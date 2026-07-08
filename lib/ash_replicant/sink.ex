@@ -56,10 +56,18 @@ defmodule AshReplicant.Sink do
       @impl Replicant.Sink
       def handle_schema_change(sc, ctx), do: Impl.handle_schema_change(__config__(), sc, ctx)
 
+      @impl Replicant.Sink
+      def handle_snapshot(changes, ctx), do: Impl.handle_snapshot(__config__(), changes, ctx)
+
+      @impl Replicant.Sink
+      def handle_snapshot_complete(lsn), do: Impl.handle_snapshot_complete(__config__(), lsn)
+
       defoverridable checkpoint: 0,
                      handle_transaction: 1,
                      sink_kind: 0,
-                     handle_schema_change: 2
+                     handle_schema_change: 2,
+                     handle_snapshot: 2,
+                     handle_snapshot_complete: 1
     end
   end
 end

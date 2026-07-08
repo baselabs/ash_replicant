@@ -13,7 +13,8 @@ defmodule AshReplicant.Sink.Impl do
   single-record create/destroy in Ash 3.x, only `return_notifications?`.)
   """
 
-  alias AshReplicant.{Apply, Error, Telemetry}
+  alias AshPostgres.DataLayer.Info, as: PGInfo
+  alias AshReplicant.{Apply, Error, Resolver, Telemetry}
   alias AshReplicant.Resource.Info
   alias Ecto.Adapters.SQL
 
@@ -84,6 +85,125 @@ defmodule AshReplicant.Sink.Impl do
            shape: "#{sc.schema || "public"}.#{sc.table}"
          )}
     end
+  end
+
+  @doc """
+  Persist a snapshot batch for `ctx.table`, upserting by PK. On
+  `first_for_table?`, clear the resource's mirror rows in-txn first (redo-safety).
+  Non-tenant resources use a bulk upsert; the load-bearing fail-closed guard is
+  the `case result.status` check — anything other than `:success` (including the
+  default-options `:partial_success`) rolls the snapshot transaction back, so a
+  failing row is never silently dropped. `stop_on_error?: true` is a defensible
+  early-stop on top of that, not the loss guard. Tenant-scoped (and, defensively,
+  sensitive) resources apply per-record. Does not advance the checkpoint.
+  """
+  @spec handle_snapshot(map(), [Replicant.Change.t()], map()) :: :ok | {:error, term()}
+  def handle_snapshot(config, changes, %{table: qualified, first_for_table?: first?} = _ctx) do
+    {schema, table} =
+      case String.split(qualified, ".", parts: 2) do
+        [s, t] -> {s, t}
+        [t] -> {"public", t}
+      end
+
+    resource = Map.get(config.resolver_index, {schema, table})
+
+    if is_nil(resource), do: :ok, else: run_snapshot(config, resource, changes, first?)
+  rescue
+    e -> {:error, Error.scrub(e, nil, :snapshot)}
+  end
+
+  defp run_snapshot(config, resource, changes, first?) do
+    config.repo.transaction(fn ->
+      if first?, do: clear_mirror(resource, config)
+      apply_snapshot_batch(config, resource, changes)
+    end)
+    |> case do
+      {:ok, _} -> :ok
+      {:error, %Error{} = e} -> {:error, e}
+      {:error, other} -> {:error, Error.scrub(other, resource, :snapshot)}
+    end
+  end
+
+  @doc "Durably set `checkpoint := snapshot_lsn` and return it (the snapshot handoff commit)."
+  @spec handle_snapshot_complete(map(), Replicant.lsn()) ::
+          {:ok, Replicant.lsn()} | {:error, term()}
+  def handle_snapshot_complete(config, snapshot_lsn) do
+    config.repo.transaction(fn -> upsert_checkpoint(config, snapshot_lsn) end)
+    |> case do
+      {:ok, _} ->
+        {:ok, snapshot_lsn}
+
+      {:error, other} ->
+        {:error, Error.scrub(other, config.checkpoint_resource, :snapshot_complete)}
+    end
+  rescue
+    e -> {:error, Error.scrub(e, config.checkpoint_resource, :snapshot_complete)}
+  end
+
+  defp clear_mirror(resource, config) do
+    # Redo-safety: wipe ALL mirror rows for this resource before re-applying the
+    # snapshot dump. A tenant-scoped Ash.bulk_destroy! cannot clear a NON-GLOBAL
+    # attribute-multitenant table (raises TenantRequired), so delete tenant-blind
+    # on the mirror's own table, inside the snapshot transaction. Works uniformly
+    # for non-tenant, global-tenant, and non-global-tenant resources. The table /
+    # schema come from the resource DSL (operator trust boundary, like
+    # maybe_append_ledger), not from a row value.
+    schema = PGInfo.schema(resource) || "public"
+    table = PGInfo.table(resource)
+    SQL.query!(config.repo, ~s(DELETE FROM "#{schema}"."#{table}"), [])
+  end
+
+  defp apply_snapshot_batch(_config, _resource, []), do: :ok
+
+  defp apply_snapshot_batch(config, resource, changes) do
+    # The load-bearing driver of the split is `tenant_scoped?`: a single bulk
+    # upsert carries one `tenant:`, so a mixed-tenant batch cannot go through bulk
+    # — it MUST apply per-record, each row under its own resolved tenant.
+    # `sensitive?` also routes per-record, but that is belt-and-suspenders:
+    # `Ash.bulk_create` fires AshCloak's before_action too (bulk encrypts), so the
+    # per-record path is conservative here, not a plaintext-leak guard.
+    if sensitive?(resource) or tenant_scoped?(resource) do
+      Enum.each(changes, fn c -> Apply.apply_change(config, %{c | op: :insert}) end)
+    else
+      inputs =
+        Enum.map(changes, fn c -> elem(Resolver.attrs_for_upsert(resource, c.record), 0) end)
+
+      # `upsert_fields` is taken from row 1 — valid because a full-table snapshot
+      # dump is column-homogeneous (every row carries the same source columns).
+      {_, upsert_fields} = Resolver.attrs_for_upsert(resource, List.first(changes).record)
+
+      result =
+        Ash.bulk_create(inputs, resource, Resolver.upsert_action(resource),
+          upsert?: true,
+          upsert_identity: Resolver.upsert_identity(resource),
+          upsert_fields: upsert_fields,
+          stop_on_error?: true,
+          return_errors?: true,
+          return_records?: false,
+          return_notifications?: true,
+          authorize?: config.authorize?,
+          transaction: false
+        )
+
+      case result.status do
+        :success ->
+          :ok
+
+        _ ->
+          config.repo.rollback(
+            Error.exception(reason: :sink_failed, resource: resource, op: :snapshot)
+          )
+      end
+    end
+  end
+
+  defp sensitive?(resource) do
+    Info.replicant_sensitive!(resource) != []
+  end
+
+  defp tenant_scoped?(resource) do
+    match?({:ok, _}, Info.replicant_tenant_attribute(resource)) or
+      match?({:ok, _}, Info.replicant_tenant_mfa(resource))
   end
 
   defp run_transaction(config, lsn, changes) do
