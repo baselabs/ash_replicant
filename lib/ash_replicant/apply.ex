@@ -10,8 +10,10 @@ defmodule AshReplicant.Apply do
   lazy single-pass Enumerable, so the caller iterates it exactly once.
   """
 
+  alias AshPostgres.DataLayer.Info, as: PGInfo
   alias AshReplicant.{Error, Resolver}
   alias AshReplicant.Resource.Info
+  alias Ecto.Adapters.SQL
 
   @doc """
   Apply a change under `config` (`%{resolver_index:, repo:, authorize?:}`).
@@ -45,13 +47,15 @@ defmodule AshReplicant.Apply do
   defp apply_to(config, resource, %{op: :truncate, table: table, schema: schema}) do
     case Info.replicant_on_truncate!(resource) do
       :mirror ->
-        Ash.bulk_destroy!(resource, :destroy, %{},
-          strategy: [:stream],
-          authorize?: config.authorize?,
-          return_errors?: true,
-          return_notifications?: true
-        )
-
+        # Tenant-blind: a TRUNCATE wipes ALL tenants, and an Ash `bulk_destroy` on a
+        # NON-GLOBAL attribute-multitenant resource raises `TenantRequired` (there is
+        # no single tenant to scope by) — the exact defect `Impl.clear_mirror/2`
+        # documents and avoids. Delete on the mirror's own table inside the sink
+        # transaction; the schema/table come from the resource DSL (operator trust
+        # boundary), never a row value, and idents are quoted.
+        pg_schema = PGInfo.schema(resource) || "public"
+        pg_table = PGInfo.table(resource)
+        SQL.query!(config.repo, ~s(DELETE FROM "#{pg_schema}"."#{pg_table}"), [])
         :ok
 
       :halt ->

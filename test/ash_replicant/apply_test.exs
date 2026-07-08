@@ -7,6 +7,55 @@ defmodule AshReplicant.ApplyTest do
   alias AshReplicant.Test.Order
   alias AshReplicant.Test.TenantOrder
 
+  defmodule MirrorTruncateDomain do
+    @moduledoc false
+    use Ash.Domain, validate_config_inclusion?: false
+
+    resources do
+      allow_unregistered?(true)
+    end
+  end
+
+  # A NON-global attribute-multitenant resource with `on_truncate :mirror`. Reuses
+  # the existing `tenant_orders` table (no migration) via a hand-built index — it is
+  # NOT in `ash_domains`, so it does not affect migration-drift. Locks that the
+  # truncate `:mirror` path clears tenant-blind instead of dead-ending on
+  # `TenantRequired` (the pre-fix `Ash.bulk_destroy!`-without-tenant defect).
+  defmodule MirrorTruncateOrder do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.ApplyTest.MirrorTruncateDomain,
+      validate_domain_inclusion?: false,
+      data_layer: AshPostgres.DataLayer,
+      extensions: [AshReplicant.Resource]
+
+    postgres do
+      table "tenant_orders"
+      repo AshReplicant.TestRepo
+    end
+
+    replicant do
+      source_table("tenant_orders")
+      tenant_attribute(:org_id)
+      on_truncate(:mirror)
+    end
+
+    attributes do
+      attribute :id, :string, primary_key?: true, allow_nil?: false, public?: true
+      attribute :org_id, :string, allow_nil?: false, public?: true
+      attribute :note, :string, public?: true
+    end
+
+    multitenancy do
+      strategy :attribute
+      attribute :org_id
+    end
+
+    actions do
+      defaults [:read, :destroy, create: :*, update: :*]
+    end
+  end
+
   defp config do
     {:ok, index} = AshReplicant.Resolver.build_index([AshReplicant.Test.Domain])
     %{resolver_index: index, repo: AshReplicant.TestRepo, authorize?: false}
@@ -112,6 +161,33 @@ defmodule AshReplicant.ApplyTest do
     )
 
     assert Ash.get!(TenantOrder, "t1", tenant: "org_1", authorize?: false, error?: false) == nil
+  end
+
+  test "on_truncate :mirror clears a NON-global tenant resource tenant-blind (no TenantRequired dead-end)" do
+    cfg = %{
+      resolver_index: %{{"public", "tenant_orders"} => MirrorTruncateOrder},
+      repo: AshReplicant.TestRepo,
+      authorize?: false
+    }
+
+    Ash.create!(MirrorTruncateOrder, %{id: "m1", org_id: "org_1", note: "a"},
+      tenant: "org_1",
+      authorize?: false
+    )
+
+    Ash.create!(MirrorTruncateOrder, %{id: "m2", org_id: "org_2", note: "b"},
+      tenant: "org_2",
+      authorize?: false
+    )
+
+    # Pre-fix: Ash.bulk_destroy! without a tenant raised TenantRequired here → dead-end.
+    assert :ok = Apply.apply_change(cfg, change(:truncate, "tenant_orders", nil))
+
+    assert Ash.get!(MirrorTruncateOrder, "m1", tenant: "org_1", authorize?: false, error?: false) ==
+             nil
+
+    assert Ash.get!(MirrorTruncateOrder, "m2", tenant: "org_2", authorize?: false, error?: false) ==
+             nil
   end
 
   test "truncate with on_truncate :halt fails closed with a value-free error" do
