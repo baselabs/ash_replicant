@@ -3,6 +3,7 @@ defmodule AshReplicant.SnapshotTest do
 
   @moduletag :integration
 
+  alias AshReplicant.Sink.Impl
   alias AshReplicant.Test.{Order, Secret, Vault}
 
   defmodule Sink do
@@ -66,13 +67,13 @@ defmodule AshReplicant.SnapshotTest do
     }
 
     assert {:error, %AshReplicant.Error{reason: :config_invalid}} =
-             AshReplicant.Sink.Impl.handle_snapshot(empty, [snap("1")], ctx(true))
+             Impl.handle_snapshot(empty, [snap("1")], ctx(true))
 
     assert {:error, %AshReplicant.Error{reason: :config_invalid}} =
-             AshReplicant.Sink.Impl.handle_snapshot_complete(empty, 500)
+             Impl.handle_snapshot_complete(empty, 500)
 
     # loss=0: the checkpoint was NOT advanced.
-    assert {:ok, nil} = AshReplicant.Sink.Impl.checkpoint(empty)
+    assert {:ok, nil} = Impl.checkpoint(empty)
   end
 
   # Spec §Telemetry: the two snapshot events are emitted with their spec'd

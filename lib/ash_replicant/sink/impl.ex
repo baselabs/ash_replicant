@@ -120,26 +120,27 @@ defmodule AshReplicant.Sink.Impl do
 
       case Resolver.lookup(config.resolver_index, schema, table) do
         # Unmapped table = legitimate partial-publication skip (no batch applied).
-        nil ->
-          :ok
-
-        resource ->
-          with :ok <- run_snapshot(config, resource, changes, first?) do
-            # Snapshot changes are a materialized list (the bulk path indexes them
-            # via List.first), so counting is single-pass-safe here — unlike the
-            # streaming path's lazy Enumerable.
-            Telemetry.event(
-              [:ash_replicant, :snapshot, :batch],
-              %{change_count: Enum.count(changes)},
-              %{table: table, commit_lsn: Map.get(ctx, :snapshot_lsn)}
-            )
-
-            :ok
-          end
+        nil -> :ok
+        resource -> run_snapshot_batch(config, resource, changes, first?, table, ctx)
       end
     end
   rescue
     e -> {:error, Error.scrub(e, nil, :snapshot)}
+  end
+
+  defp run_snapshot_batch(config, resource, changes, first?, table, ctx) do
+    with :ok <- run_snapshot(config, resource, changes, first?) do
+      # Snapshot changes are a materialized list (the bulk path indexes them via
+      # List.first), so counting is single-pass-safe here — unlike the streaming
+      # path's lazy Enumerable.
+      Telemetry.event(
+        [:ash_replicant, :snapshot, :batch],
+        %{change_count: Enum.count(changes)},
+        %{table: table, commit_lsn: Map.get(ctx, :snapshot_lsn)}
+      )
+
+      :ok
+    end
   end
 
   defp run_snapshot(config, resource, changes, first?) do
@@ -254,17 +255,7 @@ defmodule AshReplicant.Sink.Impl do
             :skipped
 
           _ ->
-            # Single pass: `changes` may be a spilled txn's lazy, single-pass
-            # Enumerable — iterate it exactly once, never sort/to_list/multi-pass.
-            # `reduce` counts DURING the one pass (for the `change_count`
-            # measurement) without a second traversal — an `Enum.count` would
-            # re-enumerate and blow up a one-shot stream.
-            count =
-              Enum.reduce(changes, 0, fn change, n ->
-                Apply.apply_change(config, change)
-                n + 1
-              end)
-
+            count = apply_all(config, changes)
             upsert_checkpoint(config, lsn)
             maybe_append_ledger(config, lsn)
             {:applied, count}
@@ -288,6 +279,16 @@ defmodule AshReplicant.Sink.Impl do
       {:error, reason} ->
         halt(reason, config)
     end
+  end
+
+  # Single pass over the (possibly lazy, one-shot) change stream — iterate it EXACTLY
+  # once, counting DURING the pass so `change_count` needs no second traversal (an
+  # `Enum.count`/`length` would re-enumerate and blow up a spilled-txn stream).
+  defp apply_all(config, changes) do
+    Enum.reduce(changes, 0, fn change, n ->
+      Apply.apply_change(config, change)
+      n + 1
+    end)
   end
 
   # Value-free fail-closed halt: scrub to a structural reason, emit `:halted`
