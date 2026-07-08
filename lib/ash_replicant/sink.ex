@@ -53,7 +53,13 @@ defmodule AshReplicant.Sink do
       @impl Replicant.Sink
       def sink_kind, do: :state_mirror
 
-      defoverridable checkpoint: 0, handle_transaction: 1, sink_kind: 0
+      @impl Replicant.Sink
+      def handle_schema_change(sc, ctx), do: Impl.handle_schema_change(__config__(), sc, ctx)
+
+      defoverridable checkpoint: 0,
+                     handle_transaction: 1,
+                     sink_kind: 0,
+                     handle_schema_change: 2
     end
   end
 end

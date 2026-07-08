@@ -14,6 +14,7 @@ defmodule AshReplicant.Sink.Impl do
   """
 
   alias AshReplicant.{Apply, Error, Telemetry}
+  alias AshReplicant.Resource.Info
   alias Ecto.Adapters.SQL
 
   @doc "Last durably-persisted commit LSN for the slot (`nil` = never), the dedup watermark."
@@ -50,6 +51,39 @@ defmodule AshReplicant.Sink.Impl do
     end
   rescue
     e -> halt(e, config)
+  end
+
+  @doc """
+  Accept or decline a schema change. An `:additive` change auto-applies; a
+  `:destructive` change on a resource whose `on_schema_change` is
+  `:halt_destructive` (default) halts fail-closed. The context map is not
+  value-inspected. Unmapped tables use the behaviour default.
+  """
+  @spec handle_schema_change(map(), Replicant.SchemaChange.t(), map()) :: :ok | {:error, term()}
+  def handle_schema_change(config, %Replicant.SchemaChange{kind: kind} = sc, _ctx) do
+    resource = Map.get(config.resolver_index, {sc.schema || "public", sc.table})
+
+    policy =
+      if resource,
+        do: Info.replicant_on_schema_change!(resource),
+        else: :halt_destructive
+
+    case {kind, policy} do
+      {:additive, _} ->
+        :ok
+
+      {:destructive, :ignore} ->
+        :ok
+
+      {:destructive, :halt_destructive} ->
+        {:error,
+         Error.exception(
+           reason: :schema_change_destructive,
+           resource: resource,
+           op: :schema_change,
+           shape: "#{sc.schema || "public"}.#{sc.table}"
+         )}
+    end
   end
 
   defp run_transaction(config, lsn, changes) do
