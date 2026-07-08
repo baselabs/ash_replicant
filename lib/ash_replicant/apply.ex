@@ -48,7 +48,8 @@ defmodule AshReplicant.Apply do
         Ash.bulk_destroy!(resource, :destroy, %{},
           strategy: [:stream],
           authorize?: config.authorize?,
-          return_errors?: true
+          return_errors?: true,
+          return_notifications?: true
         )
 
         :ok
@@ -75,7 +76,8 @@ defmodule AshReplicant.Apply do
       upsert_identity: Resolver.upsert_identity(resource),
       upsert_fields: upsert_fields,
       tenant: tenant,
-      authorize?: config.authorize?
+      authorize?: config.authorize?,
+      return_notifications?: true
     )
 
     :ok
@@ -97,8 +99,15 @@ defmodule AshReplicant.Apply do
            tenant: tenant,
            error?: false
          ) do
-      nil -> :ok
-      record -> Ash.destroy!(record, authorize?: config.authorize?, tenant: tenant)
+      nil ->
+        :ok
+
+      record ->
+        Ash.destroy!(record,
+          authorize?: config.authorize?,
+          tenant: tenant,
+          return_notifications?: true
+        )
     end
 
     :ok
