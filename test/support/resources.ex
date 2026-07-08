@@ -81,6 +81,46 @@ defmodule AshReplicant.Test.Account do
   end
 end
 
+defmodule AshReplicant.Test.TenantOrder do
+  @moduledoc false
+  use Ash.Resource,
+    domain: AshReplicant.Test.Domain,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshReplicant.Resource]
+
+  postgres do
+    table "tenant_orders"
+    repo AshReplicant.TestRepo
+  end
+
+  replicant do
+    source_table("tenant_orders")
+    tenant_attribute(:org_id)
+  end
+
+  attributes do
+    attribute :id, :string do
+      primary_key? true
+      allow_nil? false
+      public? true
+    end
+
+    attribute :org_id, :string, allow_nil?: false, public?: true
+    attribute :note, :string, public?: true
+  end
+
+  multitenancy do
+    strategy :attribute
+    attribute :org_id
+
+    # NOTE: no `global? true`, so this is a NON-global tenant resource; every op requires a tenant.
+  end
+
+  actions do
+    defaults [:read, :destroy, create: :*, update: :*]
+  end
+end
+
 defmodule AshReplicant.Test.Secret do
   @moduledoc false
   use Ash.Resource,

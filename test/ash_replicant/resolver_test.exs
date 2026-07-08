@@ -2,15 +2,25 @@ defmodule AshReplicant.ResolverTest do
   use ExUnit.Case, async: true
 
   alias AshReplicant.Resolver
-  alias AshReplicant.Test.{Order, Account, Secret, Domain, DuplicateDomain, NoSourceDomain}
+
+  alias AshReplicant.Test.{
+    Order,
+    Account,
+    TenantOrder,
+    Secret,
+    Domain,
+    DuplicateDomain,
+    NoSourceDomain
+  }
 
   describe "build_index/1" do
     test "keys mirror resources by {source_schema, source_table}, filtering out non-replicant resources" do
       assert {:ok, index} = Resolver.build_index([Domain])
       assert index[{"public", "orders"}] == Order
       assert index[{"public", "accounts"}] == Account
+      assert index[{"public", "tenant_orders"}] == TenantOrder
       assert index[{"public", "secret_orders"}] == Secret
-      assert map_size(index) == 3
+      assert map_size(index) == 4
     end
 
     test "fails closed on a duplicate {schema, table} (tripwire)" do

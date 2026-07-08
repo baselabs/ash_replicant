@@ -6,6 +6,7 @@ defmodule AshReplicant.Test.Domain do
     resource AshReplicant.Test.Checkpoint
     resource AshReplicant.Test.Order
     resource AshReplicant.Test.Account
+    resource AshReplicant.Test.TenantOrder
     resource AshReplicant.Test.Secret
   end
 end
