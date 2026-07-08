@@ -75,6 +75,31 @@ defmodule AshReplicant.SnapshotTest do
     assert {:ok, nil} = AshReplicant.Sink.Impl.checkpoint(empty)
   end
 
+  # Spec §Telemetry: the two snapshot events are emitted with their spec'd
+  # measurements/metadata (previously never emitted). :batch carries change_count +
+  # table + commit_lsn (= snapshot_lsn); :complete carries commit_lsn. All value-free.
+  test "snapshot telemetry: :batch and :complete fire with spec'd measurements/metadata" do
+    ref =
+      :telemetry_test.attach_event_handlers(self(), [
+        [:ash_replicant, :snapshot, :batch],
+        [:ash_replicant, :snapshot, :complete]
+      ])
+
+    assert :ok = Sink.handle_snapshot([snap("1"), snap("2")], ctx(true))
+
+    assert_received {[:ash_replicant, :snapshot, :batch], ^ref, m1, meta1}
+    assert m1.change_count == 2
+    assert meta1.table == "orders"
+    assert meta1.commit_lsn == 500
+
+    assert {:ok, 500} = Sink.handle_snapshot_complete(500)
+
+    assert_received {[:ash_replicant, :snapshot, :complete], ^ref, _m2, meta2}
+    assert meta2.commit_lsn == 500
+
+    :telemetry.detach(ref)
+  end
+
   test "a sensitive-resource snapshot routes per-record so AshCloak encrypts (no plaintext)" do
     start_supervised!(Vault)
 

@@ -108,7 +108,7 @@ defmodule AshReplicant.Sink.Impl do
   sensitive) resources apply per-record. Does not advance the checkpoint.
   """
   @spec handle_snapshot(map(), [Replicant.Change.t()], map()) :: :ok | {:error, term()}
-  def handle_snapshot(config, changes, %{table: qualified, first_for_table?: first?} = _ctx) do
+  def handle_snapshot(config, changes, %{table: qualified, first_for_table?: first?} = ctx) do
     if empty_index?(config) do
       {:error, Error.exception(reason: :config_invalid, resource: nil, op: :snapshot)}
     else
@@ -118,9 +118,25 @@ defmodule AshReplicant.Sink.Impl do
           [t] -> {"public", t}
         end
 
-      resource = Map.get(config.resolver_index, {schema, table})
+      case Map.get(config.resolver_index, {schema, table}) do
+        # Unmapped table = legitimate partial-publication skip (no batch applied).
+        nil ->
+          :ok
 
-      if is_nil(resource), do: :ok, else: run_snapshot(config, resource, changes, first?)
+        resource ->
+          with :ok <- run_snapshot(config, resource, changes, first?) do
+            # Snapshot changes are a materialized list (the bulk path indexes them
+            # via List.first), so counting is single-pass-safe here — unlike the
+            # streaming path's lazy Enumerable.
+            Telemetry.event(
+              [:ash_replicant, :snapshot, :batch],
+              %{change_count: Enum.count(changes)},
+              %{table: table, commit_lsn: Map.get(ctx, :snapshot_lsn)}
+            )
+
+            :ok
+          end
+      end
     end
   rescue
     e -> {:error, Error.scrub(e, nil, :snapshot)}
@@ -150,6 +166,8 @@ defmodule AshReplicant.Sink.Impl do
       config.repo.transaction(fn -> upsert_checkpoint(config, snapshot_lsn) end)
       |> case do
         {:ok, _} ->
+          Telemetry.event([:ash_replicant, :snapshot, :complete], %{}, %{commit_lsn: snapshot_lsn})
+
           {:ok, snapshot_lsn}
 
         {:error, other} ->
@@ -227,6 +245,8 @@ defmodule AshReplicant.Sink.Impl do
   end
 
   defp run_transaction(config, lsn, changes) do
+    started = System.monotonic_time()
+
     result =
       config.repo.transaction(fn ->
         case read_checkpoint(config) do
@@ -235,17 +255,30 @@ defmodule AshReplicant.Sink.Impl do
 
           _ ->
             # Single pass: `changes` may be a spilled txn's lazy, single-pass
-            # Enumerable — iterate it exactly once, never sort/count/to_list.
-            Enum.each(changes, &Apply.apply_change(config, &1))
+            # Enumerable — iterate it exactly once, never sort/to_list/multi-pass.
+            # `reduce` counts DURING the one pass (for the `change_count`
+            # measurement) without a second traversal — an `Enum.count` would
+            # re-enumerate and blow up a one-shot stream.
+            count =
+              Enum.reduce(changes, 0, fn change, n ->
+                Apply.apply_change(config, change)
+                n + 1
+              end)
+
             upsert_checkpoint(config, lsn)
             maybe_append_ledger(config, lsn)
-            :applied
+            {:applied, count}
         end
       end)
 
     case result do
-      {:ok, :applied} ->
-        Telemetry.event([:ash_replicant, :sink, :applied], %{}, %{commit_lsn: lsn})
+      {:ok, {:applied, count}} ->
+        Telemetry.event(
+          [:ash_replicant, :sink, :applied],
+          %{change_count: count, duration: System.monotonic_time() - started},
+          %{commit_lsn: lsn}
+        )
+
         {:ok, lsn}
 
       {:ok, :skipped} ->
@@ -261,7 +294,12 @@ defmodule AshReplicant.Sink.Impl do
   # (reason atom only — never a row value), return the scrubbed error.
   defp halt(reason, config) do
     error = Error.scrub(reason, config.checkpoint_resource, :sink)
-    Telemetry.event([:ash_replicant, :sink, :halted], %{}, %{reason: error.reason})
+
+    Telemetry.event([:ash_replicant, :sink, :halted], %{}, %{
+      reason: error.reason,
+      error_class: error.class
+    })
+
     {:error, error}
   end
 

@@ -111,7 +111,24 @@ defmodule AshReplicant.SinkTest do
 
     assert_received {[:ash_replicant, :sink, :halted], ^ref, _measurements, meta}
     assert meta.reason == :sink_failed
+    assert meta.error_class == :invalid
     refute inspect(meta) =~ "SECRET_4111"
+
+    :telemetry.detach(ref)
+  end
+
+  # Spec §Telemetry: the :applied event carries change_count + duration measurements
+  # and a value-free commit_lsn. change_count is counted DURING the single pass
+  # (Enum.reduce), never a re-enumeration.
+  test ":applied telemetry carries change_count + duration measurements and commit_lsn" do
+    ref = :telemetry_test.attach_event_handlers(self(), [[:ash_replicant, :sink, :applied]])
+
+    assert {:ok, 210} = TestSink.handle_transaction(txn(210, [ins("a1"), ins("a2")]))
+
+    assert_received {[:ash_replicant, :sink, :applied], ^ref, measurements, meta}
+    assert measurements.change_count == 2
+    assert is_integer(measurements.duration)
+    assert meta.commit_lsn == 210
 
     :telemetry.detach(ref)
   end
