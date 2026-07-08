@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (closeout review, 2026-07-08 — `/review-autopilot --fix`)
+
+- **Snapshot fails closed on an empty resolver index** — `handle_snapshot/3` and
+  `handle_snapshot_complete/2` now share the `handle_transaction/2` fail-closed guard
+  (a degenerate/misloaded index no longer silently drops a backfill while advancing
+  the checkpoint).
+- **`on_truncate :mirror` clears tenant-blind** — was a `TenantRequired` dead-end for
+  non-global attribute-multitenant resources; now a quoted raw `DELETE` on the mirror
+  table (matching the snapshot redo-safety clear).
+- **Full telemetry contract** — the `[:ash_replicant, :snapshot, :batch]` /
+  `[:snapshot, :complete]` events (previously never emitted), `:sink,:halted`
+  `error_class`, and `:sink,:applied` `change_count` + `duration` measurements are now
+  emitted (`change_count` counted single-pass).
+- **`transaction?: false`** on the per-record upsert (the sink owns the outer
+  transaction the action joins).
+
+### Documented (closeout review)
+
+- **Tenant-scoped source tables must be `REPLICA IDENTITY FULL`** — a tenant-scoped
+  delete / PK-changing update resolves the tenant from `old_record`, which is key-only
+  under the default replica identity (else the sink halts fail-closed
+  `:tenant_required`). Documented in AGENTS Critical Rule 2, the `tenant_attribute`
+  DSL doc, README, and usage-rules; locked by a key-only-`old_record` red-gate.
+
 ## [0.1.0] - 2026-07-08
 
 First release: the complete Ash `Replicant.Sink` adapter with effect-once

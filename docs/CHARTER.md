@@ -1,6 +1,6 @@
 # AshReplicant — Project Charter
 
-**Status: realized.** Tasks 1-15 complete. Task 16: documentation.
+**Status: realized + closeout-reviewed.** All 17 plan tasks shipped & verified; `/review-autopilot --fix` closeout complete (2026-07-08). See `docs/superpowers/plans/2026-07-08-ash-replicant.md` (per-task ledger) and `docs/superpowers/reviews/2026-07-08-ash-replicant-lens-reports.md` (closeout).
 
 ## Purpose
 
@@ -69,17 +69,24 @@ the checkpoint is upserted in the same `Repo.transaction`. A failure rolls the
 entire txn back (fail-closed); on resume, the un-acked WAL re-streams and dedups
 against the durable watermark.
 
-**Proof:** Task 15 spike (AshCloak + effect-once) and crash-injection suite in
-`replicant` (loss = 0, effect-dup = 0, real PG16).
+**Proof:** Task 15 crash-injection marquee `test/integration/effect_once_test.exs`
+(loss = 0, effect-dup = 0 via the append-only no-PK ledger, real PG16) plus the
+sibling `replicant` crash-injection suite.
 
 ### [D2] Multitenancy is fail-closed; never a "base tenant" fallback
 
 **Decision:** If a source row's `tenant_attribute` or `tenant_mfa` resolves to nil/blank,
-the mirror write fails (the Ash changeset's multitenancy validation fires and rejects
-the write). No silent base-tenant fallback. The transaction rolls back.
+the mirror write fails and the transaction rolls back — no silent base-tenant fallback.
+The sink fails closed EARLY: `Resolver.resolve_tenant/2` returns `{:error, :tenant_required}`
+(nil/blank/whitespace) and `Apply.resolve_tenant!/3` raises before the write is attempted
+(defense in depth on top of Ash's own multitenancy validation). Note: a tenant-scoped
+delete needs the tenant in `old_record`, so the source table must be `REPLICA IDENTITY
+FULL` (closeout amendment; see AGENTS Critical Rule 2).
 
-**Proof:** Verifiers in `validate_multitenancy.ex` (compile-time) and fail-closed
-behavior in the sink's `handle_transaction/1`.
+**Proof:** Compile-time `validate_multitenancy.ex` + runtime `:tenant_required` in
+`resolver.ex`/`apply.ex`; red-gates in `resolver_test.exs`, `apply_test.exs` (incl. the
+key-only-`old_record` fail-closed lock), and the non-global-tenant snapshot in
+`snapshot_test.exs`.
 
 ### [D3] Sensitive = AshCloak-encrypted or binary; verified by type-shape
 
@@ -93,7 +100,7 @@ binary-storage attribute OR listed in `skip`. AshCloak is the single encryption
 source of truth. The verifier runs at compile time and rejects a resource if a
 `sensitive` column maps to an unencrypted or missing attribute.
 
-**Proof:** Verifier in `validate_sensitive.ex` + spike in Task 15.
+**Proof:** Verifier in `validate_sensitive.ex` + the AshCloak-upsert spike (Task 2, `test/integration/cloak_upsert_spike_test.exs`).
 
 ### [D4] Tenant-blind layering: multitenancy one layer up, never in transport
 
@@ -116,15 +123,12 @@ error reasons) — never row values. Including the halt path.
 
 ## Status Build Log
 
-| Task | Slice | Status | Date |
-|------|-------|--------|------|
-| 1 | Project scaffold | ✓ | 2026-07-01 |
-| 2-5 | Core sink scaffoldding | ✓ | 2026-07-02 |
-| 6 | Checkpoint macro | ✓ | 2026-07-03 |
-| 7-11 | Resource extension + verifiers | ✓ | 2026-07-04 |
-| 12-14 | Sink action + apply logic | ✓ | 2026-07-05 |
-| 15 | Effect-once spike + AshCloak integration | ✓ | 2026-07-08 |
-| 16 | Documentation (CLAUDE/AGENTS/CHARTER/README/etc.) | ✓ | 2026-07-08 |
+All 17 plan tasks shipped and verified on 2026-07-08, then closeout-reviewed
+(`/review-autopilot --fix`). The **authoritative per-task ledger** (task → commit
+sha, RED evidence, review rounds) lives in
+`docs/superpowers/plans/2026-07-08-ash-replicant.md`; the closeout findings + fixes
+in `docs/superpowers/reviews/2026-07-08-ash-replicant-lens-reports.md`. This charter
+does not duplicate that ledger (a second copy only drifts).
 
 ## References
 
