@@ -43,6 +43,15 @@ defmodule AshReplicant.Resolver do
     end)
   end
 
+  @doc """
+  Look up the mirror resource for a source `{schema, table}` in an index built by
+  `build_index/1`, applying the SAME `nil`-schema → `"public"` default the index
+  keys use (so the convention lives in one place next to the builder). Returns the
+  resource, or `nil` for an unmapped table.
+  """
+  @spec lookup(%{source_key() => module()}, String.t() | nil, String.t()) :: module() | nil
+  def lookup(index, schema, table), do: Map.get(index, {schema || "public", table})
+
   @spec resolve_tenant(module(), map()) :: {:ok, term()} | {:error, :tenant_required}
   def resolve_tenant(resource, record) when is_map(record) do
     attr = opt(Info.replicant_tenant_attribute(resource))

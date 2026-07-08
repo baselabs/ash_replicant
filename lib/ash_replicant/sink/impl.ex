@@ -72,7 +72,7 @@ defmodule AshReplicant.Sink.Impl do
   """
   @spec handle_schema_change(map(), Replicant.SchemaChange.t(), map()) :: :ok | {:error, term()}
   def handle_schema_change(config, %Replicant.SchemaChange{kind: kind} = sc, _ctx) do
-    resource = Map.get(config.resolver_index, {sc.schema || "public", sc.table})
+    resource = Resolver.lookup(config.resolver_index, sc.schema, sc.table)
 
     policy =
       if resource,
@@ -118,7 +118,7 @@ defmodule AshReplicant.Sink.Impl do
           [t] -> {"public", t}
         end
 
-      case Map.get(config.resolver_index, {schema, table}) do
+      case Resolver.lookup(config.resolver_index, schema, table) do
         # Unmapped table = legitimate partial-publication skip (no batch applied).
         nil ->
           :ok
@@ -328,7 +328,7 @@ defmodule AshReplicant.Sink.Impl do
   # proof (Task 15). Appends inside the sink transaction, so it rolls back with a
   # failed txn and appends exactly once per applied txn. Dormant unless configured.
   defp maybe_append_ledger(%{apply_ledger: table} = config, lsn) when is_binary(table) do
-    SQL.query!(config.repo, "INSERT INTO #{table} (commit_lsn) VALUES ($1)", [lsn])
+    SQL.query!(config.repo, "INSERT INTO \"#{table}\" (commit_lsn) VALUES ($1)", [lsn])
   end
 
   defp maybe_append_ledger(_config, _lsn), do: :ok

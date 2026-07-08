@@ -29,7 +29,7 @@ defmodule AshReplicant.Apply do
   end
 
   defp resource_for(config, %{schema: schema, table: table}) do
-    Map.get(config.resolver_index, {schema || "public", table})
+    Resolver.lookup(config.resolver_index, schema, table)
   end
 
   defp apply_to(config, resource, %{op: op} = change) when op in [:insert, :update] do
