@@ -5,8 +5,9 @@ url = System.get_env("ASH_REPLICANT_TEST_URL", "postgres://postgres@localhost:55
 config :ash_replicant, AshReplicant.TestRepo,
   url: url,
   pool: Ecto.Adapters.SQL.Sandbox,
-  pool_size: 10
+  pool_size: 10,
+  priv: "priv/repo"
 
 config :ash_replicant, ecto_repos: [AshReplicant.TestRepo]
-config :ash_replicant, ash_domains: []
+config :ash_replicant, ash_domains: [AshReplicant.Test.Domain]
 config :logger, level: :warning
