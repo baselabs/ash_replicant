@@ -10,14 +10,18 @@ defmodule AshReplicant.Resource.Verifiers.ValidateSensitive do
   - **(a)** an AshCloak cloak attribute (`name in AshCloak.Info.cloak_attributes!/1`),
     guarded to resources that actually use AshCloak;
   - **(b)** a declared attribute whose storage type is `:binary`
-    (`Ash.Type.storage_type(type, constraints) == :binary`);
-  - **(c)** backed by a declared `encrypted_<name>` binary-storage attribute
-    (the shape AshCloak produces, or a hand-rolled equivalent); or
+    (`Ash.Type.storage_type(type, constraints) == :binary`); or
   - **(d)** listed in `skip` (never written).
 
   Otherwise it fails closed. This checks the TYPE SHAPE, not ciphertext —
   encrypting is the host resource's (AshCloak's) job. Messages are value-free:
   they name schema structure (column/attribute names), never a row value.
+
+  AshCloak is the single source of truth for encryption: a hand-rolled
+  `encrypted_<name>` attribute WITHOUT AshCloak is NOT accepted — there is no
+  encryptor the verifier can confirm, and `AshReplicant.Resolver` would mirror
+  the column as plaintext (it routes to `encrypted_<name>` only for real AshCloak
+  cloak attributes), so blessing that shape would leak plaintext.
   """
   use Spark.Dsl.Verifier
 
@@ -49,9 +53,8 @@ defmodule AshReplicant.Resource.Verifiers.ValidateSensitive do
            path: [:replicant, :sensitive],
            message:
              "sensitive source column #{inspect(name)} must map to an AshCloak-encrypted " <>
-               "attribute, a binary-storage attribute, or an `encrypted_<name>` binary " <>
-               "attribute, or be listed in `skip`. A sensitive column mirrored as plaintext " <>
-               "defeats the classification, so it fails closed."
+               "attribute or a binary-storage attribute, or be listed in `skip`. A sensitive " <>
+               "column mirrored as plaintext defeats the classification, so it fails closed."
          )}
     end
   end
@@ -59,21 +62,13 @@ defmodule AshReplicant.Resource.Verifiers.ValidateSensitive do
   defp protected?(name, by_name, skip, cloak_attrs) do
     name in skip or
       name in cloak_attrs or
-      binary_attr?(Map.get(by_name, name)) or
-      encrypted_binary?(by_name, name)
+      binary_attr?(Map.get(by_name, name))
   end
 
   defp binary_attr?(nil), do: false
 
   defp binary_attr?(attr),
     do: Ash.Type.storage_type(attr.type, attr.constraints) == :binary
-
-  defp encrypted_binary?(by_name, name) do
-    case safe_existing_atom("encrypted_#{name}") do
-      nil -> false
-      encrypted -> binary_attr?(Map.get(by_name, encrypted))
-    end
-  end
 
   defp cloak_attributes(dsl_state) do
     if AshCloak in (Verifier.get_persisted(dsl_state, :extensions) || []) do
@@ -83,11 +78,5 @@ defmodule AshReplicant.Resource.Verifiers.ValidateSensitive do
     end
   rescue
     _ -> []
-  end
-
-  defp safe_existing_atom(string) do
-    String.to_existing_atom(string)
-  rescue
-    ArgumentError -> nil
   end
 end

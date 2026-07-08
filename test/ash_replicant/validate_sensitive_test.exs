@@ -68,7 +68,10 @@ defmodule AshReplicant.ValidateSensitiveTest do
     end
   end
 
-  test "an encrypted_<name> attribute that is :string (not :binary) still fails closed (near-miss)" do
+  test "a hand-rolled encrypted_<name> :string attr fails closed (encrypted_<name> is never a protection without AshCloak)" do
+    # With case (c) removed, a hand-rolled encrypted_pan fails regardless of its
+    # storage type — the shape is not a protection at all (no AshCloak encryptor
+    # to confirm), not merely because it is :string rather than :binary.
     err =
       assert_dsl_error %Spark.Error.DslError{path: [:replicant, :sensitive]} do
         defmodule Elixir.AshReplicant.ValidateSensitiveTest.EncryptedPanString do
@@ -115,26 +118,34 @@ defmodule AshReplicant.ValidateSensitiveTest do
     end
   end
 
-  test "a sensitive column backed by an encrypted_<name> :binary attribute compiles clean (clause c)" do
-    refute_dsl_errors do
-      defmodule Elixir.AshReplicant.ValidateSensitiveTest.EncryptedPanBinary do
-        use Ash.Resource,
-          domain: AshReplicant.ValidateSensitiveTest.Domain,
-          validate_domain_inclusion?: false,
-          data_layer: Ash.DataLayer.Ets,
-          extensions: [AshReplicant.Resource]
+  test "a hand-rolled encrypted_<name> :binary attr WITHOUT AshCloak fails closed (case c removed)" do
+    # AshCloak is the single source of truth for encryption. A hand-rolled
+    # encrypted_pan :binary attribute (no AshCloak, no :pan cloak attr) is NOT a
+    # recognized protection: the resolver routes "pan" to the plaintext :pan
+    # branch (it maps to encrypted_<name> only for real AshCloak cloak
+    # attributes), so blessing this shape would leak plaintext. Fail closed.
+    err =
+      assert_dsl_error %Spark.Error.DslError{path: [:replicant, :sensitive]} do
+        defmodule Elixir.AshReplicant.ValidateSensitiveTest.HandRolledEncryptedPan do
+          use Ash.Resource,
+            domain: AshReplicant.ValidateSensitiveTest.Domain,
+            validate_domain_inclusion?: false,
+            data_layer: Ash.DataLayer.Ets,
+            extensions: [AshReplicant.Resource]
 
-        replicant do
-          source_table("cards")
-          sensitive([:pan])
-        end
+          replicant do
+            source_table("cards")
+            sensitive([:pan])
+          end
 
-        attributes do
-          uuid_primary_key :id
-          attribute :encrypted_pan, :binary
+          attributes do
+            uuid_primary_key :id
+            attribute :encrypted_pan, :binary
+          end
         end
       end
-    end
+
+    assert err.message =~ "sensitive source column"
   end
 
   test "a sensitive column backed by an AshCloak-cloaked attribute compiles clean (clause a)" do
