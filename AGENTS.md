@@ -37,6 +37,17 @@ passes it as `tenant:` so `Ash.Changeset` scopes **every row write** — any
 multitenancy DSL will validate the tenant at write time. If tenant resolution fails,
 the row's mirror write fails and the transaction rolls back (fail-closed).
 
+> **Operational requirement — tenant-scoped source tables must be `REPLICA IDENTITY FULL`.**
+> A `:delete` (and a PK-changing `:update`) derives the tenant from `old_record`, but
+> under the Postgres-DEFAULT replica identity `old_record` carries **only the primary-key
+> columns** — the tenant discriminator (a non-PK attribute) is absent, so tenant
+> resolution fails and the pipeline halts **fail-closed** (`:tenant_required`, never a
+> base-tenant delete). Set `ALTER TABLE <src> REPLICA IDENTITY FULL` on every source
+> table backing a tenant-scoped mirror so `old_record` carries the tenant column. Insert
+> and non-PK-changing update need only the new `record` (which always carries all
+> columns), so they are unaffected; the requirement is specific to delete / PK-change of
+> tenant-scoped resources. (Non-tenant mirrors work under the default identity.)
+
 **3. Sensitive = AshCloak-encrypted or binary, verified by type-shape.** Enforce
 via verifier: sensitive attrs must map to an AshCloak-encrypted attribute (the
 durable `before_action` hook fires on upsert) OR a binary-storage-typed attribute

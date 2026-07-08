@@ -42,7 +42,9 @@ defmodule AshReplicant.Resource do
       tenant_attribute: [
         type: :atom,
         doc:
-          "Source column carrying the tenant. Resolved per row and passed as `tenant:` to the mirror action."
+          "Source column carrying the tenant. Resolved per row and passed as `tenant:` to the mirror action. " <>
+            "The source table must be `REPLICA IDENTITY FULL` so a delete's / PK-changing update's `old_record` " <>
+            "carries the tenant column (key-only under the default identity → fail-closed `:tenant_required`)."
       ],
       tenant_mfa: [
         # `{module, function, extra_args_LIST}` — the 3rd element is a list of

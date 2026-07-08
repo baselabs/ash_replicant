@@ -101,7 +101,10 @@ end
   own AshPostgres table/schema).
 - **`tenant_attribute`** — source column carrying the tenant. Must be a plaintext,
   declared, non-sensitive attribute. Resolved per row and passed as `tenant:` to
-  the mirror action.
+  the mirror action. **The source table must be `REPLICA IDENTITY FULL`** — a
+  `:delete` / PK-changing `:update` resolves the tenant from `old_record`, which is
+  key-only under the default replica identity (the tenant column would be absent →
+  fail-closed `:tenant_required`).
 - **`tenant_mfa`** — alternative: `{Module, :function, [extra_args]}` applied as
   `apply(Module, :function, [record | extra_args])` yielding the tenant.
 - **`sensitive`** — source columns classified as sensitive. Each must map to an

@@ -190,6 +190,32 @@ defmodule AshReplicant.ApplyTest do
              nil
   end
 
+  # Operational contract: a tenant-scoped DELETE/PK-change derives the tenant from
+  # `old_record`, which under the Postgres-DEFAULT replica identity is KEY-ONLY (the
+  # tenant column is absent). The source table for a tenant-scoped mirror must be
+  # REPLICA IDENTITY FULL so `old_record` carries the tenant. Without it, the sink
+  # fails CLOSED (`:tenant_required`, no base-tenant write) — this locks that
+  # behaviour so the documented requirement cannot silently regress into a leak.
+  test "tenant-scoped delete with a KEY-ONLY old_record fails closed :tenant_required (REPLICA IDENTITY FULL required)" do
+    cfg = config()
+
+    Ash.create!(TenantOrder, %{id: "k1", org_id: "org_1", note: "n"},
+      tenant: "org_1",
+      authorize?: false
+    )
+
+    # old_record carries only the key (id) — as under default replica identity.
+    err =
+      assert_raise AshReplicant.Error, fn ->
+        Apply.apply_change(cfg, change(:delete, "tenant_orders", nil, %{"id" => "k1"}))
+      end
+
+    assert err.reason == :tenant_required
+
+    # Fail-closed: the row is untouched, never a cross-tenant/base-tenant delete.
+    assert %TenantOrder{} = Ash.get!(TenantOrder, "k1", tenant: "org_1", authorize?: false)
+  end
+
   test "truncate with on_truncate :halt fails closed with a value-free error" do
     cfg = config()
 

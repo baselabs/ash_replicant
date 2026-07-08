@@ -129,7 +129,9 @@ end
 - **`source_table` / `source_schema`** — defaults to the resource's own AshPostgres
   table/schema via reflection. Optionally override to map a different source.
 - **`tenant_attribute`** — source column carrying the tenant. Resolved per row and
-  passed as `tenant:` to the mirror action. Fail-closed if nil/blank.
+  passed as `tenant:` to the mirror action. Fail-closed if nil/blank. The source
+  table must be `REPLICA IDENTITY FULL` so a delete's / PK-changing update's
+  `old_record` carries the tenant column (key-only under the default identity).
 - **`sensitive`** — source columns classified as sensitive. Must map to an AshCloak-encrypted
   attribute, a binary-storage attribute, or be listed in `skip`. Never list the
   `tenant_attribute`.
