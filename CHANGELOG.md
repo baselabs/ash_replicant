@@ -35,9 +35,10 @@ sensitive-column verification.
   `:persistent_term` and accessed by the sink's transaction handler.
 
 - **Sink action applier** (`AshReplicant.Apply`) — applies changes to mirror
-  resources: upsert by PK, destroy, truncate per policy. All changes in a
-  transaction run with `authorize?: false` at the boundary (Ash policies still
-  gate the action definition; the flag exempts the sink's generated calls from
+  resources: upsert by PK, destroy, truncate per policy. Actions are the host's
+  own resource actions; the sink invokes them with `authorize?: false` at the
+  boundary (the host's Ash policies still guard those actions for application
+  callers; the flag exempts only the sink's in-transaction mirror writes from
   re-gating). Tenant is passed per-row.
 
 - **Compile-time verifiers** — enforce critical rules:
