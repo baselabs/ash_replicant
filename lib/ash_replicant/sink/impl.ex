@@ -40,7 +40,7 @@ defmodule AshReplicant.Sink.Impl do
   @spec handle_transaction(map(), Replicant.Transaction.t()) ::
           {:ok, Replicant.lsn()} | {:error, term()}
   def handle_transaction(config, %Replicant.Transaction{commit_lsn: lsn, changes: changes}) do
-    if map_size(config.resolver_index) == 0 do
+    if empty_index?(config) do
       # Fail closed: an absent/empty resolver index (start_link not run, slot
       # mismatch, degenerate config) would resolve every change to `nil` in
       # Apply — silently dropping ALL rows while still advancing the checkpoint,
@@ -53,6 +53,16 @@ defmodule AshReplicant.Sink.Impl do
   rescue
     e -> halt(e, config)
   end
+
+  # The empty-resolver-index fail-closed guard. Shared by ALL delivery entry
+  # points (transaction, snapshot, snapshot-complete): the same degenerate index
+  # that silently drops streaming rows would silently drop a whole backfill AND
+  # advance the checkpoint past it (permanent, invisible loss) — the snapshot
+  # path must fail closed identically, never "complete" a snapshot that mirrored
+  # nothing. (An index with entries but no target for ONE table is a legitimate
+  # partial-publication skip, handled per-table below; only the WHOLESALE-empty
+  # index is a misconfiguration.)
+  defp empty_index?(config), do: map_size(config.resolver_index) == 0
 
   @doc """
   Accept or decline a schema change. An `:additive` change auto-applies; a
@@ -99,15 +109,19 @@ defmodule AshReplicant.Sink.Impl do
   """
   @spec handle_snapshot(map(), [Replicant.Change.t()], map()) :: :ok | {:error, term()}
   def handle_snapshot(config, changes, %{table: qualified, first_for_table?: first?} = _ctx) do
-    {schema, table} =
-      case String.split(qualified, ".", parts: 2) do
-        [s, t] -> {s, t}
-        [t] -> {"public", t}
-      end
+    if empty_index?(config) do
+      {:error, Error.exception(reason: :config_invalid, resource: nil, op: :snapshot)}
+    else
+      {schema, table} =
+        case String.split(qualified, ".", parts: 2) do
+          [s, t] -> {s, t}
+          [t] -> {"public", t}
+        end
 
-    resource = Map.get(config.resolver_index, {schema, table})
+      resource = Map.get(config.resolver_index, {schema, table})
 
-    if is_nil(resource), do: :ok, else: run_snapshot(config, resource, changes, first?)
+      if is_nil(resource), do: :ok, else: run_snapshot(config, resource, changes, first?)
+    end
   rescue
     e -> {:error, Error.scrub(e, nil, :snapshot)}
   end
@@ -128,13 +142,19 @@ defmodule AshReplicant.Sink.Impl do
   @spec handle_snapshot_complete(map(), Replicant.lsn()) ::
           {:ok, Replicant.lsn()} | {:error, term()}
   def handle_snapshot_complete(config, snapshot_lsn) do
-    config.repo.transaction(fn -> upsert_checkpoint(config, snapshot_lsn) end)
-    |> case do
-      {:ok, _} ->
-        {:ok, snapshot_lsn}
+    if empty_index?(config) do
+      # Fail closed: never advance the checkpoint to "complete" a snapshot that
+      # mirrored nothing because the index was empty — that locks in invisible loss.
+      {:error, Error.exception(reason: :config_invalid, resource: nil, op: :snapshot_complete)}
+    else
+      config.repo.transaction(fn -> upsert_checkpoint(config, snapshot_lsn) end)
+      |> case do
+        {:ok, _} ->
+          {:ok, snapshot_lsn}
 
-      {:error, other} ->
-        {:error, Error.scrub(other, config.checkpoint_resource, :snapshot_complete)}
+        {:error, other} ->
+          {:error, Error.scrub(other, config.checkpoint_resource, :snapshot_complete)}
+      end
     end
   rescue
     e -> {:error, Error.scrub(e, config.checkpoint_resource, :snapshot_complete)}

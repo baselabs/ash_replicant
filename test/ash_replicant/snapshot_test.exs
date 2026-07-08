@@ -53,6 +53,28 @@ defmodule AshReplicant.SnapshotTest do
     assert {:ok, 500} = Sink.checkpoint()
   end
 
+  # An empty resolver index must fail closed on BOTH snapshot entry points, exactly
+  # as handle_transaction does — otherwise a degenerate/misloaded index would drop
+  # the whole backfill AND advance the checkpoint past it (permanent invisible loss).
+  test "an empty resolver index fails closed on snapshot AND snapshot_complete (:config_invalid), checkpoint not advanced" do
+    empty = %{
+      repo: TestRepo,
+      checkpoint_resource: AshReplicant.Test.Checkpoint,
+      slot_name: "snap_slot",
+      resolver_index: %{},
+      authorize?: false
+    }
+
+    assert {:error, %AshReplicant.Error{reason: :config_invalid}} =
+             AshReplicant.Sink.Impl.handle_snapshot(empty, [snap("1")], ctx(true))
+
+    assert {:error, %AshReplicant.Error{reason: :config_invalid}} =
+             AshReplicant.Sink.Impl.handle_snapshot_complete(empty, 500)
+
+    # loss=0: the checkpoint was NOT advanced.
+    assert {:ok, nil} = AshReplicant.Sink.Impl.checkpoint(empty)
+  end
+
   test "a sensitive-resource snapshot routes per-record so AshCloak encrypts (no plaintext)" do
     start_supervised!(Vault)
 
