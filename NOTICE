@@ -1,0 +1,12 @@
+ash_replicant
+Copyright 2026 rjpalermo. Licensed under the MIT License (see LICENSE).
+
+This product is built on the following projects:
+
+  * replicant (https://github.com/baselabs/replicant) — MIT License.
+    The CDC framework and transaction-granularity exactly-once watermark.
+  * AshPostgres — the Ash data layer for PostgreSQL.
+  * AshCloak — Ash's encryption extension for sensitive-attribute encryption.
+  * Ash Framework — the Elixir resource framework.
+
+All dependencies retain their original license terms.
