@@ -3,6 +3,8 @@ defmodule AshReplicant.EffectOnceTest do
   @moduletag :integration
 
   alias AshReplicant.Test.Marquee
+  alias AshReplicant.Test.PG
+  alias Ecto.Adapters.SQL.Sandbox
 
   @conn [hostname: "localhost", port: 5599, username: "postgres", database: "postgres"]
   @slot "marquee_slot"
@@ -15,8 +17,8 @@ defmodule AshReplicant.EffectOnceTest do
     # committing pooled connections (:auto), restoring :manual afterward. This
     # on_exit is registered FIRST so it runs LAST (LIFO): the cleanup queries below
     # still execute while mode is :auto.
-    Ecto.Adapters.SQL.Sandbox.mode(AshReplicant.TestRepo, :auto)
-    on_exit(fn -> Ecto.Adapters.SQL.Sandbox.mode(AshReplicant.TestRepo, :manual) end)
+    Sandbox.mode(AshReplicant.TestRepo, :auto)
+    on_exit(fn -> Sandbox.mode(AshReplicant.TestRepo, :manual) end)
 
     Marquee.setup_schema!()
 
@@ -93,7 +95,7 @@ defmodule AshReplicant.EffectOnceTest do
   test "end-to-end: a source INSERT lands in the Ash mirror exactly once" do
     start!()
     Marquee.q!("INSERT INTO #{Marquee.src()} (id, note) VALUES ('1', 'a')")
-    AshReplicant.Test.PG.wait_until(fn -> Marquee.mirror_rows() == [["1", "a"]] end)
+    PG.wait_until(fn -> Marquee.mirror_rows() == [["1", "a"]] end)
 
     counts = Marquee.applied_counts()
     assert map_size(counts) > 0
@@ -103,13 +105,13 @@ defmodule AshReplicant.EffectOnceTest do
   test "crash-and-resume: killing the pipeline mid-stream loses nothing and duplicates nothing" do
     start!()
     Marquee.q!("INSERT INTO #{Marquee.src()} (id, note) VALUES ('1', 'a')")
-    AshReplicant.Test.PG.wait_until(fn -> Marquee.mirror_rows() == [["1", "a"]] end)
+    PG.wait_until(fn -> Marquee.mirror_rows() == [["1", "a"]] end)
 
     :ok = AshReplicant.stop_supervised(@slot)
     Marquee.q!("INSERT INTO #{Marquee.src()} (id, note) VALUES ('2', 'b'), ('3', 'c')")
 
     start!()
-    AshReplicant.Test.PG.wait_until(fn -> length(Marquee.mirror_rows()) == 3 end)
+    PG.wait_until(fn -> length(Marquee.mirror_rows()) == 3 end)
     assert Marquee.mirror_rows() == [["1", "a"], ["2", "b"], ["3", "c"]]
 
     counts = Marquee.applied_counts()
@@ -120,7 +122,7 @@ defmodule AshReplicant.EffectOnceTest do
   test "atomic rollback: a checkpoint-write fault rolls back the whole transaction, then dedups on resume" do
     start!()
     Marquee.q!("INSERT INTO #{Marquee.src()} (id, note) VALUES ('1', 'a')")
-    AshReplicant.Test.PG.wait_until(fn -> Marquee.mirror_rows() == [["1", "a"]] end)
+    PG.wait_until(fn -> Marquee.mirror_rows() == [["1", "a"]] end)
 
     Marquee.q!(
       "ALTER TABLE ash_replicant_checkpoints ADD CONSTRAINT tmp_block CHECK (commit_lsn < 0) NOT VALID"
@@ -133,7 +135,7 @@ defmodule AshReplicant.EffectOnceTest do
     Marquee.q!("ALTER TABLE ash_replicant_checkpoints DROP CONSTRAINT tmp_block")
     AshReplicant.stop_supervised(@slot)
     start!()
-    AshReplicant.Test.PG.wait_until(fn -> length(Marquee.mirror_rows()) == 2 end)
+    PG.wait_until(fn -> length(Marquee.mirror_rows()) == 2 end)
     assert Marquee.mirror_rows() == [["1", "a"], ["2", "b"]]
 
     counts = Marquee.applied_counts()

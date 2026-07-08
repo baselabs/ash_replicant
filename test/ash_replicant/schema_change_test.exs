@@ -1,6 +1,8 @@
 defmodule AshReplicant.SchemaChangeTest do
   use ExUnit.Case, async: false
 
+  alias AshReplicant.Sink.Impl
+
   defmodule Sink do
     use AshReplicant.Sink,
       repo: AshReplicant.TestRepo,
@@ -78,7 +80,7 @@ defmodule AshReplicant.SchemaChangeTest do
     config = %{resolver_index: %{{"public", "ignore_tbl"} => IgnoreMirror}}
 
     assert :ok =
-             AshReplicant.Sink.Impl.handle_schema_change(
+             Impl.handle_schema_change(
                config,
                sc(:destructive, "ignore_tbl"),
                %{relation: :rel}

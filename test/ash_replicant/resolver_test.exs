@@ -4,13 +4,13 @@ defmodule AshReplicant.ResolverTest do
   alias AshReplicant.Resolver
 
   alias AshReplicant.Test.{
-    Order,
     Account,
-    TenantOrder,
-    Secret,
     Domain,
     DuplicateDomain,
-    NoSourceDomain
+    NoSourceDomain,
+    Order,
+    Secret,
+    TenantOrder
   }
 
   describe "build_index/1" do

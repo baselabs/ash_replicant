@@ -3,7 +3,8 @@ defmodule AshReplicant.SinkTest do
 
   @moduletag :integration
 
-  alias AshReplicant.Test.{Order, Domain, Checkpoint}
+  alias AshReplicant.Sink.Impl
+  alias AshReplicant.Test.{Checkpoint, Domain, Order}
 
   defmodule TestSink do
     use AshReplicant.Sink,
@@ -125,10 +126,10 @@ defmodule AshReplicant.SinkTest do
     }
 
     assert {:error, %AshReplicant.Error{reason: :config_invalid}} =
-             AshReplicant.Sink.Impl.handle_transaction(empty_config, txn(700, [ins("nope")]))
+             Impl.handle_transaction(empty_config, txn(700, [ins("nope")]))
 
     # loss=0: the checkpoint did NOT advance and the row was NOT written.
-    assert {:ok, nil} = AshReplicant.Sink.Impl.checkpoint(empty_config)
+    assert {:ok, nil} = Impl.checkpoint(empty_config)
     assert Ash.get!(Order, "nope", authorize?: false, error?: false) == nil
   end
 end

@@ -2,6 +2,7 @@ defmodule AshReplicant.Test.Marquee do
   @moduledoc "Fixtures for the effect-once marquee: source table + publication, mirror resource, sink."
 
   alias AshReplicant.TestRepo
+  alias Ecto.Adapters.SQL
 
   @src "repl_src_orders"
   @mirror "repl_mirror_orders"
@@ -27,7 +28,7 @@ defmodule AshReplicant.Test.Marquee do
     :ok
   end
 
-  def q!(sql, params \\ []), do: Ecto.Adapters.SQL.query!(TestRepo, sql, params)
+  def q!(sql, params \\ []), do: SQL.query!(TestRepo, sql, params)
 
   @doc "Drop the slot, retrying while the walsender still holds it (async release after socket close)."
   def drop_slot!(slot) do
@@ -57,6 +58,7 @@ defmodule AshReplicant.Test.Marquee do
   end
 
   defmodule Order do
+    @moduledoc false
     use Ash.Resource,
       domain: AshReplicant.Test.Marquee.Domain,
       data_layer: AshPostgres.DataLayer,
@@ -83,6 +85,7 @@ defmodule AshReplicant.Test.Marquee do
   end
 
   defmodule Domain do
+    @moduledoc false
     use Ash.Domain, validate_config_inclusion?: false
 
     resources do
@@ -92,6 +95,7 @@ defmodule AshReplicant.Test.Marquee do
   end
 
   defmodule Sink do
+    @moduledoc false
     use AshReplicant.Sink,
       repo: AshReplicant.TestRepo,
       domains: [AshReplicant.Test.Marquee.Domain],
