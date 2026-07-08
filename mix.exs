@@ -43,6 +43,7 @@ defmodule AshReplicant.MixProject do
       {:telemetry, "~> 1.0"},
       {:simple_sat, "~> 0.1"},
       {:ex_doc, "~> 0.31", only: :dev, runtime: false},
+      {:cloak, "~> 1.1", only: [:dev, :test], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:mix_audit, "~> 2.1", only: [:dev, :test], runtime: false}
