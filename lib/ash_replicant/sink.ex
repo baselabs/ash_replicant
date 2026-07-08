@@ -23,6 +23,9 @@ defmodule AshReplicant.Sink do
     domains = Keyword.fetch!(opts, :domains)
     checkpoint_resource = Keyword.fetch!(opts, :checkpoint_resource)
     slot_name = Keyword.fetch!(opts, :slot_name)
+    # Optional test-only append-only ledger table (dup=0 proof, Task 15). Defaults
+    # to nil so production sinks that omit it make `Impl.maybe_append_ledger` no-op.
+    apply_ledger = Keyword.get(opts, :apply_ledger)
 
     quote do
       @behaviour Replicant.Sink
@@ -33,7 +36,8 @@ defmodule AshReplicant.Sink do
           repo: unquote(repo),
           domains: unquote(domains),
           checkpoint_resource: unquote(checkpoint_resource),
-          slot_name: unquote(slot_name)
+          slot_name: unquote(slot_name),
+          apply_ledger: unquote(apply_ledger)
         }
       end
 

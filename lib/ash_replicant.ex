@@ -51,4 +51,14 @@ defmodule AshReplicant do
       )
     end
   end
+
+  @doc """
+  Stop a running pipeline by slot name (idempotent). Clears the cached resolver
+  index from `:persistent_term` so a subsequent `start_link/1` rebuilds it fresh.
+  """
+  @spec stop_supervised(String.t()) :: :ok
+  def stop_supervised(slot_name) do
+    :persistent_term.erase({AshReplicant, slot_name})
+    Replicant.stop(slot_name)
+  end
 end
