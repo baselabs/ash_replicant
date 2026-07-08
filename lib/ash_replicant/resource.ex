@@ -45,8 +45,17 @@ defmodule AshReplicant.Resource do
           "Source column carrying the tenant. Resolved per row and passed as `tenant:` to the mirror action."
       ],
       tenant_mfa: [
-        type: :mfa,
-        doc: "`{m, f, a}` applied as `apply(m, f, [record | a])` yielding the tenant for a row."
+        # `{module, function, extra_args_LIST}` — the 3rd element is a list of
+        # EXTRA args, not an arity. Spark's built-in `:mfa` validates the same
+        # `{m, f, list}` shape at runtime, but its InfoGenerator spec maps `:mfa`
+        # to Erlang's `mfa()` (`{module, atom, arity/byte}`), which mis-describes
+        # the 3rd element and breaks `apply(m, f, [record | a])`'s type in the
+        # resolver. This explicit tuple type generates the accurate
+        # `{atom(), atom(), [any()]}` spec while validating the identical value.
+        type: {:tuple, [:atom, :atom, {:list, :any}]},
+        doc:
+          "`{m, f, a}` where `a` is a list of extra args, applied as " <>
+            "`apply(m, f, [record | a])` yielding the tenant for a row."
       ],
       sensitive: [
         type: {:wrap_list, :atom},

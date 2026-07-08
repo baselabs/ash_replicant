@@ -158,6 +158,50 @@ defmodule AshReplicant.Test.Secret do
   end
 end
 
+defmodule AshReplicant.Test.TenantMfa do
+  @moduledoc """
+  Helper for `AshReplicant.Test.MfaOrder`'s `tenant_mfa`. `resolve/2` receives
+  the row (prepended by the resolver) plus one EXTRA arg (the tenant column
+  key), proving `apply(m, f, [record | a])` threads the args-list correctly.
+  """
+  def resolve(record, key) when is_map(record), do: Map.get(record, key)
+end
+
+defmodule AshReplicant.Test.MfaDomain do
+  @moduledoc false
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource AshReplicant.Test.MfaOrder
+  end
+end
+
+defmodule AshReplicant.Test.MfaOrder do
+  @moduledoc """
+  Ets-backed replicant resource exercising `tenant_mfa {m, f, [extra_arg]}`.
+  Locks that the explicit `{:tuple, [:atom, :atom, {:list, :any}]}` DSL type
+  still VALIDATES an `{Mod, :fun, [extra]}` value and that `resolve_tenant/2`
+  applies it as `apply(m, f, [record | extra_args])`.
+  """
+  use Ash.Resource,
+    domain: AshReplicant.Test.MfaDomain,
+    data_layer: Ash.DataLayer.Ets,
+    extensions: [AshReplicant.Resource]
+
+  replicant do
+    source_table("mfa_orders")
+    tenant_mfa({AshReplicant.Test.TenantMfa, :resolve, ["tenant_key"]})
+  end
+
+  attributes do
+    attribute :id, :string, primary_key?: true, allow_nil?: false, public?: true
+  end
+
+  actions do
+    defaults [:read]
+  end
+end
+
 defmodule AshReplicant.Test.DuplicateDomain do
   @moduledoc false
   use Ash.Domain, validate_config_inclusion?: false

@@ -14,7 +14,12 @@ defmodule AshReplicant.MixProject do
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
       deps: deps(),
-      dialyzer: [plt_add_apps: [:mix, :ex_unit], plt_local_path: "priv/plts"],
+      # `:cloak` is a `runtime: false` dep, so it is absent from the default PLT
+      # application tree. Without it in the PLT, dialyzer has no type info for the
+      # `Cloak.Vault` module and emits `unknown_function` warnings against cloak's
+      # own `use Cloak.Vault` macro body (surfaced via our test vaults). Adding it
+      # to `plt_add_apps` pre-analyzes cloak so those external warnings resolve.
+      dialyzer: [plt_add_apps: [:mix, :ex_unit, :cloak], plt_local_path: "priv/plts"],
       package: package(),
       docs: docs(),
       name: "AshReplicant",

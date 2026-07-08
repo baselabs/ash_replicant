@@ -7,6 +7,7 @@ defmodule AshReplicant.ResolverTest do
     Account,
     Domain,
     DuplicateDomain,
+    MfaOrder,
     NoSourceDomain,
     Order,
     Secret,
@@ -49,6 +50,24 @@ defmodule AshReplicant.ResolverTest do
 
     test "a non-tenant resource resolves to {:ok, nil}" do
       assert {:ok, nil} = Resolver.resolve_tenant(Order, %{"id" => "1"})
+    end
+
+    test "tenant_mfa {m, f, [extra]} applies as apply(m, f, [record | extra_args])" do
+      # MfaOrder declares tenant_mfa {TenantMfa, :resolve, ["tenant_key"]};
+      # resolve(record, "tenant_key") == Map.get(record, "tenant_key"). This
+      # proves the {:tuple, [:atom, :atom, {:list, :any}]} type validated the
+      # 3-tuple AND the resolver threads [record | extra_args] correctly.
+      assert {:ok, "org_9"} = Resolver.resolve_tenant(MfaOrder, %{"tenant_key" => "org_9"})
+    end
+
+    test "tenant_mfa fails closed on a nil/blank/missing resolved tenant (tripwire)" do
+      assert {:error, :tenant_required} = Resolver.resolve_tenant(MfaOrder, %{})
+
+      assert {:error, :tenant_required} =
+               Resolver.resolve_tenant(MfaOrder, %{"tenant_key" => nil})
+
+      assert {:error, :tenant_required} =
+               Resolver.resolve_tenant(MfaOrder, %{"tenant_key" => "  "})
     end
   end
 
