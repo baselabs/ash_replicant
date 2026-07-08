@@ -81,6 +81,12 @@ defmodule AshReplicant.Apply do
       upsert_fields: upsert_fields,
       tenant: tenant,
       authorize?: config.authorize?,
+      # The sink owns the single outer Repo.transaction these actions join (spec
+      # decision 7); `transaction?: false` skips a redundant per-row savepoint on
+      # the upsert. (`Ash.destroy!` has no `transaction?` option — its per-action
+      # transaction is host-action-level config — so the destroy path below cannot
+      # take the same flag and simply joins the ambient sink transaction.)
+      transaction?: false,
       return_notifications?: true
     )
 
