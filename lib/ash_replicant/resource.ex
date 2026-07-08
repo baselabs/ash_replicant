@@ -80,5 +80,7 @@ defmodule AshReplicant.Resource do
     ]
   }
 
-  use Spark.Dsl.Extension, sections: [@replicant], verifiers: []
+  use Spark.Dsl.Extension,
+    sections: [@replicant],
+    verifiers: [AshReplicant.Resource.Verifiers.ValidateSensitive]
 end
