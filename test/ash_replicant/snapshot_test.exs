@@ -162,4 +162,50 @@ defmodule AshReplicant.SnapshotTest do
     assert %TenantOrder{} = Ash.get!(TenantOrder, "t1", tenant: "org_1", authorize?: false)
     assert %TenantOrder{} = Ash.get!(TenantOrder, "t2", tenant: "org_2", authorize?: false)
   end
+
+  @tag :integration
+  test "snapshot seeds one open version per row for an SCD2 resource" do
+    config = %{
+      resolver_index: %{{"public", "orders"} => AshReplicant.Test.OrderVersion},
+      repo: AshReplicant.TestRepo,
+      authorize?: false,
+      slot_name: "scd2_snap",
+      checkpoint_resource: AshReplicant.Test.Checkpoint
+    }
+
+    # Real snapshot changes carry commit_lsn: nil — the LSN lives in ctx.snapshot_lsn.
+    # Building them with nil (the PRODUCTION shape) is what makes this test observe the
+    # threading, instead of fabricating a commit_lsn that masks the bug.
+    changes = [
+      %Replicant.Change{
+        op: :insert,
+        schema: "public",
+        table: "orders",
+        record: %{"order_id" => "s1", "amount" => "1"},
+        commit_lsn: nil
+      },
+      %Replicant.Change{
+        op: :insert,
+        schema: "public",
+        table: "orders",
+        record: %{"order_id" => "s2", "amount" => "2"},
+        commit_lsn: nil
+      }
+    ]
+
+    assert :ok =
+             AshReplicant.Sink.Impl.handle_snapshot(config, changes, %{
+               table: "public.orders",
+               first_for_table?: true,
+               snapshot_lsn: 10
+             })
+
+    rows = Ash.read!(AshReplicant.Test.OrderVersion, authorize?: false)
+    assert length(rows) == 2
+
+    assert Enum.all?(
+             rows,
+             &(&1.is_current and is_nil(&1.valid_to_lsn) and &1.valid_from_lsn == 10)
+           )
+  end
 end

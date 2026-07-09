@@ -133,24 +133,26 @@ defmodule AshReplicant.Sink.Impl do
   end
 
   defp run_snapshot_batch(config, resource, changes, first?, table, ctx) do
-    with :ok <- run_snapshot(config, resource, changes, first?) do
+    snapshot_lsn = Map.get(ctx, :snapshot_lsn)
+
+    with :ok <- run_snapshot(config, resource, changes, first?, snapshot_lsn) do
       # Snapshot changes are a materialized list (the bulk path indexes them via
       # List.first), so counting is single-pass-safe here — unlike the streaming
       # path's lazy Enumerable.
       Telemetry.event(
         [:ash_replicant, :snapshot, :batch],
         %{change_count: Enum.count(changes)},
-        %{table: table, commit_lsn: Map.get(ctx, :snapshot_lsn)}
+        %{table: table, commit_lsn: snapshot_lsn}
       )
 
       :ok
     end
   end
 
-  defp run_snapshot(config, resource, changes, first?) do
+  defp run_snapshot(config, resource, changes, first?, snapshot_lsn) do
     config.repo.transaction(fn ->
       if first?, do: clear_mirror(resource, config)
-      apply_snapshot_batch(config, resource, changes)
+      apply_snapshot_batch(config, resource, changes, snapshot_lsn)
     end)
     |> case do
       {:ok, _} -> :ok
@@ -196,17 +198,25 @@ defmodule AshReplicant.Sink.Impl do
     SQL.query!(config.repo, ~s(DELETE FROM "#{schema}"."#{table}"), [])
   end
 
-  defp apply_snapshot_batch(_config, _resource, []), do: :ok
+  defp apply_snapshot_batch(_config, _resource, [], _snapshot_lsn), do: :ok
 
-  defp apply_snapshot_batch(config, resource, changes) do
+  defp apply_snapshot_batch(config, resource, changes, snapshot_lsn) do
     # The load-bearing driver of the split is `tenant_scoped?`: a single bulk
     # upsert carries one `tenant:`, so a mixed-tenant batch cannot go through bulk
     # — it MUST apply per-record, each row under its own resolved tenant.
     # `sensitive?` also routes per-record, but that is belt-and-suspenders:
     # `Ash.bulk_create` fires AshCloak's before_action too (bulk encrypts), so the
     # per-record path is conservative here, not a plaintext-leak guard.
-    if sensitive?(resource) or tenant_scoped?(resource) do
-      Enum.each(changes, fn c -> Apply.apply_change(config, %{c | op: :insert}) end)
+    # `history_scd2?` MUST route per-record too: a bulk upsert of the source columns
+    # can't open a validity window (the NOT-NULL window columns are unpopulated) — the
+    # SCD2 apply path opens one current version per row, stamping `valid_from_lsn` from
+    # the change's `commit_lsn`. Snapshot changes carry `commit_lsn: nil`, so thread the
+    # batch's `snapshot_lsn` onto each change; it is INERT for the SCD1 sensitive/tenant
+    # per-record upsert (which reads only `change.record`).
+    if sensitive?(resource) or tenant_scoped?(resource) or Info.history_scd2?(resource) do
+      Enum.each(changes, fn c ->
+        Apply.apply_change(config, %{c | op: :insert, commit_lsn: snapshot_lsn})
+      end)
     else
       # Compute the batch-invariant reflection ONCE (F13): every row of a full-table
       # snapshot dump is column-homogeneous, so `skip`/cloak/attribute-name derivation
