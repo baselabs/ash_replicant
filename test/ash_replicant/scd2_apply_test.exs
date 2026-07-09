@@ -287,4 +287,23 @@ defmodule AshReplicant.Scd2ApplyTest do
     assert [v_new] = versions("o2")
     assert is_nil(v_new.valid_to_lsn) and v_new.is_current and v_new.amount == "10"
   end
+
+  test "an SCD2 apply failure is value-free (scrubbed to a structural reason)", %{config: config} do
+    # No `order_id` in the record → the nil-business-key guard in `close_current` raises a
+    # structural `AshReplicant.Error` BEFORE any write. The scrubbed error must carry only
+    # structure (reason/resource/op), never the `amount` row value.
+    bad = %Replicant.Change{
+      op: :insert,
+      schema: "public",
+      table: "orders",
+      record: %{"amount" => "secret-value-123"},
+      commit_lsn: 100
+    }
+
+    err =
+      assert_raise AshReplicant.Error, fn -> AshReplicant.Apply.apply_change(config, bad, nil) end
+
+    refute inspect(err) =~ "secret-value-123"
+    assert err.reason in [:sink_failed, :tenant_required]
+  end
 end
