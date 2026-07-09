@@ -11,5 +11,8 @@ defmodule AshReplicant.Test.HistoryDomain do
 
   resources do
     resource AshReplicant.Test.OrderVersion
+    resource AshReplicant.Test.OrderVersionCloseTruncate
+    resource AshReplicant.Test.OrderVersionMirror
+    resource AshReplicant.Test.OrderVersionTenant
   end
 end

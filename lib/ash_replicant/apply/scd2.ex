@@ -11,8 +11,10 @@ defmodule AshReplicant.Apply.Scd2 do
   raising op is scrubbed to a structural reason.
   """
 
+  alias AshPostgres.DataLayer.Info, as: PGInfo
   alias AshReplicant.{Error, Resolver}
   alias AshReplicant.Resource.Info
+  alias Ecto.Adapters.SQL
 
   @spec apply(map(), module(), Replicant.Change.t(), DateTime.t() | nil) :: :ok
   def apply(config, resource, %{op: op} = change, ts) when op in [:insert, :update] do
@@ -40,7 +42,75 @@ defmodule AshReplicant.Apply.Scd2 do
     e -> reraise Error.scrub(e, resource, :destroy), __STACKTRACE__
   end
 
-  # :truncate clause added in Task 7.
+  def apply(config, resource, %{op: :truncate} = change, ts) do
+    case Info.replicant_on_truncate!(resource) do
+      :close ->
+        close_all(config, resource, change.commit_lsn, ts)
+
+      :mirror ->
+        mirror_wipe(config, resource)
+
+      :halt ->
+        raise Error.exception(
+                reason: :truncate_halt,
+                resource: resource,
+                op: :truncate,
+                shape: "#{change.schema}.#{change.table}"
+              )
+    end
+  rescue
+    e -> reraise Error.scrub(e, resource, :truncate), __STACKTRACE__
+  end
+
+  # Tenant-blind close of window columns only. Real column names via attribute.source || name;
+  # only declared columns set. Mirrors the :mirror raw DELETE trust boundary (operator-trust
+  # quoted idents, VALUES parameterized, no row values).
+  defp close_all(config, resource, lsn, ts) do
+    schema = PGInfo.schema(resource) || "public"
+    table = PGInfo.table(resource)
+    to_lsn = column(resource, Info.replicant_history_valid_to_lsn_attribute!(resource))
+
+    {sets, params} =
+      [{to_lsn, lsn}]
+      |> maybe_set(
+        resource,
+        opt(Info.replicant_history_valid_to_timestamp_attribute(resource)),
+        ts
+      )
+      |> maybe_set(resource, opt(Info.replicant_history_current_attribute(resource)), false)
+      |> build_set()
+
+    SQL.query!(
+      config.repo,
+      ~s(UPDATE "#{schema}"."#{table}" SET #{sets} WHERE "#{to_lsn}" IS NULL),
+      params
+    )
+
+    :ok
+  end
+
+  defp mirror_wipe(config, resource) do
+    schema = PGInfo.schema(resource) || "public"
+    table = PGInfo.table(resource)
+    SQL.query!(config.repo, ~s(DELETE FROM "#{schema}"."#{table}"), [])
+    :ok
+  end
+
+  defp column(resource, attr) do
+    to_string(Ash.Resource.Info.attribute(resource, attr).source || attr)
+  end
+
+  defp maybe_set(list, _resource, nil, _value), do: list
+  defp maybe_set(list, resource, attr, value), do: [{column(resource, attr), value} | list]
+
+  defp build_set(pairs) do
+    {frags, params, _i} =
+      Enum.reduce(pairs, {[], [], 1}, fn {col, val}, {frags, params, i} ->
+        {["\"#{col}\" = $#{i}" | frags], [val | params], i + 1}
+      end)
+
+    {frags |> Enum.reverse() |> Enum.join(", "), Enum.reverse(params)}
+  end
 
   defp close_current(config, resource, record, lsn, ts, tenant, opts) do
     # Fail closed on a nil business key BEFORE building the close query: a nil value

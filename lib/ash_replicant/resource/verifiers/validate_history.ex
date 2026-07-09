@@ -22,8 +22,27 @@ defmodule AshReplicant.Resource.Verifiers.ValidateHistory do
 
   @impl true
   def verify(dsl_state) do
-    if Verifier.get_option(dsl_state, [:replicant], :history_strategy, :scd1) == :scd2 do
-      do_verify(dsl_state)
+    strategy = Verifier.get_option(dsl_state, [:replicant], :history_strategy, :scd1)
+
+    with :ok <- check_close_requires_scd2(dsl_state, strategy) do
+      if strategy == :scd2, do: do_verify(dsl_state), else: :ok
+    end
+  end
+
+  # `on_truncate :close` closes validity windows — an SCD2-only operation. The enum
+  # accepts `:close` globally (a shared option), so this guard runs REGARDLESS of
+  # strategy, BEFORE the SCD1 early-out: an SCD1 resource selecting `:close` would
+  # otherwise reach `Apply.apply_to`'s SCD1 truncate `case` (only `:mirror`/`:halt`)
+  # and raise `CaseClauseError` at RUNTIME. Fail closed at build instead.
+  defp check_close_requires_scd2(dsl_state, strategy) do
+    on_truncate = Verifier.get_option(dsl_state, [:replicant], :on_truncate, :halt)
+
+    if on_truncate == :close and strategy != :scd2 do
+      err(
+        Verifier.get_persisted(dsl_state, :module),
+        [:replicant, :on_truncate],
+        "`on_truncate :close` requires `history_strategy :scd2` (closing validity windows is an SCD2 operation)."
+      )
     else
       :ok
     end

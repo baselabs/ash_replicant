@@ -74,11 +74,12 @@ defmodule AshReplicant.Resource do
         doc: "Source columns excluded from the mirror write."
       ],
       on_truncate: [
-        type: {:one_of, [:halt, :mirror]},
+        type: {:one_of, [:halt, :mirror, :close]},
         default: :halt,
         doc:
-          "Policy for an upstream TRUNCATE: `:halt` (fail-closed) or `:mirror` " <>
-            "(bulk-destroy the mirror rows in-txn)."
+          "Policy for an upstream TRUNCATE: `:halt` (fail-closed), `:mirror` " <>
+            "(bulk-destroy the mirror rows in-txn), or `:close` (SCD2 only — close " <>
+            "every open version tenant-blind, retiring the whole window)."
       ],
       on_schema_change: [
         type: {:one_of, [:halt_destructive, :ignore]},

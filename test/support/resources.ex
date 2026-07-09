@@ -256,6 +256,198 @@ defmodule AshReplicant.Test.OrderVersion do
   end
 end
 
+defmodule AshReplicant.Test.OrderVersionCloseTruncate do
+  @moduledoc """
+  SCD2 fixture identical to `OrderVersion` but with `on_truncate(:close)`, exercising
+  Task 7's tenant-blind window-only close of every open version on an upstream TRUNCATE.
+  Its own `order_versions_ct` table (and open-uniq index) avoids colliding with
+  `OrderVersion`; `source_table("orders")` collides with the SCD1 `Order` under
+  `build_index`'s duplicate-source guard, so it lives in `HistoryDomain`, never
+  passed to `build_index([Test.Domain])`.
+  """
+  use Ash.Resource,
+    domain: AshReplicant.Test.HistoryDomain,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshReplicant.Resource]
+
+  postgres do
+    table "order_versions_ct"
+    repo AshReplicant.TestRepo
+
+    custom_indexes do
+      index [:order_id],
+        unique: true,
+        where: "valid_to_lsn IS NULL",
+        name: "order_versions_ct_open_uniq"
+    end
+  end
+
+  replicant do
+    source_table("orders")
+    on_truncate(:close)
+    history_strategy(:scd2)
+    history_business_key([:order_id])
+    upsert_identity(:order_version)
+    history_close_action(:close_version)
+    history_current_attribute(:is_current)
+    history_valid_from_timestamp_attribute(:valid_from_ts)
+    history_valid_to_timestamp_attribute(:valid_to_ts)
+  end
+
+  attributes do
+    uuid_primary_key :id
+    attribute :order_id, :string, allow_nil?: false, public?: true
+    attribute :amount, :string, public?: true
+    attribute :valid_from_lsn, :integer, allow_nil?: false, public?: true
+    attribute :valid_to_lsn, :integer, allow_nil?: true, public?: true
+    attribute :valid_from_ts, :utc_datetime_usec, allow_nil?: true, public?: true
+    attribute :valid_to_ts, :utc_datetime_usec, allow_nil?: true, public?: true
+    attribute :is_current, :boolean, allow_nil?: false, default: true, public?: true
+  end
+
+  identities do
+    identity :order_version, [:order_id, :valid_from_lsn]
+  end
+
+  actions do
+    defaults [:read, :destroy, create: :*, update: :*]
+
+    update :close_version do
+      accept [:valid_to_lsn, :valid_to_ts, :is_current]
+    end
+  end
+end
+
+defmodule AshReplicant.Test.OrderVersionMirror do
+  @moduledoc """
+  SCD2 fixture with `on_truncate(:mirror)`, exercising Task 7's `mirror_wipe` (raw
+  DELETE of the whole version table). Its own `order_versions_m` table avoids
+  colliding with the other SCD2 fixtures; `source_table("orders")` collides with the
+  SCD1 `Order` under `build_index`'s duplicate-source guard, so it lives in
+  `HistoryDomain`.
+  """
+  use Ash.Resource,
+    domain: AshReplicant.Test.HistoryDomain,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshReplicant.Resource]
+
+  postgres do
+    table "order_versions_m"
+    repo AshReplicant.TestRepo
+
+    custom_indexes do
+      index [:order_id],
+        unique: true,
+        where: "valid_to_lsn IS NULL",
+        name: "order_versions_m_open_uniq"
+    end
+  end
+
+  replicant do
+    source_table("orders")
+    on_truncate(:mirror)
+    history_strategy(:scd2)
+    history_business_key([:order_id])
+    upsert_identity(:order_version)
+    history_close_action(:close_version)
+    history_current_attribute(:is_current)
+    history_valid_from_timestamp_attribute(:valid_from_ts)
+    history_valid_to_timestamp_attribute(:valid_to_ts)
+  end
+
+  attributes do
+    uuid_primary_key :id
+    attribute :order_id, :string, allow_nil?: false, public?: true
+    attribute :amount, :string, public?: true
+    attribute :valid_from_lsn, :integer, allow_nil?: false, public?: true
+    attribute :valid_to_lsn, :integer, allow_nil?: true, public?: true
+    attribute :valid_from_ts, :utc_datetime_usec, allow_nil?: true, public?: true
+    attribute :valid_to_ts, :utc_datetime_usec, allow_nil?: true, public?: true
+    attribute :is_current, :boolean, allow_nil?: false, default: true, public?: true
+  end
+
+  identities do
+    identity :order_version, [:order_id, :valid_from_lsn]
+  end
+
+  actions do
+    defaults [:read, :destroy, create: :*, update: :*]
+
+    update :close_version do
+      accept [:valid_to_lsn, :valid_to_ts, :is_current]
+    end
+  end
+end
+
+defmodule AshReplicant.Test.OrderVersionTenant do
+  @moduledoc """
+  MULTITENANT SCD2 fixture (non-global attribute multitenancy on `org_id`) with
+  `on_truncate(:close)`, proving `close_all` is TENANT-BLIND: its raw UPDATE closes
+  every open version across ALL tenants with no tenant filter. A tenant-scoped
+  `bulk_update` would raise `TenantRequired` on a non-global multitenant resource
+  (no single tenant to scope by) — the reason close uses raw SQL. Its own
+  `order_versions_t` table; lives in `HistoryDomain` (duplicate `source_table`).
+  """
+  use Ash.Resource,
+    domain: AshReplicant.Test.HistoryDomain,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshReplicant.Resource]
+
+  postgres do
+    table "order_versions_t"
+    repo AshReplicant.TestRepo
+
+    custom_indexes do
+      index [:order_id],
+        unique: true,
+        where: "valid_to_lsn IS NULL",
+        name: "order_versions_t_open_uniq"
+    end
+  end
+
+  replicant do
+    source_table("orders")
+    tenant_attribute(:org_id)
+    on_truncate(:close)
+    history_strategy(:scd2)
+    history_business_key([:order_id])
+    upsert_identity(:order_version)
+    history_close_action(:close_version)
+    history_current_attribute(:is_current)
+    history_valid_from_timestamp_attribute(:valid_from_ts)
+    history_valid_to_timestamp_attribute(:valid_to_ts)
+  end
+
+  attributes do
+    uuid_primary_key :id
+    attribute :order_id, :string, allow_nil?: false, public?: true
+    attribute :org_id, :string, allow_nil?: false, public?: true
+    attribute :amount, :string, public?: true
+    attribute :valid_from_lsn, :integer, allow_nil?: false, public?: true
+    attribute :valid_to_lsn, :integer, allow_nil?: true, public?: true
+    attribute :valid_from_ts, :utc_datetime_usec, allow_nil?: true, public?: true
+    attribute :valid_to_ts, :utc_datetime_usec, allow_nil?: true, public?: true
+    attribute :is_current, :boolean, allow_nil?: false, default: true, public?: true
+  end
+
+  multitenancy do
+    strategy :attribute
+    attribute :org_id
+  end
+
+  identities do
+    identity :order_version, [:order_id, :valid_from_lsn]
+  end
+
+  actions do
+    defaults [:read, :destroy, create: :*, update: :*]
+
+    update :close_version do
+      accept [:valid_to_lsn, :valid_to_ts, :is_current]
+    end
+  end
+end
+
 defmodule AshReplicant.Test.DuplicateDomain do
   @moduledoc false
   use Ash.Domain, validate_config_inclusion?: false

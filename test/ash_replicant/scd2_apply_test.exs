@@ -148,6 +148,126 @@ defmodule AshReplicant.Scd2ApplyTest do
     assert Enum.all?(vs, &(not is_nil(&1.valid_to_lsn)))
   end
 
+  test "on_truncate :close closes every open version tenant-blind", %{config: _config} do
+    ct_config = %{
+      resolver_index: %{{"public", "orders"} => AshReplicant.Test.OrderVersionCloseTruncate},
+      repo: AshReplicant.TestRepo,
+      authorize?: false
+    }
+
+    AshReplicant.Apply.apply_change(
+      ct_config,
+      change(:insert, %{"order_id" => "a", "amount" => "1"}, 100),
+      nil
+    )
+
+    AshReplicant.Apply.apply_change(
+      ct_config,
+      change(:insert, %{"order_id" => "b", "amount" => "2"}, 100),
+      nil
+    )
+
+    AshReplicant.Apply.apply_change(
+      ct_config,
+      %Replicant.Change{op: :truncate, schema: "public", table: "orders", commit_lsn: 500},
+      nil
+    )
+
+    rows = AshReplicant.Test.OrderVersionCloseTruncate |> Ash.read!(authorize?: false)
+
+    # ANTI-VACUITY (MANDATORY): assert BOTH versions exist before checking closed — `Enum.all?([], _)`
+    # is vacuously true, so an empty result (inserts failed) must NOT pass.
+    assert length(rows) == 2
+    assert Enum.all?(rows, &(&1.valid_to_lsn == 500 and not &1.is_current))
+
+    # IDEMPOTENCY: re-truncate at a LATER lsn. `WHERE valid_to_lsn IS NULL` matches no
+    # open rows now, so already-closed versions KEEP their original valid_to_lsn (500),
+    # never re-stamped to 600.
+    AshReplicant.Apply.apply_change(
+      ct_config,
+      %Replicant.Change{op: :truncate, schema: "public", table: "orders", commit_lsn: 600},
+      nil
+    )
+
+    reread = AshReplicant.Test.OrderVersionCloseTruncate |> Ash.read!(authorize?: false)
+    assert length(reread) == 2
+    assert Enum.all?(reread, &(&1.valid_to_lsn == 500 and not &1.is_current))
+  end
+
+  test "on_truncate :mirror physically deletes every version row (mirror_wipe)", %{
+    config: _config
+  } do
+    m_config = %{
+      resolver_index: %{{"public", "orders"} => AshReplicant.Test.OrderVersionMirror},
+      repo: AshReplicant.TestRepo,
+      authorize?: false
+    }
+
+    AshReplicant.Apply.apply_change(
+      m_config,
+      change(:insert, %{"order_id" => "a", "amount" => "1"}, 100),
+      nil
+    )
+
+    AshReplicant.Apply.apply_change(
+      m_config,
+      change(:insert, %{"order_id" => "b", "amount" => "2"}, 100),
+      nil
+    )
+
+    # ANTI-VACUITY: rows MUST exist before the truncate, else an empty-table `== []` passes falsely.
+    assert length(Ash.read!(AshReplicant.Test.OrderVersionMirror, authorize?: false)) == 2
+
+    AshReplicant.Apply.apply_change(
+      m_config,
+      %Replicant.Change{op: :truncate, schema: "public", table: "orders", commit_lsn: 500},
+      nil
+    )
+
+    # mirror_wipe issues a raw DELETE of the whole version table — no rows remain.
+    assert Ash.read!(AshReplicant.Test.OrderVersionMirror, authorize?: false) == []
+  end
+
+  test "on_truncate :close is tenant-blind — closes EVERY tenant's open version", %{
+    config: _config
+  } do
+    t_config = %{
+      resolver_index: %{{"public", "orders"} => AshReplicant.Test.OrderVersionTenant},
+      repo: AshReplicant.TestRepo,
+      authorize?: false
+    }
+
+    # Insert via the SCD2 apply path for two distinct tenants (resolve_tenant pulls org_id
+    # from the record). This also exercises the multitenant SCD2 INSERT path.
+    AshReplicant.Apply.apply_change(
+      t_config,
+      change(:insert, %{"order_id" => "a", "org_id" => "t1", "amount" => "1"}, 100),
+      nil
+    )
+
+    AshReplicant.Apply.apply_change(
+      t_config,
+      change(:insert, %{"order_id" => "b", "org_id" => "t2", "amount" => "2"}, 100),
+      nil
+    )
+
+    # A SINGLE tenant-blind truncate closes BOTH tenants' open versions (no tenant filter).
+    AshReplicant.Apply.apply_change(
+      t_config,
+      %Replicant.Change{op: :truncate, schema: "public", table: "orders", commit_lsn: 500},
+      nil
+    )
+
+    t1 = Ash.read!(AshReplicant.Test.OrderVersionTenant, tenant: "t1", authorize?: false)
+    t2 = Ash.read!(AshReplicant.Test.OrderVersionTenant, tenant: "t2", authorize?: false)
+
+    # ANTI-VACUITY: each tenant has exactly one version row — a tenant-scoped close would
+    # have raised TenantRequired or touched only one tenant; both are closed here.
+    assert length(t1) == 1
+    assert length(t2) == 1
+    assert Enum.all?(t1 ++ t2, &(&1.valid_to_lsn == 500 and not &1.is_current))
+  end
+
   test "pk-changing update closes the old business key and opens the new", %{config: config} do
     AshReplicant.Apply.apply_change(
       config,

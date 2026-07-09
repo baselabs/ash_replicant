@@ -246,4 +246,33 @@ defmodule AshReplicant.ValidateHistoryTest do
 
     assert err.message =~ "close"
   end
+
+  test "on_truncate :close on a non-SCD2 (SCD1) resource fails closed at build" do
+    err =
+      assert_dsl_error %Spark.Error.DslError{path: [:replicant, :on_truncate]} do
+        defmodule Elixir.AshReplicant.ValidateHistoryTest.Scd1CloseTruncate do
+          use Ash.Resource,
+            domain: AshReplicant.ValidateHistoryTest.Domain,
+            validate_domain_inclusion?: false,
+            data_layer: Ash.DataLayer.Ets,
+            extensions: [AshReplicant.Resource]
+
+          replicant do
+            source_table("orders")
+            # history_strategy defaults to :scd1
+            on_truncate(:close)
+          end
+
+          attributes do
+            attribute :id, :string, primary_key?: true, allow_nil?: false
+          end
+
+          actions do
+            defaults [:read]
+          end
+        end
+      end
+
+    assert err.message =~ "scd2"
+  end
 end
