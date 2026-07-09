@@ -145,13 +145,22 @@ defmodule AshReplicant.ApplyTest do
     end
   end
 
-  test "deleting a never-present row is an idempotent no-op (atomic 0-row match)" do
+  test "deleting a never-present row is an idempotent no-op that does not over-match (atomic 0-row match)" do
     cfg = config()
+
+    # A distinct sibling row that MUST survive the never-present delete — makes this
+    # test red-capable against an unfiltered/over-broad DELETE: the atomic
+    # `DELETE ... WHERE pk` must scope to the target PK, never wipe the table.
+    Apply.apply_change(cfg, change(:insert, "orders", %{"id" => "survivor", "note" => "keep"}))
 
     # The row was never mirrored — the atomic DELETE ... WHERE pk matches 0 rows and
     # must return :ok (never raise), exactly as the prior read-then-destroy returned
     # :ok when Ash.get! found nothing.
     assert :ok = Apply.apply_change(cfg, change(:delete, "orders", nil, %{"id" => "never-here"}))
+
+    # A genuine 0-row no-op: the sibling is untouched (over-match guard) and the
+    # never-present PK is still absent.
+    assert %Order{note: "keep"} = Ash.get!(Order, "survivor", authorize?: false)
     assert Ash.get!(Order, "never-here", authorize?: false, error?: false) == nil
   end
 
