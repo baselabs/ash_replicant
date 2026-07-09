@@ -1,7 +1,7 @@
 defmodule AshReplicant.MixProject do
   use Mix.Project
 
-  @version "0.1.0"
+  @version "0.2.0"
   @source_url "https://github.com/baselabs/ash_replicant"
 
   def project do
@@ -41,7 +41,7 @@ defmodule AshReplicant.MixProject do
       {:ash, "~> 3.11"},
       {:ash_postgres, "~> 2.6"},
       {:ash_cloak, "~> 0.1"},
-      {:replicant, path: "../replicant"},
+      {:replicant, "~> 0.1.0"},
       {:spark, ">= 2.3.3 and < 3.0.0-0"},
       {:splode, "~> 0.3"},
       {:jason, "~> 1.4"},
@@ -66,7 +66,7 @@ defmodule AshReplicant.MixProject do
     [
       maintainers: ["rjpalermo"],
       licenses: ["MIT"],
-      files: ~w(lib .formatter.exs mix.exs README* LICENSE* CHANGELOG* usage-rules.md),
+      files: ~w(lib .formatter.exs mix.exs README* LICENSE* NOTICE* CHANGELOG* usage-rules.md),
       links: %{"GitHub" => @source_url, "Changelog" => "#{@source_url}/blob/main/CHANGELOG.md"}
     ]
   end

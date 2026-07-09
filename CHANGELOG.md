@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-09
+
+### Added
+
+- **`ValidateTenantSource` compile-time verifier** — a resource declaring
+  non-global Ash multitenancy must declare a `replicant` tenant source
+  (`tenant_attribute` or `tenant_mfa`). Without one, every mirror write is
+  attempted with `tenant: nil` and halts fail-closed (`:tenant_required`) at
+  runtime; this gate moves that failure to build time. It is the converse of
+  `ValidateMultitenancy` (which checks the shape of a declared discriminator).
+
 ### Fixed (closeout review, 2026-07-08 — `/review-autopilot --fix`)
 
 - **Snapshot fails closed on an empty resolver index** — `handle_snapshot/3` and
@@ -99,5 +110,6 @@ sensitive-column verification.
   `usage-rules.md`, `CONTRIBUTING.md`, `LICENSE`, `NOTICE`; tracked charter at
   `docs/CHARTER.md` (only `/docs/superpowers/` lifecycle artifacts are local-only).
 
-[Unreleased]: https://github.com/baselabs/ash_replicant/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/baselabs/ash_replicant/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/baselabs/ash_replicant/releases/tag/v0.2.0
 [0.1.0]: https://github.com/baselabs/ash_replicant/releases/tag/v0.1.0

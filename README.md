@@ -1,6 +1,6 @@
 # AshReplicant
 
-An [Ash Framework](https://ash-hq.org) adapter for [replicant](../replicant) — the
+An [Ash Framework](https://ash-hq.org) adapter for [replicant](https://github.com/baselabs/replicant) — the
 framework-agnostic Postgres CDC consumer. Mirrors a source Postgres database's
 committed changes into AshPostgres resources with **effect-once semantics** (dup = 0,
 loss = 0), resolving resource, tenant, and classification in the Ash layer while
@@ -12,11 +12,13 @@ verification, and policies **enforced Ash-natively**. It executes through the
 [`replicant`](https://github.com/baselabs/replicant) client (the transport — the
 "`postgrex` of CDC").
 
-> **Status: v0.1.0.** Full working library with effect-once guarantees, fail-closed
-> multitenancy, and AshCloak integration. Working rules are in [`AGENTS.md`](AGENTS.md) —
-> read it first. A fuller project charter (architecture, scope, and the resolved
-> effect-once model) is **tracked** at [`docs/CHARTER.md`](docs/CHARTER.md). Only the
-> `/docs/superpowers/` lifecycle artifacts (specs, plans, handoffs) are local-only.
+> **Status: v0.2.0.** Full working library with effect-once guarantees, fail-closed
+> multitenancy, and AshCloak integration. Working rules are in
+> [`AGENTS.md`](https://github.com/baselabs/ash_replicant/blob/main/AGENTS.md) — read it
+> first. A fuller project charter (architecture, scope, and the resolved effect-once
+> model) is **tracked** at
+> [`docs/CHARTER.md`](https://github.com/baselabs/ash_replicant/blob/main/docs/CHARTER.md).
+> Only the `/docs/superpowers/` lifecycle artifacts (specs, plans, handoffs) are local-only.
 
 ## Layering
 
@@ -37,13 +39,15 @@ Multitenancy lives **here**, not in `replicant` — exactly as `ash_postgres` (n
 
 ## Installation
 
-Not yet published. During co-development it path-depends on `replicant`:
+Add `ash_replicant` to your dependencies in `mix.exs`:
 
 ```elixir
 # mix.exs
-{:ash_replicant, path: "../ash_replicant"},
-{:replicant, path: "../replicant"}
+{:ash_replicant, "~> 0.2.0"}
 ```
+
+It pulls in [`replicant`](https://github.com/baselabs/replicant) (the CDC transport)
+as a transitive dependency.
 
 ## Quick Start
 
