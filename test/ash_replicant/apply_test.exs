@@ -247,4 +247,12 @@ defmodule AshReplicant.ApplyTest do
     # value-free: message names only reason/resource/op/shape, no row value
     refute Exception.message(err) =~ "note"
   end
+
+  test "apply_change/3 accepts an optional commit_timestamp; /2 still works" do
+    config = %{resolver_index: %{}, repo: AshReplicant.TestRepo, authorize?: false}
+    change = %Replicant.Change{op: :insert, schema: "public", table: "unmapped", record: %{}}
+    # Unmapped table → :ok without touching the DB, proving arity acceptance.
+    assert AshReplicant.Apply.apply_change(config, change) == :ok
+    assert AshReplicant.Apply.apply_change(config, change, ~U[2026-07-09 00:00:00.000000Z]) == :ok
+  end
 end

@@ -39,7 +39,11 @@ defmodule AshReplicant.Sink.Impl do
   """
   @spec handle_transaction(map(), Replicant.Transaction.t()) ::
           {:ok, Replicant.lsn()} | {:error, term()}
-  def handle_transaction(config, %Replicant.Transaction{commit_lsn: lsn, changes: changes}) do
+  def handle_transaction(config, %Replicant.Transaction{
+        commit_lsn: lsn,
+        commit_timestamp: ts,
+        changes: changes
+      }) do
     if empty_index?(config) do
       # Fail closed: an absent/empty resolver index (start_link not run, slot
       # mismatch, degenerate config) would resolve every change to `nil` in
@@ -48,7 +52,7 @@ defmodule AshReplicant.Sink.Impl do
       # never advances and the LSN is re-delivered on resume.
       halt(Error.exception(reason: :config_invalid, resource: nil, op: :sink), config)
     else
-      run_transaction(config, lsn, changes)
+      run_transaction(config, lsn, ts, changes)
     end
   rescue
     e -> halt(e, config)
@@ -249,7 +253,7 @@ defmodule AshReplicant.Sink.Impl do
       match?({:ok, _}, Info.replicant_tenant_mfa(resource))
   end
 
-  defp run_transaction(config, lsn, changes) do
+  defp run_transaction(config, lsn, ts, changes) do
     started = System.monotonic_time()
 
     result =
@@ -259,7 +263,7 @@ defmodule AshReplicant.Sink.Impl do
             :skipped
 
           _ ->
-            count = apply_all(config, changes)
+            count = apply_all(config, changes, ts)
             upsert_checkpoint(config, lsn)
             maybe_append_ledger(config, lsn)
             {:applied, count}
@@ -288,9 +292,9 @@ defmodule AshReplicant.Sink.Impl do
   # Single pass over the (possibly lazy, one-shot) change stream — iterate it EXACTLY
   # once, counting DURING the pass so `change_count` needs no second traversal (an
   # `Enum.count`/`length` would re-enumerate and blow up a spilled-txn stream).
-  defp apply_all(config, changes) do
+  defp apply_all(config, changes, ts) do
     Enum.reduce(changes, 0, fn change, n ->
-      Apply.apply_change(config, change)
+      Apply.apply_change(config, change, ts)
       n + 1
     end)
   end

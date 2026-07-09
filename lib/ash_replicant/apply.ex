@@ -20,12 +20,17 @@ defmodule AshReplicant.Apply do
   Apply a change under `config` (`%{resolver_index:, repo:, authorize?:}`).
   Returns `:ok`; raises `AshReplicant.Error` (value-free) on failure.
   A change whose `{schema, table}` is not a mirror target is ignored.
+
+  `commit_timestamp` (optional, defaults to `nil`) is the change's transaction
+  commit time, threaded through for SCD2 dispatch; unused on the SCD1 path.
   """
-  @spec apply_change(map(), Replicant.Change.t()) :: :ok
-  def apply_change(config, %Replicant.Change{} = change) do
+  @spec apply_change(map(), Replicant.Change.t(), DateTime.t() | nil) :: :ok
+  def apply_change(config, change, commit_timestamp \\ nil)
+
+  def apply_change(config, %Replicant.Change{} = change, commit_timestamp) do
     case resource_for(config, change) do
       nil -> :ok
-      resource -> apply_to(config, resource, change)
+      resource -> apply_to(config, resource, change, commit_timestamp)
     end
   end
 
@@ -33,7 +38,8 @@ defmodule AshReplicant.Apply do
     Resolver.lookup(config.resolver_index, schema, table)
   end
 
-  defp apply_to(config, resource, %{op: op} = change) when op in [:insert, :update] do
+  defp apply_to(config, resource, %{op: op} = change, _commit_timestamp)
+       when op in [:insert, :update] do
     if op == :update and pk_changed?(resource, change) do
       destroy_by_pk(config, resource, change.old_record)
     end
@@ -41,11 +47,16 @@ defmodule AshReplicant.Apply do
     upsert(config, resource, change)
   end
 
-  defp apply_to(config, resource, %{op: :delete} = change) do
+  defp apply_to(config, resource, %{op: :delete} = change, _commit_timestamp) do
     destroy_by_pk(config, resource, change.old_record)
   end
 
-  defp apply_to(config, resource, %{op: :truncate, table: table, schema: schema}) do
+  defp apply_to(
+         config,
+         resource,
+         %{op: :truncate, table: table, schema: schema},
+         _commit_timestamp
+       ) do
     case Info.replicant_on_truncate!(resource) do
       :mirror ->
         # Tenant-blind: a TRUNCATE wipes ALL tenants, and an Ash `bulk_destroy` on a
