@@ -111,8 +111,8 @@ end
   AshCloak-encrypted attribute, a binary-storage attribute, or be listed in `skip`.
   Never list the `tenant_attribute`.
 - **`skip`** — source columns excluded from the mirror write.
-- **`on_truncate`** — `:halt` (fail-closed, default) or `:mirror` (bulk-destroy in
-  transaction).
+- **`on_truncate`** — `:halt` (fail-closed, default) or `:mirror` (direct in-transaction
+  DELETE of the mirror table).
 - **`on_schema_change`** — `:halt_destructive` (default, halt on destructive DDL)
   or `:ignore`.
 - **`upsert_identity`** — identity for the upsert write (defaults to primary-key upsert

@@ -136,8 +136,8 @@ end
   attribute, a binary-storage attribute, or be listed in `skip`. Never list the
   `tenant_attribute`.
 - **`skip`** — source columns excluded from the mirror write.
-- **`on_truncate`** — `:halt` (fail-closed) or `:mirror` (bulk-destroy in-transaction).
-  Default `:halt`.
+- **`on_truncate`** — `:halt` (fail-closed) or `:mirror` (direct in-transaction DELETE
+  of the mirror table). Default `:halt`.
 - **`on_schema_change`** — `:halt_destructive` (halt on destructive DDL) or `:ignore`.
   Default `:halt_destructive`.
 - **`upsert_identity`** — identity name used for the upsert mirror write. Defaults to
