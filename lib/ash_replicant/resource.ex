@@ -19,9 +19,11 @@ defmodule AshReplicant.Resource do
   `source_table` / `source_schema` default to the resource's own
   `AshPostgres.DataLayer.Info.table/1` / `schema/1` via
   `AshReplicant.Resource.Info.source_table/1` and `source_schema/1`. Every
-  option is optional. Compile-time verifiers (registered in later slices)
-  enforce that `sensitive` columns map to encrypted/binary targets and that a
-  `tenant_attribute` is a plaintext, declared, non-classified discriminator.
+  option is optional. Compile-time verifiers enforce that `sensitive` columns map
+  to encrypted/binary targets (`ValidateSensitive`), that a declared
+  `tenant_attribute` is a plaintext, declared, non-classified discriminator
+  (`ValidateMultitenancy`), and that a **non-global multitenant** resource declares
+  a tenant source — `tenant_attribute` or `tenant_mfa` (`ValidateTenantSource`).
   """
 
   @replicant %Spark.Dsl.Section{
@@ -95,6 +97,7 @@ defmodule AshReplicant.Resource do
     sections: [@replicant],
     verifiers: [
       AshReplicant.Resource.Verifiers.ValidateSensitive,
-      AshReplicant.Resource.Verifiers.ValidateMultitenancy
+      AshReplicant.Resource.Verifiers.ValidateMultitenancy,
+      AshReplicant.Resource.Verifiers.ValidateTenantSource
     ]
 end

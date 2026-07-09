@@ -35,7 +35,10 @@ must fail closed (no query runs), never silently span tenants. Source column
 `tenant_attribute` or `tenant_mfa` resolves the per-row tenant; the mirror action
 passes it as `tenant:` so `Ash.Changeset` scopes **every row write** — any
 multitenancy DSL will validate the tenant at write time. If tenant resolution fails,
-the row's mirror write fails and the transaction rolls back (fail-closed).
+the row's mirror write fails and the transaction rolls back (fail-closed). A
+compile-time verifier (`ValidateTenantSource`) additionally requires a
+`tenant_attribute` or `tenant_mfa` on any **non-global** Ash-multitenant resource —
+so the misconfiguration fails closed at build time, not only at runtime.
 
 > **Operational requirement — tenant-scoped source tables must be `REPLICA IDENTITY FULL`.**
 > A `:delete` (and a PK-changing `:update`) derives the tenant from `old_record`, but
