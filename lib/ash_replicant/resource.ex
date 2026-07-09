@@ -89,6 +89,54 @@ defmodule AshReplicant.Resource do
       upsert_identity: [
         type: :atom,
         doc: "Identity name used for the upsert-by-PK mirror write."
+      ],
+      history_strategy: [
+        type: {:one_of, [:scd1, :scd2]},
+        default: :scd1,
+        doc:
+          "History strategy: `:scd1` (current-state upsert/destroy mirror, default) or " <>
+            "`:scd2` (validity-windowed close-current + insert-version against a host version table)."
+      ],
+      history_business_key: [
+        type: {:wrap_list, :atom},
+        default: [],
+        doc:
+          "SCD2 only: the source natural key (composite supported). Should be the source primary " <>
+            "key; a non-PK business key requires `REPLICA IDENTITY FULL` on the source table."
+      ],
+      history_valid_from_lsn_attribute: [
+        type: :atom,
+        default: :valid_from_lsn,
+        doc:
+          "SCD2 only: bigint attribute stamped with the change's `commit_lsn` when a version opens."
+      ],
+      history_valid_to_lsn_attribute: [
+        type: :atom,
+        default: :valid_to_lsn,
+        doc:
+          "SCD2 only: nullable bigint attribute stamped with the closing change's `commit_lsn`."
+      ],
+      history_valid_from_timestamp_attribute: [
+        type: :atom,
+        doc:
+          "SCD2 only (optional): nullable datetime attribute stamped with the source `commit_timestamp` " <>
+            "when a version opens. Omit to store LSN windows only."
+      ],
+      history_valid_to_timestamp_attribute: [
+        type: :atom,
+        doc:
+          "SCD2 only (optional): nullable datetime attribute stamped with the closing `commit_timestamp`."
+      ],
+      history_current_attribute: [
+        type: :atom,
+        doc:
+          "SCD2 only (optional): boolean attribute maintained `true` on the open version and `false` on close."
+      ],
+      history_close_action: [
+        type: :atom,
+        default: :close_version,
+        doc:
+          "SCD2 only: the host `:update` action that sets the window columns to close a version."
       ]
     ]
   }

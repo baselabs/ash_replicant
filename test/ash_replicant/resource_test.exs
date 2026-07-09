@@ -71,4 +71,12 @@ defmodule AshReplicant.ResourceTest do
   test "source_schema/1 falls back to \"public\" when neither DSL nor postgres schema is set" do
     assert Info.source_schema(ReflectedWidgets) == "public"
   end
+
+  describe "history_* options" do
+    test "history_strategy defaults to :scd1 and is readable" do
+      # AshReplicant.Test.Secret is an existing non-history resource.
+      assert Info.history_scd2?(AshReplicant.Test.Secret) == false
+      assert Info.replicant_history_strategy!(AshReplicant.Test.Secret) == :scd1
+    end
+  end
 end

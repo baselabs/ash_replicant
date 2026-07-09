@@ -33,4 +33,10 @@ defmodule AshReplicant.Resource.Info do
       _ -> PostgresInfo.schema(resource) || "public"
     end
   end
+
+  @doc "True when the resource opts into SCD2 history (`history_strategy :scd2`)."
+  @spec history_scd2?(module() | map()) :: boolean()
+  def history_scd2?(resource) do
+    replicant_history_strategy!(resource) == :scd2
+  end
 end
