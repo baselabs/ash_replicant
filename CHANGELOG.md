@@ -31,6 +31,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `:tenant_required`). Documented in AGENTS Critical Rule 2, the `tenant_attribute`
   DSL doc, README, and usage-rules; locked by a key-only-`old_record` red-gate.
 
+### Optimized (post-closeout, 2026-07-09)
+
+- **Snapshot bulk path computes its reflection once per batch** — the non-tenant
+  bulk upsert derives the `{skip, cloak, attribute-name}` reflection a single time
+  (`Resolver.upsert_reflection/1` + `Resolver.upsert_input/2`) instead of re-deriving
+  it per row; `attrs_for_upsert/2` is retained for single-record callers. Behavior
+  unchanged (F13).
+- **Delete path is a single atomic `bulk_destroy`** — `Apply.destroy_by_pk/3` issues
+  one `DELETE ... WHERE pk` (`strategy: [:atomic, :stream]`, `transaction: false`)
+  instead of read-then-destroy, falling back to per-record streaming when a host
+  destroy action carries non-atomic changes. The nil-PK fail-closed guard, per-row
+  tenant scoping, and idempotent-on-absent-row semantics are preserved (F14).
+
 ## [0.1.0] - 2026-07-08
 
 First release: the complete Ash `Replicant.Sink` adapter with effect-once
