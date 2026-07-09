@@ -104,4 +104,67 @@ defmodule AshReplicant.Scd2ApplyTest do
     assert [v] = versions("o1")
     assert is_nil(v.valid_to_lsn) and v.is_current
   end
+
+  test "insert THEN delete at the same commit_lsn leaves NO current version (ghost tripwire)", %{
+    config: config
+  } do
+    AshReplicant.Apply.apply_change(
+      config,
+      change(:insert, %{"order_id" => "o1", "amount" => "10"}, 100),
+      nil
+    )
+
+    AshReplicant.Apply.apply_change(config, change(:delete, nil, 100, %{"order_id" => "o1"}), nil)
+
+    vs = versions("o1")
+    # ANTI-VACUITY: there MUST be exactly one version row (the create opened it); a delete
+    # close at `<= 100` must have retired it. `Enum.all?([], _)` is vacuously true, so assert
+    # the row EXISTS and is closed — otherwise a double-no-op would pass falsely.
+    assert [v] = vs
+
+    assert not is_nil(v.valid_to_lsn) and not v.is_current,
+           "a create+delete within one commit must leave the opened version closed, not open"
+  end
+
+  test "update THEN delete at the same commit_lsn retires the row", %{config: config} do
+    AshReplicant.Apply.apply_change(
+      config,
+      change(:insert, %{"order_id" => "o1", "amount" => "10"}, 100),
+      nil
+    )
+
+    AshReplicant.Apply.apply_change(
+      config,
+      change(:update, %{"order_id" => "o1", "amount" => "20"}, 200),
+      nil
+    )
+
+    AshReplicant.Apply.apply_change(config, change(:delete, nil, 200, %{"order_id" => "o1"}), nil)
+
+    vs = versions("o1")
+    # ANTI-VACUITY: expect BOTH versions to exist (v@100 closed@200, v@200 closed@200) and
+    # NONE open. Assert the count so an empty/partial result can't pass vacuously.
+    assert length(vs) == 2
+    assert Enum.all?(vs, &(not is_nil(&1.valid_to_lsn)))
+  end
+
+  test "pk-changing update closes the old business key and opens the new", %{config: config} do
+    AshReplicant.Apply.apply_change(
+      config,
+      change(:insert, %{"order_id" => "o1", "amount" => "10"}, 100),
+      nil
+    )
+
+    AshReplicant.Apply.apply_change(
+      config,
+      change(:update, %{"order_id" => "o2", "amount" => "10"}, 200, %{"order_id" => "o1"}),
+      nil
+    )
+
+    assert [v_old] = versions("o1")
+    assert v_old.valid_to_lsn == 200 and not v_old.is_current
+
+    assert [v_new] = versions("o2")
+    assert is_nil(v_new.valid_to_lsn) and v_new.is_current and v_new.amount == "10"
+  end
 end
