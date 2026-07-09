@@ -110,10 +110,14 @@ defmodule AshReplicant.Apply do
     query = Ash.Query.do_filter(resource, pk_values)
 
     # One atomic `DELETE ... WHERE pk` (single round-trip) instead of read-then-destroy.
-    # `strategy: [:atomic, :stream]` takes the data-layer atomic path for a plain mirror
-    # destroy and falls back to per-record streaming when the host's destroy action
-    # carries non-atomic changes (so any host-defined destroy hooks still fire) — the
-    # effect is identical to the prior get!-then-destroy! for every host action.
+    # `strategy: [:atomic, :stream]` takes the data-layer atomic path for the mirror's
+    # plain destroy and falls back to per-record streaming when the host's destroy
+    # action carries non-atomic changes (so any host-defined destroy hooks still fire).
+    # Row-effect (removal, tenant scope, idempotency) is identical to the prior
+    # get!-then-destroy!; the one non-equivalence is that a host `:destroy` whose
+    # after_action hook reads `changeset.data` sees `%OriginalDataNotAvailable{}` on the
+    # atomic path (the cost of not loading the row) — the mirror's own `defaults
+    # [:destroy]` has no such hook, so this is inert for the sink's use.
     # `transaction: false` joins the sink's ambient outer transaction (spec decision 7),
     # never opening its own savepoint. Tenant scopes the DELETE (fail-closed, resolved
     # above). A 0-row match (already-absent row) is `:success` → `:ok` (idempotent).
