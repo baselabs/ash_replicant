@@ -91,6 +91,33 @@ defmodule AshReplicant.ResolverTest do
     end
   end
 
+  describe "upsert_reflection/1 + upsert_input/2 (batch-invariant hoist)" do
+    test "upsert_input under a precomputed reflection routes a cloak row to encrypted fields" do
+      reflection = Resolver.upsert_reflection(Secret)
+
+      # Assert the CONCRETE shape (not equality with attrs_for_upsert/2, which would be
+      # tautological once that delegates) so a broken split goes red independently:
+      # a cloak column passes plaintext under :pan but names encrypted_pan in fields.
+      {inputs, fields} = Resolver.upsert_input(reflection, %{"id" => "1", "pan" => "4111"})
+      assert inputs == %{id: "1", pan: "4111"}
+      assert :encrypted_pan in fields
+      assert :id in fields
+      refute :pan in fields
+
+      # A second, differently-shaped row reuses the SAME reflection (batch-invariant,
+      # not row-specific) and still maps correctly.
+      assert Resolver.upsert_input(reflection, %{"id" => "2"}) == {%{id: "2"}, [:id]}
+    end
+
+    test "upsert_reflection/1 is the batch-invariant {skip, cloak, attrs} triple" do
+      {skip, cloak, attrs} = Resolver.upsert_reflection(Order)
+      assert skip == []
+      assert cloak == []
+      assert MapSet.member?(attrs, :note)
+      refute MapSet.member?(attrs, :nonexistent)
+    end
+  end
+
   describe "primary_key/1, pk_values/2, upsert_action/1, upsert_identity/1" do
     test "PK extraction is string-keyed and composite-safe" do
       assert Resolver.primary_key(Order) == [:id]

@@ -204,12 +204,16 @@ defmodule AshReplicant.Sink.Impl do
     if sensitive?(resource) or tenant_scoped?(resource) do
       Enum.each(changes, fn c -> Apply.apply_change(config, %{c | op: :insert}) end)
     else
-      inputs =
-        Enum.map(changes, fn c -> elem(Resolver.attrs_for_upsert(resource, c.record), 0) end)
+      # Compute the batch-invariant reflection ONCE (F13): every row of a full-table
+      # snapshot dump is column-homogeneous, so `skip`/cloak/attribute-name derivation
+      # is invariant across the batch — hoist it above the per-row map.
+      reflection = Resolver.upsert_reflection(resource)
+      mapped = Enum.map(changes, fn c -> Resolver.upsert_input(reflection, c.record) end)
+      inputs = Enum.map(mapped, &elem(&1, 0))
 
       # `upsert_fields` is taken from row 1 — valid because a full-table snapshot
       # dump is column-homogeneous (every row carries the same source columns).
-      {_, upsert_fields} = Resolver.attrs_for_upsert(resource, List.first(changes).record)
+      {_inputs, upsert_fields} = List.first(mapped)
 
       result =
         Ash.bulk_create(inputs, resource, Resolver.upsert_action(resource),

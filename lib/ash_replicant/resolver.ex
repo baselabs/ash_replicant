@@ -11,7 +11,9 @@ defmodule AshReplicant.Resolver do
       failing closed with `:tenant_required` on a nil/blank tenant.
     * `writable_target/2` / `attrs_for_upsert/2` — map source string columns to
       their real writable targets, routing AshCloak-sensitive columns through the
-      cloak argument while naming `encrypted_<col>` in `upsert_fields`.
+      cloak argument while naming `encrypted_<col>` in `upsert_fields`. The bulk
+      snapshot path computes `upsert_reflection/1` once and maps each row via
+      `upsert_input/2` (the batch-invariant hoist).
     * `primary_key/1` / `pk_values/2` / `upsert_identity/1` / `upsert_action/1`.
   """
 
@@ -85,12 +87,33 @@ defmodule AshReplicant.Resolver do
     end
   end
 
-  @spec attrs_for_upsert(module(), map()) :: {map(), [atom()]}
-  def attrs_for_upsert(resource, record) when is_map(record) do
-    skip = Info.replicant_skip!(resource)
-    cloak = cloak_attributes(resource)
-    attrs = attribute_names(resource)
+  @typedoc "The batch-invariant upsert reflection: `{skip, cloak_attrs, attribute_names}`."
+  @type upsert_reflection :: {[atom()], [atom()], MapSet.t(atom())}
 
+  @doc """
+  Compute the batch-invariant upsert reflection for a resource ONCE — the `skip`
+  list, the AshCloak cloak attributes, and the attribute-name set. Thread it into
+  `upsert_input/2` per row of a column-homogeneous batch (the snapshot bulk path)
+  to avoid re-deriving these for every row. Single-record callers use
+  `attrs_for_upsert/2`, which computes the reflection inline.
+  """
+  @spec upsert_reflection(module()) :: upsert_reflection()
+  def upsert_reflection(resource) do
+    {Info.replicant_skip!(resource), cloak_attributes(resource), attribute_names(resource)}
+  end
+
+  @spec attrs_for_upsert(module(), map()) :: {map(), [atom()]}
+  def attrs_for_upsert(resource, record) when is_atom(resource) and is_map(record) do
+    upsert_input(upsert_reflection(resource), record)
+  end
+
+  @doc """
+  Map one source `record` to `{inputs, upsert_fields}` under a precomputed
+  `upsert_reflection/1`. AshCloak-sensitive columns pass plaintext under the cloak
+  argument while `upsert_fields` names `encrypted_<col>`.
+  """
+  @spec upsert_input(upsert_reflection(), map()) :: {map(), [atom()]}
+  def upsert_input({skip, cloak, attrs}, record) when is_map(record) do
     {inputs, fields} =
       Enum.reduce(record, {%{}, []}, fn {col, value}, {inputs, fields} ->
         atom = to_existing_atom(col)
