@@ -9,5 +9,5 @@ config :ash_replicant, AshReplicant.TestRepo,
   priv: "priv/repo"
 
 config :ash_replicant, ecto_repos: [AshReplicant.TestRepo]
-config :ash_replicant, ash_domains: [AshReplicant.Test.Domain]
+config :ash_replicant, ash_domains: [AshReplicant.Test.Domain, AshReplicant.Test.HistoryDomain]
 config :logger, level: :warning

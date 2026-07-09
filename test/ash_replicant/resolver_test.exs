@@ -14,6 +14,59 @@ defmodule AshReplicant.ResolverTest do
     TenantOrder
   }
 
+  defmodule LsnOnlyDomain do
+    @moduledoc false
+    use Ash.Domain, validate_config_inclusion?: false
+
+    resources do
+      allow_unregistered? true
+    end
+  end
+
+  defmodule LsnOnlyVersion do
+    @moduledoc """
+    A valid SCD2 version resource declaring ONLY the LSN window columns — no
+    optional `history_valid_from_timestamp_attribute` / `..._valid_to_timestamp` /
+    `history_current_attribute`. Exercises `version_open_input/3`'s `maybe_put`
+    nil-skip (omit) branch, which every AshPostgres fixture leaves uncovered because
+    they all declare the optional attrs. ETS-backed: `version_open_input/3` is pure
+    DSL/record reflection, so no table or migration is needed.
+    """
+    use Ash.Resource,
+      domain: AshReplicant.ResolverTest.LsnOnlyDomain,
+      validate_domain_inclusion?: false,
+      data_layer: Ash.DataLayer.Ets,
+      extensions: [AshReplicant.Resource]
+
+    replicant do
+      source_table("orders")
+      history_strategy(:scd2)
+      history_business_key([:order_id])
+      upsert_identity(:ov)
+      history_close_action(:close_version)
+    end
+
+    attributes do
+      uuid_primary_key :id
+      attribute :order_id, :string, allow_nil?: false
+      attribute :valid_from_lsn, :integer, allow_nil?: false
+      attribute :valid_to_lsn, :integer, allow_nil?: true
+    end
+
+    identities do
+      identity :ov, [:order_id, :valid_from_lsn],
+        pre_check_with: AshReplicant.ResolverTest.LsnOnlyDomain
+    end
+
+    actions do
+      defaults [:read, :destroy, create: :*, update: :*]
+
+      update :close_version do
+        accept [:valid_to_lsn]
+      end
+    end
+  end
+
   describe "build_index/1" do
     test "keys mirror resources by {source_schema, source_table}, filtering out non-replicant resources" do
       assert {:ok, index} = Resolver.build_index([Domain])
@@ -127,6 +180,70 @@ defmodule AshReplicant.ResolverTest do
     test "upsert_action/1 is the resource's primary create action; upsert_identity/1 defaults to nil (PK upsert)" do
       assert Resolver.upsert_action(Order) == :create
       assert Resolver.upsert_identity(Order) == nil
+    end
+  end
+
+  describe "SCD2 helpers" do
+    test "business_key_values/2 pulls the declared business key from a string-keyed source record" do
+      record = %{"order_id" => "o-1", "amount" => "9.99", "org_id" => "t-1"}
+
+      assert AshReplicant.Resolver.business_key_values(AshReplicant.Test.OrderVersion, record) ==
+               %{order_id: "o-1"}
+    end
+
+    test "version_open_input/3 opens a version with ALL declared window columns (present-optional path)" do
+      {inputs, fields} =
+        Resolver.version_open_input(
+          AshReplicant.Test.OrderVersion,
+          %{"order_id" => "o-1", "amount" => "9.99"},
+          lsn: 42,
+          ts: ~U[2026-01-01 00:00:00.000000Z]
+        )
+
+      # source data columns (via attrs_for_upsert) carry through
+      assert inputs[:order_id] == "o-1"
+      assert inputs[:amount] == "9.99"
+
+      # window columns stamped: valid_from_lsn, valid_to_lsn: nil, and the declared
+      # optional valid_from_ts + is_current
+      assert inputs[:valid_from_lsn] == 42
+      assert Map.has_key?(inputs, :valid_to_lsn)
+      assert inputs[:valid_to_lsn] == nil
+      assert inputs[:valid_from_ts] == ~U[2026-01-01 00:00:00.000000Z]
+      assert inputs[:is_current] == true
+
+      # upsert_fields name every window column so a same-lsn re-open coalesces...
+      for col <- [:valid_from_lsn, :valid_to_lsn, :valid_from_ts, :is_current] do
+        assert col in fields
+      end
+
+      # ...with no duplicate field names
+      assert Enum.uniq(fields) == fields
+    end
+
+    test "version_open_input/3 OMITS undeclared optional window columns (LSN-only path)" do
+      {inputs, fields} =
+        Resolver.version_open_input(
+          LsnOnlyVersion,
+          %{"order_id" => "o-2"},
+          lsn: 7,
+          ts: ~U[2026-01-01 00:00:00.000000Z]
+        )
+
+      assert inputs[:order_id] == "o-2"
+      assert inputs[:valid_from_lsn] == 7
+      assert Map.has_key?(inputs, :valid_to_lsn)
+      assert inputs[:valid_to_lsn] == nil
+
+      # the optional columns are NOT declared on this resource, so the maybe_put
+      # nil-skip branch drops them from BOTH inputs and upsert_fields
+      refute Map.has_key?(inputs, :valid_from_ts)
+      refute Map.has_key?(inputs, :valid_to_ts)
+      refute Map.has_key?(inputs, :is_current)
+
+      refute :valid_from_ts in fields
+      refute :valid_to_ts in fields
+      refute :is_current in fields
     end
   end
 end

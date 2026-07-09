@@ -145,6 +145,63 @@ defmodule AshReplicant.Resolver do
     resource |> primary_key() |> Map.new(fn k -> {k, Map.get(record, to_string(k))} end)
   end
 
+  @doc "The declared SCD2 business-key values from a string-keyed source `record`."
+  @spec business_key_values(module(), map()) :: map()
+  def business_key_values(resource, record) when is_map(record) do
+    resource
+    |> Info.replicant_history_business_key!()
+    |> Map.new(fn k -> {k, Map.get(record, to_string(k))} end)
+  end
+
+  @doc """
+  A query over `resource` selecting the CURRENT open version of the business key in
+  `record`, whose `valid_from_lsn` is strictly less than `lsn` (open-path close) or at
+  most `lsn` (delete/terminal close, `inclusive?: true`). Uses dynamic `^ref/1` because
+  the window column names are DSL-configured.
+  """
+  @spec open_version_query(module(), map(), integer(), keyword()) :: Ash.Query.t()
+  def open_version_query(resource, record, lsn, opts \\ []) do
+    require Ash.Query
+
+    from_col = Info.replicant_history_valid_from_lsn_attribute!(resource)
+    to_col = Info.replicant_history_valid_to_lsn_attribute!(resource)
+    bk = business_key_values(resource, record)
+    inclusive? = Keyword.get(opts, :inclusive?, false)
+
+    base = Ash.Query.do_filter(resource, bk)
+
+    if inclusive? do
+      Ash.Query.filter(base, is_nil(^Ash.Expr.ref(to_col)) and ^Ash.Expr.ref(from_col) <= ^lsn)
+    else
+      Ash.Query.filter(base, is_nil(^Ash.Expr.ref(to_col)) and ^Ash.Expr.ref(from_col) < ^lsn)
+    end
+  end
+
+  @doc """
+  The `{inputs, upsert_fields}` for OPENING a version: the source data columns (via the
+  existing upsert reflection) PLUS the window columns (`valid_from_lsn`, optional
+  `valid_from_ts`, `valid_to_lsn: nil`, optional `is_current: true`). `upsert_fields`
+  names every window column so a same-`lsn` re-open coalesces in place.
+  """
+  @spec version_open_input(module(), map(), keyword()) :: {map(), [atom()]}
+  def version_open_input(resource, record, window) do
+    {inputs, fields} = attrs_for_upsert(resource, record)
+
+    from_lsn = Info.replicant_history_valid_from_lsn_attribute!(resource)
+    to_lsn = Info.replicant_history_valid_to_lsn_attribute!(resource)
+    from_ts = opt(Info.replicant_history_valid_from_timestamp_attribute(resource))
+    current = opt(Info.replicant_history_current_attribute(resource))
+
+    window_cols =
+      [{from_lsn, window[:lsn]}, {to_lsn, nil}]
+      |> maybe_put(from_ts, window[:ts])
+      |> maybe_put(current, true)
+
+    merged_inputs = Enum.reduce(window_cols, inputs, fn {k, v}, acc -> Map.put(acc, k, v) end)
+    merged_fields = Enum.uniq(fields ++ Enum.map(window_cols, &elem(&1, 0)))
+    {merged_inputs, merged_fields}
+  end
+
   @doc "The upsert identity name from the DSL (`nil` → primary-key upsert)."
   @spec upsert_identity(module()) :: atom() | nil
   def upsert_identity(resource), do: opt(Info.replicant_upsert_identity(resource))
@@ -180,6 +237,9 @@ defmodule AshReplicant.Resolver do
   rescue
     ArgumentError -> nil
   end
+
+  defp maybe_put(list, nil, _value), do: list
+  defp maybe_put(list, key, value), do: [{key, value} | list]
 
   defp opt({:ok, value}), do: value
   defp opt(_), do: nil

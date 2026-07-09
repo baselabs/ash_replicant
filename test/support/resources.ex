@@ -202,6 +202,60 @@ defmodule AshReplicant.Test.MfaOrder do
   end
 end
 
+defmodule AshReplicant.Test.OrderVersion do
+  @moduledoc false
+  use Ash.Resource,
+    domain: AshReplicant.Test.HistoryDomain,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshReplicant.Resource]
+
+  postgres do
+    table "order_versions"
+    repo AshReplicant.TestRepo
+
+    custom_indexes do
+      index [:order_id],
+        unique: true,
+        where: "valid_to_lsn IS NULL",
+        name: "order_versions_open_uniq"
+    end
+  end
+
+  replicant do
+    source_table("orders")
+    history_strategy(:scd2)
+    history_business_key([:order_id])
+    upsert_identity(:order_version)
+    history_close_action(:close_version)
+    history_current_attribute(:is_current)
+    history_valid_from_timestamp_attribute(:valid_from_ts)
+    history_valid_to_timestamp_attribute(:valid_to_ts)
+  end
+
+  attributes do
+    uuid_primary_key :id
+    attribute :order_id, :string, allow_nil?: false, public?: true
+    attribute :amount, :string, public?: true
+    attribute :valid_from_lsn, :integer, allow_nil?: false, public?: true
+    attribute :valid_to_lsn, :integer, allow_nil?: true, public?: true
+    attribute :valid_from_ts, :utc_datetime_usec, allow_nil?: true, public?: true
+    attribute :valid_to_ts, :utc_datetime_usec, allow_nil?: true, public?: true
+    attribute :is_current, :boolean, allow_nil?: false, default: true, public?: true
+  end
+
+  identities do
+    identity :order_version, [:order_id, :valid_from_lsn]
+  end
+
+  actions do
+    defaults [:read, :destroy, create: :*, update: :*]
+
+    update :close_version do
+      accept [:valid_to_lsn, :valid_to_ts, :is_current]
+    end
+  end
+end
+
 defmodule AshReplicant.Test.DuplicateDomain do
   @moduledoc false
   use Ash.Domain, validate_config_inclusion?: false
