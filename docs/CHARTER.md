@@ -47,6 +47,7 @@ This is "the `ash_postgres` of `replicant`" — just as `ash_postgres` is not
 - Resource resolver index (`{schema,table}` → resource mapping)
 - Value-free error/telemetry boundaries
 - Tenant-aware action execution (the `tenant:` option on the Ash action, resolved per-row from the source record's `tenant_attribute`)
+- Validity-windowed SCD2 history mode (opt-in; close-current + insert-version)
 
 ### Out (tenant-blind; lives in `replicant`)
 

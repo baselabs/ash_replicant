@@ -3,8 +3,9 @@ defmodule AshReplicant.Resource.Info do
   Introspection for the `AshReplicant.Resource` extension.
 
   Generates the `replicant_<option>/1` (`{:ok, value} | :error`) and
-  `replicant_<option>!/1` accessors for every option, plus the
-  reflection-fallback helpers `source_table/1` and `source_schema/1`.
+  `replicant_<option>!/1` accessors for every option, plus the hand-written
+  helpers `source_table/1` and `source_schema/1` (reflection fallbacks) and
+  `history_scd2?/1` (the SCD2-strategy predicate).
   """
   use Spark.InfoGenerator, extension: AshReplicant.Resource, sections: [:replicant]
 

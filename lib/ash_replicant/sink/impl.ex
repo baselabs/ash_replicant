@@ -32,7 +32,7 @@ defmodule AshReplicant.Sink.Impl do
   `{:error, %AshReplicant.Error{}}` (the pipeline halts fail-closed and
   re-delivers on resume).
 
-  `Apply.apply_change/2` RAISES on failure, so a failing change propagates out of
+  `Apply.apply_change/3` RAISES on failure, so a failing change propagates out of
   `Repo.transaction` (Ecto rolls back, then re-raises) and lands on the outer
   `rescue` — NOT the `{:error, _}` branch of the result match. Both halt paths
   route through `halt/2`, so `:halted` telemetry fires on the real raise path too.
@@ -104,12 +104,14 @@ defmodule AshReplicant.Sink.Impl do
   @doc """
   Persist a snapshot batch for `ctx.table`, upserting by PK. On
   `first_for_table?`, clear the resource's mirror rows in-txn first (redo-safety).
-  Non-tenant resources use a bulk upsert; the load-bearing fail-closed guard is
-  the `case result.status` check — anything other than `:success` (including the
-  default-options `:partial_success`) rolls the snapshot transaction back, so a
-  failing row is never silently dropped. `stop_on_error?: true` is a defensible
-  early-stop on top of that, not the loss guard. Tenant-scoped (and, defensively,
-  sensitive) resources apply per-record. Does not advance the checkpoint.
+  Plain SCD1 non-tenant, non-sensitive resources use a bulk upsert; the
+  load-bearing fail-closed guard is the `case result.status` check — anything
+  other than `:success` (including the default-options `:partial_success`) rolls
+  the snapshot transaction back, so a failing row is never silently dropped.
+  `stop_on_error?: true` is a defensible early-stop on top of that, not the loss
+  guard. Sensitive, tenant-scoped, OR SCD2 resources apply per-record — SCD2
+  stamps the batch's snapshot LSN onto each change so each version opens at
+  `valid_from_lsn = snapshot_lsn`. Does not advance the checkpoint.
   """
   @spec handle_snapshot(map(), [Replicant.Change.t()], map()) :: :ok | {:error, term()}
   def handle_snapshot(config, changes, %{table: qualified, first_for_table?: first?} = ctx) do

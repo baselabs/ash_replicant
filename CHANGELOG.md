@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **SCD2 history mirroring** — a per-resource opt-in (`history_strategy :scd2`) that
+  mirrors a source table into a host-defined validity-windowed version table
+  (close-current + insert-version) instead of overwriting current state. Effect-once,
+  fail-closed multitenancy, value-free boundaries, and Critical Rule 1 preserved; new
+  `ValidateHistory` compile verifier; `on_truncate :close`. Audit-log needs remain
+  served by AshPaperTrail on an SCD1 mirror.
+
 ## [0.2.0] - 2026-07-09
 
 ### Added

@@ -5,8 +5,9 @@ defmodule AshReplicant.Resource.Verifiers.ValidateHistory do
 
   When SCD2 is selected, verifies the DSL-checkable SHAPE of the host version table:
   a non-empty declared business key; declared integer `valid_from_lsn` / `valid_to_lsn`
-  (`valid_to` nullable so a version can stay open); a SURROGATE primary key disjoint
-  from the business key; the `upsert_identity` identity present with keys equal to
+  (`valid_to` nullable so a version can stay open); a SURROGATE primary key distinct
+  from the business key (must not be exactly the business key); the `upsert_identity`
+  identity present with keys equal to
   `business_key ++ [valid_from_lsn]`; the `history_close_action` update action present;
   and any declared optional timestamp / `is_current` attributes typed correctly.
 

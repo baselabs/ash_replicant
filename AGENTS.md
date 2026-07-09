@@ -30,6 +30,14 @@ defines them. The sink writes through them with `authorize?: false`, so AshCloak
 tenancy still fire (policies are not re-gated). Direct Ecto bypasses AshCloak and
 tenancy — a bypass is a data loss / classification / encryption failure vector.
 
+An **SCD2** mirror keeps the rule: the version close routes through the host
+`history_close_action` (`:close_version`) via `Ash.bulk_update` (tenant-scoped, so it
+never retires another tenant's identically-keyed version) and the new version opens
+through the host `:create` upsert. The **only** raw SQL SCD2 adds is `on_truncate
+:close` — a tenant-blind, window-columns-only `UPDATE` (quoted idents + parameterized
+values, table/columns from the resource DSL, never a row value), the same trust boundary
+as the existing `:mirror` truncate `DELETE`.
+
 **2. Multitenancy is fail-closed.** A nil/blank tenant on a multitenant resource
 must fail closed (no query runs), never silently span tenants. Source column
 `tenant_attribute` or `tenant_mfa` resolves the per-row tenant; the mirror action
@@ -50,6 +58,11 @@ so the misconfiguration fails closed at build time, not only at runtime.
 > and non-PK-changing update need only the new `record` (which always carries all
 > columns), so they are unaffected; the requirement is specific to delete / PK-change of
 > tenant-scoped resources. (Non-tenant mirrors work under the default identity.)
+>
+> The same `REPLICA IDENTITY FULL` requirement applies to an **SCD2 resource whose
+> `history_business_key` is not the source primary key** — a delete / key-changing
+> update reads the business key from `old_record`, absent under the default identity —
+> so the close would match no open version.
 
 **3. Sensitive = AshCloak-encrypted or binary, verified by type-shape.** Enforce
 via verifier: sensitive attrs must map to an AshCloak-encrypted attribute (the

@@ -142,6 +142,81 @@ AshReplicant.start_link(
 **Key:** the `slot_name` comes from the sink, not `start_link` options. It keys the
 resolver index and the replication slot name.
 
+### SCD2 history mode (optional)
+
+By default a resource mirrors **current state** (`history_strategy :scd1` — upsert /
+destroy, the default). Opt a resource into **validity-windowed SCD2 history** with
+`history_strategy :scd2`: instead of overwriting, each change **closes the current open
+version** (stamps its `valid_to_lsn`) and **inserts a new version**, so the mirror
+becomes an append-only history table with one row per `(business_key, valid_from_lsn)`.
+
+```elixir
+replicant do
+  source_table "orders"
+  history_strategy :scd2
+  history_business_key [:order_id]     # source natural key (composite supported)
+  upsert_identity :version_key         # identity keys: [:order_id, :valid_from_lsn]
+  # window-column attributes default to :valid_from_lsn / :valid_to_lsn
+  on_truncate :close                   # optional; SCD2-only
+end
+```
+
+**DSL options (all `:scd2`-only unless noted):**
+
+- **`history_strategy`** — `:scd1` (default, current-state upsert/destroy) or `:scd2`
+  (close-current + insert-version).
+- **`history_business_key`** — the source natural key (composite supported). Should be
+  the source primary key; a **non-PK** business key requires `REPLICA IDENTITY FULL` on
+  the source table (see below).
+- **`history_valid_from_lsn_attribute`** — bigint attribute stamped with the change's
+  `commit_lsn` when a version opens. Default `:valid_from_lsn`.
+- **`history_valid_to_lsn_attribute`** — nullable bigint attribute stamped with the
+  closing change's `commit_lsn` (nil while the version is open). Default `:valid_to_lsn`.
+- **`history_valid_from_timestamp_attribute`** — optional nullable datetime stamped with
+  the source `commit_timestamp` when a version opens. Omit to store LSN windows only.
+- **`history_valid_to_timestamp_attribute`** — optional nullable datetime stamped with
+  the closing `commit_timestamp`.
+- **`history_current_attribute`** — optional boolean kept `true` on the open version and
+  set `false` on close.
+- **`history_close_action`** — the host `:update` action that sets the window columns to
+  close a version. Default `:close_version`.
+
+**Host version-table obligations.** A compile-time verifier (`ValidateHistory`) checks
+the DSL-visible shape; the index and action bodies are host obligations covered by
+integration tests:
+
+- A **surrogate primary key** distinct from the business key (the version table holds
+  many rows per business key, so the business key cannot be the primary key).
+- Declared **integer** (Postgres bigint) `valid_from_lsn` / `valid_to_lsn` window
+  columns; `valid_to_lsn` must be `allow_nil?: true` (an open version has no `valid_to`
+  yet). A declared timestamp window column must likewise be `allow_nil?: true`.
+- A version identity named by `upsert_identity` whose keys are exactly
+  `history_business_key ++ [valid_from_lsn]` (the insert-version upsert target).
+- The `history_close_action` (`:close_version`) `:update` action, which sets the
+  `valid_to` window columns.
+- A **partial-unique index** enforcing one open version per business key —
+  `UNIQUE (business_key…) WHERE valid_to_lsn IS NULL` (a host DDL obligation, not
+  DSL-checked).
+
+**`REPLICA IDENTITY FULL` for a non-PK business key.** Mirroring a close needs the
+business key from the change record; on a `:delete` (and a PK/business-key-changing
+`:update`) that key is read from `old_record`, which under the Postgres-default replica
+identity carries **only the primary-key columns**. If the SCD2 business key is not the
+source primary key, set `ALTER TABLE <src> REPLICA IDENTITY FULL` so `old_record`
+carries the business-key columns — the same requirement, and the same fail-closed
+reason, as a non-PK `tenant_attribute`.
+
+**History is retained on delete (soft-close).** A source delete **closes** the current
+version (stamps `valid_to_lsn`); it never erases prior versions. SCD2 therefore does
+**not** serve a point-erasure / right-to-be-forgotten need — for that, use an SCD1
+mirror (which overwrites / destroys) or AshPaperTrail with a pruning policy.
+
+**`on_truncate :close` (SCD2 only).** In place of `:halt` / `:mirror`, an SCD2 resource
+may set `on_truncate :close`: an upstream TRUNCATE **closes every open version
+tenant-blind** (stamps `valid_to_lsn` on all rows where it is NULL), retiring the whole
+window without deleting history. `on_truncate :close` on a non-SCD2 resource is rejected
+at compile time.
+
 ## Non-negotiable rules
 
 - **Route writes through Ash actions.** The mirror writes through the host resource's

@@ -147,6 +147,25 @@ end
 - **`upsert_identity`** — identity name used for the upsert mirror write. Defaults to
   primary-key upsert when omitted; set an identity name to upsert by that identity instead.
 
+**History (SCD2).** By default a resource mirrors **current state** (`history_strategy
+:scd1` — upsert / destroy). Opt a resource into **validity-windowed SCD2 history**
+(close-current + insert-version into a host-defined version table, instead of
+overwriting) with `history_strategy :scd2`:
+
+```elixir
+replicant do
+  source_table "orders"
+  history_strategy :scd2
+  history_business_key [:order_id]   # source natural key (composite supported)
+  upsert_identity :version_key       # identity keys: [:order_id, :valid_from_lsn]
+end
+```
+
+See [`usage-rules.md`](usage-rules.md) (“SCD2 history mode”) for the full version-table
+contract: the surrogate PK, the `valid_from_lsn` / `valid_to_lsn` window columns, the
+`:close_version` action, the partial-unique-open index, `on_truncate :close`, and the
+`REPLICA IDENTITY FULL` precondition for a non-PK business key.
+
 ### 4. Start the pipeline
 
 ```elixir
