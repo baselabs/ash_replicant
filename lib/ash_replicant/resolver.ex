@@ -14,7 +14,8 @@ defmodule AshReplicant.Resolver do
       cloak argument while naming `encrypted_<col>` in `upsert_fields`. The bulk
       snapshot path computes `upsert_reflection/1` once and maps each row via
       `upsert_input/2` (the batch-invariant hoist).
-    * `primary_key/1` / `pk_values/2` / `upsert_identity/1` / `upsert_action/1`.
+    * `primary_key/1` / `pk_values/2` / `upsert_identity/1` / `upsert_action/1` /
+      `destroy_action/1`.
   """
 
   alias AshReplicant.Resource.Info
@@ -151,6 +152,10 @@ defmodule AshReplicant.Resolver do
   @doc "The upsert-capable create action name (the resource's primary create action)."
   @spec upsert_action(module()) :: atom()
   def upsert_action(resource), do: Ash.Resource.Info.primary_action!(resource, :create).name
+
+  @doc "The primary destroy action name (mirrors `upsert_action/1` for `:create`)."
+  @spec destroy_action(module()) :: atom()
+  def destroy_action(resource), do: Ash.Resource.Info.primary_action!(resource, :destroy).name
 
   # --- private ---
 

@@ -1,7 +1,8 @@
 defmodule AshReplicant.Apply do
   @moduledoc """
-  Applies one `%Replicant.Change{}` to the mirror. An insert/update/delete goes
-  through a single-row Ash action; a `:mirror` truncate issues a bulk destroy.
+  Applies one `%Replicant.Change{}` to the mirror. An insert/update goes through a
+  single-row Ash action; a delete issues one atomic `bulk_destroy` over a PK-filtered
+  query; a `:mirror` truncate deletes the mirror table directly.
 
   Called once per change, in delivery (`ordinal`) order, inside the sink's
   transaction. Raises on any failure so the surrounding `Repo.transaction`
@@ -98,27 +99,33 @@ defmodule AshReplicant.Apply do
   defp destroy_by_pk(config, resource, old_record) do
     pk_values = Resolver.pk_values(resource, old_record)
 
+    # Fail closed on a missing PK BEFORE building the filter: a nil PK value would
+    # produce `id == nil`, which matches 0 rows and would silently "succeed" — losing
+    # the no-silent-lost-delete contract. Keep this guard ahead of the query.
     if Enum.any?(pk_values, fn {_k, v} -> is_nil(v) end) do
       raise Error.exception(reason: :sink_failed, resource: resource, op: :destroy)
     end
 
     tenant = resolve_tenant!(resource, old_record, :destroy)
+    query = Ash.Query.do_filter(resource, pk_values)
 
-    case Ash.get!(resource, pk_values,
-           authorize?: config.authorize?,
-           tenant: tenant,
-           error?: false
-         ) do
-      nil ->
-        :ok
-
-      record ->
-        Ash.destroy!(record,
-          authorize?: config.authorize?,
-          tenant: tenant,
-          return_notifications?: true
-        )
-    end
+    # One atomic `DELETE ... WHERE pk` (single round-trip) instead of read-then-destroy.
+    # `strategy: [:atomic, :stream]` takes the data-layer atomic path for a plain mirror
+    # destroy and falls back to per-record streaming when the host's destroy action
+    # carries non-atomic changes (so any host-defined destroy hooks still fire) — the
+    # effect is identical to the prior get!-then-destroy! for every host action.
+    # `transaction: false` joins the sink's ambient outer transaction (spec decision 7),
+    # never opening its own savepoint. Tenant scopes the DELETE (fail-closed, resolved
+    # above). A 0-row match (already-absent row) is `:success` → `:ok` (idempotent).
+    # `notify?` defaults to false, so no notifier fires for mirrored changes (the sink
+    # contract), matching the prior `return_notifications?: true` bundle-and-discard.
+    Ash.bulk_destroy!(query, Resolver.destroy_action(resource), %{},
+      strategy: [:atomic, :stream],
+      transaction: false,
+      tenant: tenant,
+      authorize?: config.authorize?,
+      return_errors?: true
+    )
 
     :ok
   rescue

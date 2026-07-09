@@ -145,6 +145,16 @@ defmodule AshReplicant.ApplyTest do
     end
   end
 
+  test "deleting a never-present row is an idempotent no-op (atomic 0-row match)" do
+    cfg = config()
+
+    # The row was never mirrored — the atomic DELETE ... WHERE pk matches 0 rows and
+    # must return :ok (never raise), exactly as the prior read-then-destroy returned
+    # :ok when Ash.get! found nothing.
+    assert :ok = Apply.apply_change(cfg, change(:delete, "orders", nil, %{"id" => "never-here"}))
+    assert Ash.get!(Order, "never-here", authorize?: false, error?: false) == nil
+  end
+
   test "multitenant delete on a NON-global resource derives the tenant from old_record (would break with tenant: nil)" do
     cfg = config()
 
