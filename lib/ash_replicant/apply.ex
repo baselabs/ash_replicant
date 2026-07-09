@@ -12,6 +12,7 @@ defmodule AshReplicant.Apply do
   """
 
   alias AshPostgres.DataLayer.Info, as: PGInfo
+  alias AshReplicant.Apply.Scd2
   alias AshReplicant.{Error, Resolver}
   alias AshReplicant.Resource.Info
   alias Ecto.Adapters.SQL
@@ -29,8 +30,15 @@ defmodule AshReplicant.Apply do
 
   def apply_change(config, %Replicant.Change{} = change, commit_timestamp) do
     case resource_for(config, change) do
-      nil -> :ok
-      resource -> apply_to(config, resource, change, commit_timestamp)
+      nil ->
+        :ok
+
+      resource ->
+        if Info.history_scd2?(resource) do
+          Scd2.apply(config, resource, change, commit_timestamp)
+        else
+          apply_to(config, resource, change, commit_timestamp)
+        end
     end
   end
 
