@@ -196,8 +196,7 @@ defmodule AshReplicant.ResolverTest do
         Resolver.version_open_input(
           AshReplicant.Test.OrderVersion,
           %{"order_id" => "o-1", "amount" => "9.99"},
-          lsn: 42,
-          ts: ~U[2026-01-01 00:00:00.000000Z]
+          %{lsn: 42, ts: ~U[2026-01-01 00:00:00.000000Z]}
         )
 
       # source data columns (via attrs_for_upsert) carry through
@@ -226,8 +225,7 @@ defmodule AshReplicant.ResolverTest do
         Resolver.version_open_input(
           LsnOnlyVersion,
           %{"order_id" => "o-2"},
-          lsn: 7,
-          ts: ~U[2026-01-01 00:00:00.000000Z]
+          %{lsn: 7, ts: ~U[2026-01-01 00:00:00.000000Z]}
         )
 
       assert inputs[:order_id] == "o-2"

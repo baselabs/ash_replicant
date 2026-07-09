@@ -183,7 +183,7 @@ defmodule AshReplicant.Resolver do
   `valid_from_ts`, `valid_to_lsn: nil`, optional `is_current: true`). `upsert_fields`
   names every window column so a same-`lsn` re-open coalesces in place.
   """
-  @spec version_open_input(module(), map(), keyword()) :: {map(), [atom()]}
+  @spec version_open_input(module(), map(), map()) :: {map(), [atom()]}
   def version_open_input(resource, record, window) do
     {inputs, fields} = attrs_for_upsert(resource, record)
 

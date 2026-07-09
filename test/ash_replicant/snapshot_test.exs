@@ -194,7 +194,7 @@ defmodule AshReplicant.SnapshotTest do
     ]
 
     assert :ok =
-             AshReplicant.Sink.Impl.handle_snapshot(config, changes, %{
+             Impl.handle_snapshot(config, changes, %{
                table: "public.orders",
                first_for_table?: true,
                snapshot_lsn: 10
