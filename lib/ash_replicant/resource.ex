@@ -146,6 +146,7 @@ defmodule AshReplicant.Resource do
     verifiers: [
       AshReplicant.Resource.Verifiers.ValidateSensitive,
       AshReplicant.Resource.Verifiers.ValidateMultitenancy,
-      AshReplicant.Resource.Verifiers.ValidateTenantSource
+      AshReplicant.Resource.Verifiers.ValidateTenantSource,
+      AshReplicant.Resource.Verifiers.ValidateHistory
     ]
 end
