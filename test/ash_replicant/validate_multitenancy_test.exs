@@ -119,7 +119,34 @@ defmodule AshReplicant.ValidateMultitenancyTest do
     assert err.message =~ "binary"
   end
 
-  test "a plain, declared, string tenant_attribute compiles clean (green control)" do
+  test "a tenant_attribute without an Ash multitenancy block fails closed (fail-open guard)" do
+    err =
+      assert_dsl_error %Spark.Error.DslError{path: [:replicant, :tenant_attribute]} do
+        defmodule Elixir.AshReplicant.ValidateMultitenancyTest.NoMultitenancy do
+          use Ash.Resource,
+            domain: AshReplicant.ValidateMultitenancyTest.Domain,
+            validate_domain_inclusion?: false,
+            data_layer: Ash.DataLayer.Ets,
+            extensions: [AshReplicant.Resource]
+
+          replicant do
+            source_table("orders")
+            tenant_attribute(:org_id)
+          end
+
+          # No `multitenancy` block: Ash silently ignores the `tenant:` option the sink
+          # passes, so the mirror write is UNSCOPED (fail-open isolation) — must fail closed.
+          attributes do
+            uuid_primary_key :id
+            attribute :org_id, :string
+          end
+        end
+      end
+
+    assert err.message =~ "multitenancy"
+  end
+
+  test "a declared string tenant_attribute WITH attribute multitenancy compiles clean (green control)" do
     refute_dsl_errors do
       defmodule Elixir.AshReplicant.ValidateMultitenancyTest.PlainDiscriminator do
         use Ash.Resource,
@@ -131,6 +158,11 @@ defmodule AshReplicant.ValidateMultitenancyTest do
         replicant do
           source_table("orders")
           tenant_attribute(:org_id)
+        end
+
+        multitenancy do
+          strategy :attribute
+          attribute :org_id
         end
 
         attributes do

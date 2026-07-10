@@ -11,15 +11,23 @@ defmodule AshReplicant.Resource.Verifiers.ValidateMultitenancy do
   - **not** listed in `skip` — a skipped discriminator is never written, so the
     tenant filter matches nothing (fail-open isolation);
   - a **declared** attribute — an undeclared discriminator cannot be resolved or
-    force-set; and
+    force-set;
   - **not** binary-storage-typed — the discriminator is a plaintext comparator;
-    a tag/base64 discriminator would scope inconsistently.
+    a tag/base64 discriminator would scope inconsistently; and
+  - backed by an Ash **`multitenancy`** block — the sink passes the resolved
+    per-row tenant to Ash as the `tenant:` option, which Ash HONORS only under
+    declared multitenancy. With no `multitenancy` block, `tenant:` is silently
+    ignored and every tenant's rows are mirrored UNSCOPED (fail-open isolation).
+    (`tenant_mfa` has the identical fail-open but is NOT checked here — an
+    mfa-resolved tenant may require `:context` multitenancy, a separate case;
+    tracked as a follow-up.)
 
   Messages are value-free: they name schema structure (the attribute name),
   never a row value.
   """
   use Spark.Dsl.Verifier
 
+  alias Ash.Resource.Info, as: AshInfo
   alias Spark.Dsl.Verifier
   alias Spark.Error.DslError
 
@@ -38,8 +46,9 @@ defmodule AshReplicant.Resource.Verifiers.ValidateMultitenancy do
     declared = Enum.find(Verifier.get_entities(dsl_state, [:attributes]), &(&1.name == attr))
 
     with :ok <- not_sensitive(module, attr, sensitive),
-         :ok <- not_skipped(module, attr, skip) do
-      declared_non_binary(module, attr, declared)
+         :ok <- not_skipped(module, attr, skip),
+         :ok <- declared_non_binary(module, attr, declared) do
+      requires_multitenancy(module, attr, dsl_state)
     end
   end
 
@@ -96,6 +105,28 @@ defmodule AshReplicant.Resource.Verifiers.ValidateMultitenancy do
            "the tenant_attribute #{inspect(attr)} must not be binary-storage-typed: the " <>
              "discriminator is a plaintext comparator; a tag/base64 discriminator would scope " <>
              "inconsistently, so it fails closed."
+       )}
+    else
+      :ok
+    end
+  end
+
+  # `multitenancy_strategy/1` is `nil` unless a `multitenancy` section is present (it accepts
+  # a compile-time `dsl_state`, same idiom as `ValidateTenantSource`). Both `:attribute` and
+  # `:context` honor the `tenant:` option; only its ABSENCE is the fail-open, so require any
+  # strategy. `global?` is fine — a global resource still honors `tenant:` when one is given.
+  defp requires_multitenancy(module, attr, dsl_state) do
+    if is_nil(AshInfo.multitenancy_strategy(dsl_state)) do
+      {:error,
+       DslError.exception(
+         module: module,
+         path: [:replicant, :tenant_attribute],
+         message:
+           "the tenant_attribute #{inspect(attr)} requires an Ash `multitenancy` block on this " <>
+             "resource (typically `strategy :attribute`, `attribute #{inspect(attr)}`): the sink " <>
+             "passes the resolved per-row tenant to Ash as the `tenant:` option, which Ash HONORS " <>
+             "only under declared multitenancy. With none, `tenant:` is silently ignored and every " <>
+             "tenant's rows are mirrored unscoped (fail-open isolation), so it fails closed here."
        )}
     else
       :ok

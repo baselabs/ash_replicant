@@ -24,6 +24,11 @@ defmodule AshReplicant.ResourceTest do
       tenant_attribute(:org_id)
     end
 
+    multitenancy do
+      strategy :attribute
+      attribute :org_id
+    end
+
     attributes do
       uuid_primary_key :id
       attribute :org_id, :string
