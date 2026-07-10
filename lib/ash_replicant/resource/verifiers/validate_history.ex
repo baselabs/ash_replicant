@@ -4,9 +4,10 @@ defmodule AshReplicant.Resource.Verifiers.ValidateHistory do
   Spark diagnostic; build-blocking under `--warnings-as-errors`).
 
   When SCD2 is selected, verifies the DSL-checkable SHAPE of the host version table:
-  a non-empty declared business key; declared integer `valid_from_lsn` / `valid_to_lsn`
-  (`valid_to` nullable so a version can stay open); a SURROGATE primary key distinct
-  from the business key (must not be exactly the business key); the `upsert_identity`
+  a non-empty declared business key; declared integer `valid_from_lsn` (non-nullable — the
+  version identity anchor) / `valid_to_lsn` (nullable so a version can stay open); a SURROGATE
+  primary key disjoint from the business key (no business-key attribute may be part of the
+  primary key — an overlapping PK caps the table at one row per business-key prefix); the `upsert_identity`
   identity present with keys equal to
   `business_key ++ [valid_from_lsn]`; the `history_close_action` update action present;
   and any declared optional timestamp / `is_current` attributes typed correctly.
@@ -110,13 +111,14 @@ defmodule AshReplicant.Resource.Verifiers.ValidateHistory do
           "history_business_key #{inspect(missing)} is not a declared attribute."
         )
 
-      MapSet.equal?(MapSet.new(bk), MapSet.new(pk)) ->
+      not MapSet.disjoint?(MapSet.new(bk), MapSet.new(pk)) ->
         err(
           module,
           [:replicant],
-          "the primary key must be a surrogate key distinct from `history_business_key` " <>
-            "#{inspect(bk)} — an SCD2 version table holds many rows per business key, so the " <>
-            "business key cannot be the primary key."
+          "the primary key must be a surrogate key DISJOINT from `history_business_key` " <>
+            "#{inspect(bk)} — an SCD2 version table holds many rows per business key, so no " <>
+            "business-key attribute may be part of the primary key (an overlapping or equal PK " <>
+            "caps the table at one row per business-key prefix, collapsing SCD2)."
         )
 
       true ->
@@ -148,6 +150,15 @@ defmodule AshReplicant.Resource.Verifiers.ValidateHistory do
               [:replicant],
               "the SCD2 close column #{inspect(name)} must be `allow_nil?: true` — an open version " <>
                 "has no valid_to yet."
+            )
+
+          which == :from and attr.allow_nil? != false ->
+            err(
+              module,
+              [:replicant],
+              "the SCD2 anchor column #{inspect(name)} (valid_from_lsn) must be `allow_nil?: false` — " <>
+                "it is the version identity anchor, always stamped with the change's commit_lsn; a " <>
+                "nullable anchor is a fail-open shape."
             )
 
           true ->

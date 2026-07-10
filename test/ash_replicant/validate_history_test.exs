@@ -275,4 +275,384 @@ defmodule AshReplicant.ValidateHistoryTest do
 
     assert err.message =~ "scd2"
   end
+
+  test "SCD2 whose primary key OVERLAPS (not equals) the business key fails closed (surrogate must be disjoint)" do
+    err =
+      assert_dsl_error %Spark.Error.DslError{path: [:replicant]} do
+        defmodule Elixir.AshReplicant.ValidateHistoryTest.OverlappingPk do
+          use Ash.Resource,
+            domain: AshReplicant.ValidateHistoryTest.Domain,
+            validate_domain_inclusion?: false,
+            data_layer: Ash.DataLayer.Ets,
+            extensions: [AshReplicant.Resource]
+
+          replicant do
+            source_table("orders")
+            history_strategy(:scd2)
+            history_business_key([:order_id])
+            upsert_identity(:order_version)
+          end
+
+          attributes do
+            # PK is [id, order_id] — a surrogate id PLUS the business key: overlaps, not disjoint.
+            # order_id in the PK caps the table at one row per order_id, defeating SCD2.
+            uuid_primary_key :id
+            attribute :order_id, :string, primary_key?: true, allow_nil?: false
+            attribute :valid_from_lsn, :integer, allow_nil?: false
+            attribute :valid_to_lsn, :integer, allow_nil?: true
+          end
+
+          identities do
+            identity :order_version, [:order_id, :valid_from_lsn],
+              pre_check_with: AshReplicant.ValidateHistoryTest.Domain
+          end
+
+          actions do
+            defaults [:read, :destroy, create: :*, update: :*]
+
+            update :close_version do
+              accept [:valid_to_lsn]
+            end
+          end
+        end
+      end
+
+    assert err.message =~ "surrogate"
+  end
+
+  test "SCD2 with a nullable valid_from_lsn fails closed (the version anchor must be non-null)" do
+    err =
+      assert_dsl_error %Spark.Error.DslError{path: [:replicant]} do
+        defmodule Elixir.AshReplicant.ValidateHistoryTest.NullableValidFrom do
+          use Ash.Resource,
+            domain: AshReplicant.ValidateHistoryTest.Domain,
+            validate_domain_inclusion?: false,
+            data_layer: Ash.DataLayer.Ets,
+            extensions: [AshReplicant.Resource]
+
+          replicant do
+            source_table("orders")
+            history_strategy(:scd2)
+            history_business_key([:order_id])
+            upsert_identity(:order_version)
+          end
+
+          attributes do
+            uuid_primary_key :id
+            attribute :order_id, :string, allow_nil?: false
+            # valid_from_lsn is the identity anchor — a nullable anchor is a fail-open shape.
+            attribute :valid_from_lsn, :integer, allow_nil?: true
+            attribute :valid_to_lsn, :integer, allow_nil?: true
+          end
+
+          identities do
+            identity :order_version, [:order_id, :valid_from_lsn],
+              pre_check_with: AshReplicant.ValidateHistoryTest.Domain
+          end
+
+          actions do
+            defaults [:read, :destroy, create: :*, update: :*]
+
+            update :close_version do
+              accept [:valid_to_lsn]
+            end
+          end
+        end
+      end
+
+    assert err.message =~ "valid_from"
+  end
+
+  test "SCD2 whose business_key names an undeclared attribute fails closed" do
+    err =
+      assert_dsl_error %Spark.Error.DslError{path: [:replicant, :history_business_key]} do
+        defmodule Elixir.AshReplicant.ValidateHistoryTest.BkUndeclared do
+          use Ash.Resource,
+            domain: AshReplicant.ValidateHistoryTest.Domain,
+            validate_domain_inclusion?: false,
+            data_layer: Ash.DataLayer.Ets,
+            extensions: [AshReplicant.Resource]
+
+          replicant do
+            source_table("orders")
+            history_strategy(:scd2)
+            history_business_key([:nonexistent_col])
+            upsert_identity(:order_version)
+          end
+
+          attributes do
+            uuid_primary_key :id
+            attribute :valid_from_lsn, :integer, allow_nil?: false
+            attribute :valid_to_lsn, :integer, allow_nil?: true
+          end
+
+          identities do
+            identity :order_version, [:nonexistent_col, :valid_from_lsn],
+              pre_check_with: AshReplicant.ValidateHistoryTest.Domain
+          end
+
+          actions do
+            defaults [:read, :destroy, create: :*, update: :*]
+          end
+        end
+      end
+
+    assert err.message =~ "not a declared attribute"
+  end
+
+  test "SCD2 with a missing valid_from_lsn attribute fails closed" do
+    err =
+      assert_dsl_error %Spark.Error.DslError{path: [:replicant]} do
+        defmodule Elixir.AshReplicant.ValidateHistoryTest.MissingValidFrom do
+          use Ash.Resource,
+            domain: AshReplicant.ValidateHistoryTest.Domain,
+            validate_domain_inclusion?: false,
+            data_layer: Ash.DataLayer.Ets,
+            extensions: [AshReplicant.Resource]
+
+          replicant do
+            source_table("orders")
+            history_strategy(:scd2)
+            history_business_key([:order_id])
+            upsert_identity(:order_version)
+          end
+
+          attributes do
+            uuid_primary_key :id
+            attribute :order_id, :string, allow_nil?: false
+            # no valid_from_lsn attribute declared
+            attribute :valid_to_lsn, :integer, allow_nil?: true
+          end
+
+          identities do
+            identity :order_version, [:order_id, :valid_from_lsn],
+              pre_check_with: AshReplicant.ValidateHistoryTest.Domain
+          end
+
+          actions do
+            defaults [:read, :destroy, create: :*, update: :*]
+          end
+        end
+      end
+
+    assert err.message =~ "valid_from_lsn"
+  end
+
+  test "SCD2 with a non-integer valid_from_lsn fails closed" do
+    err =
+      assert_dsl_error %Spark.Error.DslError{path: [:replicant]} do
+        defmodule Elixir.AshReplicant.ValidateHistoryTest.NonIntegerValidFrom do
+          use Ash.Resource,
+            domain: AshReplicant.ValidateHistoryTest.Domain,
+            validate_domain_inclusion?: false,
+            data_layer: Ash.DataLayer.Ets,
+            extensions: [AshReplicant.Resource]
+
+          replicant do
+            source_table("orders")
+            history_strategy(:scd2)
+            history_business_key([:order_id])
+            upsert_identity(:order_version)
+          end
+
+          attributes do
+            uuid_primary_key :id
+            attribute :order_id, :string, allow_nil?: false
+            # valid_from_lsn declared as a string, not integer storage
+            attribute :valid_from_lsn, :string, allow_nil?: false
+            attribute :valid_to_lsn, :integer, allow_nil?: true
+          end
+
+          identities do
+            identity :order_version, [:order_id, :valid_from_lsn],
+              pre_check_with: AshReplicant.ValidateHistoryTest.Domain
+          end
+
+          actions do
+            defaults [:read, :destroy, create: :*, update: :*]
+          end
+        end
+      end
+
+    assert err.message =~ "integer"
+  end
+
+  test "SCD2 with a wrong-typed valid_from_timestamp (not datetime) fails closed" do
+    err =
+      assert_dsl_error %Spark.Error.DslError{path: [:replicant]} do
+        defmodule Elixir.AshReplicant.ValidateHistoryTest.BadTsType do
+          use Ash.Resource,
+            domain: AshReplicant.ValidateHistoryTest.Domain,
+            validate_domain_inclusion?: false,
+            data_layer: Ash.DataLayer.Ets,
+            extensions: [AshReplicant.Resource]
+
+          replicant do
+            source_table("orders")
+            history_strategy(:scd2)
+            history_business_key([:order_id])
+            upsert_identity(:order_version)
+            history_valid_from_timestamp_attribute(:valid_from_ts)
+          end
+
+          attributes do
+            uuid_primary_key :id
+            attribute :order_id, :string, allow_nil?: false
+            attribute :valid_from_lsn, :integer, allow_nil?: false
+            attribute :valid_to_lsn, :integer, allow_nil?: true
+            # declared as a string, not a datetime
+            attribute :valid_from_ts, :string, allow_nil?: true
+          end
+
+          identities do
+            identity :order_version, [:order_id, :valid_from_lsn],
+              pre_check_with: AshReplicant.ValidateHistoryTest.Domain
+          end
+
+          actions do
+            defaults [:read, :destroy, create: :*, update: :*]
+
+            update :close_version do
+              accept [:valid_to_lsn]
+            end
+          end
+        end
+      end
+
+    assert err.message =~ "datetime"
+  end
+
+  test "SCD2 with a non-nullable valid_from_timestamp fails closed (snapshots open with nil ts)" do
+    err =
+      assert_dsl_error %Spark.Error.DslError{path: [:replicant]} do
+        defmodule Elixir.AshReplicant.ValidateHistoryTest.NonNullableTs do
+          use Ash.Resource,
+            domain: AshReplicant.ValidateHistoryTest.Domain,
+            validate_domain_inclusion?: false,
+            data_layer: Ash.DataLayer.Ets,
+            extensions: [AshReplicant.Resource]
+
+          replicant do
+            source_table("orders")
+            history_strategy(:scd2)
+            history_business_key([:order_id])
+            upsert_identity(:order_version)
+            history_valid_from_timestamp_attribute(:valid_from_ts)
+          end
+
+          attributes do
+            uuid_primary_key :id
+            attribute :order_id, :string, allow_nil?: false
+            attribute :valid_from_lsn, :integer, allow_nil?: false
+            attribute :valid_to_lsn, :integer, allow_nil?: true
+            # a ts column must be allow_nil?: true (snapshots carry no source commit timestamp)
+            attribute :valid_from_ts, :utc_datetime_usec, allow_nil?: false
+          end
+
+          identities do
+            identity :order_version, [:order_id, :valid_from_lsn],
+              pre_check_with: AshReplicant.ValidateHistoryTest.Domain
+          end
+
+          actions do
+            defaults [:read, :destroy, create: :*, update: :*]
+
+            update :close_version do
+              accept [:valid_to_lsn]
+            end
+          end
+        end
+      end
+
+    assert err.message =~ "allow_nil"
+  end
+
+  test "SCD2 with a wrong-typed is_current (not boolean) fails closed" do
+    err =
+      assert_dsl_error %Spark.Error.DslError{path: [:replicant]} do
+        defmodule Elixir.AshReplicant.ValidateHistoryTest.BadCurrentType do
+          use Ash.Resource,
+            domain: AshReplicant.ValidateHistoryTest.Domain,
+            validate_domain_inclusion?: false,
+            data_layer: Ash.DataLayer.Ets,
+            extensions: [AshReplicant.Resource]
+
+          replicant do
+            source_table("orders")
+            history_strategy(:scd2)
+            history_business_key([:order_id])
+            upsert_identity(:order_version)
+            history_current_attribute(:is_current)
+          end
+
+          attributes do
+            uuid_primary_key :id
+            attribute :order_id, :string, allow_nil?: false
+            attribute :valid_from_lsn, :integer, allow_nil?: false
+            attribute :valid_to_lsn, :integer, allow_nil?: true
+            # is_current declared as a string, not a boolean
+            attribute :is_current, :string, allow_nil?: true
+          end
+
+          identities do
+            identity :order_version, [:order_id, :valid_from_lsn],
+              pre_check_with: AshReplicant.ValidateHistoryTest.Domain
+          end
+
+          actions do
+            defaults [:read, :destroy, create: :*, update: :*]
+
+            update :close_version do
+              accept [:valid_to_lsn]
+            end
+          end
+        end
+      end
+
+    assert err.message =~ "boolean"
+  end
+
+  test "SCD2 whose declared optional timestamp attribute is absent from the resource fails closed" do
+    err =
+      assert_dsl_error %Spark.Error.DslError{path: [:replicant]} do
+        defmodule Elixir.AshReplicant.ValidateHistoryTest.OptionalAbsent do
+          use Ash.Resource,
+            domain: AshReplicant.ValidateHistoryTest.Domain,
+            validate_domain_inclusion?: false,
+            data_layer: Ash.DataLayer.Ets,
+            extensions: [AshReplicant.Resource]
+
+          replicant do
+            source_table("orders")
+            history_strategy(:scd2)
+            history_business_key([:order_id])
+            upsert_identity(:order_version)
+            # names a ts attribute that is never declared below
+            history_valid_from_timestamp_attribute(:valid_from_ts)
+          end
+
+          attributes do
+            uuid_primary_key :id
+            attribute :order_id, :string, allow_nil?: false
+            attribute :valid_from_lsn, :integer, allow_nil?: false
+            attribute :valid_to_lsn, :integer, allow_nil?: true
+          end
+
+          identities do
+            identity :order_version, [:order_id, :valid_from_lsn],
+              pre_check_with: AshReplicant.ValidateHistoryTest.Domain
+          end
+
+          actions do
+            defaults [:read, :destroy, create: :*, update: :*]
+
+            update :close_version do
+              accept [:valid_to_lsn]
+            end
+          end
+        end
+      end
+
+    assert err.message =~ "not present"
+  end
 end
