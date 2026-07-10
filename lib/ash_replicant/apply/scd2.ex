@@ -21,8 +21,13 @@ defmodule AshReplicant.Apply.Scd2 do
     lsn = change.commit_lsn
 
     if op == :update and bk_changed?(resource, change) do
+      # The old business key is being RETIRED (never re-opened at this lsn), so its close is
+      # TERMINAL — use the inclusive `<= lsn` predicate the delete path uses. A same-commit_lsn
+      # insert-then-pk-change opens the old key at exactly `lsn`; the open-path `< lsn` would
+      # miss it and leave a ghost open version for a key that no longer exists. Inclusive is safe
+      # for the normal cross-txn case (the old version was opened at an earlier lsn < this one).
       old_tenant = resolve_tenant!(resource, change.old_record, :destroy)
-      close_current(config, resource, change.old_record, lsn, ts, old_tenant, inclusive?: false)
+      close_current(config, resource, change.old_record, lsn, ts, old_tenant, inclusive?: true)
     end
 
     tenant = resolve_tenant!(resource, change.record, :upsert)

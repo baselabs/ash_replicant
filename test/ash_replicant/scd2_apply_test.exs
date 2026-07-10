@@ -288,6 +288,38 @@ defmodule AshReplicant.Scd2ApplyTest do
     assert is_nil(v_new.valid_to_lsn) and v_new.is_current and v_new.amount == "10"
   end
 
+  test "pk-changing update at the SAME commit_lsn retires the old key (no ghost open version)", %{
+    config: config
+  } do
+    # Insert o1 and change its key o1→o2 within ONE source transaction: both changes carry the
+    # SAME commit_lsn. The old-key close is TERMINAL (o1 is retired, never re-opened at L), so it
+    # must use the inclusive `<= L` predicate. With the open-path `< L`, o1's version opened at
+    # exactly L is not matched and dangles open forever — a ghost of a key that no longer exists,
+    # invisible to the partial-unique-open index (o1 and o2 are distinct keys). This is the
+    # within-txn case the cross-txn pk-change test above cannot exercise (it uses 100 then 200).
+    AshReplicant.Apply.apply_change(
+      config,
+      change(:insert, %{"order_id" => "o1", "amount" => "10"}, 100),
+      nil
+    )
+
+    AshReplicant.Apply.apply_change(
+      config,
+      change(:update, %{"order_id" => "o2", "amount" => "10"}, 100, %{"order_id" => "o1"}),
+      nil
+    )
+
+    # ANTI-VACUITY: the old key MUST have exactly one version and it MUST be closed at L.
+    assert [v_old] = versions("o1")
+
+    assert v_old.valid_to_lsn == 100 and not v_old.is_current,
+           "a same-commit_lsn pk-change must retire the old key's version, not leave it open"
+
+    # The new key is the sole open/current version.
+    assert [v_new] = versions("o2")
+    assert is_nil(v_new.valid_to_lsn) and v_new.is_current
+  end
+
   test "an SCD2 apply failure is value-free (scrubbed to a structural reason)", %{config: config} do
     # No `order_id` in the record → the nil-business-key guard in `close_current` raises a
     # structural `AshReplicant.Error` BEFORE any write. The scrubbed error must carry only
