@@ -8,7 +8,8 @@ defmodule AshReplicant.Resolver do
       `{source_schema, source_table} => resource` index, failing closed on a
       duplicate source key (ambiguous route).
     * `resolve_tenant/2` — per-row tenant from `tenant_attribute` / `tenant_mfa`,
-      failing closed with `:tenant_required` on a nil/blank tenant.
+      failing closed with `:tenant_required` on a nil/blank tenant; `resolve_tenant!/3` is
+      the raising variant every apply path shares.
     * `writable_target/2` / `attrs_for_upsert/2` — map source string columns to
       their real writable targets, routing AshCloak-sensitive columns through the
       cloak argument while naming `encrypted_<col>` in `upsert_fields`. The bulk

@@ -116,9 +116,10 @@ defmodule AshReplicant.Resource.Verifiers.ValidateHistory do
           module,
           [:replicant],
           "the primary key must be a surrogate key DISJOINT from `history_business_key` " <>
-            "#{inspect(bk)} — an SCD2 version table holds many rows per business key, so no " <>
-            "business-key attribute may be part of the primary key (an overlapping or equal PK " <>
-            "caps the table at one row per business-key prefix, collapsing SCD2)."
+            "#{inspect(bk)} — no business-key attribute may be part of the primary key. A PK " <>
+            "equal to or a subset of the business key caps the table at one row per business " <>
+            "key, collapsing SCD2; any other overlap couples the version identity to a " <>
+            "business-key column, so a pure surrogate is required."
         )
 
       true ->

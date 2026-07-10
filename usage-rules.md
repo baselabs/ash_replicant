@@ -186,9 +186,10 @@ the DSL-visible shape; the index and action bodies are host obligations covered 
 integration tests:
 
 - A **surrogate primary key** disjoint from the business key — no business-key attribute
-  may be part of the primary key (the version table holds many rows per business key, so a
-  primary key that overlaps or equals the business key would cap it at one row per
-  business-key prefix, collapsing SCD2).
+  may be part of the primary key. A primary key equal to or a subset of the business key
+  caps the version table at one row per business key (collapsing SCD2); any other overlap
+  couples the version identity to a business-key column, so the verifier requires a fully
+  disjoint surrogate.
 - Declared **integer** (Postgres bigint) `valid_from_lsn` / `valid_to_lsn` window
   columns; `valid_to_lsn` must be `allow_nil?: true` (an open version has no `valid_to`
   yet). A declared timestamp window column must likewise be `allow_nil?: true`.

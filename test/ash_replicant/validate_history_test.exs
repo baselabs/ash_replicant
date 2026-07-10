@@ -294,8 +294,9 @@ defmodule AshReplicant.ValidateHistoryTest do
           end
 
           attributes do
-            # PK is [id, order_id] — a surrogate id PLUS the business key: overlaps, not disjoint.
-            # order_id in the PK caps the table at one row per order_id, defeating SCD2.
+            # PK is [id, order_id] — a surrogate id PLUS a business-key column: overlaps, not
+            # disjoint. Spec §8 requires a fully disjoint surrogate PK, so this is rejected even
+            # though the unique id would technically permit many rows per order_id.
             uuid_primary_key :id
             attribute :order_id, :string, primary_key?: true, allow_nil?: false
             attribute :valid_from_lsn, :integer, allow_nil?: false
