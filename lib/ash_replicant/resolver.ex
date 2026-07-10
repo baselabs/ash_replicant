@@ -18,6 +18,7 @@ defmodule AshReplicant.Resolver do
       `destroy_action/1`.
   """
 
+  alias AshReplicant.Error
   alias AshReplicant.Resource.Info
 
   @type source_key :: {schema :: String.t(), table :: String.t()}
@@ -69,6 +70,24 @@ defmodule AshReplicant.Resolver do
 
       true ->
         {:ok, nil}
+    end
+  end
+
+  @doc """
+  The fail-closed bang variant of `resolve_tenant/2`: returns the per-row tenant, or raises a
+  value-free `AshReplicant.Error` (`reason: :tenant_required`) when the row carries no usable
+  tenant. `op` labels the failing sink operation (`:upsert` / `:destroy` / ...) in the
+  structural error. The single tenant-resolution entry point shared by every apply path
+  (`Apply`, `Apply.Scd2`), so `:tenant_required` fails identically everywhere.
+  """
+  @spec resolve_tenant!(module(), map(), atom()) :: term()
+  def resolve_tenant!(resource, record, op) do
+    case resolve_tenant(resource, record) do
+      {:ok, tenant} ->
+        tenant
+
+      {:error, :tenant_required} ->
+        raise Error.exception(reason: :tenant_required, resource: resource, op: op)
     end
   end
 

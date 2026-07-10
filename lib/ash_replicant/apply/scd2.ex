@@ -26,11 +26,11 @@ defmodule AshReplicant.Apply.Scd2 do
       # insert-then-pk-change opens the old key at exactly `lsn`; the open-path `< lsn` would
       # miss it and leave a ghost open version for a key that no longer exists. Inclusive is safe
       # for the normal cross-txn case (the old version was opened at an earlier lsn < this one).
-      old_tenant = resolve_tenant!(resource, change.old_record, :destroy)
+      old_tenant = Resolver.resolve_tenant!(resource, change.old_record, :destroy)
       close_current(config, resource, change.old_record, lsn, ts, old_tenant, inclusive?: true)
     end
 
-    tenant = resolve_tenant!(resource, change.record, :upsert)
+    tenant = Resolver.resolve_tenant!(resource, change.record, :upsert)
     close_current(config, resource, change.record, lsn, ts, tenant, inclusive?: false)
     open_version(config, resource, change.record, lsn, ts, tenant)
     :ok
@@ -40,7 +40,7 @@ defmodule AshReplicant.Apply.Scd2 do
 
   def apply(config, resource, %{op: :delete} = change, ts) do
     lsn = change.commit_lsn
-    tenant = resolve_tenant!(resource, change.old_record, :destroy)
+    tenant = Resolver.resolve_tenant!(resource, change.old_record, :destroy)
     close_current(config, resource, change.old_record, lsn, ts, tenant, inclusive?: true)
     :ok
   rescue
@@ -177,16 +177,6 @@ defmodule AshReplicant.Apply.Scd2 do
     do: Resolver.business_key_values(resource, r) != Resolver.business_key_values(resource, o)
 
   defp bk_changed?(_resource, _change), do: false
-
-  defp resolve_tenant!(resource, record, op) do
-    case Resolver.resolve_tenant(resource, record) do
-      {:ok, tenant} ->
-        tenant
-
-      {:error, :tenant_required} ->
-        raise Error.exception(reason: :tenant_required, resource: resource, op: op)
-    end
-  end
 
   defp opt({:ok, v}), do: v
   defp opt(_), do: nil

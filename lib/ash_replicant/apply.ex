@@ -92,7 +92,7 @@ defmodule AshReplicant.Apply do
 
   defp upsert(config, resource, change) do
     {inputs, upsert_fields} = Resolver.attrs_for_upsert(resource, change.record)
-    tenant = resolve_tenant!(resource, change.record, :upsert)
+    tenant = Resolver.resolve_tenant!(resource, change.record, :upsert)
 
     Ash.create!(resource, inputs,
       action: Resolver.upsert_action(resource),
@@ -125,7 +125,7 @@ defmodule AshReplicant.Apply do
       raise Error.exception(reason: :sink_failed, resource: resource, op: :destroy)
     end
 
-    tenant = resolve_tenant!(resource, old_record, :destroy)
+    tenant = Resolver.resolve_tenant!(resource, old_record, :destroy)
     query = Ash.Query.do_filter(resource, pk_values)
 
     # One atomic `DELETE ... WHERE pk` (single round-trip) instead of read-then-destroy.
@@ -160,14 +160,4 @@ defmodule AshReplicant.Apply do
   end
 
   defp pk_changed?(_resource, _change), do: false
-
-  defp resolve_tenant!(resource, record, op) do
-    case Resolver.resolve_tenant(resource, record) do
-      {:ok, tenant} ->
-        tenant
-
-      {:error, :tenant_required} ->
-        raise Error.exception(reason: :tenant_required, resource: resource, op: op)
-    end
-  end
 end
