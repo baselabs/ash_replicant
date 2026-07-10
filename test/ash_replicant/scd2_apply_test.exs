@@ -32,6 +32,12 @@ defmodule AshReplicant.Scd2ApplyTest do
     |> Ash.read!(authorize?: false)
   end
 
+  defp org_scoped_versions(tenant) do
+    AshReplicant.Test.OrderVersionOrgScoped
+    |> Ash.Query.sort(valid_from_lsn: :asc)
+    |> Ash.read!(tenant: tenant, authorize?: false)
+  end
+
   test "insert opens one current version", %{config: config} do
     AshReplicant.Apply.apply_change(
       config,
@@ -318,6 +324,56 @@ defmodule AshReplicant.Scd2ApplyTest do
     # The new key is the sole open/current version.
     assert [v_new] = versions("o2")
     assert is_nil(v_new.valid_to_lsn) and v_new.is_current
+  end
+
+  test "the per-change close is tenant-scoped — closing one tenant's version leaves another tenant's identically-keyed version OPEN" do
+    ps_config = %{
+      resolver_index: %{{"public", "orders"} => AshReplicant.Test.OrderVersionOrgScoped},
+      repo: AshReplicant.TestRepo,
+      authorize?: false
+    }
+
+    # Two tenants each open a version for the SAME business key "x" at the same lsn. The
+    # per-tenant open-uniq index (UNIQUE(org_id, order_id) WHERE valid_to_lsn IS NULL) permits
+    # both to be open — the global order_versions_t index structurally could not.
+    AshReplicant.Apply.apply_change(
+      ps_config,
+      change(:insert, %{"order_id" => "x", "org_id" => "t1", "amount" => "1"}, 100),
+      nil
+    )
+
+    AshReplicant.Apply.apply_change(
+      ps_config,
+      change(:insert, %{"order_id" => "x", "org_id" => "t2", "amount" => "1"}, 100),
+      nil
+    )
+
+    # An UPDATE to t1's "x" closes t1's current version and opens a new one — the close
+    # `bulk_update` is scoped to t1's resolved tenant.
+    AshReplicant.Apply.apply_change(
+      ps_config,
+      change(:update, %{"order_id" => "x", "org_id" => "t1", "amount" => "2"}, 200),
+      nil
+    )
+
+    t1 = org_scoped_versions("t1")
+    t2 = org_scoped_versions("t2")
+
+    # t1: the @100 version is CLOSED at 200; a new @200 version is open.
+    assert length(t1) == 2
+    [t1_closed, t1_open] = t1
+
+    assert t1_closed.valid_from_lsn == 100 and t1_closed.valid_to_lsn == 200 and
+             not t1_closed.is_current
+
+    assert t1_open.valid_from_lsn == 200 and is_nil(t1_open.valid_to_lsn) and t1_open.is_current
+
+    # t2: its identically-keyed version is UNTOUCHED — the close did NOT cross the tenant
+    # boundary (the exact cross-tenant retire the tenant_attribute→multitenancy guard prevents).
+    assert [t2_only] = t2
+
+    assert t2_only.valid_from_lsn == 100 and is_nil(t2_only.valid_to_lsn) and t2_only.is_current,
+           "closing t1's version must not retire t2's identically-keyed open version"
   end
 
   test "an SCD2 apply failure is value-free (scrubbed to a structural reason)", %{config: config} do

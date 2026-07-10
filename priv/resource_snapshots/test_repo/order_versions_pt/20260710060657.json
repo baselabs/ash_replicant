@@ -1,0 +1,151 @@
+{
+  "attributes": [
+    {
+      "allow_nil?": false,
+      "default": "fragment(\"gen_random_uuid()\")",
+      "generated?": false,
+      "precision": null,
+      "primary_key?": true,
+      "references": null,
+      "scale": null,
+      "size": null,
+      "source": "id",
+      "type": "uuid"
+    },
+    {
+      "allow_nil?": false,
+      "default": "nil",
+      "generated?": false,
+      "precision": null,
+      "primary_key?": false,
+      "references": null,
+      "scale": null,
+      "size": null,
+      "source": "order_id",
+      "type": "text"
+    },
+    {
+      "allow_nil?": false,
+      "default": "nil",
+      "generated?": false,
+      "precision": null,
+      "primary_key?": false,
+      "references": null,
+      "scale": null,
+      "size": null,
+      "source": "org_id",
+      "type": "text"
+    },
+    {
+      "allow_nil?": true,
+      "default": "nil",
+      "generated?": false,
+      "precision": null,
+      "primary_key?": false,
+      "references": null,
+      "scale": null,
+      "size": null,
+      "source": "amount",
+      "type": "text"
+    },
+    {
+      "allow_nil?": false,
+      "default": "nil",
+      "generated?": false,
+      "precision": null,
+      "primary_key?": false,
+      "references": null,
+      "scale": null,
+      "size": null,
+      "source": "valid_from_lsn",
+      "type": "bigint"
+    },
+    {
+      "allow_nil?": true,
+      "default": "nil",
+      "generated?": false,
+      "precision": null,
+      "primary_key?": false,
+      "references": null,
+      "scale": null,
+      "size": null,
+      "source": "valid_to_lsn",
+      "type": "bigint"
+    },
+    {
+      "allow_nil?": false,
+      "default": "true",
+      "generated?": false,
+      "precision": null,
+      "primary_key?": false,
+      "references": null,
+      "scale": null,
+      "size": null,
+      "source": "is_current",
+      "type": "boolean"
+    }
+  ],
+  "base_filter": null,
+  "check_constraints": [],
+  "create_table_options": null,
+  "custom_indexes": [
+    {
+      "all_tenants?": false,
+      "concurrently": false,
+      "error_fields": [
+        "org_id",
+        "order_id"
+      ],
+      "fields": [
+        {
+          "type": "atom",
+          "value": "org_id"
+        },
+        {
+          "type": "atom",
+          "value": "order_id"
+        }
+      ],
+      "include": null,
+      "message": null,
+      "name": "order_versions_pt_open_uniq",
+      "nulls_distinct": true,
+      "prefix": null,
+      "table": null,
+      "unique": true,
+      "using": null,
+      "where": "valid_to_lsn IS NULL"
+    }
+  ],
+  "custom_statements": [],
+  "has_create_action": true,
+  "hash": "DF91A13D19058F933AF24987C90317522777F3EE0FEE49502BE03CFB322E74BA",
+  "identities": [
+    {
+      "all_tenants?": false,
+      "base_filter": null,
+      "index_name": "order_versions_pt_order_version_index",
+      "keys": [
+        {
+          "type": "atom",
+          "value": "order_id"
+        },
+        {
+          "type": "atom",
+          "value": "valid_from_lsn"
+        }
+      ],
+      "name": "order_version",
+      "nils_distinct?": true,
+      "where": null
+    }
+  ],
+  "multitenancy": {
+    "attribute": "org_id",
+    "global": false,
+    "strategy": "attribute"
+  },
+  "repo": "Elixir.AshReplicant.TestRepo",
+  "schema": null,
+  "table": "order_versions_pt"
+}

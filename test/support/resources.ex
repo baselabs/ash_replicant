@@ -448,6 +448,70 @@ defmodule AshReplicant.Test.OrderVersionTenant do
   end
 end
 
+defmodule AshReplicant.Test.OrderVersionOrgScoped do
+  @moduledoc """
+  Multitenant SCD2 fixture with a PER-TENANT open-uniq index
+  (`UNIQUE (org_id, order_id) WHERE valid_to_lsn IS NULL`) — the correct shape for a
+  multitenant version table: it allows the SAME business key to be open in DIFFERENT
+  tenants (the global `order_versions_t` index cannot). Used to prove the SCD2 per-change
+  close is tenant-scoped — closing one tenant's version must NOT retire another tenant's
+  identically-keyed open version. Its own `order_versions_pt` table; lives in `HistoryDomain`.
+  """
+  use Ash.Resource,
+    domain: AshReplicant.Test.HistoryDomain,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshReplicant.Resource]
+
+  postgres do
+    table "order_versions_pt"
+    repo AshReplicant.TestRepo
+
+    custom_indexes do
+      index [:org_id, :order_id],
+        unique: true,
+        where: "valid_to_lsn IS NULL",
+        name: "order_versions_pt_open_uniq"
+    end
+  end
+
+  replicant do
+    source_table("orders")
+    tenant_attribute(:org_id)
+    history_strategy(:scd2)
+    history_business_key([:order_id])
+    upsert_identity(:order_version)
+    history_close_action(:close_version)
+    history_current_attribute(:is_current)
+  end
+
+  attributes do
+    uuid_primary_key :id
+    attribute :order_id, :string, allow_nil?: false, public?: true
+    attribute :org_id, :string, allow_nil?: false, public?: true
+    attribute :amount, :string, public?: true
+    attribute :valid_from_lsn, :integer, allow_nil?: false, public?: true
+    attribute :valid_to_lsn, :integer, allow_nil?: true, public?: true
+    attribute :is_current, :boolean, allow_nil?: false, default: true, public?: true
+  end
+
+  multitenancy do
+    strategy :attribute
+    attribute :org_id
+  end
+
+  identities do
+    identity :order_version, [:order_id, :valid_from_lsn]
+  end
+
+  actions do
+    defaults [:read, :destroy, create: :*, update: :*]
+
+    update :close_version do
+      accept [:valid_to_lsn, :is_current]
+    end
+  end
+end
+
 defmodule AshReplicant.Test.DuplicateDomain do
   @moduledoc false
   use Ash.Domain, validate_config_inclusion?: false
