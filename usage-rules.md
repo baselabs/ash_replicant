@@ -185,8 +185,10 @@ end
 the DSL-visible shape; the index and action bodies are host obligations covered by
 integration tests:
 
-- A **surrogate primary key** distinct from the business key (the version table holds
-  many rows per business key, so the business key cannot be the primary key).
+- A **surrogate primary key** disjoint from the business key — no business-key attribute
+  may be part of the primary key (the version table holds many rows per business key, so a
+  primary key that overlaps or equals the business key would cap it at one row per
+  business-key prefix, collapsing SCD2).
 - Declared **integer** (Postgres bigint) `valid_from_lsn` / `valid_to_lsn` window
   columns; `valid_to_lsn` must be `allow_nil?: true` (an open version has no `valid_to`
   yet). A declared timestamp window column must likewise be `allow_nil?: true`.
@@ -205,6 +207,14 @@ identity carries **only the primary-key columns**. If the SCD2 business key is n
 source primary key, set `ALTER TABLE <src> REPLICA IDENTITY FULL` so `old_record`
 carries the business-key columns — the same requirement, and the same fail-closed
 reason, as a non-PK `tenant_attribute`.
+
+**A mutable tenant must be part of the business key.** The per-change close is scoped to
+the change record's resolved tenant. Tenant (`tenant_attribute`) is normally an immutable
+owner scope; but if a source row can change tenant while keeping the same business key,
+include the tenant column in `history_business_key` so the move is treated as a business-key
+change (the old-tenant version is then closed). Otherwise keep the partial-unique-open index
+**global** on the business key (its shape above): a same-key tenant move then fails closed on
+a unique violation rather than silently leaving the old tenant's version open.
 
 **History is retained on delete (soft-close).** A source delete **closes** the current
 version (stamps `valid_to_lsn`); it never erases prior versions. SCD2 therefore does

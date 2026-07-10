@@ -78,7 +78,7 @@ defmodule AshReplicant.Resource do
         default: :halt,
         doc:
           "Policy for an upstream TRUNCATE: `:halt` (fail-closed), `:mirror` " <>
-            "(bulk-destroy the mirror rows in-txn), or `:close` (SCD2 only — close " <>
+            "(raw-delete the mirror rows in-txn), or `:close` (SCD2 only — close " <>
             "every open version tenant-blind, retiring the whole window)."
       ],
       on_schema_change: [

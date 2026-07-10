@@ -5,9 +5,10 @@ defmodule AshReplicant.Apply.Scd2 do
   `bulk_update` through the host close action, tenant-scoped, so it never retires
   another tenant's identically-keyed version) and OPENS a new version (host `:create`
   upsert by the `(business_key, valid_from_lsn)` identity), inside the sink's outer
-  transaction (`transaction: false`). Op-dependent close predicate: insert/update close
-  `valid_from_lsn < lsn` (don't clobber the version being re-opened at `lsn`); delete
-  closes `valid_from_lsn <= lsn` (retire a same-commit version too). Value-free: every
+  transaction (`transaction: false`). Op-dependent close predicate: the re-opened record's
+  close uses `valid_from_lsn < lsn` (don't clobber the version being re-opened at `lsn`); a
+  TERMINAL close — a delete, or the retired OLD key of a pk-changing update — uses
+  `valid_from_lsn <= lsn` (retire a version opened in the same commit too). Value-free: every
   raising op is scrubbed to a structural reason.
   """
 
