@@ -112,6 +112,19 @@ defmodule AshReplicant.Sink.Impl do
   guard. Sensitive, tenant-scoped, OR SCD2 resources apply per-record — SCD2
   stamps the batch's snapshot LSN onto each change so each version opens at
   `valid_from_lsn = snapshot_lsn`. Does not advance the checkpoint.
+
+  This sink implements replicant's v1 snapshot only (no `snapshot_progress/0`
+  callback). The whole-resource `first_for_table?` clear is correct under v1
+  because the snapshot runs as a separate phase before the stream starts
+  (EXPORT_SNAPSHOT -> COPY -> START_REPLICATION at the consistent_point), so
+  there are no concurrent `handle_transaction` rows to wipe when the clear
+  runs. If/when this sink adopts replicant's incremental snapshot mode
+  (`snapshot: [mode: :incremental]`, which requires implementing
+  `snapshot_progress/0` and interleaves snapshot chunks with the live stream),
+  this clear must change to preserve stream-applied rows (clear only
+  snapshot-origin rows) — otherwise a stream update that lands before the
+  first chunk closes is lost (replicant incremental "Bug C", proven by the
+  replicant marquee 2026-07-10).
   """
   @spec handle_snapshot(map(), [Replicant.Change.t()], map()) :: :ok | {:error, term()}
   def handle_snapshot(config, changes, %{table: qualified, first_for_table?: first?} = ctx) do
