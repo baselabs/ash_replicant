@@ -49,7 +49,17 @@ mix quality
   code — its Critical Rules are binding.
 - TDD: write the test first. Unit tests live in `test/`; integration tests (marked
   with `@moduletag :integration`) live in `test/integration/` and require a live
-  Postgres.
+  Postgres. Integration tests run whenever `ASH_REPLICANT_TEST_URL` is set (it gates the
+  suite); unit tests run without it. The URL supplies host/port/user, but the **database is
+  always forced to a dedicated `ash_replicant_test`** (isolated from any sibling suite sharing
+  the instance — see `config/test.exs`). One-time provision, then run:
+
+  ```bash
+  export ASH_REPLICANT_TEST_URL="postgres://postgres@localhost:5599/postgres"
+  MIX_ENV=test mix ecto.create   # creates ash_replicant_test
+  MIX_ENV=test mix ecto.migrate
+  mix test                       # unit + integration (the env var enables integration)
+  ```
 
 ## Critical rules (binding)
 

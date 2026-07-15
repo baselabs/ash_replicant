@@ -49,6 +49,17 @@ defmodule AshReplicant.Test.Marquee do
 
   def q!(sql, params \\ []), do: SQL.query!(TestRepo, sql, params)
 
+  @doc """
+  The `replicant` replication connection, DERIVED from the TestRepo config — so the WAL slot
+  always targets the SAME database (`ash_replicant_test`, `config/test.exs`) the source tables
+  and mirror live in. Never hardcode the database here: a divergence between the pool's DB and
+  the slot's DB is exactly the class of bug this indirection prevents.
+  """
+  def conn do
+    TestRepo.config()
+    |> Keyword.take([:hostname, :port, :username, :password, :database])
+  end
+
   @doc "Drop the slot, retrying while the walsender still holds it (async release after socket close)."
   def drop_slot!(slot) do
     Enum.reduce_while(1..80, :ok, fn _i, _acc ->

@@ -6,7 +6,6 @@ defmodule AshReplicant.EffectOnceTest do
   alias AshReplicant.Test.PG
   alias Ecto.Adapters.SQL.Sandbox
 
-  @conn [hostname: "localhost", port: 5599, username: "postgres", database: "postgres"]
   @slot "marquee_slot"
 
   setup do
@@ -77,7 +76,7 @@ defmodule AshReplicant.EffectOnceTest do
     {:ok, _pid} =
       AshReplicant.start_link(
         sink: Marquee.Sink,
-        connection: @conn,
+        connection: Marquee.conn(),
         slot_name: @slot,
         publication: Marquee.publication(),
         go_forward_only: true
