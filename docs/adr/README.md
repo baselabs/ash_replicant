@@ -27,4 +27,4 @@ authored as an ADR by the next slice that touches its surface (do NOT bulk-autho
 | Tenant-blind layering | [D4] | `resolver.ex`, `ash_replicant.ex` |
 | Value-free boundary | [D5] | `error.ex`, `telemetry.ex` |
 | SCD2 surrogate-PK disjoint from business key | CHARTER SCD2 | `validate_history.ex:114-123` |
-| `REPLICA IDENTITY FULL` operational precondition | AGENTS Rule 2 | `resource.ex:47-49,105` |
+| `REPLICA IDENTITY FULL` operational precondition | AGENTS Rule 2 | `resource.ex:51,109` (tenant + SCD2 business-key notes) |

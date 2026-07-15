@@ -20,10 +20,13 @@ defmodule AshReplicant.Resource do
   `AshPostgres.DataLayer.Info.table/1` / `schema/1` via
   `AshReplicant.Resource.Info.source_table/1` and `source_schema/1`. Every
   option is optional. Compile-time verifiers enforce that `sensitive` columns map
-  to encrypted/binary targets (`ValidateSensitive`), that a declared
-  `tenant_attribute` is a plaintext, declared, non-classified discriminator
-  (`ValidateMultitenancy`), and that a **non-global multitenant** resource declares
-  a tenant source — `tenant_attribute` or `tenant_mfa` (`ValidateTenantSource`).
+  to encrypted/binary targets (`ValidateSensitive`); that a declared tenant source is
+  a plaintext discriminator backed by an Ash `multitenancy` block, and that the block's
+  own `:attribute` is plaintext (`ValidateMultitenancy`); that a **non-global
+  multitenant** resource declares a tenant source — `tenant_attribute` or `tenant_mfa`
+  (`ValidateTenantSource`); that no sink-selected action bypasses tenancy
+  (`ValidateActionMultitenancy`); and that an SCD2 resource's version-table shape is
+  valid (`ValidateHistory`).
   """
 
   @replicant %Spark.Dsl.Section{

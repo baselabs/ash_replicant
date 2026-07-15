@@ -38,20 +38,23 @@ through the host `:create` upsert. The **only** raw SQL SCD2 adds is `on_truncat
 values, table/columns from the resource DSL, never a row value), the same trust boundary
 as the existing `:mirror` truncate `DELETE`.
 
-**2. Multitenancy is fail-closed.** A nil/blank tenant on a multitenant resource
-must fail closed (no query runs), never silently span tenants. Source column
-`tenant_attribute` or `tenant_mfa` resolves the per-row tenant; the mirror action
-passes it as `tenant:` so `Ash.Changeset` scopes **every row write** — any
-multitenancy DSL will validate the tenant at write time. If tenant resolution fails,
-the row's mirror write fails and the transaction rolls back (fail-closed). A
-compile-time verifier (`ValidateTenantSource`) additionally requires a
-`tenant_attribute` or `tenant_mfa` on any **non-global** Ash-multitenant resource —
-so the misconfiguration fails closed at build time, not only at runtime.
-Symmetrically, `ValidateMultitenancy` requires an Ash `multitenancy` block whenever a
-`tenant_attribute` **or** `tenant_mfa` is declared: with no block Ash silently ignores the
-`tenant:` option and mirrors every tenant **unscoped** (a fail-open), so that too fails
-closed at compile time (any strategy — `:attribute`/`:context`, incl. `global?` — satisfies
-it). See [ADR-0001](docs/adr/0001-fail-closed-multitenancy.md).
+**2. Multitenancy is fail-closed.** A nil/`false`/blank tenant on a multitenant resource
+must fail closed (no query runs), never silently span tenants (`false` too — Ash treats a
+falsy tenant as unscoped). Source column `tenant_attribute` or `tenant_mfa` resolves the
+per-row tenant; the mirror action passes it as `tenant:` so `Ash.Changeset` scopes **every
+row write** — any multitenancy DSL will validate the tenant at write time. If tenant
+resolution fails, the row's mirror write fails and the transaction rolls back (fail-closed).
+Compile-time verifiers move the misconfigurations to build time (fail-closed at compile, per
+[ADR-0001](docs/adr/0001-fail-closed-multitenancy.md)):
+`ValidateTenantSource` requires a `tenant_attribute` or `tenant_mfa` on any **non-global**
+Ash-multitenant resource; `ValidateMultitenancy` requires an Ash `multitenancy` block whenever
+either source is declared (with no block Ash silently ignores `tenant:` and mirrors every
+tenant **unscoped**; any strategy — `:attribute`/`:context`, incl. `global?` — satisfies it)
+AND requires the block's own `strategy :attribute` discriminator to be a plaintext,
+non-sensitive, non-binary column; and `ValidateActionMultitenancy` rejects `multitenancy
+:bypass`/`:bypass_all` on any sink-selected action (primary read/create/destroy or the SCD2
+close), which would otherwise let Ash ignore the tenant on a write OR a `bulk_update`/
+`bulk_destroy` row match.
 
 > **Operational requirement — tenant-scoped source tables must be `REPLICA IDENTITY FULL`.**
 > A `:delete` (and a PK-changing `:update`) derives the tenant from `old_record`, but

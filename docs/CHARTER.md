@@ -1,6 +1,6 @@
 # AshReplicant — Project Charter
 
-**Status: realized, v0.2.0, actively maintained.** The original 17-task build shipped & closeout-reviewed 2026-07-08; later runs added the 3-task hardening + 7/11-task SCD2 history-mirror (`ValidateHistory`, `on_truncate :close`) 2026-07-09, the multitenancy tenant-scope + fail-open fix (`ValidateTenantSource`, `ValidateMultitenancy` require-a-block) 2026-07-10, and the 2026-07-14 tenancy fail-open hardening (false-tenant fail-close, `ValidateActionMultitenancy` bypass gate, multitenancy-`:attribute` shape). Product-shaping decisions are tracked in `docs/adr/`; per-run per-task ledgers live under `docs/superpowers/plans/` (gitignored, local-only).
+**Status: realized, v0.3.0, actively maintained.** The original 17-task build shipped & closeout-reviewed 2026-07-08; later runs added the 3-task hardening + 7/11-task SCD2 history-mirror (`ValidateHistory`, `on_truncate :close`) 2026-07-09, the multitenancy tenant-scope + fail-open fix (`ValidateTenantSource`, `ValidateMultitenancy` require-a-block) 2026-07-10, and the 2026-07-14 tenancy fail-open hardening (false-tenant fail-close, `ValidateActionMultitenancy` bypass gate, multitenancy-`:attribute` shape). Product-shaping decisions are tracked in `docs/adr/`; per-run per-task ledgers live under `docs/superpowers/plans/` (gitignored, local-only).
 
 ## Purpose
 

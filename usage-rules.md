@@ -112,6 +112,15 @@ end
   incl. `global?`); `ValidateMultitenancy` fails the build closed otherwise. Without a block
   Ash silently ignores the `tenant:` the sink passes and mirrors every tenant unscoped.
   `:context` is the typical pairing for `tenant_mfa`.
+- **Multitenancy `:attribute` must be plaintext.** Under `strategy :attribute`, the block's
+  own `attribute` is force-set to the plaintext tenant and filtered on read — `ValidateMultitenancy`
+  rejects a `sensitive`-classified or binary-storage-typed one (it would mis-scope). (An
+  AshCloak-encrypted attribute is rejected by Ash's own multitenancy verifier.)
+- **No sink action may bypass tenancy.** `ValidateActionMultitenancy` rejects
+  `multitenancy :bypass`/`:bypass_all` on the sink-selected actions of a multitenant resource —
+  primary read/create/destroy and the SCD2 close — since Ash would otherwise ignore the tenant
+  on a write, or on the `bulk_update`/`bulk_destroy` read that matches rows to close/delete.
+  `:enforce` (default) and `:allow_global` are permitted.
 - **`sensitive`** — source columns classified as sensitive. Each must map to an
   AshCloak-encrypted attribute, a binary-storage attribute, or be listed in `skip`.
   Never list the `tenant_attribute`.
@@ -241,13 +250,13 @@ at compile time.
   AshCloak encryption and multitenancy scoping still fire (policies are not re-gated).
   Direct Ecto bypasses AshCloak and tenancy — never do it.
 
-- **Fail-closed multitenancy.** A nil/blank tenant on a multitenant resource is an
-  error. No silent base-tenant fallback. The mirror action's `tenant:` option
-  triggers Ash's multitenancy DSL; if tenant validation fails, the write fails and
-  the transaction rolls back. A declared `tenant_attribute` or `tenant_mfa` **requires
-  an Ash `multitenancy` block** — `ValidateMultitenancy` rejects a source with no block
-  at compile time, since Ash would otherwise silently ignore `tenant:` and mirror every
-  tenant unscoped.
+- **Fail-closed multitenancy.** A nil/`false`/blank tenant on a multitenant resource is an
+  error (`false` too — Ash treats a falsy tenant as unscoped). No silent base-tenant fallback.
+  The mirror action's `tenant:` option triggers Ash's multitenancy DSL; if tenant validation
+  fails, the write fails and the transaction rolls back. A declared `tenant_attribute` or
+  `tenant_mfa` **requires an Ash `multitenancy` block** — `ValidateMultitenancy` rejects a
+  source with no block at compile time, since Ash would otherwise silently ignore `tenant:` and
+  mirror every tenant unscoped.
 
 - **Sensitive = AshCloak-encrypted or binary or skip.** Every source column listed
   in `sensitive` must map to one of: (1) an Ash attribute with AshCloak encryption

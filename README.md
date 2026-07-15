@@ -12,8 +12,9 @@ verification, and policies **enforced Ash-natively**. It executes through the
 [`replicant`](https://github.com/baselabs/replicant) client (the transport — the
 "`postgrex` of CDC").
 
-> **Status: v0.2.0.** Full working library with effect-once guarantees, fail-closed
-> multitenancy, and AshCloak integration. Working rules are in
+> **Status: v0.3.0.** Full working library with effect-once guarantees, fail-closed
+> multitenancy (compile-time verified), SCD2 history mirroring, and AshCloak integration.
+> Working rules are in
 > [`AGENTS.md`](https://github.com/baselabs/ash_replicant/blob/main/AGENTS.md) — read it
 > first. A fuller project charter (architecture, scope, and the resolved effect-once
 > model) is **tracked** at
@@ -43,7 +44,7 @@ Add `ash_replicant` to your dependencies in `mix.exs`:
 
 ```elixir
 # mix.exs
-{:ash_replicant, "~> 0.2.0"}
+{:ash_replicant, "~> 0.3.0"}
 ```
 
 It pulls in [`replicant`](https://github.com/baselabs/replicant) (the CDC transport)
@@ -133,16 +134,20 @@ end
 - **`source_table` / `source_schema`** — defaults to the resource's own AshPostgres
   table/schema via reflection. Optionally override to map a different source.
 - **`tenant_attribute`** — source column carrying the tenant. Resolved per row and
-  passed as `tenant:` to the mirror action. Fail-closed if nil/blank. The source
-  table must be `REPLICA IDENTITY FULL` so a delete's / PK-changing update's
-  `old_record` carries the tenant column (key-only under the default identity).
+  passed as `tenant:` to the mirror action. Fail-closed if nil/`false`/blank (Ash treats
+  a falsy tenant as unscoped). The source table must be `REPLICA IDENTITY FULL` so a
+  delete's / PK-changing update's `old_record` carries the tenant column (key-only under
+  the default identity).
 - **`tenant_mfa`** — alternative tenant source: `{Module, :function, [extra_args]}`
   applied as `apply(Module, :function, [record | extra_args])` yielding the tenant.
-- **Multitenancy block required.** Declaring either `tenant_attribute` or `tenant_mfa`
-  **requires an Ash `multitenancy` block** (any strategy — `:attribute`/`:context`,
-  incl. `global?`). Without one, Ash silently ignores the `tenant:` option and every
-  tenant mirrors unscoped; `ValidateMultitenancy` fails the build closed. See
-  [ADR-0001](docs/adr/0001-fail-closed-multitenancy.md).
+- **Compile-time tenancy checks** (fail-closed at build, `ValidateMultitenancy` /
+  `ValidateActionMultitenancy` — see
+  [ADR-0001](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0001-fail-closed-multitenancy.md)):
+  declaring either tenant source **requires an Ash `multitenancy` block** (any strategy —
+  `:attribute`/`:context`, incl. `global?`), or Ash silently ignores `tenant:` and every
+  tenant mirrors unscoped; under `strategy :attribute` the block's own `attribute` must be
+  a plaintext, non-sensitive, non-binary column; and no sink-selected action (primary
+  read/create/destroy or the SCD2 close) may declare `multitenancy :bypass`/`:bypass_all`.
 - **`sensitive`** — source columns classified as sensitive. Must map to an AshCloak-encrypted
   attribute, a binary-storage attribute, or be listed in `skip`. Never list the
   `tenant_attribute`.
