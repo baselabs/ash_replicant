@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test & quality (Elixir ${{ matrix.elixir }} / OTP ${{ matrix.otp }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - elixir: "1.18"
+            otp: "27"
+
+    env:
+      MIX_ENV: test
+      # PG.enabled? (test/support/pg.ex) gates the :integration suite on this being set.
+      # config/test.exs FORCES the database to a dedicated `ash_replicant_test` regardless of
+      # the URL's db, so the value only needs a valid host/port/user for the CI Postgres below.
+      ASH_REPLICANT_TEST_URL: postgres://postgres@localhost:5432/postgres
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The CDC integration tests use logical replication (publications + slots), which needs
+      # `wal_level=logical`. A GitHub Actions `services:` postgres can't override the server
+      # command, so run the container manually with the replication settings enabled.
+      - name: Start PostgreSQL 16 (wal_level=logical)
+        run: |
+          docker run -d --name pg \
+            -e POSTGRES_HOST_AUTH_METHOD=trust \
+            -p 5432:5432 \
+            postgres:16 \
+            -c wal_level=logical -c max_replication_slots=10 -c max_wal_senders=10
+          for _ in $(seq 1 30); do
+            docker exec pg pg_isready -U postgres && break
+            sleep 1
+          done
+          docker exec pg pg_isready -U postgres || { docker logs pg; exit 1; }
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ matrix.elixir }}
+          otp-version: ${{ matrix.otp }}
+
+      - name: Cache deps, build, and dialyzer PLT
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+            priv/plts
+          key: ${{ runner.os }}-mix-${{ matrix.otp }}-${{ matrix.elixir }}-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-${{ matrix.otp }}-${{ matrix.elixir }}-
+
+      - run: mix deps.get
+      - run: mix deps.compile
+
+      # Fast, cheap gates first (fail before the slow dialyzer/PLT build).
+      - run: mix format --check-formatted
+      - run: mix compile --warnings-as-errors
+      - run: mix credo --strict
+      - name: Dependency hygiene (unused / retired / CVEs)
+        run: mix deps.audit
+
+      # Provision the isolated integration database, then run unit + integration together
+      # (ASH_REPLICANT_TEST_URL is set, so PG.enabled? is true and integration is NOT excluded).
+      - run: mix ecto.create
+      - run: mix ecto.migrate
+
+      # Run unit + integration together, and FAIL if integration was excluded — otherwise a
+      # misconfigured substrate would make CI green while silently testing only the unit suite.
+      # When PG.enabled? is true the suite runs with no exclusions; a skipped integration suite
+      # prints "(N excluded)".
+      - name: Test (unit + integration; fail if integration excluded)
+        run: |
+          set -o pipefail
+          mix test 2>&1 | tee test_output.txt
+          if grep -qE '[0-9]+ excluded' test_output.txt; then
+            echo "::error::Integration suite was EXCLUDED — ASH_REPLICANT_TEST_URL not honored; CI must not pass without integration."
+            exit 1
+          fi
+
+      # Slowest gate last (builds/caches the PLT).
+      - run: mix dialyzer
