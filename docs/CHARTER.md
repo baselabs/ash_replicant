@@ -1,6 +1,6 @@
 # AshReplicant — Project Charter
 
-**Status: realized + closeout-reviewed.** All 17 plan tasks shipped & verified; `/review-autopilot --fix` closeout complete (2026-07-08). See `docs/superpowers/plans/2026-07-08-ash-replicant.md` (per-task ledger) and `docs/superpowers/reviews/2026-07-08-ash-replicant-lens-reports.md` (closeout).
+**Status: realized, v0.2.0, actively maintained.** The original 17-task build shipped & closeout-reviewed 2026-07-08; later runs added the 3-task hardening + 7/11-task SCD2 history-mirror (`ValidateHistory`, `on_truncate :close`) 2026-07-09, the multitenancy tenant-scope + fail-open fix (`ValidateTenantSource`, `ValidateMultitenancy` require-a-block) 2026-07-10, and the 2026-07-14 tenancy fail-open hardening (false-tenant fail-close, `ValidateActionMultitenancy` bypass gate, multitenancy-`:attribute` shape). Product-shaping decisions are tracked in `docs/adr/`; per-run per-task ledgers live under `docs/superpowers/plans/` (gitignored, local-only).
 
 ## Purpose
 
@@ -130,12 +130,15 @@ error reasons) — never row values. Including the halt path.
 
 ## Status Build Log
 
-All 17 plan tasks shipped and verified on 2026-07-08, then closeout-reviewed
-(`/review-autopilot --fix`). The **authoritative per-task ledger** (task → commit
-sha, RED evidence, review rounds) lives in
-`docs/superpowers/plans/2026-07-08-ash-replicant.md`; the closeout findings + fixes
-in `docs/superpowers/reviews/2026-07-08-ash-replicant-lens-reports.md`. This charter
-does not duplicate that ledger (a second copy only drifts).
+The original 17-task build shipped and was closeout-reviewed on 2026-07-08. Subsequent
+runs, each with its own gitignored per-task ledger under `docs/superpowers/plans/`:
+3-task hardening + 7/11-task SCD2 history-mirror (2026-07-09), the multitenancy
+tenant-scope + require-a-block fix (2026-07-10, `c0a379f`/`ca32e21`), and the tenancy
+fail-open hardening (2026-07-14: `6dc51d7` false-tenant, `8a06ea9` action-bypass gate,
+`b81b2cd` multitenancy-`:attribute` shape, plus the `tenant_mfa` require-a-block symmetry).
+The **authoritative per-task ledgers** (task → commit sha, RED evidence, review rounds)
+live in those `docs/superpowers/plans/` files (local-only); product decisions are in
+`docs/adr/`. This charter does not duplicate the ledgers (a second copy only drifts).
 
 ## References
 

@@ -5,8 +5,9 @@ Thank you for your interest in contributing to AshReplicant!
 ## Prerequisites
 
 - **Elixir** 1.15+ and **Erlang/OTP** 26+
-- A sibling checkout of [`replicant`](https://github.com/baselabs/replicant) at
-  `../replicant` (path dependency during co-development)
+- `replicant` is a **Hex dependency** (`{:replicant, "~> 0.1.0"}` in `mix.exs`), pulled by
+  `mix deps.get` — no sibling checkout is required to build or test. A local checkout at
+  `../replicant` is only needed for cross-repo design/brainstorm work (see `CLAUDE.md`).
 - **PostgreSQL** 14+ for integration tests (with `wal_level=logical`); the
   integration suite runs against a live Postgres with a logical replication slot
   and publication
