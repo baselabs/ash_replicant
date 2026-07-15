@@ -24,8 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ignores the `tenant:` option the sink passes, so every tenant's rows mirror **unscoped**
   into one table — a proven fail-open with no runtime error. The `tenant_attribute` arm
   shipped 2026-07-10; the symmetric `tenant_mfa` arm closes the parallel hole (2026-07-14).
-  Any strategy (`:attribute`/`:context`, incl. `global?`) satisfies the gate. See
-  [ADR-0001](docs/adr/0001-fail-closed-multitenancy.md).
+  Any strategy (`:attribute` or `:context`), including a `global?` block, satisfies the gate.
+  See [ADR-0001](docs/adr/0001-fail-closed-multitenancy.md).
+- **A `false`-resolved tenant now fails closed.** `Resolver.resolve_tenant/2` rejected only
+  `nil`/blank-string tenants; a `tenant_attribute` column holding boolean `false` or a
+  `tenant_mfa` returning `false` resolved to `{:ok, false}`. Ash treats a falsy tenant as
+  **no scoping** (neither force-set nor required), so the mirror write landed **unscoped**
+  across tenants. `false` now returns `:tenant_required` like `nil` (2026-07-14).
 
 ## [0.2.0] - 2026-07-09
 

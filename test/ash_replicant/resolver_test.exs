@@ -122,6 +122,18 @@ defmodule AshReplicant.ResolverTest do
       assert {:error, :tenant_required} =
                Resolver.resolve_tenant(MfaOrder, %{"tenant_key" => "  "})
     end
+
+    test "a boolean-false resolved tenant fails closed for BOTH sources (falsy tenant = UNSCOPED — tripwire)" do
+      # Ash treats a falsy tenant as NO scoping: `handle_attribute_multitenancy` guards on
+      # `if changeset.tenant` (create.ex) and `validate_changeset_multitenancy` keys on
+      # `is_nil(changeset.tenant)` (helpers.ex) — so `false` is neither force-set NOR
+      # rejected, and the mirror write lands UNSCOPED across tenants. Both a `tenant_attribute`
+      # column holding `false` and a `tenant_mfa` returning `false` must fail closed here.
+      assert {:error, :tenant_required} = Resolver.resolve_tenant(Account, %{"org_id" => false})
+
+      assert {:error, :tenant_required} =
+               Resolver.resolve_tenant(MfaOrder, %{"tenant_key" => false})
+    end
   end
 
   describe "writable_target/2 + attrs_for_upsert/2 (classification)" do

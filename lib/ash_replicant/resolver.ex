@@ -8,8 +8,8 @@ defmodule AshReplicant.Resolver do
       `{source_schema, source_table} => resource` index, failing closed on a
       duplicate source key (ambiguous route).
     * `resolve_tenant/2` — per-row tenant from `tenant_attribute` / `tenant_mfa`,
-      failing closed with `:tenant_required` on a nil/blank tenant; `resolve_tenant!/3` is
-      the raising variant every apply path shares.
+      failing closed with `:tenant_required` on a nil/`false`/blank tenant (any value Ash would
+      treat as unscoped); `resolve_tenant!/3` is the raising variant every apply path shares.
     * `writable_target/2` / `attrs_for_upsert/2` — map source string columns to
       their real writable targets, routing AshCloak-sensitive columns through the
       cloak argument while naming `encrypted_<col>` in `upsert_fields`. The bulk
@@ -265,6 +265,12 @@ defmodule AshReplicant.Resolver do
   defp opt(_), do: nil
 
   defp present_or_required(nil), do: {:error, :tenant_required}
+
+  # `false` is the only other Elixir falsy value. Ash treats a falsy tenant as NO scoping —
+  # `handle_attribute_multitenancy` guards `if changeset.tenant` and `validate_changeset_multitenancy`
+  # keys on `is_nil(changeset.tenant)` — so a `false` tenant is neither force-set nor rejected and
+  # the mirror write lands UNSCOPED. Fail closed, exactly like `nil`.
+  defp present_or_required(false), do: {:error, :tenant_required}
 
   defp present_or_required(v) when is_binary(v),
     do: if(String.trim(v) == "", do: {:error, :tenant_required}, else: {:ok, v})
