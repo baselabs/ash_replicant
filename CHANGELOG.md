@@ -31,6 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tenant_mfa` returning `false` resolved to `{:ok, false}`. Ash treats a falsy tenant as
   **no scoping** (neither force-set nor required), so the mirror write landed **unscoped**
   across tenants. `false` now returns `:tenant_required` like `nil` (2026-07-14).
+- **Sink-selected write actions can no longer bypass tenancy.** A new
+  `ValidateActionMultitenancy` compile verifier rejects `multitenancy :bypass` / `:bypass_all`
+  on the host's primary create/destroy (and the SCD2 close action) of a multitenant resource —
+  Ash would otherwise ignore the tenant the sink passes and mirror every tenant **unscoped**,
+  despite a valid multitenancy block. `:enforce` and `:allow_global` remain permitted
+  (2026-07-14).
 
 ## [0.2.0] - 2026-07-09
 

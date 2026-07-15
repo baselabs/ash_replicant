@@ -5,8 +5,9 @@ Date: 2026-07-14
 ## Status
 
 Accepted. Records CHARTER decision **[D2]** (previously governed by charter prose only).
-Strengthened 2026-07-14 by the `tenant_mfa` compile-gate symmetry fix (this ADR's second
-decision clause).
+Strengthened 2026-07-14 by three fixes surfaced during closeout: the `tenant_mfa` compile-gate
+symmetry (mode 2), the `false`-tenant runtime fail-close (mode 1), and the sink-action
+`:bypass` gate (mode 3, `ValidateActionMultitenancy`).
 
 ## Context
 
@@ -33,11 +34,13 @@ Two failure modes must be closed:
 **Multitenancy is fail-closed. There is never a base-tenant fallback.**
 
 - **Runtime (mode 1):** `AshReplicant.Resolver.resolve_tenant/2` returns
-  `{:error, :tenant_required}` on a nil/blank/whitespace tenant, and `resolve_tenant!/3`
+  `{:error, :tenant_required}` on a nil/`false`/blank/whitespace tenant, and `resolve_tenant!/3`
   raises a value-free `AshReplicant.Error` before the write is attempted — defense in depth on
-  top of Ash's own multitenancy validation. A tenant-scoped delete / key-changing update needs
-  the tenant in `old_record`, so the source table must be `REPLICA IDENTITY FULL` (see
-  AGENTS.md Critical Rule 2 and the operational note there).
+  top of Ash's own multitenancy validation. `false` is included because Ash treats a falsy
+  tenant as **no scoping** (neither force-set nor required — `create.ex` `handle_multitenancy`
+  guards on truthiness), so a `tenant_mfa` returning `false` would otherwise write unscoped.
+  A tenant-scoped delete / key-changing update needs the tenant in `old_record`, so the source
+  table must be `REPLICA IDENTITY FULL` (see AGENTS.md Critical Rule 2 and the operational note).
 
 - **Compile time (mode 2):** a declared tenant source requires an Ash `multitenancy` block —
   **symmetrically for both sources**:
@@ -51,7 +54,15 @@ Two failure modes must be closed:
     `ValidateTenantSource` (fires only when a block exists; the two verifiers' fire-conditions
     are disjoint, so they never both fire on one resource).
 
-The compile gate moves both fail-opens to build time under `--warnings-as-errors`, matching the
+- **Compile time (mode 3) — sink-action bypass:** the sink writes through the host's PRIMARY
+  create / destroy (and the SCD2 `history_close_action`). An Ash action can declare
+  `multitenancy :bypass` / `:bypass_all`, which makes Ash ignore the tenant even with a valid
+  block (`create.ex` `handle_multitenancy`: neither force-set nor required). `ValidateActionMultitenancy`
+  rejects `:bypass`/`:bypass_all` on any sink-selected write action of a multitenant resource.
+  `:enforce` (default) and `:allow_global` are permitted — both force-set when a tenant is
+  present, and the sink always passes a resolved one.
+
+The compile gates move these fail-opens to build time under `--warnings-as-errors`, matching the
 project's fail-closed-at-compile-time posture (`ValidateSensitive`, `ValidateTenantSource`).
 
 ## Consequences
@@ -68,11 +79,14 @@ project's fail-closed-at-compile-time posture (`ValidateSensitive`, `ValidateTen
 
 ## Evidence
 
-- Runtime: `lib/ash_replicant/resolver.ex:60-93,267-272`; `apply.ex:95,128`; `apply/scd2.ex:30,34,44`.
+- Runtime: `lib/ash_replicant/resolver.ex:60-93,267-277` (incl. the `false` fail-close clause);
+  `apply.ex:95,128`; `apply/scd2.ex:30,34,44`.
 - Compile: `lib/ash_replicant/resource/verifiers/validate_multitenancy.ex` (both arms),
-  `validate_tenant_source.ex` (converse).
-- Tests: `test/ash_replicant/validate_multitenancy_test.exs` (tripwires: both fail-opens RED-proven),
-  `validate_tenant_source_test.exs`, `resolver_test.exs`.
-- Ash-source verification of the silent no-op: `Ash.Changeset.validate_multitenancy` (no-op when
-  strategy nil) — confirmed in `.forge/reviews/2026-07-14-tenant-mfa-design-adversarial.md`.
-- History: `tenant_attribute` gate `c0a379f` (2026-07-10); `tenant_mfa` symmetry 2026-07-14.
+  `validate_tenant_source.ex` (converse), `validate_action_multitenancy.ex` (sink-action bypass).
+- Tests: `test/ash_replicant/validate_multitenancy_test.exs` + `validate_action_multitenancy_test.exs`
+  + `resolver_test.exs` (all fail-opens RED-proven), `validate_tenant_source_test.exs`.
+- Ash-source verification: `Ash.Changeset.validate_multitenancy` no-op when strategy nil;
+  `create.ex` `handle_multitenancy` truthiness/bypass guards — confirmed in
+  `.forge/reviews/2026-07-14-tenant-mfa-*.md`.
+- History: `tenant_attribute` gate `c0a379f` (2026-07-10); `tenant_mfa` symmetry + `false`
+  fail-close + sink-action bypass gate 2026-07-14.
