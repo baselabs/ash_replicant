@@ -136,6 +136,13 @@ end
   passed as `tenant:` to the mirror action. Fail-closed if nil/blank. The source
   table must be `REPLICA IDENTITY FULL` so a delete's / PK-changing update's
   `old_record` carries the tenant column (key-only under the default identity).
+- **`tenant_mfa`** — alternative tenant source: `{Module, :function, [extra_args]}`
+  applied as `apply(Module, :function, [record | extra_args])` yielding the tenant.
+- **Multitenancy block required.** Declaring either `tenant_attribute` or `tenant_mfa`
+  **requires an Ash `multitenancy` block** (any strategy — `:attribute`/`:context`,
+  incl. `global?`). Without one, Ash silently ignores the `tenant:` option and every
+  tenant mirrors unscoped; `ValidateMultitenancy` fails the build closed. See
+  [ADR-0001](docs/adr/0001-fail-closed-multitenancy.md).
 - **`sensitive`** — source columns classified as sensitive. Must map to an AshCloak-encrypted
   attribute, a binary-storage attribute, or be listed in `skip`. Never list the
   `tenant_attribute`.

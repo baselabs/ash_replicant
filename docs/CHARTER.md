@@ -79,13 +79,19 @@ sibling `replicant` crash-injection suite.
 **Decision:** If a source row's `tenant_attribute` or `tenant_mfa` resolves to nil/blank,
 the mirror write fails and the transaction rolls back — no silent base-tenant fallback.
 The sink fails closed EARLY: `Resolver.resolve_tenant/2` returns `{:error, :tenant_required}`
-(nil/blank/whitespace) and `Apply.resolve_tenant!/3` raises before the write is attempted
-(defense in depth on top of Ash's own multitenancy validation). Note: a tenant-scoped
-delete needs the tenant in `old_record`, so the source table must be `REPLICA IDENTITY
-FULL` (closeout amendment; see AGENTS Critical Rule 2).
+(nil/blank/whitespace) and `Resolver.resolve_tenant!/3` raises before the write is attempted
+(defense in depth on top of Ash's own multitenancy validation). Additionally, at COMPILE time
+a declared tenant source requires an Ash `multitenancy` block — `ValidateMultitenancy` rejects
+a `tenant_attribute` **or** `tenant_mfa` with no block (Ash would otherwise silently ignore
+`tenant:` and mirror every tenant unscoped), and the converse `ValidateTenantSource` rejects a
+non-global multitenant resource with no tenant source. Note: a tenant-scoped delete needs the
+tenant in `old_record`, so the source table must be `REPLICA IDENTITY FULL` (closeout amendment;
+see AGENTS Critical Rule 2). Recorded as [ADR-0001](adr/0001-fail-closed-multitenancy.md).
 
-**Proof:** Compile-time `validate_multitenancy.ex` + runtime `:tenant_required` in
-`resolver.ex`/`apply.ex`; red-gates in `resolver_test.exs`, `apply_test.exs` (incl. the
+**Proof:** Compile-time `validate_multitenancy.ex` (both `tenant_attribute` and `tenant_mfa`
+arms) + `validate_tenant_source.ex` (converse) + runtime `:tenant_required` in
+`resolver.ex`/`apply.ex`; red-gates in `validate_multitenancy_test.exs` (both fail-opens
+tripwired), `validate_tenant_source_test.exs`, `resolver_test.exs`, `apply_test.exs` (incl. the
 key-only-`old_record` fail-closed lock), and the non-global-tenant snapshot in
 `snapshot_test.exs`.
 

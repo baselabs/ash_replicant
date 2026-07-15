@@ -1,7 +1,9 @@
 defmodule AshReplicant.Resource.Verifiers.ValidateMultitenancy do
   @moduledoc """
-  Compile-verifier for `replicant do tenant_attribute :x end` (surfaced as a
-  Spark diagnostic; build-blocking under `--warnings-as-errors`).
+  Compile-verifier for the `replicant` tenant sources (surfaced as a Spark
+  diagnostic; build-blocking under `--warnings-as-errors`). Two arms.
+
+  ## `tenant_attribute`
 
   When a `tenant_attribute` is set it is the per-row tenant discriminator Ash
   injects as a plaintext filter and force-set. It fails closed unless it is:
@@ -18,12 +20,20 @@ defmodule AshReplicant.Resource.Verifiers.ValidateMultitenancy do
     per-row tenant to Ash as the `tenant:` option, which Ash HONORS only under
     declared multitenancy. With no `multitenancy` block, `tenant:` is silently
     ignored and every tenant's rows are mirrored UNSCOPED (fail-open isolation).
-    (`tenant_mfa` has the identical fail-open but is NOT checked here — an
-    mfa-resolved tenant may require `:context` multitenancy, a separate case;
-    tracked as a follow-up.)
 
-  Messages are value-free: they name schema structure (the attribute name),
-  never a row value.
+  ## `tenant_mfa`
+
+  An mfa-resolved tenant is passed to Ash as the same `tenant:` option, so it has
+  the **identical** "no `multitenancy` block ⇒ `tenant:` ignored ⇒ every tenant
+  mirrored unscoped" fail-open. This arm requires an Ash `multitenancy` block when
+  `tenant_mfa` is declared — any strategy satisfies (both `:attribute` and
+  `:context` honor `tenant:`; `:context` is the typical mfa pairing, since the mfa
+  value is a computed function result, not a stored attribute). The shape checks
+  above do not apply to the mfa arm — the tenant is a function result, not a
+  declared column.
+
+  Messages are value-free: they name schema structure (the attribute name or the
+  `tenant_mfa` key), never a row value or the mfa target's arguments.
   """
   use Spark.Dsl.Verifier
 
@@ -33,9 +43,25 @@ defmodule AshReplicant.Resource.Verifiers.ValidateMultitenancy do
 
   @impl true
   def verify(dsl_state) do
+    with :ok <- verify_tenant_attribute(dsl_state) do
+      verify_tenant_mfa(dsl_state)
+    end
+  end
+
+  defp verify_tenant_attribute(dsl_state) do
     case Verifier.get_option(dsl_state, [:replicant], :tenant_attribute) do
       nil -> :ok
       attr -> do_verify(dsl_state, attr)
+    end
+  end
+
+  # The mfa arm has no attribute to shape-check (the tenant is a function result), so it runs
+  # only the multitenancy-block requirement — the same fail-open the tenant_attribute arm's
+  # `requires_multitenancy` closes.
+  defp verify_tenant_mfa(dsl_state) do
+    case Verifier.get_option(dsl_state, [:replicant], :tenant_mfa) do
+      nil -> :ok
+      _mfa -> requires_multitenancy_mfa(dsl_state)
     end
   end
 
@@ -115,8 +141,13 @@ defmodule AshReplicant.Resource.Verifiers.ValidateMultitenancy do
   # a compile-time `dsl_state`, same idiom as `ValidateTenantSource`). Both `:attribute` and
   # `:context` honor the `tenant:` option; only its ABSENCE is the fail-open, so require any
   # strategy. `global?` is fine — a global resource still honors `tenant:` when one is given.
+  # Shared by both tenant-source arms (attribute and mfa): the fail-open is identical.
+  defp multitenancy_declared?(dsl_state), do: not is_nil(AshInfo.multitenancy_strategy(dsl_state))
+
   defp requires_multitenancy(module, attr, dsl_state) do
-    if is_nil(AshInfo.multitenancy_strategy(dsl_state)) do
+    if multitenancy_declared?(dsl_state) do
+      :ok
+    else
       {:error,
        DslError.exception(
          module: module,
@@ -128,8 +159,24 @@ defmodule AshReplicant.Resource.Verifiers.ValidateMultitenancy do
              "only under declared multitenancy. With none, `tenant:` is silently ignored and every " <>
              "tenant's rows are mirrored unscoped (fail-open isolation), so it fails closed here."
        )}
-    else
+    end
+  end
+
+  defp requires_multitenancy_mfa(dsl_state) do
+    if multitenancy_declared?(dsl_state) do
       :ok
+    else
+      {:error,
+       DslError.exception(
+         module: Verifier.get_persisted(dsl_state, :module),
+         path: [:replicant, :tenant_mfa],
+         message:
+           "`tenant_mfa` requires an Ash `multitenancy` block on this resource (typically " <>
+             "`strategy :context`): the sink passes the mfa-resolved per-row tenant to Ash as the " <>
+             "`tenant:` option, which Ash HONORS only under declared multitenancy. With none, " <>
+             "`tenant:` is silently ignored and every tenant's rows are mirrored unscoped " <>
+             "(fail-open isolation), so it fails closed here."
+       )}
     end
   end
 end

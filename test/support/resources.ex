@@ -193,6 +193,13 @@ defmodule AshReplicant.Test.MfaOrder do
     tenant_mfa({AshReplicant.Test.TenantMfa, :resolve, ["tenant_key"]})
   end
 
+  # A tenant_mfa resource requires an Ash multitenancy block (ValidateMultitenancy) — the
+  # sink's `tenant:` is honored only under declared multitenancy. `:context` is the typical
+  # mfa pairing (the tenant is a computed function result, not a stored attribute).
+  multitenancy do
+    strategy :context
+  end
+
   attributes do
     attribute :id, :string, primary_key?: true, allow_nil?: false, public?: true
   end

@@ -47,6 +47,11 @@ the row's mirror write fails and the transaction rolls back (fail-closed). A
 compile-time verifier (`ValidateTenantSource`) additionally requires a
 `tenant_attribute` or `tenant_mfa` on any **non-global** Ash-multitenant resource —
 so the misconfiguration fails closed at build time, not only at runtime.
+Symmetrically, `ValidateMultitenancy` requires an Ash `multitenancy` block whenever a
+`tenant_attribute` **or** `tenant_mfa` is declared: with no block Ash silently ignores the
+`tenant:` option and mirrors every tenant **unscoped** (a fail-open), so that too fails
+closed at compile time (any strategy — `:attribute`/`:context`, incl. `global?` — satisfies
+it). See [ADR-0001](docs/adr/0001-fail-closed-multitenancy.md).
 
 > **Operational requirement — tenant-scoped source tables must be `REPLICA IDENTITY FULL`.**
 > A `:delete` (and a PK-changing `:update`) derives the tenant from `old_record`, but

@@ -107,6 +107,11 @@ end
   fail-closed `:tenant_required`).
 - **`tenant_mfa`** — alternative: `{Module, :function, [extra_args]}` applied as
   `apply(Module, :function, [record | extra_args])` yielding the tenant.
+- **Multitenancy block required for either source.** Declaring `tenant_attribute` or
+  `tenant_mfa` requires an Ash `multitenancy` block (any strategy — `:attribute`/`:context`,
+  incl. `global?`); `ValidateMultitenancy` fails the build closed otherwise. Without a block
+  Ash silently ignores the `tenant:` the sink passes and mirrors every tenant unscoped.
+  `:context` is the typical pairing for `tenant_mfa`.
 - **`sensitive`** — source columns classified as sensitive. Each must map to an
   AshCloak-encrypted attribute, a binary-storage attribute, or be listed in `skip`.
   Never list the `tenant_attribute`.
@@ -239,7 +244,10 @@ at compile time.
 - **Fail-closed multitenancy.** A nil/blank tenant on a multitenant resource is an
   error. No silent base-tenant fallback. The mirror action's `tenant:` option
   triggers Ash's multitenancy DSL; if tenant validation fails, the write fails and
-  the transaction rolls back.
+  the transaction rolls back. A declared `tenant_attribute` or `tenant_mfa` **requires
+  an Ash `multitenancy` block** — `ValidateMultitenancy` rejects a source with no block
+  at compile time, since Ash would otherwise silently ignore `tenant:` and mirror every
+  tenant unscoped.
 
 - **Sensitive = AshCloak-encrypted or binary or skip.** Every source column listed
   in `sensitive` must map to one of: (1) an Ash attribute with AshCloak encryption

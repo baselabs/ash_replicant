@@ -16,6 +16,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ValidateHistory` compile verifier; `on_truncate :close`. Audit-log needs remain
   served by AshPaperTrail on an SCD1 mirror.
 
+### Security
+
+- **Multitenancy fail-closed at compile time — both tenant sources.**
+  `ValidateMultitenancy` now requires an Ash `multitenancy` block whenever a
+  `tenant_attribute` **or** a `tenant_mfa` is declared. Without a block Ash silently
+  ignores the `tenant:` option the sink passes, so every tenant's rows mirror **unscoped**
+  into one table — a proven fail-open with no runtime error. The `tenant_attribute` arm
+  shipped 2026-07-10; the symmetric `tenant_mfa` arm closes the parallel hole (2026-07-14).
+  Any strategy (`:attribute`/`:context`, incl. `global?`) satisfies the gate. See
+  [ADR-0001](docs/adr/0001-fail-closed-multitenancy.md).
+
 ## [0.2.0] - 2026-07-09
 
 ### Added
