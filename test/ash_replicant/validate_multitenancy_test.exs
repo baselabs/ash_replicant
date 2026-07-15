@@ -266,4 +266,120 @@ defmodule AshReplicant.ValidateMultitenancyTest do
       end
     end
   end
+
+  # --- multitenancy block's OWN `:attribute` shape (under `strategy :attribute`) ---
+  #
+  # Ash force-sets the multitenancy `attribute` to the plaintext tenant on write and filters
+  # reads on it (create.ex `handle_attribute_multitenancy`). If that column is AshCloak-encrypted
+  # or binary-storage-typed, the stored value never equals the plaintext filter → silent
+  # mis-scope (reads return empty). A `sensitive`-classified discriminator is the same hazard by
+  # classification. This runs whenever `strategy :attribute` is declared (independent of the
+  # tenant SOURCE), so the RED fixtures use `tenant_mfa` to keep the tenant_attribute arm silent
+  # and isolate this check at path [:multitenancy, :attribute]. The plaintext green control is
+  # `MfaWithAttribute` above; `:context` is exempt (no attribute) — `MfaWithContext`.
+
+  test "a binary-storage multitenancy :attribute fails closed (plaintext-comparator mis-scope)" do
+    err =
+      assert_dsl_error %Spark.Error.DslError{path: [:multitenancy, :attribute]} do
+        defmodule Elixir.AshReplicant.ValidateMultitenancyTest.BinaryMtAttr do
+          use Ash.Resource,
+            domain: AshReplicant.ValidateMultitenancyTest.Domain,
+            validate_domain_inclusion?: false,
+            data_layer: Ash.DataLayer.Ets,
+            extensions: [AshReplicant.Resource]
+
+          replicant do
+            source_table("orders")
+            tenant_mfa({AshReplicant.ValidateMultitenancyTest.TenantHelper, :resolve, ["k"]})
+          end
+
+          multitenancy do
+            strategy :attribute
+            attribute :org_id
+          end
+
+          attributes do
+            uuid_primary_key :id
+            attribute :org_id, :binary
+          end
+        end
+      end
+
+    assert err.message =~ "multitenancy"
+  end
+
+  test "a `sensitive`-classified multitenancy :attribute fails closed (classification hazard)" do
+    err =
+      assert_dsl_error %Spark.Error.DslError{path: [:multitenancy, :attribute]} do
+        defmodule Elixir.AshReplicant.ValidateMultitenancyTest.SensitiveMtAttr do
+          use Ash.Resource,
+            domain: AshReplicant.ValidateMultitenancyTest.Domain,
+            validate_domain_inclusion?: false,
+            data_layer: Ash.DataLayer.Ets,
+            extensions: [AshReplicant.Resource]
+
+          replicant do
+            source_table("orders")
+            tenant_mfa({AshReplicant.ValidateMultitenancyTest.TenantHelper, :resolve, ["k"]})
+            # `skip` keeps ValidateSensitive satisfied (path [:replicant, :sensitive]); this
+            # isolates the multitenancy-attribute check on the `sensitive` classification.
+            sensitive([:org_id])
+            skip([:org_id])
+          end
+
+          multitenancy do
+            strategy :attribute
+            attribute :org_id
+          end
+
+          attributes do
+            uuid_primary_key :id
+            attribute :org_id, :string
+          end
+        end
+      end
+
+    assert err.message =~ "multitenancy"
+  end
+
+  # BOUNDARY / regression test (NOT this verifier's tripwire): an AshCloak-encrypted attribute
+  # used as the multitenancy `:attribute` is already rejected by ASH's OWN `ValidateMultitenancy`
+  # ("Attribute org_id used in multitenancy configuration does not exist" — AshCloak transforms
+  # the plain attribute into a decrypt calculation, so it is no longer an attribute). ash_replicant
+  # RELIES on Ash here, so its own check only needs `sensitive`/binary (both of which Ash allows).
+  # This green test guards against an Ash/AshCloak change that would silently reopen the gap.
+  test "an AshCloak-encrypted multitenancy :attribute is rejected at compile time (Ash's own verifier)" do
+    err =
+      assert_dsl_error %Spark.Error.DslError{path: [:multitenancy, :attribute]} do
+        defmodule Elixir.AshReplicant.ValidateMultitenancyTest.CloakMtAttr do
+          use Ash.Resource,
+            domain: AshReplicant.ValidateMultitenancyTest.Domain,
+            validate_domain_inclusion?: false,
+            data_layer: Ash.DataLayer.Ets,
+            extensions: [AshReplicant.Resource, AshCloak]
+
+          replicant do
+            source_table("orders")
+            tenant_mfa({AshReplicant.ValidateMultitenancyTest.TenantHelper, :resolve, ["k"]})
+          end
+
+          multitenancy do
+            strategy :attribute
+            attribute :org_id
+          end
+
+          cloak do
+            vault(AshReplicant.Test.Vault)
+            attributes([:org_id])
+          end
+
+          attributes do
+            uuid_primary_key :id
+            attribute :org_id, :string
+          end
+        end
+      end
+
+    assert err.message =~ "multitenancy"
+  end
 end

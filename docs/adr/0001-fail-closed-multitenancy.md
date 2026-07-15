@@ -5,9 +5,10 @@ Date: 2026-07-14
 ## Status
 
 Accepted. Records CHARTER decision **[D2]** (previously governed by charter prose only).
-Strengthened 2026-07-14 by three fixes surfaced during closeout: the `tenant_mfa` compile-gate
-symmetry (mode 2), the `false`-tenant runtime fail-close (mode 1), and the sink-action
-`:bypass` gate (mode 3, `ValidateActionMultitenancy`).
+Strengthened 2026-07-14 by four fixes surfaced during closeout: the `tenant_mfa` compile-gate
+symmetry (mode 2), the `false`-tenant runtime fail-close (mode 1), the sink-action `:bypass`
+gate (mode 3, `ValidateActionMultitenancy`), and the multitenancy-`:attribute` shape check
+(mode 4, `ValidateMultitenancy`).
 
 ## Context
 
@@ -62,6 +63,15 @@ Two failure modes must be closed:
   `:enforce` (default) and `:allow_global` are permitted — both force-set when a tenant is
   present, and the sink always passes a resolved one.
 
+- **Compile time (mode 4) — multitenancy `:attribute` shape:** under `strategy :attribute`, Ash
+  force-sets the block's own `attribute` to the plaintext tenant and filters reads on it. A
+  `sensitive`-classified or binary-storage-typed discriminator stores/compares a mismatched value
+  → silent mis-scope (reads return empty). `ValidateMultitenancy` now also rejects a
+  `sensitive`/binary multitenancy `attribute` (both tenant arms + a global `:attribute` resource).
+  An AshCloak-**encrypted** attribute is already rejected by Ash's OWN multitenancy verifier — the
+  cloak transform removes the plain attribute, so Ash errors "attribute does not exist"; this ADR
+  relies on Ash there (a labeled regression test guards against an Ash change reopening it).
+
 The compile gates move these fail-opens to build time under `--warnings-as-errors`, matching the
 project's fail-closed-at-compile-time posture (`ValidateSensitive`, `ValidateTenantSource`).
 
@@ -72,10 +82,9 @@ project's fail-closed-at-compile-time posture (`ValidateSensitive`, `ValidateTen
   usage-rules). Host authors get a value-free compile error naming the fix.
 - No cross-tenant leak via the silent no-block path is reachable; the runtime `:tenant_required`
   halt remains the backstop for nil-tenant rows.
-- **Known residual (not closed by this ADR):** neither arm validates that the multitenancy
-  *block's own* `attribute` (under `strategy :attribute`) is non-sensitive/non-binary. A block
-  whose discriminator column is AshCloak-encrypted would mis-scope at runtime — a LOUD class
-  (reads return empty), symmetric across both arms, tracked as a follow-up.
+- **Residual CLOSED (2026-07-14, mode 4):** the multitenancy block's own `:attribute` shape is
+  now validated (sensitive/binary rejected; AshCloak-encrypted covered by Ash's own verifier).
+  What was flagged as a runtime mis-scope is now a compile error.
 
 ## Evidence
 

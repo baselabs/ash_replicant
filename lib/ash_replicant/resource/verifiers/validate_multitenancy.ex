@@ -32,6 +32,17 @@ defmodule AshReplicant.Resource.Verifiers.ValidateMultitenancy do
   above do not apply to the mfa arm — the tenant is a function result, not a
   declared column.
 
+  ## Multitenancy block `:attribute` shape
+
+  Independent of the tenant source, when the resource declares `strategy :attribute`
+  the multitenancy block's OWN `attribute` is force-set to the plaintext tenant on
+  write and filtered on read. It must be a plaintext, non-sensitive comparator — a
+  `sensitive`-classified or binary-storage-typed discriminator would store/compare a
+  mismatched value and **silently mis-scope** (reads return empty). This runs for both
+  tenant sources (and a global `:attribute` resource). An AshCloak-encrypted attribute
+  is already rejected by Ash's own multitenancy verifier (the cloak transform removes
+  the plain attribute), so it is not re-checked here.
+
   Messages are value-free: they name schema structure (the attribute name or the
   `tenant_mfa` key), never a row value or the mfa target's arguments.
   """
@@ -43,8 +54,9 @@ defmodule AshReplicant.Resource.Verifiers.ValidateMultitenancy do
 
   @impl true
   def verify(dsl_state) do
-    with :ok <- verify_tenant_attribute(dsl_state) do
-      verify_tenant_mfa(dsl_state)
+    with :ok <- verify_tenant_attribute(dsl_state),
+         :ok <- verify_tenant_mfa(dsl_state) do
+      verify_multitenancy_attribute(dsl_state)
     end
   end
 
@@ -178,5 +190,55 @@ defmodule AshReplicant.Resource.Verifiers.ValidateMultitenancy do
              "(fail-open isolation), so it fails closed here."
        )}
     end
+  end
+
+  # The Ash `multitenancy` block's OWN `attribute` (under `strategy :attribute`) is force-set to
+  # the plaintext tenant on write and filtered on read (`create.ex` `handle_attribute_multitenancy`).
+  # It must be a plaintext, non-sensitive comparator: a `sensitive`-classified or binary-storage
+  # column would store/compare a mismatched value and silently mis-scope (reads return empty). Runs
+  # independent of the tenant SOURCE — it covers both arms and a global `:attribute` resource.
+  # (An AshCloak-encrypted attribute is already rejected by Ash's own multitenancy verifier — the
+  # cloak transform removes the plain attribute — so it is not re-checked here.)
+  defp verify_multitenancy_attribute(dsl_state) do
+    if AshInfo.multitenancy_strategy(dsl_state) == :attribute do
+      check_multitenancy_attribute_shape(dsl_state, AshInfo.multitenancy_attribute(dsl_state))
+    else
+      :ok
+    end
+  end
+
+  # nil under `:attribute` is Ash's own error ("attribute ... does not exist") — defer to it.
+  defp check_multitenancy_attribute_shape(_dsl_state, nil), do: :ok
+
+  defp check_multitenancy_attribute_shape(dsl_state, attr) do
+    sensitive = Verifier.get_option(dsl_state, [:replicant], :sensitive, [])
+    declared = Enum.find(Verifier.get_entities(dsl_state, [:attributes]), &(&1.name == attr))
+
+    cond do
+      attr in sensitive ->
+        {:error, mt_attribute_error(dsl_state, attr, "is classified `sensitive`")}
+
+      binary_storage?(declared) ->
+        {:error, mt_attribute_error(dsl_state, attr, "is binary-storage-typed")}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp binary_storage?(nil), do: false
+  defp binary_storage?(attr), do: Ash.Type.storage_type(attr.type, attr.constraints) == :binary
+
+  defp mt_attribute_error(dsl_state, attr, reason) do
+    DslError.exception(
+      module: Verifier.get_persisted(dsl_state, :module),
+      path: [:multitenancy, :attribute],
+      message:
+        "the multitenancy `attribute` #{inspect(attr)} #{reason}: under `strategy :attribute` Ash " <>
+          "force-sets it to the plaintext tenant on write and filters reads on it, so a " <>
+          "sensitive/encrypted/binary discriminator stores or compares a mismatched value and " <>
+          "silently mis-scopes (reads return empty). Use a plaintext, non-sensitive attribute, so " <>
+          "it fails closed here."
+    )
   end
 end

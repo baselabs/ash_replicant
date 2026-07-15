@@ -37,6 +37,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Ash would otherwise ignore the tenant the sink passes and mirror every tenant **unscoped**,
   despite a valid multitenancy block. `:enforce` and `:allow_global` remain permitted
   (2026-07-14).
+- **The multitenancy discriminator column is now shape-checked.** Under `strategy :attribute`,
+  `ValidateMultitenancy` rejects a `sensitive`-classified or binary-storage-typed multitenancy
+  `attribute` — Ash force-sets it to the plaintext tenant and filters reads on it, so an
+  encrypted/binary column would store/compare a mismatched value and **silently mis-scope**
+  (reads return empty). AshCloak-encrypted attributes are already rejected by Ash's own verifier
+  (2026-07-14).
 
 ## [0.2.0] - 2026-07-09
 
