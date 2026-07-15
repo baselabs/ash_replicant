@@ -141,6 +141,46 @@ defmodule AshReplicant.ValidateActionMultitenancyTest do
     assert err.message =~ "bypass"
   end
 
+  test "a :bypass primary READ action on a multitenant resource fails closed (tripwire, read path)" do
+    # The sink's SCD2 close (`bulk_update`) and mirror delete (`bulk_destroy`) READ matching rows
+    # via the primary read (`Ash.Query.do_filter`) before writing; under the stream strategy a
+    # `:bypass` read matches ACROSS tenants → cross-tenant close/delete (verified probe). The read
+    # action is a sink-selected action too — must fail closed.
+    err =
+      assert_dsl_error %Spark.Error.DslError{path: [:actions, :read]} do
+        defmodule Elixir.AshReplicant.ValidateActionMultitenancyTest.BypassRead do
+          use Ash.Resource,
+            domain: AshReplicant.ValidateActionMultitenancyTest.Domain,
+            validate_domain_inclusion?: false,
+            data_layer: Ash.DataLayer.Ets,
+            extensions: [AshReplicant.Resource]
+
+          replicant do
+            source_table("orders")
+            tenant_attribute(:org_id)
+          end
+
+          multitenancy do
+            strategy :attribute
+            attribute :org_id
+          end
+
+          attributes do
+            uuid_primary_key :id
+            attribute :org_id, :string
+          end
+
+          actions do
+            defaults [:destroy, create: :*]
+
+            read :read, primary?: true, multitenancy: :bypass
+          end
+        end
+      end
+
+    assert err.message =~ "bypass"
+  end
+
   test "default (:enforce) sink actions on a multitenant resource compile clean (green control)" do
     refute_dsl_errors do
       defmodule Elixir.AshReplicant.ValidateActionMultitenancyTest.EnforceDefault do

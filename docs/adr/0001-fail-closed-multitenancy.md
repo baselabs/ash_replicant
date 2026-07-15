@@ -56,12 +56,16 @@ Two failure modes must be closed:
     are disjoint, so they never both fire on one resource).
 
 - **Compile time (mode 3) — sink-action bypass:** the sink writes through the host's PRIMARY
-  create / destroy (and the SCD2 `history_close_action`). An Ash action can declare
-  `multitenancy :bypass` / `:bypass_all`, which makes Ash ignore the tenant even with a valid
-  block (`create.ex` `handle_multitenancy`: neither force-set nor required). `ValidateActionMultitenancy`
-  rejects `:bypass`/`:bypass_all` on any sink-selected write action of a multitenant resource.
-  `:enforce` (default) and `:allow_global` are permitted — both force-set when a tenant is
-  present, and the sink always passes a resolved one.
+  create / destroy (and the SCD2 `history_close_action`), and READS through the PRIMARY read —
+  the SCD2 close (`bulk_update`) and mirror delete (`bulk_destroy`) match rows via an
+  `Ash.Query.do_filter` over the primary read, which must be tenant-scoped (stream strategy). An
+  Ash action can declare `multitenancy :bypass` / `:bypass_all`, which makes Ash ignore the tenant
+  even with a valid block (`create.ex`/`read.ex` `handle_multitenancy`: neither force-set/filter nor
+  required). `ValidateActionMultitenancy` rejects `:bypass`/`:bypass_all` on any sink-selected
+  action (primary read/create/destroy + SCD2 close) of a multitenant resource. `:enforce` (default)
+  and `:allow_global` are permitted — both scope when a tenant is present, and the sink always
+  passes a resolved one. (A `:bypass` READ would otherwise let a `bulk_update`/`bulk_destroy` match
+  and mutate ANOTHER tenant's rows — found by cross-vendor closeout decorrelation.)
 
 - **Compile time (mode 4) — multitenancy `:attribute` shape:** under `strategy :attribute`, Ash
   force-sets the block's own `attribute` to the plaintext tenant and filters reads on it. A
