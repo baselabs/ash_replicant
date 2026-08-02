@@ -179,7 +179,9 @@ sensitive-column verification.
   `usage-rules.md`, `CONTRIBUTING.md`, `LICENSE`, `NOTICE`; tracked charter at
   `docs/CHARTER.md` (only `/docs/superpowers/` lifecycle artifacts are local-only).
 
-[Unreleased]: https://github.com/baselabs/ash_replicant/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/baselabs/ash_replicant/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/baselabs/ash_replicant/releases/tag/v0.3.2
+[0.3.1]: https://github.com/baselabs/ash_replicant/releases/tag/v0.3.1
 [0.3.0]: https://github.com/baselabs/ash_replicant/releases/tag/v0.3.0
 [0.2.0]: https://github.com/baselabs/ash_replicant/releases/tag/v0.2.0
 [0.1.0]: https://github.com/baselabs/ash_replicant/releases/tag/v0.1.0
