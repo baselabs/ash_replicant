@@ -1,7 +1,7 @@
 defmodule AshReplicant.MixProject do
   use Mix.Project
 
-  @version "0.3.0"
+  @version "0.3.1"
   @source_url "https://github.com/baselabs/ash_replicant"
 
   def project do
@@ -41,7 +41,7 @@ defmodule AshReplicant.MixProject do
       {:ash, "~> 3.11"},
       {:ash_postgres, "~> 2.6"},
       {:ash_cloak, "~> 0.1"},
-      {:replicant, "~> 0.1.0"},
+      {:replicant, "~> 0.3"},
       {:spark, ">= 2.3.3 and < 3.0.0-0"},
       {:splode, "~> 0.3"},
       {:jason, "~> 1.4"},

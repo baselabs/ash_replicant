@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-08-02
+
+### Changed
+
+- Widen the `replicant` requirement from `~> 0.1.0` to `~> 0.3` so consumers can adopt the
+  current replicant line (0.3.x) without a resolver conflict. ash_replicant calls only
+  replicant's stable core (`Replicant.{Change, SchemaChange, Sink, Transaction, lsn}`,
+  `Replicant.start_link/1`, `Replicant.stop/1`); verified compatible against replicant 0.3.1:
+  `mix compile --warnings-as-errors` clean and `mix test` 90 passed / 0 failed (unit suite;
+  the `:integration` gate — 52 tests needing a live `wal_level=logical` DB via
+  `ASH_REPLICANT_TEST_URL` — is owed in CI before publish). No API or behavior change.
+
 ## [0.3.0] - 2026-07-14
 
 ### Added
