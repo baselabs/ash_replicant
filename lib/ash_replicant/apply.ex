@@ -48,7 +48,7 @@ defmodule AshReplicant.Apply do
 
   defp apply_to(config, resource, %{op: op} = change, _commit_timestamp)
        when op in [:insert, :update] do
-    if op == :update and pk_changed?(resource, change) do
+    if op == :update and (pk_changed?(resource, change) or tenant_changed?(resource, change)) do
       destroy_by_pk(config, resource, change.old_record)
     end
 
@@ -160,4 +160,26 @@ defmodule AshReplicant.Apply do
   end
 
   defp pk_changed?(_resource, _change), do: false
+
+  # A tenant reassignment (the row's resolved tenant changed between old_record and
+  # record) must RELOCATE the mirror row, not upsert-in-place. Under a tenant-scoped
+  # upsert identity (`(tenant, pk)`) the new-tenant upsert misses its conflict target
+  # and falls through to an INSERT that collides with the row's GLOBAL primary key
+  # (the still-present old-tenant row) — halting the sink fail-closed and stalling the
+  # stream for ALL tenants. Handle it symmetrically to `pk_changed?`: destroy the
+  # old-tenant row first (from old_record, which resolves to the OLD tenant) then
+  # upsert under the new tenant.
+  #
+  # Trigger ONLY when BOTH tenants resolve and differ: a non-multitenant resource
+  # resolves both to `nil` (never triggers), and a key-only old_record whose tenant
+  # cannot be resolved (no REPLICA IDENTITY FULL) falls through to the existing upsert
+  # path UNCHANGED — never a new fail-closed on a case that worked before.
+  defp tenant_changed?(resource, %{record: record, old_record: old}) when is_map(old) do
+    case {Resolver.resolve_tenant(resource, record), Resolver.resolve_tenant(resource, old)} do
+      {{:ok, new_tenant}, {:ok, old_tenant}} -> new_tenant != old_tenant
+      _ -> false
+    end
+  end
+
+  defp tenant_changed?(_resource, _change), do: false
 end

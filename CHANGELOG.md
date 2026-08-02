@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-08-02
+
+### Fixed
+
+- **Tenant reassignment no longer halts the mirror stream.** When a source row's tenant
+  attribute changed (same PK, new `tenant_attribute` value), a resource declaring a
+  tenant-scoped upsert identity (`identity :source_pk, [pk]` under attribute multitenancy →
+  a `(tenant, pk)` unique index) would fall through to an INSERT under the new tenant that
+  collided with the row's GLOBAL primary key (the still-present old-tenant row). The upsert
+  raised, the sink transaction rolled back, and the checkpoint froze — a fail-closed poison
+  pill that stalled delivery for ALL tenants and retained source WAL indefinitely. `Apply`
+  now treats a resolved-tenant change like a PK change: destroy the old-tenant row (resolved
+  from `old_record`) then upsert under the new tenant, relocating the mirror row. Triggers
+  only when both tenants resolve and differ, so non-multitenant resources and key-only
+  `old_record` updates (no REPLICA IDENTITY FULL) are unchanged. Regression test:
+  `apply_test.exs` "tenant-reassigning UPDATE … MOVES the row to the new tenant".
+
 ## [0.3.1] - 2026-08-02
 
 ### Changed

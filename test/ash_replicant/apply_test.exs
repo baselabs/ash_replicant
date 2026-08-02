@@ -56,6 +56,60 @@ defmodule AshReplicant.ApplyTest do
     end
   end
 
+  # A NON-global attribute-multitenant resource that declares a SOURCE-PK upsert
+  # identity — `identity :source_pk, [:id]` + `upsert_identity(:source_pk)`. Under
+  # attribute multitenancy Ash scopes that identity's unique index to `(org_id,
+  # id)` (see the reassign_orders migration), while `id` is ALSO a global primary
+  # key. This is the shape a real mirror carries; it is what makes a tenant
+  # reassignment collide (the new-tenant upsert misses the `(org_id, id)` conflict
+  # target and INSERTs, hitting the global `id` PK of the old-tenant row).
+  defmodule ReassignOrder do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.ApplyTest.MirrorTruncateDomain,
+      validate_domain_inclusion?: false,
+      data_layer: AshPostgres.DataLayer,
+      extensions: [AshReplicant.Resource]
+
+    postgres do
+      table "reassign_orders"
+      repo AshReplicant.TestRepo
+    end
+
+    replicant do
+      source_table("reassign_orders")
+      tenant_attribute(:org_id)
+      upsert_identity(:source_pk)
+    end
+
+    attributes do
+      attribute :id, :string, primary_key?: true, allow_nil?: false, public?: true
+      attribute :org_id, :string, allow_nil?: false, public?: true
+      attribute :note, :string, public?: true
+    end
+
+    multitenancy do
+      strategy :attribute
+      attribute :org_id
+    end
+
+    identities do
+      identity :source_pk, [:id]
+    end
+
+    actions do
+      defaults [:read, :destroy, create: :*, update: :*]
+    end
+  end
+
+  defp reassign_config do
+    %{
+      resolver_index: %{{"public", "reassign_orders"} => ReassignOrder},
+      repo: AshReplicant.TestRepo,
+      authorize?: false
+    }
+  end
+
   defp config do
     {:ok, index} = AshReplicant.Resolver.build_index([AshReplicant.Test.Domain])
     %{resolver_index: index, repo: AshReplicant.TestRepo, authorize?: false}
@@ -180,6 +234,41 @@ defmodule AshReplicant.ApplyTest do
     )
 
     assert Ash.get!(TenantOrder, "t1", tenant: "org_1", authorize?: false, error?: false) == nil
+  end
+
+  test "tenant-reassigning UPDATE (org_id changes, id same) MOVES the row to the new tenant — no PK-collision halt, no ghost" do
+    cfg = reassign_config()
+
+    Apply.apply_change(
+      cfg,
+      change(:insert, "reassign_orders", %{"id" => "r1", "org_id" => "org_1", "note" => "n"})
+    )
+
+    assert %ReassignOrder{} = Ash.get!(ReassignOrder, "r1", tenant: "org_1", authorize?: false)
+
+    # The source reassigns the row from org_1 to org_2 (same PK). Under REPLICA
+    # IDENTITY FULL the old_record carries the OLD org_id. With a source-PK upsert
+    # identity the conflict target is (org_id, id); a plain upsert under the NEW
+    # tenant misses it and falls through to an INSERT, which collides with the
+    # GLOBAL id primary key of the still-present old-tenant row → the whole sink
+    # transaction halts fail-closed and the mirror stalls for ALL tenants. The fix
+    # treats a tenant change like a PK change: destroy-old (under the old tenant,
+    # from old_record) then upsert-new.
+    Apply.apply_change(
+      cfg,
+      change(
+        :update,
+        "reassign_orders",
+        %{"id" => "r1", "org_id" => "org_2", "note" => "n"},
+        %{"id" => "r1", "org_id" => "org_1"}
+      )
+    )
+
+    # The row now lives ONLY under org_2 — no ghost under org_1, no halt.
+    assert Ash.get!(ReassignOrder, "r1", tenant: "org_1", authorize?: false, error?: false) == nil
+
+    assert %ReassignOrder{note: "n"} =
+             Ash.get!(ReassignOrder, "r1", tenant: "org_2", authorize?: false)
   end
 
   test "on_truncate :mirror clears a NON-global tenant resource tenant-blind (no TenantRequired dead-end)" do
