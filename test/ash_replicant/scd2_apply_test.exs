@@ -376,6 +376,53 @@ defmodule AshReplicant.Scd2ApplyTest do
            "closing t1's version must not retire t2's identically-keyed open version"
   end
 
+  test "tenant-reassigning update terminally closes the OLD-tenant version and opens under the NEW tenant (no double-current)" do
+    ps_config = %{
+      resolver_index: %{{"public", "orders"} => AshReplicant.Test.OrderVersionOrgScoped},
+      repo: AshReplicant.TestRepo,
+      authorize?: false
+    }
+
+    # Open a version for business key "y" under t1.
+    AshReplicant.Apply.apply_change(
+      ps_config,
+      change(:insert, %{"order_id" => "y", "org_id" => "t1", "amount" => "1"}, 100),
+      nil
+    )
+
+    # Reassign the row from t1 to t2 (SAME business key "y", NEW tenant). REPLICA IDENTITY
+    # FULL → old_record carries the OLD org_id. `bk_changed?` is false (order_id unchanged),
+    # so ONLY `Resolver.tenant_changed?` triggers the terminal close of the old-tenant version.
+    #
+    # Pre-fix this left t1's version OPEN (the per-tenant open-uniq index permits it, so no
+    # halt) while opening a fresh current version under t2 — the entity read as "current"
+    # under BOTH tenants (silent double-current). This test RED-proves the fix.
+    AshReplicant.Apply.apply_change(
+      ps_config,
+      change(
+        :update,
+        %{"order_id" => "y", "org_id" => "t2", "amount" => "1"},
+        200,
+        %{"order_id" => "y", "org_id" => "t1"}
+      ),
+      nil
+    )
+
+    t1 = org_scoped_versions("t1")
+    t2 = org_scoped_versions("t2")
+
+    # OLD tenant (t1): the version is terminally CLOSED at 200 — never left dangling open.
+    assert [t1_closed] = t1
+
+    assert t1_closed.valid_from_lsn == 100 and t1_closed.valid_to_lsn == 200 and
+             not t1_closed.is_current,
+           "the old-tenant version must be terminally closed on reassignment, not left open"
+
+    # NEW tenant (t2): exactly one OPEN current version — the row now lives here.
+    assert [t2_open] = t2
+    assert t2_open.valid_from_lsn == 200 and is_nil(t2_open.valid_to_lsn) and t2_open.is_current
+  end
+
   test "an SCD2 apply failure is value-free (scrubbed to a structural reason)", %{config: config} do
     # No `order_id` in the record → the nil-business-key guard in `close_current` raises a
     # structural `AshReplicant.Error` BEFORE any write. The scrubbed error must carry only

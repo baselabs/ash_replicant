@@ -92,6 +92,48 @@ defmodule AshReplicant.Resolver do
     end
   end
 
+  @doc """
+  True when the resolved tenant DIFFERS between a change's `record` and `old_record`
+  — a tenant reassignment (same source row moved between tenants). Shared by both apply
+  strategies (`Apply` relocates the SCD1 row; `Apply.Scd2` terminally closes the old-tenant
+  version) so the reassignment invariant is enforced identically on both paths.
+
+  Reports a change ONLY when BOTH sides resolve to a present tenant and they differ, so:
+  a non-multitenant resource (both resolve to `nil`), a same-tenant update, and a key-only
+  `old_record` whose tenant is unresolvable (no REPLICA IDENTITY FULL) all report `false` —
+  the caller then keeps its existing upsert/apply behavior unchanged.
+
+  Value-free: a raising `tenant_mfa` is caught and reported as "not changed" (never
+  propagating an unscrubbed row value out of the tenant check); the caller's own scrub
+  boundary handles any re-raise on the subsequent apply.
+
+  CAVEAT: because a raise resolves to "not changed", reassignment detection depends on a
+  NON-RAISING resolver. A `tenant_mfa` that raises on `old_record` (but not `record`) makes
+  a genuine reassignment invisible here — the caller then keeps its non-relocating path
+  (SCD1: the colliding upsert; SCD2: a double-current). This is strictly `tenant_mfa`-only
+  (`tenant_attribute` never raises — `Map.get` + tuple-returning `present_or_required`), and
+  it is not a regression (before this helper, neither path handled reassignment at all). Same
+  `old_record`-availability class as the REPLICA IDENTITY FULL requirement.
+  """
+  @spec tenant_changed?(module(), map()) :: boolean()
+  def tenant_changed?(resource, %{record: record, old_record: old})
+      when is_map(record) and is_map(old) do
+    case {safe_resolve(resource, record), safe_resolve(resource, old)} do
+      {{:ok, new_tenant}, {:ok, old_tenant}} -> new_tenant != old_tenant
+      _ -> false
+    end
+  end
+
+  def tenant_changed?(_resource, _change), do: false
+
+  # Value-free wrapper: a raising `tenant_mfa` becomes `:error` (no row bytes escape),
+  # which the `tenant_changed?/2` match treats as "not changed".
+  defp safe_resolve(resource, row) do
+    resolve_tenant(resource, row)
+  rescue
+    _ -> :error
+  end
+
   @spec writable_target(module(), String.t()) :: {:ok, atom()} | :skip
   def writable_target(resource, source_col) when is_binary(source_col) do
     skip = Info.replicant_skip!(resource)

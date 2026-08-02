@@ -21,12 +21,18 @@ defmodule AshReplicant.Apply.Scd2 do
   def apply(config, resource, %{op: op} = change, ts) when op in [:insert, :update] do
     lsn = change.commit_lsn
 
-    if op == :update and bk_changed?(resource, change) do
-      # The old business key is being RETIRED (never re-opened at this lsn), so its close is
-      # TERMINAL — use the inclusive `<= lsn` predicate the delete path uses. A same-commit_lsn
-      # insert-then-pk-change opens the old key at exactly `lsn`; the open-path `< lsn` would
-      # miss it and leave a ghost open version for a key that no longer exists. Inclusive is safe
-      # for the normal cross-txn case (the old version was opened at an earlier lsn < this one).
+    if op == :update and
+         (bk_changed?(resource, change) or Resolver.tenant_changed?(resource, change)) do
+      # The old (business key, tenant) pairing is being RETIRED — either the business key
+      # changed, OR the row was reassigned to a new tenant (same business key, new tenant).
+      # In BOTH cases the OLD-tenant open version must be terminally closed: without this a
+      # tenant reassignment would leave the old-tenant version OPEN forever while a fresh
+      # open version is created under the new tenant, so the entity reads as "current" under
+      # BOTH tenants (a silent double-current split — the SCD2 analogue of the SCD1 relocate).
+      # The close runs under the OLD tenant (resolved from old_record) and is TERMINAL — the
+      # inclusive `<= lsn` predicate the delete path uses. A same-commit_lsn insert-then-change
+      # opens the old version at exactly `lsn`; the open-path `< lsn` would miss it and leave a
+      # ghost. Inclusive is safe for the normal cross-txn case (old version opened at lsn < this).
       old_tenant = Resolver.resolve_tenant!(resource, change.old_record, :destroy)
       close_current(config, resource, change.old_record, lsn, ts, old_tenant, inclusive?: true)
     end

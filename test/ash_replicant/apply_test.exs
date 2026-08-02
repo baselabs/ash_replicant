@@ -271,6 +271,34 @@ defmodule AshReplicant.ApplyTest do
              Ash.get!(ReassignOrder, "r1", tenant: "org_2", authorize?: false)
   end
 
+  test "an update that changes BOTH the PK and the tenant relocates once (old-key/old-tenant destroyed, new-key/new-tenant upserted)" do
+    cfg = reassign_config()
+
+    Apply.apply_change(
+      cfg,
+      change(:insert, "reassign_orders", %{"id" => "p1", "org_id" => "org_1", "note" => "n"})
+    )
+
+    # Both the PK (p1 -> p2) and the tenant (org_1 -> org_2) change in one update. The single
+    # destroy_by_pk(old_record) retires (org_1, p1); the upsert writes (org_2, p2). No ghost
+    # under the old key/tenant, no collision.
+    Apply.apply_change(
+      cfg,
+      change(
+        :update,
+        "reassign_orders",
+        %{"id" => "p2", "org_id" => "org_2", "note" => "n"},
+        %{"id" => "p1", "org_id" => "org_1"}
+      )
+    )
+
+    assert Ash.get!(ReassignOrder, "p1", tenant: "org_1", authorize?: false, error?: false) == nil
+    assert Ash.get!(ReassignOrder, "p2", tenant: "org_1", authorize?: false, error?: false) == nil
+
+    assert %ReassignOrder{note: "n"} =
+             Ash.get!(ReassignOrder, "p2", tenant: "org_2", authorize?: false)
+  end
+
   test "on_truncate :mirror clears a NON-global tenant resource tenant-blind (no TenantRequired dead-end)" do
     cfg = %{
       resolver_index: %{{"public", "tenant_orders"} => MirrorTruncateOrder},

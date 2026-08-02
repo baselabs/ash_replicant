@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-08-02
+
+### Fixed
+
+- **Tenant reassignment on the SCD2 path no longer leaves a double-current version.** The
+  0.3.2 relocate fix covered only the SCD1 (upsert) path. On the SCD2 (validity-windowed)
+  path a tenant reassignment (same business key, new tenant) left the OLD-tenant version
+  OPEN forever while opening a fresh current version under the NEW tenant — the entity read
+  as "current" under BOTH tenants (a silent double-current split; a per-tenant open-uniq
+  index permits it, so no error surfaced). `Apply.Scd2` now terminally closes the old-tenant
+  version on a resolved-tenant change (in addition to a business-key change), relocating the
+  row. Regression test: `scd2_apply_test.exs` "tenant-reassigning update terminally closes
+  the OLD-tenant version and opens under the NEW tenant".
+- **Value-free preserved on the tenant-change check.** The reassignment predicate was
+  promoted to `Resolver.tenant_changed?/2` and made scrub-safe: a raising `tenant_mfa`
+  resolver is caught inside the check and reported as "not changed" (never propagating an
+  unscrubbed row value out of the pre-apply tenant comparison, which sits outside the
+  per-op scrub boundary). Both apply paths share the one helper.
+
+### Notes
+
+- Tenant-scoped mirrors REQUIRE `REPLICA IDENTITY FULL` on the source for reassignment
+  detection: the check needs the old row's tenant, which is key-only under the default
+  replica identity. Without RIF a genuine reassignment falls through to the pre-0.3.2
+  behavior (SCD1: the colliding upsert; SCD2: the double-current) — the same `old_record`
+  dependency already documented for tenant-scoped deletes/PK-changes.
+- Reassignment detection also depends on a NON-RAISING tenant resolver. `Resolver.tenant_changed?/2`
+  treats a raising `tenant_mfa` as "not changed" (value-free), so an MFA that raises on
+  `old_record` makes a reassignment invisible and the caller keeps its non-relocating path.
+  `tenant_attribute` resolvers never raise; this affects only `tenant_mfa` and is not a
+  regression (no path handled reassignment before 0.3.2/0.3.3).
+
 ## [0.3.2] - 2026-08-02
 
 ### Fixed
