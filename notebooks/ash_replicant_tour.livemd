@@ -1,0 +1,715 @@
+# AshReplicant — an interactive tour
+
+```elixir
+Mix.install([
+  # This notebook lives in `notebooks/`, so `..` is the repo root. Swap for
+  # `{:ash_replicant, "~> 0.3"}` to run it against the published Hex package.
+  {:ash_replicant, path: Path.join(__DIR__, "..")},
+  {:kino, "~> 0.14"}
+])
+```
+
+## What this is (and how to use it)
+
+**AshReplicant** is the Ash [`Replicant.Sink`](https://github.com/baselabs/replicant)
+adapter for CDC mirror targets — the *"`ash_postgres` of `replicant`."* It mirrors a
+source Postgres database's committed changes into AshPostgres resources with
+**effect-once semantics** (dup = 0, loss = 0), resolving **resource**, **tenant**, and
+**classification** in the Ash layer while keeping `replicant` tenant-blind.
+
+This notebook is a **developer tour**. It is split into two kinds of section:
+
+* **▶︎ Runnable, zero-database.** The green code cells define real mirror resources
+  (backed by in-memory ETS) and call the library's pure functions live. You can
+  *watch* fail-closed multitenancy and the value-free boundary actually behave —
+  no Postgres, no replication slot, no setup beyond the `Mix.install` cell above.
+* **📋 Copy-into-your-app.** The plain (non-executable) code blocks are the
+  production integration — the AshPostgres checkpoint/sink/`start_link` plumbing and
+  the SCD2 version table. They need a live repo and a replication stream, so they are
+  shown for reference rather than run here. Each is a one-line swap away from the
+  runnable ETS analogs.
+
+> **Runtime tip.** The `Mix.install` cell compiles the full Ash dependency tree on
+> its first run (a few minutes). If you launched Livebook with the **"Mix standalone"**
+> runtime pointed at this repo, the app is already compiled — you can delete the
+> `Mix.install` cell and everything else still works.
+
+## 1 · The mental model
+
+AshReplicant owns the **Ash-native mechanism** and executes *through* the tenant-blind
+`replicant` CDC framework. It does **not** own transport, and does **not**
+re-implement Ash core's multitenancy concept.
+
+```mermaid
+flowchart TD
+  A["Ash core<br/>multitenancy DSL · policies · the tenant concept"]
+  B["AshReplicant  ← HERE<br/>resource resolution · tenant routing<br/>sensitive-column verification · mirror actions"]
+  C["replicant<br/>Postgres logical replication (pgoutput)<br/>transaction assembly · exactly-once watermark"]
+  D["Postgres<br/>logical decoding output"]
+  A --> B --> C --> D
+```
+
+Multitenancy and classification live **here**, not in `replicant` — exactly as
+`ash_postgres` (not `postgrex`) owns schema-based tenancy. Six critical rules
+([`AGENTS.md`](../AGENTS.md)) define the adapter, and the rest of this tour makes each
+one tangible:
+
+| # | Rule | You'll see it in |
+|---|------|------------------|
+| 1 | Route writes through the host's own Ash `:create` (upsert) / `:destroy` actions — never raw Ecto | §7, §9 |
+| 2 | Multitenancy is **fail-closed** — nil/`false`/blank tenant ⇒ error, never a base tenant | §5 |
+| 3 | Sensitive = AshCloak-encrypted **or** binary **or** `skip`, verified by type-shape at compile time | §7, §8 |
+| 4 | **Value-free** — no row value in any error, log, or telemetry event | §3 |
+| 5 | **Stay one layer up** — tenant + classification live here; `replicant` is tenant-blind | §1, §5 |
+| 6 | Effect-once = one transaction, dedup by watermark, upsert by PK | §11 |
+
+## 2 · Is it loaded?
+
+▶︎ **Runnable.** A one-line sanity check that `AshReplicant` compiled and is on the path.
+
+```elixir
+AshReplicant.version()
+# => "0.3.0"
+```
+
+## 3 · The value-free boundary (rule 4)
+
+*Assume every row value is PII or a secret.* Two enforcement points make this
+concrete, and both are pure functions you can call right now.
+
+### 3a · Telemetry metadata is an allowlist
+
+`AshReplicant.Telemetry` owns the single allowlist of metadata **keys**. Anything off
+it **raises** rather than shipping a value downstream — so a stray `pan:` or
+`tenant_name:` can never reach your logs through a telemetry handler.
+
+```elixir
+AshReplicant.Telemetry.allowed_meta_keys()
+# => [:commit_lsn, :resource, :table, :change_count, :tenant?, :duration, :reason, :error_class, :kind, :slot_name]
+```
+
+An allowlisted event passes through untouched:
+
+```elixir
+AshReplicant.Telemetry.validate!(%{table: "orders", change_count: 3})
+```
+
+…but an off-allowlist key (here, a card number masquerading as metadata) fails loud:
+
+```elixir
+try do
+  AshReplicant.Telemetry.validate!(%{pan: "4111111111111111"})
+rescue
+  e in ArgumentError -> {:blocked, Exception.message(e)}
+end
+```
+
+### 3b · Errors carry structure, never values
+
+`AshReplicant.Error` is the fail-closed halt payload. It holds a *reason atom*, the
+*resource module*, the *op*, and — for a scrubbed upstream fault — only the offending
+error's **struct name**. Never a changeset, message, PK, or column value.
+
+```elixir
+err =
+  AshReplicant.Error.exception(
+    reason: :tenant_required,
+    resource: MyApp.Shop.Order,
+    op: :upsert
+  )
+
+Exception.message(err)
+# => "ash_replicant error reason=tenant_required resource=MyApp.Shop.Order op=:upsert"
+```
+
+`scrub/3` normalizes *any* raised or returned error into that value-free shape.
+Watch a secret in an upstream error's message get dropped — only `shape=RuntimeError`
+survives:
+
+```elixir
+leaky = %RuntimeError{message: "PAN=4111111111111111 leaked into the message!"}
+
+AshReplicant.Error.scrub(leaky, MyApp.Shop.Order, :upsert)
+|> Exception.message()
+# => "ash_replicant error reason=sink_failed resource=MyApp.Shop.Order op=:upsert shape=RuntimeError"
+```
+
+## 4 · Define a mirror resource, live
+
+A mirror resource is an ordinary Ash resource plus the `AshReplicant.Resource`
+extension and a `replicant do … end` block. **In production the data layer is
+`AshPostgres.DataLayer`** (see §9); here we back it with in-memory **ETS** so the whole
+thing compiles and runs with no database. The `replicant` block — the part
+AshReplicant cares about — is identical either way.
+
+▶︎ **Runnable.** A minimal, non-tenant mirror of a source `orders` table:
+
+```elixir
+defmodule Tour.Domain do
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource Tour.Order
+    resource Tour.Account
+  end
+end
+
+defmodule Tour.Order do
+  use Ash.Resource,
+    domain: Tour.Domain,
+    data_layer: Ash.DataLayer.Ets,
+    extensions: [AshReplicant.Resource]
+
+  replicant do
+    source_table "orders"
+    # source_schema defaults to the resource's own AshPostgres schema, else "public"
+  end
+
+  attributes do
+    attribute :id, :string, primary_key?: true, allow_nil?: false, public?: true
+    attribute :note, :string, public?: true
+    attribute :amount, :string, public?: true
+  end
+
+  actions do
+    # AshReplicant generates NO action. The mirror writes through THIS resource's own
+    # primary :create (used as an upsert) and :destroy. `create: :*` accepts every
+    # public attribute — that's the upsert target.
+    defaults [:read, :destroy, create: :*, update: :*]
+  end
+end
+
+defmodule Tour.Account do
+  use Ash.Resource,
+    domain: Tour.Domain,
+    data_layer: Ash.DataLayer.Ets,
+    extensions: [AshReplicant.Resource]
+
+  replicant do
+    source_table "accounts"
+    tenant_attribute :org_id
+  end
+
+  attributes do
+    attribute :id, :string, primary_key?: true, allow_nil?: false, public?: true
+    attribute :org_id, :string, allow_nil?: false, public?: true
+    attribute :name, :string, public?: true
+  end
+
+  # Declaring a tenant source REQUIRES an Ash multitenancy block (rule 2 / §7).
+  multitenancy do
+    strategy :attribute
+    attribute :org_id
+    global? true
+  end
+
+  actions do
+    defaults [:read, :destroy, create: :*, update: :*]
+  end
+end
+
+:compiled
+```
+
+Everything the sink needs about a resource is introspectable through
+`AshReplicant.Resource.Info`. Note `source_table` *falls back to reflection* and the
+SCD2 predicate `history_scd2?`:
+
+```elixir
+alias AshReplicant.Resource.Info
+
+# The generated `replicant_<option>/1` accessors return `{:ok, value} | :error`
+# (`:error` = "not set"). Unwrap for display, exactly as the resolver does internally.
+opt = fn
+  {:ok, v} -> inspect(v)
+  :error -> "—"
+end
+
+Kino.DataTable.new(
+  for res <- [Tour.Order, Tour.Account] do
+    %{
+      "resource" => inspect(res),
+      "source_schema" => Info.source_schema(res),
+      "source_table" => Info.source_table(res),
+      "tenant_attribute" => opt.(Info.replicant_tenant_attribute(res)),
+      "sensitive" => inspect(Info.replicant_sensitive!(res)),
+      "on_truncate" => inspect(Info.replicant_on_truncate!(res)),
+      "history" => inspect(Info.replicant_history_strategy!(res)),
+      "scd2?" => Info.history_scd2?(res)
+    }
+  end
+)
+```
+
+## 5 · Fail-closed multitenancy (rule 2)
+
+This is the heart of AshReplicant. Every source row's tenant is resolved from its
+`tenant_attribute` (or `tenant_mfa`) and passed as the `tenant:` option to the mirror
+action. **If the tenant is absent, the write fails and the transaction rolls back —
+there is no silent "base tenant" fallback.**
+
+Source CDC records arrive **string-keyed** (that's how they come off the wire), so the
+resolver reads `record["org_id"]`. `resolve_tenant/2` fails closed on *every* value Ash
+would treat as unscoped — `nil`, `false`, empty, and whitespace-only:
+
+```elixir
+alias AshReplicant.Resolver
+
+records = [
+  %{"id" => "o1", "org_id" => "acme"},
+  %{"id" => "o2", "org_id" => nil},
+  %{"id" => "o3", "org_id" => false},
+  %{"id" => "o4", "org_id" => "   "},
+  %{"id" => "o5"}
+]
+
+Kino.DataTable.new(
+  for rec <- records do
+    %{
+      "source record" => inspect(rec),
+      "resolve_tenant/2" => inspect(Resolver.resolve_tenant(Tour.Account, rec))
+    }
+  end
+)
+```
+
+You should see `{:ok, "acme"}` for the first row and `{:error, :tenant_required}` for
+all four of the others.
+
+```mermaid
+flowchart TD
+  R["source record (string-keyed)"] --> Q{tenant_attribute<br/>or tenant_mfa?}
+  Q -->|neither| G["{:ok, nil}<br/>(not multitenant)"]
+  Q -->|resolve| V{"present?<br/>(not nil / false / blank)"}
+  V -->|yes| OK["{:ok, tenant}<br/>→ passed as tenant: to the Ash action"]
+  V -->|no| ERR["{:error, :tenant_required}<br/>→ write fails · txn rolls back · WAL re-streams"]
+  style ERR fill:#fde,stroke:#c33
+  style OK fill:#efe,stroke:#3a3
+```
+
+The bang variant, `resolve_tenant!/3`, is the single entry point every apply path
+shares — it raises a **value-free** `AshReplicant.Error` (note: no row value in the
+message, only the reason, resource, and op):
+
+```elixir
+try do
+  Resolver.resolve_tenant!(Tour.Account, %{"id" => "o5"}, :upsert)
+rescue
+  e in AshReplicant.Error -> {:fail_closed, Exception.message(e)}
+end
+```
+
+### `tenant_mfa` — a computed tenant
+
+When the tenant isn't a plain column, `tenant_mfa {Module, :function, [extra_args]}`
+is applied as `apply(Module, :function, [record | extra_args])`. It pairs with a
+`:context` multitenancy strategy (the tenant is a function result, not a stored
+attribute):
+
+```elixir
+defmodule Tour.MfaHelper do
+  # Receives the row (prepended by the resolver) plus the extra args from the DSL tuple.
+  def resolve(record, key) when is_map(record), do: Map.get(record, key)
+end
+
+defmodule Tour.MfaDomain do
+  use Ash.Domain, validate_config_inclusion?: false
+  resources do
+    resource Tour.MfaOrder
+  end
+end
+
+defmodule Tour.MfaOrder do
+  use Ash.Resource,
+    domain: Tour.MfaDomain,
+    data_layer: Ash.DataLayer.Ets,
+    extensions: [AshReplicant.Resource]
+
+  replicant do
+    source_table "mfa_orders"
+    tenant_mfa {Tour.MfaHelper, :resolve, ["tenant_key"]}
+  end
+
+  multitenancy do
+    strategy :context
+  end
+
+  attributes do
+    attribute :id, :string, primary_key?: true, allow_nil?: false, public?: true
+  end
+
+  actions do
+    defaults [:read]
+  end
+end
+
+%{
+  present: Resolver.resolve_tenant(Tour.MfaOrder, %{"tenant_key" => "tenant-42"}),
+  missing: Resolver.resolve_tenant(Tour.MfaOrder, %{})
+}
+# => %{present: {:ok, "tenant-42"}, missing: {:error, :tenant_required}}
+```
+
+> **Operational note.** A `:delete` (or a PK-changing `:update`) resolves the tenant
+> from `old_record`, which under the Postgres-default replica identity carries **only
+> the primary-key columns** — the tenant discriminator would be absent and the pipeline
+> would (correctly) halt fail-closed. Set `ALTER TABLE <src> REPLICA IDENTITY FULL` on
+> every source table backing a tenant-scoped mirror.
+
+## 6 · The resolver index (rule 1 · routing)
+
+At `start_link`, AshReplicant reflects the sink's domains into a
+`{source_schema, source_table} => resource` index, cached in `:persistent_term` keyed
+by the sink's `slot_name`. It **fails closed** on an ambiguous route — two resources
+claiming the same source table.
+
+```elixir
+{:ok, index} = Resolver.build_index([Tour.Domain])
+index
+# => %{{"public", "accounts"} => Tour.Account, {"public", "orders"} => Tour.Order}
+```
+
+`lookup/3` applies the same `nil`-schema ⇒ `"public"` default the index keys use:
+
+```elixir
+%{
+  mapped: Resolver.lookup(index, "public", "orders"),
+  unmapped: Resolver.lookup(index, "public", "no_such_table")
+}
+```
+
+Two resources mapping the **same** source table is a configuration bug that must never
+route silently — the builder halts with `{:error, {:duplicate_source, _}}`:
+
+```elixir
+defmodule Tour.DupDomain do
+  use Ash.Domain, validate_config_inclusion?: false
+  resources do
+    resource Tour.DupA
+    resource Tour.DupB
+  end
+end
+
+for mod <- [Tour.DupA, Tour.DupB] do
+  defmodule mod do
+    use Ash.Resource,
+      domain: Tour.DupDomain,
+      data_layer: Ash.DataLayer.Ets,
+      extensions: [AshReplicant.Resource]
+
+    replicant do
+      source_table "dup_orders"
+      source_schema "public"
+    end
+
+    attributes do
+      attribute :id, :string, primary_key?: true, allow_nil?: false, public?: true
+    end
+
+    actions do
+      defaults [:read]
+    end
+  end
+end
+
+Resolver.build_index([Tour.DupDomain])
+# => {:error, {:duplicate_source, {"public", "dup_orders"}}}
+```
+
+## 7 · The bug can't ship — compile-time verifiers (rules 1–3)
+
+AshReplicant moves misconfigurations to **build time**. Five verifiers run against the
+DSL and fail the compile *(build-blocking under `--warnings-as-errors`)*. These are
+shown as 📋 reference because Spark surfaces them during the compiler's parallel-check
+phase — copy one into a real resource and `mix compile` to watch it fire. The messages
+below are the **actual** verifier output.
+
+**`ValidateMultitenancy`** — a `tenant_attribute` with no multitenancy block would let
+Ash silently ignore `tenant:` and mirror every tenant *unscoped*. Fail-open isolation
+is exactly what rule 2 forbids, so it fails closed at compile:
+
+```
+replicant do
+  source_table "accounts"
+  tenant_attribute :org_id     # ← but NO `multitenancy do … end` block
+end
+```
+
+> ** (Spark.Error.DslError) [MyApp.Account]**
+> replicant -> tenant_attribute :
+>   the tenant_attribute :org_id requires an Ash `multitenancy` block on this resource
+>   (typically `strategy :attribute`, `attribute :org_id`): the sink passes the resolved
+>   per-row tenant to Ash as the `tenant:` option, which Ash HONORS only under declared
+>   multitenancy. With none, `tenant:` is silently ignored and every tenant's rows are
+>   mirrored unscoped (fail-open isolation), so it fails closed here.
+
+**`ValidateSensitive`** — a column classified `sensitive` that maps to a plaintext
+attribute (not AshCloak-encrypted, not binary, not skipped) would mirror the secret in
+the clear:
+
+```
+replicant do
+  source_table "secret_orders"
+  sensitive [:pan]             # ← but :pan is a plain :string attribute
+end
+```
+
+> ** (Spark.Error.DslError) [MyApp.Secret]**
+> replicant -> sensitive :
+>   sensitive source column :pan must map to an AshCloak-encrypted attribute or a
+>   binary-storage attribute, or be listed in `skip`. A sensitive column mirrored as
+>   plaintext defeats the classification, so it fails closed.
+
+The full verifier set (all in `lib/ash_replicant/resource/verifiers/`):
+
+| Verifier | Rejects at compile |
+|----------|--------------------|
+| `ValidateSensitive` | a `sensitive` column that isn't encrypted / binary / skipped |
+| `ValidateMultitenancy` | a tenant source with no multitenancy block; a non-plaintext `:attribute` discriminator |
+| `ValidateTenantSource` | a non-global multitenant resource with **no** tenant source |
+| `ValidateActionMultitenancy` | `multitenancy :bypass` / `:bypass_all` on a sink-selected action |
+| `ValidateHistory` | an invalid SCD2 version-table shape (§10) |
+
+## 8 · Sensitive data & AshCloak (rule 3)
+
+Every source column in `sensitive` must map to exactly one of:
+
+1. **AshCloak-encrypted** — the `before_action` hook fires on the upsert. The resolver
+   routes the plaintext under the cloak argument and names `encrypted_<col>` in the
+   upsert fields. AshCloak is the *single source of truth* for encryption.
+2. **Binary storage** — a `:binary`-typed attribute (host-managed encryption).
+3. **Skipped** — listed in `skip`, never written to the mirror.
+
+The verifier checks the **type shape**, not ciphertext — encrypting is the host app's
+job. A resource that opts into AshCloak looks like this (📋 reference — AshCloak needs a
+configured `Cloak.Vault` process, so it isn't run here):
+
+```
+defmodule MyApp.Secret do
+  use Ash.Resource,
+    domain: MyApp.Domain,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshReplicant.Resource, AshCloak]
+
+  replicant do
+    source_table "secret_orders"
+    sensitive [:pan]
+  end
+
+  cloak do
+    vault MyApp.Vault
+    attributes [:pan]        # ← :pan becomes AshCloak-encrypted; verifier is satisfied
+  end
+
+  attributes do
+    attribute :id, :string, primary_key?: true, allow_nil?: false, public?: true
+    attribute :pan, :string, public?: true
+  end
+
+  actions do
+    defaults [:read, :destroy, create: :*, update: :*]
+  end
+end
+```
+
+> **Never** list the `tenant_attribute` as `sensitive` — the discriminator is a
+> plaintext selector Ash injects as a filter; an encrypted one would match nothing
+> (`ValidateMultitenancy` rejects it).
+
+## 9 · Full production integration (📋 copy-into-your-app)
+
+Everything above ran on ETS. In your app the data layer is `AshPostgres.DataLayer`
+and there are four wiring steps. **The one-line swap:** take a runnable resource from
+§4 and replace `data_layer: Ash.DataLayer.Ets` with `AshPostgres.DataLayer` + a
+`postgres do … end` block — the `replicant` block is unchanged.
+
+**Step 1 — the checkpoint resource** (the durable `commit_lsn` watermark, one row per
+slot; upserted in the *same* transaction as the mirrored changes — that's what gives
+effect-once):
+
+```
+defmodule MyApp.ReplicantCheckpoint do
+  use AshReplicant.Checkpoint,
+    repo: MyApp.Repo,
+    domain: MyApp.Domain
+end
+```
+
+> The checkpoint is an internal watermark. If your app exposes its domain on a wire
+> surface (JSON:API, MCP), pass `authorizers: [Ash.Policy.Authorizer]` and declare a
+> `policies do` block to lock it down — the sink reads/upserts with `authorize?: false`,
+> so effect-once is never gated by those policies. `authorizers:` defaults to `[]`.
+
+**Step 2 — the sink** (carries repo/domains/checkpoint; `slot_name` is baked in here —
+it is *not* a `start_link` option, and it keys both the `:persistent_term` index and
+the replication slot):
+
+```
+defmodule MyApp.ReplicantSink do
+  use AshReplicant.Sink,
+    repo: MyApp.Repo,
+    domains: [MyApp.Shop, MyApp.Billing],
+    checkpoint_resource: MyApp.ReplicantCheckpoint,
+    slot_name: "shop_orders"
+end
+```
+
+**Step 3 — a mirror resource** (the §4 `Tour.Order`, now Postgres-backed):
+
+```
+defmodule MyApp.Shop.Order do
+  use Ash.Resource,
+    domain: MyApp.Shop,
+    data_layer: AshPostgres.DataLayer,          # ← the only change from §4
+    extensions: [AshReplicant.Resource]
+
+  postgres do                                    # ← plus this block
+    table "orders"
+    repo MyApp.Repo
+  end
+
+  replicant do                                   # ← the replicant block is
+    source_table "orders"                        #    data-layer-agnostic: same DSL
+    tenant_attribute :org_id                      #    as the ETS resources in §4/§5
+    sensitive [:pan]
+  end
+
+  # attributes / multitenancy / actions / identities as in §4
+end
+```
+
+**Step 4 — start the pipeline** (point `:connection` at a standby; the resolver index
+is built and cached, then the `replicant` stream starts):
+
+```
+AshReplicant.start_link(
+  sink: MyApp.ReplicantSink,
+  connection: [hostname: "standby.example.com", database: "source_db"],
+  publication: "shop_orders_pub",
+  go_forward_only: true,
+  snapshot: false
+)
+```
+
+Stop it (idempotent; clears the cached index) with
+`AshReplicant.stop_supervised("shop_orders")`.
+
+## 10 · SCD2 history mode (📋 reference)
+
+By default a resource mirrors **current state** (`history_strategy :scd1` — upsert /
+destroy). Opt in to **validity-windowed SCD2 history** and each change instead **closes
+the current open version** (stamps `valid_to_lsn`) and **inserts a new version** — an
+append-only history with one row per `(business_key, valid_from_lsn)`.
+
+```mermaid
+sequenceDiagram
+  participant C as source change (commit_lsn = N)
+  participant S as AshReplicant sink
+  participant V as version table
+  C->>S: change for business_key K
+  S->>V: close current open version of K<br/>(set valid_to_lsn = N) — via :close_version
+  S->>V: insert new version of K<br/>(valid_from_lsn = N, valid_to_lsn = NULL)
+  Note over V: one open version per key<br/>enforced by a partial-unique index
+```
+
+The version table is a **host obligation** (`ValidateHistory` checks the DSL-visible
+shape; the index and action bodies are yours):
+
+```
+defmodule MyApp.OrderVersion do
+  use Ash.Resource,
+    domain: MyApp.Domain,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshReplicant.Resource]
+
+  postgres do
+    table "order_versions"
+    repo MyApp.Repo
+
+    custom_indexes do
+      # one OPEN version per business key
+      index [:order_id], unique: true, where: "valid_to_lsn IS NULL",
+        name: "order_versions_open_uniq"
+    end
+  end
+
+  replicant do
+    source_table "orders"
+    history_strategy :scd2
+    history_business_key [:order_id]      # source natural key (composite supported)
+    upsert_identity :order_version        # keys: business_key ++ [valid_from_lsn]
+    history_close_action :close_version
+    history_current_attribute :is_current
+  end
+
+  attributes do
+    uuid_primary_key :id                  # SURROGATE PK, disjoint from the business key
+    attribute :order_id, :string, allow_nil?: false, public?: true
+    attribute :amount, :string, public?: true
+    attribute :valid_from_lsn, :integer, allow_nil?: false, public?: true
+    attribute :valid_to_lsn, :integer, allow_nil?: true, public?: true   # nil while open
+    attribute :is_current, :boolean, allow_nil?: false, default: true, public?: true
+  end
+
+  identities do
+    identity :order_version, [:order_id, :valid_from_lsn]
+  end
+
+  actions do
+    defaults [:read, :destroy, create: :*, update: :*]
+
+    update :close_version do
+      accept [:valid_to_lsn, :is_current]
+    end
+  end
+end
+```
+
+Key SCD2 facts (full contract in [`usage-rules.md`](../usage-rules.md)):
+
+* The primary key must be a **surrogate** fully disjoint from the business key — a PK
+  equal to / subset of the business key collapses SCD2 to one row per key.
+* A **non-PK** business key requires `ALTER TABLE <src> REPLICA IDENTITY FULL` (same
+  reason as a non-PK `tenant_attribute`).
+* **Deletes soft-close** — a source delete stamps `valid_to_lsn`; it never erases prior
+  versions. SCD2 therefore does **not** serve right-to-be-forgotten; use SCD1 for that.
+* `on_truncate :close` (SCD2 only) closes *every* open version tenant-blind on an
+  upstream TRUNCATE.
+
+## 11 · Effect-once, in one picture (rule 6)
+
+Every `replicant` transaction is applied in a **single** `Repo.transaction`: skip any
+change at or below the watermark, apply the rows, then upsert the checkpoint — all or
+nothing. A failure rolls the whole transaction back; on resume the un-acked WAL
+re-streams and dedups against the durable checkpoint. **dup = 0, loss = 0.**
+
+```mermaid
+flowchart TD
+  T["Replicant.Transaction<br/>(single commit_lsn = N)"] --> Chk{"N ≤ checkpoint?"}
+  Chk -->|yes| Skip["skip — already applied<br/>(watermark dedup)"]
+  Chk -->|no| Tx["BEGIN one Repo.transaction"]
+  Tx --> Apply["apply each change<br/>upsert-by-PK · destroy · truncate policy<br/>through the host Ash actions"]
+  Apply --> CP["upsert checkpoint = N<br/>IN THE SAME transaction"]
+  CP --> Commit["COMMIT"]
+  Apply -->|any failure| RB["ROLLBACK (fail-closed)<br/>un-acked WAL re-streams on resume"]
+  style Commit fill:#efe,stroke:#3a3
+  style RB fill:#fde,stroke:#c33
+  style Skip fill:#eef,stroke:#33a
+```
+
+## 12 · Where to go next
+
+* **[`AGENTS.md`](../AGENTS.md)** — the working guide; the six critical rules are
+  binding (start here to contribute).
+* **[`docs/CHARTER.md`](../docs/CHARTER.md)** — mission, layering, scope, and the
+  resolved key decisions (D1–D5).
+* **[`docs/adr/0001-fail-closed-multitenancy.md`](../docs/adr/0001-fail-closed-multitenancy.md)**
+  — the fail-closed multitenancy decision record.
+* **[`usage-rules.md`](../usage-rules.md)** — the full host-integration contract,
+  including the complete SCD2 version-table obligations.
+* **`replicant`** (`../../replicant`) — the tenant-blind CDC transport this executes
+  through.
+
+*Everything in §2–§6 ran with no database. That's the adapter's whole design: the
+tenant, classification, and routing decisions are Ash-native and testable in isolation,
+one layer above transport.*
