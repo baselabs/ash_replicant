@@ -33,9 +33,9 @@ defmodule AshReplicant.Checkpoint do
         end
       end
 
-  The sink always reads and upserts the checkpoint with `authorize?: false`
-  (`AshReplicant.Sink.Impl.read_checkpoint/1`, `upsert_checkpoint/2`), so it bypasses
-  policy on both paths — effect-once is unaffected by whatever policies the host
+  The sink always reads and upserts the checkpoint with `authorize?: false` on both
+  paths (its internal `read_checkpoint` and `upsert_checkpoint` helpers), so it bypasses
+  policy — effect-once is unaffected by whatever policies the host
   declares, including none. With the authorizer present and no policies declared, the
   resource is fail-closed to every actor except the sink's `authorize?: false` path,
   which is the safe default for a watermark. `authorizers:` defaults to `[]`, so omitting
