@@ -10,17 +10,53 @@ defmodule AshReplicant.Checkpoint do
 
   A macro is required because an AshPostgres resource needs its host `repo` at compile
   time; `ash_replicant` cannot hardcode it.
+
+  ## Locking the checkpoint down with policies
+
+  The checkpoint is an internal watermark, not tenant data: nothing outside the sink
+  should read or write it. By default the generated resource carries no authorizer (so
+  `policies do` is not even a declarable section), which means a host that exposes it on
+  a wire surface — a JSON:API route, an MCP tool — has no way to enforce that. Pass the
+  policy authorizer to close that:
+
+      use AshReplicant.Checkpoint,
+        repo: MyApp.Repo,
+        domain: MyApp.Domain,
+        authorizers: [Ash.Policy.Authorizer]
+
+      # ...then declare your own policies in the module body, e.g. system-only:
+      policies do
+        default_access_type :strict
+
+        policy always() do
+          authorize_if MyApp.Checks.SystemActor
+        end
+      end
+
+  The sink always reads and upserts the checkpoint with `authorize?: false`
+  (`AshReplicant.Sink.Impl.read_checkpoint/1`, `upsert_checkpoint/2`), so it bypasses
+  policy on both paths — effect-once is unaffected by whatever policies the host
+  declares, including none. With the authorizer present and no policies declared, the
+  resource is fail-closed to every actor except the sink's `authorize?: false` path,
+  which is the safe default for a watermark. `authorizers:` defaults to `[]`, so omitting
+  it reproduces the pre-0.4 resource exactly (no behaviour change for existing hosts).
   """
 
   @doc false
   defmacro __using__(opts) do
     repo = Keyword.fetch!(opts, :repo)
     domain = Keyword.fetch!(opts, :domain)
+    # Opt-in, default []. The consumer passes [Ash.Policy.Authorizer] to make the
+    # generated resource policy-capable and then declares its own `policies do` block;
+    # `authorizers: []` is identical to the option Ash already defaults to, so an
+    # existing host that omits it gets the byte-for-byte pre-0.4 resource.
+    authorizers = Keyword.get(opts, :authorizers, [])
 
     quote do
       use Ash.Resource,
         domain: unquote(domain),
-        data_layer: AshPostgres.DataLayer
+        data_layer: AshPostgres.DataLayer,
+        authorizers: unquote(authorizers)
 
       postgres do
         table "ash_replicant_checkpoints"

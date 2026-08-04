@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-03
+
+### Added
+
+- **`use AshReplicant.Checkpoint` accepts an `authorizers:` option**, so the generated
+  checkpoint resource can carry `Ash.Policy.Authorizer` and enforce host-declared
+  `policies do` blocks. The checkpoint is an internal watermark; a host that exposes its
+  domain on a wire surface (JSON:API, MCP) previously had no way to lock the checkpoint
+  down, because the macro emitted a resource with no authorizer and `policies` is not a
+  declarable section without one. The sink still reads/upserts with `authorize?: false`
+  on both paths (`Sink.Impl.read_checkpoint/1`, `upsert_checkpoint/2`), so effect-once is
+  unaffected by whatever policies the host declares — including none, which fail-closes
+  the resource to every actor except the sink. `authorizers:` defaults to `[]`, identical
+  to the option Ash already defaults to, so existing hosts get the byte-for-byte prior
+  resource (no behaviour change). Verified against live logical-replication Postgres:
+  `checkpoint_policy_test.exs` proves the authorizer + policies are present, a non-system
+  actor is denied (hard `Forbidden`), a system actor is allowed, and the sink's
+  `authorize?: false` path bypasses both.
+
 ## [0.3.3] - 2026-08-02
 
 ### Fixed
@@ -211,7 +230,9 @@ sensitive-column verification.
   `usage-rules.md`, `CONTRIBUTING.md`, `LICENSE`, `NOTICE`; tracked charter at
   `docs/CHARTER.md` (only `/docs/superpowers/` lifecycle artifacts are local-only).
 
-[Unreleased]: https://github.com/baselabs/ash_replicant/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/baselabs/ash_replicant/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/baselabs/ash_replicant/releases/tag/v0.4.0
+[0.3.3]: https://github.com/baselabs/ash_replicant/releases/tag/v0.3.3
 [0.3.2]: https://github.com/baselabs/ash_replicant/releases/tag/v0.3.2
 [0.3.1]: https://github.com/baselabs/ash_replicant/releases/tag/v0.3.1
 [0.3.0]: https://github.com/baselabs/ash_replicant/releases/tag/v0.3.0

@@ -4,6 +4,7 @@ defmodule AshReplicant.Test.Domain do
 
   resources do
     resource AshReplicant.Test.Checkpoint
+    resource AshReplicant.Test.CheckpointPolicied
     resource AshReplicant.Test.Order
     resource AshReplicant.Test.Account
     resource AshReplicant.Test.TenantOrder

@@ -65,6 +65,32 @@ end
 This generates an AshPostgres resource backed by the `ash_replicant_checkpoints`
 table (one row per replication slot, tracking the durable commit LSN watermark).
 
+The checkpoint is an internal watermark — nothing outside the sink should read or write
+it. If your app exposes its domain on a wire surface (JSON:API, MCP), pass the policy
+authorizer so you can lock the checkpoint down, then declare your own policies:
+
+```elixir
+defmodule MyApp.ReplicantCheckpoint do
+  use AshReplicant.Checkpoint,
+    repo: MyApp.Repo,
+    domain: MyApp.Domain,
+    authorizers: [Ash.Policy.Authorizer]
+
+  policies do
+    default_access_type :strict
+
+    policy always() do
+      authorize_if MyApp.Checks.SystemActor
+    end
+  end
+end
+```
+
+The sink reads and upserts the checkpoint with `authorize?: false`, so it bypasses these
+policies and effect-once is unaffected — including when you declare none (which
+fail-closes the resource to every actor except the sink). `authorizers:` defaults to
+`[]`, so omitting it reproduces the prior resource exactly.
+
 ### 2. Define the sink
 
 ```elixir

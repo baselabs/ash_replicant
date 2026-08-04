@@ -31,6 +31,12 @@ end
 This generates an AshPostgres resource backing `ash_replicant_checkpoints` (one row
 per replication slot, storing the durable `commit_lsn` watermark).
 
+To lock the checkpoint down when the host exposes its domain on a wire surface, pass
+`authorizers: [Ash.Policy.Authorizer]` and declare a `policies do` block on the module.
+The sink reads/upserts with `authorize?: false`, so policies never gate effect-once;
+with the authorizer and no policies the resource is fail-closed to everyone but the sink.
+`authorizers:` defaults to `[]` (no behaviour change when omitted).
+
 ### 2. Define the sink module
 
 ```elixir
