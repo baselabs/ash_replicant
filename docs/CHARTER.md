@@ -140,6 +140,35 @@ The **authoritative per-task ledgers** (task → commit sha, RED evidence, revie
 live in those `docs/superpowers/plans/` files (local-only); product decisions are in
 `docs/adr/`. This charter does not duplicate the ledgers (a second copy only drifts).
 
+## Backlog (future, not committed)
+
+### [B1] Adopt `ash_onetime` for authoritative Rule-3 admission (enhances [D1])
+
+**Opportunity:** [D1] today implements effect-once with a hand-rolled transaction-granularity
+`commit_lsn` watermark — skip `commit_lsn <= checkpoint`, upsert rows by PK, upsert the checkpoint
+in the same `Repo.transaction`. It works (loss=0, effect-dup=0, crash-proven) but it is bespoke
+admission: the sibling [`ash_onetime`](https://hex.pm/packages/ash_onetime) library provides the
+authoritative version for Ash/Postgres — `protect` the apply action with `strategy :idempotency`
+keyed on the transaction's `commit_lsn`, and the Postgres unique constraint (not an application-level
+pre-check) decides the replay within the retention boundary. `replicant`'s published
+[`docs/INVARIANTS.md`](../replicant/docs/INVARIANTS.md) §3 now points Ash sinks at `ash_onetime` as
+the recommended admission layer, so adopting it here aligns the sink with that guidance.
+
+**Two concrete moves if adopted:**
+1. Replace the [D1] watermark admission with `ash_onetime` `strategy :idempotency` keyed on
+   `commit_lsn` — stronger race-protection (DB-constraint, no pre-read) and a uniform mechanism.
+2. Upgrade the at-least-once **non-transactional** `handle_message/2` path to effect-once *at the
+   sink* via `strategy :one_time_nonce` keyed on the message's `{lsn, ordinal}` — `replicant` still
+   states that path's *delivery* honestly as at-least-once; the nonce makes the *effect* once.
+
+**Trade-off:** a new dep (`ash_onetime`) + migrating the admission path off the working watermark,
+in exchange for authoritative admission and a single idempotency mechanism across both the
+transactional and non-transactional effect paths. `ash_onetime` rejects non-transactional /
+non-Postgres actions, which fits this sink (it is already Ash/Postgres + transactional).
+
+**Status:** future, not committed; scope on touch. (A corresponding note lives in `replicant`'s
+1.0 tracker D2 / `ash_replicant` coordination row.)
+
 ## References
 
 - **`replicant`** (`../replicant`) — CDC framework; see `AGENTS.md` and `usage-rules.md`
