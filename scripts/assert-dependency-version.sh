@@ -28,7 +28,7 @@ ASH_REPLICANT_ASSERTED_REQUIREMENT="$requirement" \
          true <- Version.match?(parsed_version, parsed_requirement) do
       :ok
     else
-      {:error, _reason} ->
+      :error ->
         IO.puts(:stderr, "dependency version assertion input is invalid")
         System.halt(2)
 

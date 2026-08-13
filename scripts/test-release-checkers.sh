@@ -30,6 +30,27 @@ if scripts/assert-dependency-version.sh ash '== 0.0.0' >/dev/null 2>&1; then
   exit 1
 fi
 
+requirement_sentinel="ASH_REPLICANT_REQUIREMENT_SENTINEL"
+set +e
+requirement_output="$(scripts/assert-dependency-version.sh ash "$requirement_sentinel" 2>&1)"
+requirement_exit=$?
+set -e
+
+if [[ "$requirement_exit" -ne 2 ]] || [[ "$requirement_output" != *"assertion input is invalid"* ]] || [[ "$requirement_output" == *"$requirement_sentinel"* ]]; then
+  echo "dependency checker did not reject malformed input structurally" >&2
+  exit 1
+fi
+
+set +e
+runtime_output="$(scripts/assert-runtime-version.sh --self-test-mismatch 2>&1)"
+runtime_exit=$?
+set -e
+
+if [[ "$runtime_exit" -ne 1 ]] || [[ "$runtime_output" != "runtime identity does not match the release contract" ]]; then
+  echo "runtime checker did not reject a forced mismatch" >&2
+  exit 1
+fi
+
 selector_sentinel="ASH_REPLICANT_SELECTOR_SENTINEL"
 set +e
 selector_output="$(ASH_REPLICANT_ASH_VERSION="$selector_sentinel" mix run --no-start -e ':ok' 2>&1)"

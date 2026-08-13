@@ -4,6 +4,18 @@ set -euo pipefail
 expected_elixir="1.20.3"
 expected_otp="29"
 
+case "${1:-}" in
+  "") ;;
+  --self-test-mismatch)
+    expected_elixir="0.0.0"
+    expected_otp="0"
+    ;;
+  *)
+    echo "usage: assert-runtime-version.sh [--self-test-mismatch]" >&2
+    exit 2
+    ;;
+esac
+
 ASH_REPLICANT_EXPECTED_ELIXIR="$expected_elixir" \
 ASH_REPLICANT_EXPECTED_OTP="$expected_otp" \
   elixir -e '

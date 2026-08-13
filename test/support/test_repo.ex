@@ -5,8 +5,9 @@ defmodule AshReplicant.TestRepo do
   @start_attempt_key {__MODULE__, :start_attempted}
 
   @impl true
-  def init(_type, config) do
-    if Application.get_env(:ash_replicant, :forbid_test_repo_start?, false) do
+  def init(type, config) do
+    if type == :supervisor and
+         Application.get_env(:ash_replicant, :forbid_test_repo_start?, false) do
       :persistent_term.put(@start_attempt_key, true)
     end
 

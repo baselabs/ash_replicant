@@ -34,7 +34,7 @@ Release evidence is separated by what it proves:
    row values. `scripts/assert-exunit-output.sh` requires exactly one
    `Result: N passed` line where `N > 0`; zero tests, failures, skips,
    exclusions, and a later clean-looking summary all fail. Checked-in negative
-   self-tests protect both release-evidence checkers.
+   self-tests protect the ExUnit, dependency, selector, and runtime checkers.
 4. Migration drift is checked against both configured domains,
    `AshReplicant.Test.Domain` and `AshReplicant.Test.HistoryDomain`. The command
    preloads `AshPostgres.CustomIndex` because AshPostgres decodes snapshot keys
