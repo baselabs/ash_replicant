@@ -51,6 +51,26 @@ if [[ "$runtime_exit" -ne 1 ]] || [[ "$runtime_output" != "runtime identity does
   exit 1
 fi
 
+env -u ASH_REPLICANT_TEST_URL MIX_ENV=test mix run --no-start -e '
+  Application.put_env(:ash_replicant, :forbid_test_repo_start?, true)
+  key = AshReplicant.TestRepo.start_attempt_key()
+  :persistent_term.erase(key)
+
+  _config = AshReplicant.TestRepo.config()
+
+  if :persistent_term.get(key, false) do
+    IO.puts(:stderr, "runtime configuration read counted as a Repo start")
+    System.halt(1)
+  end
+
+  {:ok, []} = AshReplicant.TestRepo.init(:supervisor, [])
+
+  unless :persistent_term.get(key, false) do
+    IO.puts(:stderr, "supervisor initialization was not counted as a Repo start")
+    System.halt(1)
+  end
+' >/dev/null
+
 selector_sentinel="ASH_REPLICANT_SELECTOR_SENTINEL"
 set +e
 selector_output="$(ASH_REPLICANT_ASH_VERSION="$selector_sentinel" mix run --no-start -e ':ok' 2>&1)"
