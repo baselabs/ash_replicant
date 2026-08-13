@@ -25,6 +25,29 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   docker exec pg pg_isready -U postgres || { docker logs pg; exit 1; }
   """
 
+  @package_inspection """
+  package_dir=$(mktemp -d)
+  trap 'rm -rf "$package_dir"' EXIT
+  env -u ASH_REPLICANT_ASH_VERSION mix hex.build --unpack --output "$package_dir"
+
+  for required in lib .formatter.exs mix.exs README.md LICENSE NOTICE CHANGELOG.md usage-rules.md; do
+    test -e "$package_dir/$required" || {
+      echo "::error::Missing package path: $required"
+      exit 1
+    }
+  done
+
+  if find "$package_dir" -type d \\( -name test -o -name .forge -o -name _build \\) -print -quit | grep -q .; then
+    echo "::error::Package contains test, Forge, or build residue"
+    exit 1
+  fi
+
+  if find "$package_dir" -type f \\( -name '.env*' -o -name '*.pem' -o -name '*.key' \\) -print -quit | grep -q .; then
+    echo "::error::Package contains a credential-shaped file"
+    exit 1
+  fi
+  """
+
   @job_commands %{
     "no-database" => [
       "mix deps.get",
@@ -60,7 +83,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       "elixir --version",
       "scripts/assert-runtime-version.sh",
       "scripts/assert-release-contract.sh",
-      "mix docs --warnings-as-errors"
+      "mix docs --warnings-as-errors",
+      String.trim(@package_inspection)
     ]
   }
 
@@ -108,6 +132,27 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     prepare_fixture()
     replace_once!(@workflow, "name: CI", "name: CI\n# Example text: uses: actions/setup-node@v4")
+    assert_valid!()
+
+    prepare_fixture()
+
+    replace_once!(
+      @workflow,
+      "jobs:\n  no-database:",
+      """
+      jobs:
+        harmless-environment-key:
+          runs-on: ubuntu-latest
+          env:
+            uses: harmless-environment-value
+          steps:
+            - run: echo harmless
+
+        no-database:
+      """
+      |> String.trim_trailing()
+    )
+
     assert_valid!()
 
     prepare_fixture()
@@ -297,6 +342,32 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     assert_invalid!()
 
+    prepare_fixture()
+
+    replace_once!(
+      @workflow,
+      "env:\n  ELIXIR_VERSION:",
+      "env:\n  BASH_ENV: /tmp/release-bypass\n  ELIXIR_VERSION:"
+    )
+
+    assert_invalid!()
+
+    for {job, mix_env} <- [
+          {"no-database", "test"},
+          {"compatibility", "test"},
+          {"release-artifact", "dev"}
+        ] do
+      prepare_fixture()
+
+      mutate_job!(
+        job,
+        "      MIX_ENV: #{mix_env}\n",
+        "      MIX_ENV: #{mix_env}\n      BASH_ENV: /tmp/release-bypass\n"
+      )
+
+      assert_invalid!()
+    end
+
     for replacement <- [
           "      - run: scripts/test-release-contract.sh\n        shell: echo {0}\n",
           "      - run: scripts/test-release-contract.sh\n        continue-on-error: ${{ true }}\n",
@@ -384,8 +455,28 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
       replace_once!(
         path,
+        hd(required_texts),
+        "```text\n```still-code\n#{hd(required_texts)}\n```"
+      )
+
+      assert_invalid!()
+
+      prepare_fixture()
+
+      replace_once!(
+        path,
         heading,
         "#{heading}\n\nThis package does not support Elixir 1.20.3 or Erlang/OTP 29."
+      )
+
+      assert_invalid!()
+
+      prepare_fixture()
+
+      replace_once!(
+        path,
+        heading,
+        "#{heading}\n\nThis package does&#32;not support Elixir 1.20.3 or Erlang/OTP 29."
       )
 
       assert_invalid!()
@@ -408,6 +499,16 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       replace_once!("mix.exs", required, "release dependency removed")
       assert_invalid!()
     end)
+
+    prepare_fixture()
+
+    replace_once!(
+      "mix.exs",
+      ~s(elixir: "~> 1.20.3"),
+      ~s(elixir: "~> 1.18", release_contract_decoy: [elixir: "~> 1.20.3"])
+    )
+
+    assert_invalid!()
   end
 
   defp prepare_fixture do
@@ -461,7 +562,10 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       "        run: |\n" <>
         (command
          |> String.split("\n")
-         |> Enum.map_join("\n", &("          " <> &1))) <> "\n"
+         |> Enum.map_join("\n", fn
+           "" -> ""
+           line -> "          " <> line
+         end)) <> "\n"
 
     cond do
       String.contains?(content, direct) -> mutate_job!(job, direct, "")

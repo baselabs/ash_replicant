@@ -29,6 +29,39 @@ defmodule AshReplicant.ReleaseContract do
   scripts/assert-dependency-version.sh ash '${{ matrix.requirement }}'
   """
 
+  @package_inspection """
+  package_dir=$(mktemp -d)
+  trap 'rm -rf "$package_dir"' EXIT
+  env -u ASH_REPLICANT_ASH_VERSION mix hex.build --unpack --output "$package_dir"
+
+  for required in lib .formatter.exs mix.exs README.md LICENSE NOTICE CHANGELOG.md usage-rules.md; do
+    test -e "$package_dir/$required" || {
+      echo "::error::Missing package path: $required"
+      exit 1
+    }
+  done
+
+  if find "$package_dir" -type d \\( -name test -o -name .forge -o -name _build \\) -print -quit | grep -q .; then
+    echo "::error::Package contains test, Forge, or build residue"
+    exit 1
+  fi
+
+  if find "$package_dir" -type f \\( -name '.env*' -o -name '*.pem' -o -name '*.key' \\) -print -quit | grep -q .; then
+    echo "::error::Package contains a credential-shaped file"
+    exit 1
+  fi
+  """
+
+  @job_env %{
+    "no-database" => %{"MIX_ENV" => "test"},
+    "compatibility" => %{
+      "MIX_ENV" => "test",
+      "ASH_REPLICANT_ASH_VERSION" => "${{ matrix.selector }}",
+      "ASH_REPLICANT_TEST_URL" => "postgres://postgres@localhost:5432/postgres"
+    },
+    "release-artifact" => %{"MIX_ENV" => "dev"}
+  }
+
   @matrix [
     %{
       "label" => "floor-3.31.3",
@@ -86,7 +119,8 @@ defmodule AshReplicant.ReleaseContract do
       "elixir --version",
       "scripts/assert-runtime-version.sh",
       "scripts/assert-release-contract.sh",
-      "mix docs --warnings-as-errors"
+      "mix docs --warnings-as-errors",
+      String.trim(@package_inspection)
     ]
   }
 
@@ -133,12 +167,15 @@ defmodule AshReplicant.ReleaseContract do
 
   defp assert_runtime(workflow) do
     env = Map.get(workflow, "env", %{})
-    assert(env["ELIXIR_VERSION"] == "1.20.3", "CI runtime contract is incomplete")
-    assert(to_string(env["OTP_VERSION"]) == "29", "CI runtime contract is incomplete")
+
+    assert(
+      env == %{"ELIXIR_VERSION" => "1.20.3", "OTP_VERSION" => "29"},
+      "CI runtime contract is incomplete"
+    )
   end
 
   defp assert_actions(workflow) do
-    actions = collect_uses(workflow)
+    actions = semantic_uses(workflow)
 
     assert(actions != [], "CI Action contract is incomplete")
 
@@ -151,16 +188,15 @@ defmodule AshReplicant.ReleaseContract do
     )
   end
 
-  defp collect_uses(value) when is_list(value), do: Enum.flat_map(value, &collect_uses/1)
-
-  defp collect_uses(value) when is_map(value) do
-    Enum.flat_map(value, fn
-      {"uses", action} -> [action | collect_uses(action)]
-      {_key, nested} -> collect_uses(nested)
+  defp semantic_uses(workflow) do
+    workflow
+    |> Map.get("jobs", %{})
+    |> Enum.flat_map(fn {_name, job} ->
+      job_actions = if is_binary(job["uses"]), do: [job["uses"]], else: []
+      step_actions = job |> Map.get("steps", []) |> Enum.map(&Map.get(&1, "uses"))
+      job_actions ++ Enum.filter(step_actions, &is_binary/1)
     end)
   end
-
-  defp collect_uses(_value), do: []
 
   defp assert_workflow_controls(workflow) do
     assert(not Map.has_key?(workflow, "defaults"), "CI workflow can override release shells")
@@ -177,6 +213,7 @@ defmodule AshReplicant.ReleaseContract do
       end
 
       assert(job["runs-on"] == "ubuntu-latest", "CI release runner is invalid")
+      assert(job["env"] == @job_env[name], "CI release job environment is invalid")
 
       positions = Enum.map(commands, &dedicated_run_position(job, &1))
 
@@ -206,13 +243,7 @@ defmodule AshReplicant.ReleaseContract do
 
   defp assert_compatibility(workflow) do
     job = get_in(workflow, ["jobs", "compatibility"]) || fail("CI compatibility job is missing")
-    env = Map.get(job, "env", %{})
     rows = get_in(job, ["strategy", "matrix", "include"]) || []
-
-    assert(
-      env["ASH_REPLICANT_ASH_VERSION"] == "${{ matrix.selector }}",
-      "CI Ash selector binding is invalid"
-    )
 
     assert(rows == @matrix, "CI Ash compatibility matrix is invalid")
   end
@@ -231,23 +262,42 @@ defmodule AshReplicant.ReleaseContract do
 
   defp assert_mix_contract(root) do
     ast = root |> Path.join("mix.exs") |> File.read!() |> Code.string_to_quoted!()
+    body = mix_project_body(ast)
+    project = find_definition(body, :project)
+    ash_requirement = find_module_attribute(body, :ash_requirement)
 
-    {_ast, state} =
-      Macro.prewalk(ast, %{ash: false, elixir: false}, fn
-        {:@, _, [{:ash_requirement, _, [@ash_requirement]}]} = node, state ->
-          {node, %{state | ash: true}}
-
-        {:elixir, "~> 1.20.3"} = node, state ->
-          {node, %{state | elixir: true}}
-
-        node, state ->
-          {node, state}
-      end)
-
-    assert(state == %{ash: true, elixir: true}, "Mix release contract is incomplete")
+    assert(
+      is_list(project) and Keyword.get(project, :elixir) == "~> 1.20.3" and
+        ash_requirement == @ash_requirement,
+      "Mix release contract is incomplete"
+    )
   rescue
     _error in [SyntaxError, TokenMissingError] -> fail("Mix release contract is invalid")
   end
+
+  defp mix_project_body(
+         {:defmodule, _, [{:__aliases__, _, [:AshReplicant, :MixProject]}, [do: body]]}
+       ),
+       do: block_expressions(body)
+
+  defp mix_project_body(_ast), do: fail("Mix release contract is incomplete")
+
+  defp find_definition(expressions, name) do
+    Enum.find_value(expressions, fn
+      {:def, _, [{^name, _, context}, [do: body]]} when context in [nil, []] -> body
+      _node -> nil
+    end)
+  end
+
+  defp find_module_attribute(expressions, name) do
+    Enum.find_value(expressions, fn
+      {:@, _, [{^name, _, [value]}]} -> value
+      _node -> nil
+    end)
+  end
+
+  defp block_expressions({:__block__, _, expressions}), do: expressions
+  defp block_expressions(expression), do: [expression]
 
   defp assert_docs(root) do
     Enum.each(@doc_contracts, fn {path, heading, required_texts} ->
@@ -278,6 +328,7 @@ defmodule AshReplicant.ReleaseContract do
     |> String.split("\n")
     |> remove_code_lines()
     |> Enum.join("\n")
+    |> decode_html_entities()
   end
 
   defp remove_code_lines(lines) do
@@ -287,18 +338,15 @@ defmodule AshReplicant.ReleaseContract do
   end
 
   defp reduce_code_line(line, {visible, fence}) do
-    case {fence, fence_marker(line)} do
-      {nil, nil} ->
-        reduce_visible_line(line, visible)
+    case fence do
+      nil ->
+        case fence_marker(line) do
+          nil -> reduce_visible_line(line, visible)
+          marker -> {visible, marker}
+        end
 
-      {nil, marker} ->
-        {visible, marker}
-
-      {{character, length}, {character, closing_length}} when closing_length >= length ->
-        {visible, nil}
-
-      {_fence, _marker} ->
-        {visible, fence}
+      marker ->
+        if closing_fence?(line, marker), do: {visible, nil}, else: {visible, marker}
     end
   end
 
@@ -313,6 +361,33 @@ defmodule AshReplicant.ReleaseContract do
       [_, marker] -> {String.first(marker), String.length(marker)}
       _ -> nil
     end
+  end
+
+  defp closing_fence?(line, {character, length}) do
+    case Regex.run(~r/^\s*(`+|~+)\s*$/, line) do
+      [_, marker] -> String.first(marker) == character and String.length(marker) >= length
+      _ -> false
+    end
+  end
+
+  defp decode_html_entities(content) do
+    content
+    |> then(
+      &Regex.replace(~r/&#([0-9]+);/, &1, fn _, digits ->
+        digits |> String.to_integer() |> List.wrap() |> List.to_string()
+      end)
+    )
+    |> then(
+      &Regex.replace(~r/&#x([0-9a-f]+);/i, &1, fn _, digits ->
+        digits |> String.to_integer(16) |> List.wrap() |> List.to_string()
+      end)
+    )
+    |> then(fn decoded ->
+      Enum.reduce(["&nbsp;", "&ensp;", "&emsp;"], decoded, &String.replace(&2, &1, " "))
+    end)
+  rescue
+    _error in [ArgumentError, UnicodeConversionError] ->
+      fail("published contract entity is invalid")
   end
 
   defp normalize_markdown(content) do
