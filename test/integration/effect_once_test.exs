@@ -79,6 +79,7 @@ defmodule AshReplicant.EffectOnceTest do
         connection: Marquee.conn(),
         slot_name: @slot,
         publication: Marquee.publication(),
+        source_identity: Marquee.source_identity(),
         go_forward_only: true
       )
 

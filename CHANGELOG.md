@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adopt Replicant `>= 1.0.0 and < 2.0.0-0` from Hex, with current 1.1.0 and
+  exact-floor 1.0.0 compatibility gates. Generated sinks now require and compare
+  the actual replication-session system/database identity before checkpoint lookup.
+- Add live Replicant 1.1.0 proofs for actual-session ordering, v1 snapshot-to-stream
+  convergence, post-handoff restart, and operator-reset retry after an incomplete snapshot.
 - Add AshOnetime 0.6.0 as the governed idempotency dependency for the logical-message
   actions planned for 1.0.0. The permanent commit-LSN checkpoint remains the
   transaction replay and resume authority.
@@ -29,6 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Serialize resolver activation per slot, generation-check rejected-start cleanup,
+  and forward Replicant's safe `streaming`, `max_inflight_lag`,
+  `max_command_retries`, and `failover` transport options. Incremental snapshots,
+  batch delivery, and logical messages remain capability-gated for their owning rows.
 - Require Elixir 1.20.3/OTP 29 and the AshPostgres 2.11 dependency family for the
   1.0.0 release line.
 

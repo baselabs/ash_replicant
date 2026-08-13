@@ -6,12 +6,9 @@ Thank you for your interest in contributing to AshReplicant!
 
 - **Elixir 1.20.3** and **Erlang/OTP 29** (run `asdf install` from the repository root)
 - Ash `>= 3.31.3 and < 4.0.0-0`; selector-free development uses this public range
-- `replicant` is a **Hex dependency** (`{:replicant, "~> 0.3.0"}` in the current
-  hardening baseline), pulled by
-  `mix deps.get` — no sibling checkout is required to build or test. A local checkout at
-  `../replicant` is only needed for cross-repo design work. AshReplicant 1.0.0 will
-  move to Replicant `~> 1.0` only after that package is published and fetched; a
-  sibling path is not release evidence.
+- Replicant `>= 1.0.0 and < 2.0.0-0` from Hex; the release-candidate lock is 1.1.0.
+  No sibling checkout is required to build or test. A local checkout at
+  `../replicant` is only needed for cross-repo design work and is never release evidence.
 - **PostgreSQL 16** for the current integration gate (with `wal_level=logical`); the
   integration suite runs against a live Postgres with a logical replication slot
   and publication
@@ -43,6 +40,7 @@ env -u ASH_REPLICANT_TEST_URL \
   scripts/with-release-runtime.sh scripts/run-structural-tests.sh \
     --allow-excluded --exclude integration
 scripts/with-release-runtime.sh mix deps.audit
+scripts/with-release-runtime.sh mix hex.audit
 scripts/with-release-runtime.sh mix dialyzer
 scripts/with-release-runtime.sh mix docs --warnings-as-errors
 scripts/with-release-runtime.sh mix hex.build
@@ -85,6 +83,19 @@ scripts/with-release-runtime.sh mix hex.build
 
   These live-suite and migration-drift commands are mandatory parts of the
   pre-PR release battery, in addition to the checks in step 3.
+
+  CI also resolves the exact Replicant 1.0.0 floor independently of the current
+  1.1.0 lock. To reproduce that selector in an isolated instrument worktree:
+
+  ```bash
+  ASH_REPLICANT_REPLICANT_VERSION=1.0.0 \
+    scripts/with-release-runtime.sh mix deps.unlock replicant
+  ASH_REPLICANT_REPLICANT_VERSION=1.0.0 \
+    scripts/with-release-runtime.sh mix deps.get
+  ASH_REPLICANT_REPLICANT_VERSION=1.0.0 \
+    scripts/with-release-runtime.sh \
+      scripts/assert-dependency-version.sh replicant '== 1.0.0'
+  ```
 
   The full release battery is intentionally not represented by `mix quality`;
   that alias covers format, Credo, and Dialyzer only.

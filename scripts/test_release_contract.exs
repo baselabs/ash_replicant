@@ -30,23 +30,26 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   mix ecto.migrate
   """
 
-  @public_ash_check """
-  env -u ASH_REPLICANT_ASH_VERSION mix run --no-start -e '
-  requirement =
-    Mix.Project.config()
-    |> Keyword.fetch!(:deps)
-    |> List.keyfind!(:ash, 0)
-    |> elem(1)
+  @public_dependency_check """
+  env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION mix run --no-start -e '
+  deps = Mix.Project.config() |> Keyword.fetch!(:deps)
 
-  unless requirement == ">= 3.31.3 and < 4.0.0-0" do
-    raise "unexpected public Ash requirement: \#{inspect(requirement)}"
-  end'
+  expected = %{
+    ash: ">= 3.31.3 and < 4.0.0-0",
+    replicant: ">= 1.0.0 and < 2.0.0-0"
+  }
+
+  Enum.each(expected, fn {dependency, requirement} ->
+    actual = deps |> List.keyfind!(dependency, 0) |> elem(1)
+    unless actual == requirement, do: raise("unexpected public dependency requirement")
+  end)
+  '
   """
 
   @package_inspection """
   package_dir=$(mktemp -d)
   trap 'rm -rf "$package_dir"' EXIT
-  env -u ASH_REPLICANT_ASH_VERSION mix hex.build --unpack --output "$package_dir"
+  env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION mix hex.build --unpack --output "$package_dir"
 
   for required in lib .formatter.exs mix.exs README.md LICENSE NOTICE CHANGELOG.md usage-rules.md; do
     test -e "$package_dir/$required" || {
@@ -96,13 +99,13 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       "mix dialyzer"
     ],
     "release-artifact" => [
-      "env -u ASH_REPLICANT_ASH_VERSION mix deps.get",
+      "env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION mix deps.get",
       "mix deps.compile",
       "mix compile --warnings-as-errors",
       "elixir --version",
       "scripts/assert-runtime-version.sh",
       "scripts/assert-release-contract.sh",
-      String.trim(@public_ash_check),
+      String.trim(@public_dependency_check),
       "mix docs --warnings-as-errors",
       String.trim(@package_inspection)
     ]
@@ -112,17 +115,20 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     {"README.md", "### Supported foundation",
      [
        "- Elixir 1.20.3 on Erlang/OTP 29;",
-       "- Ash `>= 3.31.3 and < 4.0.0-0` and AshPostgres 2.11.x;"
+       "- Ash `>= 3.31.3 and < 4.0.0-0` and AshPostgres 2.11.x;",
+       "- Replicant `>= 1.0.0 and < 2.0.0-0` (current release-candidate lock 1.1.0)"
      ]},
     {"CONTRIBUTING.md", "## Prerequisites",
      [
        "- **Elixir 1.20.3** and **Erlang/OTP 29**",
-       "- Ash `>= 3.31.3 and < 4.0.0-0`; selector-free development uses this public range"
+       "- Ash `>= 3.31.3 and < 4.0.0-0`; selector-free development uses this public range",
+       "- Replicant `>= 1.0.0 and < 2.0.0-0` from Hex; the release-candidate lock is 1.1.0."
      ]},
     {"AGENTS.md", "## Development workflow",
      [
        "The supported release foundation is Elixir 1.20.3 on Erlang/OTP 29 with Ash\n" <>
-         "`>= 3.31.3 and < 4.0.0-0`."
+         "`>= 3.31.3 and < 4.0.0-0` and Replicant\n" <>
+         "`>= 1.0.0 and < 2.0.0-0` (current release-candidate lock 1.1.0)."
      ]}
   ]
 
@@ -137,6 +143,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   )
   @mix_contracts [
     ~s(@ash_requirement ">= 3.31.3 and < 4.0.0-0"),
+    ~s(@replicant_requirement ">= 1.0.0 and < 2.0.0-0"),
     ~s(elixir: "~> 1.20.3")
   ]
 
@@ -365,7 +372,23 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
   defp compatibility_probes do
     prepare_fixture()
-    mutate_job!("compatibility", "      ASH_REPLICANT_ASH_VERSION: ${{ matrix.selector }}\n", "")
+
+    mutate_job!(
+      "compatibility",
+      "      ASH_REPLICANT_ASH_VERSION: ${{ matrix.ash_selector }}\n",
+      ""
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
+    mutate_job!(
+      "compatibility",
+      "      ASH_REPLICANT_REPLICANT_VERSION: ${{ matrix.replicant_selector }}\n",
+      ""
+    )
+
     assert_invalid!()
 
     prepare_fixture()
@@ -392,8 +415,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     mutate_job!(
       "compatibility",
-      "      - name: Resolve and assert Ash version\n",
-      "      - name: Resolve and assert Ash version\n        env:\n          ASH_REPLICANT_ASH_VERSION: latest\n"
+      "          mix deps replicant\n",
+      ""
     )
 
     assert_invalid!()
@@ -402,8 +425,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     mutate_job!(
       "compatibility",
-      "          if [[ '${{ matrix.unlock }}' == 'true' ]]; then\n            mix deps.unlock ash\n          fi\n",
-      "          mix deps.unlock ash\n          if [[ '${{ matrix.unlock }}' == 'true' ]]; then\n            :\n          fi\n"
+      "      - name: Resolve and assert dependency versions\n",
+      "      - name: Resolve and assert dependency versions\n        env:\n          ASH_REPLICANT_ASH_VERSION: latest\n"
     )
 
     assert_invalid!()
@@ -412,7 +435,37 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     mutate_job!(
       "compatibility",
-      "          scripts/assert-dependency-version.sh ash '${{ matrix.requirement }}'\n",
+      "          if [[ '${{ matrix.ash_unlock }}' == 'true' ]]; then\n            mix deps.unlock ash\n          fi\n",
+      "          mix deps.unlock ash\n          if [[ '${{ matrix.ash_unlock }}' == 'true' ]]; then\n            :\n          fi\n"
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
+    mutate_job!(
+      "compatibility",
+      "          if [[ '${{ matrix.replicant_unlock }}' == 'true' ]]; then\n            mix deps.unlock replicant\n          fi\n",
+      "          mix deps.unlock replicant\n          if [[ '${{ matrix.replicant_unlock }}' == 'true' ]]; then\n            :\n          fi\n"
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
+    mutate_job!(
+      "compatibility",
+      "          scripts/assert-dependency-version.sh ash '${{ matrix.ash_requirement }}'\n",
+      "          :\n"
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
+    mutate_job!(
+      "compatibility",
+      "          scripts/assert-dependency-version.sh replicant '${{ matrix.replicant_requirement }}'\n",
       "          :\n"
     )
 
@@ -429,19 +482,61 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     assert_invalid!()
 
     prepare_fixture()
-    mutate_job!("compatibility", "            selector: \"\"\n", "            selector: latest\n")
-    assert_invalid!()
 
-    prepare_fixture()
-    mutate_job!("compatibility", "            unlock: false\n", "            unlock: true\n")
+    mutate_job!(
+      "compatibility",
+      "            ash_selector: \"\"\n",
+      "            ash_selector: latest\n"
+    )
+
     assert_invalid!()
 
     prepare_fixture()
 
     mutate_job!(
       "compatibility",
-      "            requirement: \"== 3.31.3\"\n",
-      "            requirement: \"#{">= 3.31.3"}\"\n"
+      "            replicant_selector: \"\"\n",
+      "            replicant_selector: latest\n"
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
+    mutate_job!(
+      "compatibility",
+      "            ash_unlock: false\n",
+      "            ash_unlock: true\n"
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
+    mutate_job!(
+      "compatibility",
+      "            replicant_unlock: false\n",
+      "            replicant_unlock: true\n"
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
+    mutate_job!(
+      "compatibility",
+      "            ash_requirement: \"== 3.31.3\"\n",
+      "            ash_requirement: \">= 3.31.3\"\n"
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
+    mutate_job!(
+      "compatibility",
+      "            replicant_requirement: \"== 1.0.0\"\n",
+      "            replicant_requirement: \">= 1.0.0\"\n"
     )
 
     assert_invalid!()
@@ -713,6 +808,56 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     )
 
     assert_invalid!()
+
+    prepare_fixture()
+
+    replace_once!(
+      "mix.exs",
+      ~s(@replicant_requirement ">= 1.0.0 and < 2.0.0-0"),
+      ~s(@replicant_requirement ">= 0.3.0 and < 2.0.0-0")
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
+    replace_once!(
+      "mix.exs",
+      "{:replicant, replicant_requirement()}",
+      "{:replicant, path: \"../replicant\"}"
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
+    replace_once!(
+      "mix.lock",
+      ~s("replicant": {:hex, :replicant, "1.1.0"),
+      ~s("replicant": {:hex, :replicant, "0.3.1")
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
+    replace_once!(
+      "deps/replicant/lib/replicant/sink.ex",
+      "@callback handle_session_identity",
+      "@callback removed_session_identity"
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
+    replace_once!(
+      "deps/replicant/lib/replicant/connection.ex",
+      "Replicant.Sink.accept_session_identity",
+      "Replicant.Sink.removed_session_identity"
+    )
+
+    assert_invalid!()
   end
 
   defp prepare_fixture do
@@ -721,8 +866,18 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     File.cp!(Path.join(@source_root, @workflow), fixture_path(@workflow))
 
-    for path <- ["README.md", "CONTRIBUTING.md", "AGENTS.md", "mix.exs"] do
+    for path <- ["README.md", "CONTRIBUTING.md", "AGENTS.md", "mix.exs", "mix.lock"] do
       File.cp!(Path.join(@source_root, path), fixture_path(path))
+    end
+
+    for path <- [
+          "lib/replicant/session_identity.ex",
+          "lib/replicant/sink.ex",
+          "lib/replicant/connection.ex"
+        ] do
+      destination = fixture_path(Path.join("deps/replicant", path))
+      File.mkdir_p!(Path.dirname(destination))
+      File.cp!(Path.join([@source_root, "deps/replicant", path]), destination)
     end
   end
 

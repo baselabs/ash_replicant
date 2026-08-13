@@ -58,7 +58,7 @@ The current 1.0.0 hardening baseline is built and tested with:
 
 - Elixir 1.20.3 on Erlang/OTP 29;
 - Ash `>= 3.31.3 and < 4.0.0-0` and AshPostgres 2.11.x;
-- Replicant 0.3.x pending the dependency-ordered Replicant 1.x coordination, and
+- Replicant `>= 1.0.0 and < 2.0.0-0` (current release-candidate lock 1.1.0) and
   AshOnetime 0.6.x;
 - PostgreSQL 16 with `wal_level=logical` for the current live integration gate.
 
@@ -71,7 +71,8 @@ resume.
 See [ADR-0002](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0002-supported-runtime-and-dependencies.md)
 for the dependency decision and
 [ADR-0003](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0003-verification-and-release-evidence.md)
-for the release-evidence contract.
+for the release-evidence contract. [ADR-0005](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0005-replicant-coordination.md)
+records the Replicant 1.x compatibility and release-order contract.
 
 ## Quick Start
 
@@ -237,16 +238,26 @@ AshReplicant.start_link(
   sink: MyApp.ReplicantSink,
   connection: [hostname: "standby.example.com", database: "source_db"],
   publication: "shop_orders_pub",
+  source_identity: [system_identifier: "7378697629483820647", database: "source_db"],
   go_forward_only: true,
-  snapshot: false
+  snapshot: false,
+  streaming: :transaction,
+  max_inflight_lag: 64 * 1024 * 1024,
+  max_command_retries: 5,
+  failover: false
 )
 ```
 
 **Key points:**
 
 - The `slot_name` comes from the sink (not a `start_link` option).
-- The resolver index is built and cached in `:persistent_term` keyed by `slot_name`.
+- `source_identity` is required. It pins the PostgreSQL system identifier and
+  database that the actual replication session must report before checkpoint lookup.
+- Resolver activation is serialized per slot and cached as one generation; a
+  rejected or duplicate start cannot replace or erase the active generation.
 - Rows arrive from the source's CDC stream and are upserted into the mirrors.
+- `streaming`, `max_inflight_lag`, `max_command_retries`, and `failover` are passed
+  through to Replicant 1.x.
 - `snapshot: false` and Replicant's v1 snapshot (`snapshot: true`) are supported.
   Incremental snapshot configuration is rejected until roadmap C3 adds durable
   progress and target provenance.

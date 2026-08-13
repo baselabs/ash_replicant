@@ -43,9 +43,20 @@ defmodule AshReplicant.Sink do
 
       defp __config__ do
         base = __ash_replicant_config__()
-        index = :persistent_term.get({AshReplicant, unquote(slot_name)}, %{})
-        Map.merge(base, %{resolver_index: index, authorize?: false})
+        runtime = :persistent_term.get({AshReplicant, unquote(slot_name)}, %{})
+
+        runtime =
+          case runtime do
+            %{resolver_index: _index} -> runtime
+            index when is_map(index) -> %{resolver_index: index}
+          end
+
+        Map.merge(base, Map.put(runtime, :authorize?, false))
       end
+
+      @impl Replicant.Sink
+      def handle_session_identity(identity, context),
+        do: Impl.handle_session_identity(__config__(), identity, context)
 
       @impl Replicant.Sink
       def checkpoint, do: Impl.checkpoint(__config__())
@@ -66,7 +77,8 @@ defmodule AshReplicant.Sink do
       @impl Replicant.Sink
       def handle_snapshot_complete(lsn), do: Impl.handle_snapshot_complete(__config__(), lsn)
 
-      defoverridable checkpoint: 0,
+      defoverridable handle_session_identity: 2,
+                     checkpoint: 0,
                      handle_transaction: 1,
                      sink_kind: 0,
                      handle_schema_change: 2,

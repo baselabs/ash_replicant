@@ -21,10 +21,15 @@ defmodule AshReplicant do
     * `:sink` — a module built with `use AshReplicant.Sink` (carries repo/domains/checkpoint/slot).
     * `:connection` — Postgrex opts (point at a standby).
     * `:publication` — replication identifier.
+    * `:source_identity` — required PostgreSQL system/database identity expected
+      from the actual replication session, as
+      `[system_identifier: "...", database: "..."]`.
     * `:go_forward_only` — passed through to `Replicant.start_link/1`.
     * `:snapshot` — `false` or Replicant's v1 snapshot (`true`). Incremental
       snapshot options are unsupported until the adapter implements durable
       progress and target provenance.
+    * `:streaming`, `:max_inflight_lag`, `:max_command_retries`, and `:failover`
+      — passed through unchanged to Replicant.
 
   The `slot_name` is NOT a `start_link` option — it is baked into the sink via
   `use AshReplicant.Sink, slot_name: ...` and is the single source of truth for
@@ -34,24 +39,16 @@ defmodule AshReplicant do
   closed** on a duplicate or missing source table, caches the index in
   `:persistent_term`, then starts the `replicant` pipeline.
   """
-  @spec start_link(keyword()) :: {:ok, pid()} | {:error, term()}
+  @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
     sink = Keyword.fetch!(opts, :sink)
-    connection = Keyword.fetch!(opts, :connection)
-    publication = Keyword.fetch!(opts, :publication)
     %{domains: domains, slot_name: slot_name} = sink.__ash_replicant_config__()
 
-    with {:ok, index} <- AshReplicant.Resolver.build_index(domains) do
-      :persistent_term.put({AshReplicant, slot_name}, index)
-
-      Replicant.start_link(
-        connection: connection,
-        slot_name: slot_name,
-        publication: publication,
-        sink: sink,
-        go_forward_only: Keyword.get(opts, :go_forward_only, false),
-        snapshot: Keyword.get(opts, :snapshot, false)
-      )
+    with {:ok, source_identity} <- validate_source_identity(opts),
+         {:ok, publication} <- normalize_publication(Keyword.get(opts, :publication)) do
+      activation_lock(slot_name, fn ->
+        activate(opts, sink, domains, slot_name, source_identity, publication)
+      end)
     end
   end
 
@@ -61,7 +58,107 @@ defmodule AshReplicant do
   """
   @spec stop_supervised(String.t()) :: :ok
   def stop_supervised(slot_name) do
-    :persistent_term.erase({AshReplicant, slot_name})
-    Replicant.stop(slot_name)
+    activation_lock(slot_name, fn ->
+      :ok = Replicant.stop(slot_name)
+      :persistent_term.erase({AshReplicant, slot_name})
+      :ok
+    end)
+  end
+
+  @replicant_option_keys [
+    :connection,
+    :publication,
+    :go_forward_only,
+    :snapshot,
+    :streaming,
+    :max_inflight_lag,
+    :max_command_retries,
+    :failover
+  ]
+
+  defp activate(opts, sink, domains, slot_name, source_identity, publication) do
+    key = {AshReplicant, slot_name}
+
+    case :persistent_term.get(key, :none) do
+      :none ->
+        start_with_generation(
+          key,
+          opts,
+          sink,
+          domains,
+          slot_name,
+          source_identity,
+          publication
+        )
+
+      _active_generation ->
+        {:error, :slot_already_active}
+    end
+  end
+
+  defp start_with_generation(
+         key,
+         opts,
+         sink,
+         domains,
+         slot_name,
+         source_identity,
+         publication
+       ) do
+    with {:ok, index} <- AshReplicant.Resolver.build_index(domains) do
+      generation = make_ref()
+
+      runtime = %{
+        generation: generation,
+        resolver_index: index,
+        source_identity: source_identity,
+        publication: publication
+      }
+
+      :persistent_term.put(key, runtime)
+
+      result =
+        opts
+        |> Keyword.take(@replicant_option_keys)
+        |> Keyword.merge(slot_name: slot_name, sink: sink)
+        |> Replicant.start_link()
+
+      if not match?({:ok, _pid}, result), do: erase_generation(key, generation)
+      result
+    end
+  end
+
+  defp erase_generation(key, generation) do
+    case :persistent_term.get(key, :none) do
+      %{generation: ^generation} -> :persistent_term.erase(key)
+      _other -> :ok
+    end
+  end
+
+  defp validate_source_identity(opts) do
+    with identity when is_list(identity) <- Keyword.get(opts, :source_identity),
+         {:ok, system_identifier} <- nonempty_binary(Keyword.get(identity, :system_identifier)),
+         {:ok, database} <- nonempty_binary(Keyword.get(identity, :database)) do
+      {:ok, %{system_identifier: system_identifier, database: database}}
+    else
+      _other -> {:error, :source_identity_required}
+    end
+  end
+
+  defp nonempty_binary(value) when is_binary(value) and value != "", do: {:ok, value}
+  defp nonempty_binary(_value), do: :error
+
+  defp normalize_publication(publication) when is_binary(publication), do: {:ok, [publication]}
+
+  defp normalize_publication(publication) when is_list(publication) and publication != [],
+    do: {:ok, publication}
+
+  defp normalize_publication(_publication), do: {:error, :config_invalid}
+
+  defp activation_lock(slot_name, fun) do
+    case :global.trans({{__MODULE__, node(), slot_name}, self()}, fun) do
+      {:aborted, _reason} -> {:error, :activation_lock_unavailable}
+      result -> result
+    end
   end
 end

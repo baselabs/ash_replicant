@@ -4,6 +4,7 @@ defmodule AshReplicant.MixProject do
   @version "0.4.0"
   @source_url "https://github.com/baselabs/ash_replicant"
   @ash_requirement ">= 3.31.3 and < 4.0.0-0"
+  @replicant_requirement ">= 1.0.0 and < 2.0.0-0"
 
   def project do
     [
@@ -43,7 +44,7 @@ defmodule AshReplicant.MixProject do
       {:ash_postgres, "~> 2.11.0"},
       {:ash_onetime, "~> 0.6.0"},
       {:ash_cloak, "~> 0.1"},
-      {:replicant, "~> 0.3.0"},
+      {:replicant, replicant_requirement()},
       {:spark, "~> 2.7.0"},
       {:splode, "~> 0.3"},
       {:jason, "~> 1.4"},
@@ -71,6 +72,22 @@ defmodule AshReplicant.MixProject do
         else
           _ ->
             raise "ASH_REPLICANT_ASH_VERSION must be a semantic version matching #{@ash_requirement}"
+        end
+    end
+  end
+
+  defp replicant_requirement do
+    case System.get_env("ASH_REPLICANT_REPLICANT_VERSION") do
+      value when value in [nil, "", "latest"] ->
+        @replicant_requirement
+
+      value ->
+        with {:ok, _version} <- Version.parse(value),
+             true <- Version.match?(value, @replicant_requirement) do
+          "== #{value}"
+        else
+          _ ->
+            raise "ASH_REPLICANT_REPLICANT_VERSION must be a semantic version matching #{@replicant_requirement}"
         end
     end
   end

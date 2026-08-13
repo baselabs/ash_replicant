@@ -53,27 +53,37 @@ jobs:
         run: env -u ASH_REPLICANT_TEST_URL scripts/run-structural-tests.sh --allow-excluded --exclude integration
 
   compatibility:
-    name: Ash ${{ matrix.label }} / PostgreSQL 16
+    name: Dependencies ${{ matrix.label }} / PostgreSQL 16
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
-          - label: floor-3.31.3
-            selector: "3.31.3"
-            unlock: true
-            requirement: "== 3.31.3"
+          - label: exact-floors
+            ash_selector: "3.31.3"
+            ash_unlock: true
+            ash_requirement: "== 3.31.3"
+            replicant_selector: "1.0.0"
+            replicant_unlock: true
+            replicant_requirement: "== 1.0.0"
           - label: current-lock
-            selector: ""
-            unlock: false
-            requirement: ">= 3.31.3 and < 4.0.0-0"
-          - label: latest-3.x
-            selector: latest
-            unlock: true
-            requirement: ">= 3.31.3 and < 4.0.0-0"
+            ash_selector: ""
+            ash_unlock: false
+            ash_requirement: ">= 3.31.3 and < 4.0.0-0"
+            replicant_selector: ""
+            replicant_unlock: false
+            replicant_requirement: ">= 1.0.0 and < 2.0.0-0"
+          - label: latest-compatible
+            ash_selector: latest
+            ash_unlock: true
+            ash_requirement: ">= 3.31.3 and < 4.0.0-0"
+            replicant_selector: latest
+            replicant_unlock: true
+            replicant_requirement: ">= 1.0.0 and < 2.0.0-0"
     env:
       MIX_ENV: test
-      ASH_REPLICANT_ASH_VERSION: ${{ matrix.selector }}
+      ASH_REPLICANT_ASH_VERSION: ${{ matrix.ash_selector }}
+      ASH_REPLICANT_REPLICANT_VERSION: ${{ matrix.replicant_selector }}
       ASH_REPLICANT_TEST_URL: postgres://postgres@localhost:5432/postgres
 
     steps:
@@ -106,14 +116,19 @@ jobs:
             priv/plts
           key: ${{ runner.os }}-ash-${{ matrix.label }}-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}
 
-      - name: Resolve and assert Ash version
+      - name: Resolve and assert dependency versions
         run: |
-          if [[ '${{ matrix.unlock }}' == 'true' ]]; then
+          if [[ '${{ matrix.ash_unlock }}' == 'true' ]]; then
             mix deps.unlock ash
+          fi
+          if [[ '${{ matrix.replicant_unlock }}' == 'true' ]]; then
+            mix deps.unlock replicant
           fi
           mix deps.get
           mix deps ash
-          scripts/assert-dependency-version.sh ash '${{ matrix.requirement }}'
+          mix deps replicant
+          scripts/assert-dependency-version.sh ash '${{ matrix.ash_requirement }}'
+          scripts/assert-dependency-version.sh replicant '${{ matrix.replicant_requirement }}'
 
       - run: mix deps.compile
       - run: mix compile --warnings-as-errors
@@ -163,24 +178,27 @@ jobs:
             _build
           key: ${{ runner.os }}-release-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}
 
-      - run: env -u ASH_REPLICANT_ASH_VERSION mix deps.get
+      - run: env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION mix deps.get
       - run: mix deps.compile
       - run: mix compile --warnings-as-errors
       - run: elixir --version
       - run: scripts/assert-runtime-version.sh
       - run: scripts/assert-release-contract.sh
-      - name: Assert selector-free public Ash requirement
+      - name: Assert selector-free public dependency requirements
         run: |
-          env -u ASH_REPLICANT_ASH_VERSION mix run --no-start -e '
-          requirement =
-            Mix.Project.config()
-            |> Keyword.fetch!(:deps)
-            |> List.keyfind!(:ash, 0)
-            |> elem(1)
+          env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION mix run --no-start -e '
+          deps = Mix.Project.config() |> Keyword.fetch!(:deps)
 
-          unless requirement == ">= 3.31.3 and < 4.0.0-0" do
-            raise "unexpected public Ash requirement: #{inspect(requirement)}"
-          end'
+          expected = %{
+            ash: ">= 3.31.3 and < 4.0.0-0",
+            replicant: ">= 1.0.0 and < 2.0.0-0"
+          }
+
+          Enum.each(expected, fn {dependency, requirement} ->
+            actual = deps |> List.keyfind!(dependency, 0) |> elem(1)
+            unless actual == requirement, do: raise("unexpected public dependency requirement")
+          end)
+          '
 
       - run: mix docs --warnings-as-errors
 
@@ -188,7 +206,7 @@ jobs:
         run: |
           package_dir=$(mktemp -d)
           trap 'rm -rf "$package_dir"' EXIT
-          env -u ASH_REPLICANT_ASH_VERSION mix hex.build --unpack --output "$package_dir"
+          env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION mix hex.build --unpack --output "$package_dir"
 
           for required in lib .formatter.exs mix.exs README.md LICENSE NOTICE CHANGELOG.md usage-rules.md; do
             test -e "$package_dir/$required" || {

@@ -41,6 +41,7 @@ if scripts/assert-exunit-output.sh "$fixture_dir/intentional-exclusion.txt" >/de
 fi
 
 scripts/assert-dependency-version.sh ash '>= 3.31.3 and < 4.0.0-0' >/dev/null
+scripts/assert-dependency-version.sh replicant '>= 1.0.0 and < 2.0.0-0' >/dev/null
 
 if scripts/assert-dependency-version.sh ash '== 0.0.0' >/dev/null 2>&1; then
   echo "dependency checker accepted a nonmatching requirement" >&2
@@ -140,6 +141,58 @@ floor_requirement="$(ASH_REPLICANT_ASH_VERSION=3.31.3 mix run --no-start --no-co
 
 if [[ "$floor_requirement" != "== 3.31.3" ]]; then
   echo "exact Ash floor selector did not produce an exact requirement" >&2
+  exit 1
+fi
+
+set +e
+replicant_selector_output="$(ASH_REPLICANT_REPLICANT_VERSION="$selector_sentinel" mix run --no-start --no-compile --no-deps-check -e ':ok' 2>&1)"
+replicant_selector_exit=$?
+set -e
+
+if [[ "$replicant_selector_exit" -eq 0 ]] || [[ "$replicant_selector_output" != *"must be a semantic version matching"* ]] || [[ "$replicant_selector_output" == *"$selector_sentinel"* ]]; then
+  echo "Replicant selector guard did not fail structurally" >&2
+  exit 1
+fi
+
+set +e
+replicant_major_output="$(ASH_REPLICANT_REPLICANT_VERSION='2.0.0-rc.0' mix run --no-start --no-compile --no-deps-check -e ':ok' 2>&1)"
+replicant_major_exit=$?
+set -e
+
+if [[ "$replicant_major_exit" -eq 0 ]] || [[ "$replicant_major_output" != *"must be a semantic version matching"* ]] || [[ "$replicant_major_output" == *"because mix.lock"* ]]; then
+  echo "Replicant major guard did not reject before dependency resolution" >&2
+  exit 1
+fi
+
+replicant_public_requirement=">= 1.0.0 and < 2.0.0-0"
+
+for selector in unset empty latest; do
+  case "$selector" in
+    unset)
+      selected_requirement="$(env -u ASH_REPLICANT_REPLICANT_VERSION mix run --no-start --no-compile --no-deps-check -e '
+        Mix.Project.config() |> Keyword.fetch!(:deps) |> List.keyfind!(:replicant, 0) |> elem(1) |> IO.write()')"
+      ;;
+    empty)
+      selected_requirement="$(ASH_REPLICANT_REPLICANT_VERSION='' mix run --no-start --no-compile --no-deps-check -e '
+        Mix.Project.config() |> Keyword.fetch!(:deps) |> List.keyfind!(:replicant, 0) |> elem(1) |> IO.write()')"
+      ;;
+    latest)
+      selected_requirement="$(ASH_REPLICANT_REPLICANT_VERSION=latest mix run --no-start --no-compile --no-deps-check -e '
+        Mix.Project.config() |> Keyword.fetch!(:deps) |> List.keyfind!(:replicant, 0) |> elem(1) |> IO.write()')"
+      ;;
+  esac
+
+  if [[ "$selected_requirement" != "$replicant_public_requirement" ]]; then
+    echo "public Replicant selector mode changed its requirement" >&2
+    exit 1
+  fi
+done
+
+replicant_floor_requirement="$(ASH_REPLICANT_REPLICANT_VERSION=1.0.0 mix run --no-start --no-compile --no-deps-check -e '
+  Mix.Project.config() |> Keyword.fetch!(:deps) |> List.keyfind!(:replicant, 0) |> elem(1) |> IO.write()')"
+
+if [[ "$replicant_floor_requirement" != "== 1.0.0" ]]; then
+  echo "exact Replicant floor selector did not produce an exact requirement" >&2
   exit 1
 fi
 

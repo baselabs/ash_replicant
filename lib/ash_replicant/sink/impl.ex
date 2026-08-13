@@ -17,6 +17,27 @@ defmodule AshReplicant.Sink.Impl do
   alias AshReplicant.Resource.Info
   alias Ecto.Adapters.SQL
 
+  @doc false
+  def handle_session_identity(
+        %{
+          slot_name: expected_slot,
+          publication: expected_publication,
+          source_identity: %{
+            system_identifier: expected_system,
+            database: expected_database
+          }
+        },
+        %Replicant.SessionIdentity{
+          system_identifier: expected_system,
+          database: expected_database
+        },
+        %{slot_name: expected_slot, publication: expected_publication}
+      ),
+      do: :ok
+
+  def handle_session_identity(_config, _identity, _context),
+    do: {:error, :source_identity_mismatch}
+
   @doc "Last durably-persisted commit LSN for the slot (`nil` = never), the dedup watermark."
   @spec checkpoint(map()) :: {:ok, Replicant.lsn() | nil} | {:error, term()}
   def checkpoint(config) do

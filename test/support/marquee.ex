@@ -60,6 +60,14 @@ defmodule AshReplicant.Test.Marquee do
     |> Keyword.take([:hostname, :port, :username, :password, :database])
   end
 
+  @doc "Actual PostgreSQL source identity expected from the replication session."
+  def source_identity do
+    [[system_identifier, database]] =
+      q!("SELECT system_identifier::text, current_database() FROM pg_control_system()").rows
+
+    [system_identifier: system_identifier, database: database]
+  end
+
   @doc "Drop the slot, retrying while the walsender still holds it (async release after socket close)."
   def drop_slot!(slot) do
     Enum.reduce_while(1..80, :ok, fn _i, _acc ->

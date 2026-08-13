@@ -149,8 +149,13 @@ AshReplicant.start_link(
   sink: MyApp.ReplicantSink,
   connection: [hostname: "standby.example.com", database: "source_db"],
   publication: "shop_orders_pub",
+  source_identity: [system_identifier: "7378697629483820647", database: "source_db"],
   go_forward_only: true,
-  snapshot: false
+  snapshot: false,
+  streaming: :transaction,
+  max_inflight_lag: 64 * 1024 * 1024,
+  max_command_retries: 5,
+  failover: false
 )
 ```
 
@@ -160,13 +165,19 @@ AshReplicant.start_link(
 - `:connection` — Postgrex connection options (required). Point at a standby or
   replica to avoid load on the primary.
 - `:publication` — Postgres publication name (required).
+- `:source_identity` — expected actual replication-session identity (required),
+  containing nonempty `:system_identifier` and `:database` strings. A mismatch
+  rejects the session before checkpoint lookup with a value-free structural error.
 - `:go_forward_only` — passed to `Replicant.start_link/1`.
 - `:snapshot` — `false` disables snapshots and `true` selects Replicant's v1
   snapshot. Incremental snapshot options are not supported by this adapter until
   roadmap C3 adds `snapshot_progress/0` and target provenance.
+- `:streaming`, `:max_inflight_lag`, `:max_command_retries`, and `:failover` —
+  passed through unchanged to Replicant 1.x.
 
 **Key:** the `slot_name` comes from the sink, not `start_link` options. It keys the
-resolver index and the replication slot name.
+active resolver generation and the replication slot name. Start/stop activation is
+serialized per slot so a duplicate cannot overwrite or erase the winner's generation.
 
 ### SCD2 history mode (optional)
 

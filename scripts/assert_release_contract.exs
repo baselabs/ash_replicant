@@ -6,6 +6,7 @@ defmodule AshReplicant.ReleaseContract do
   @immutable_action ~r/\A[^@\s]+@[0-9a-f]{40}\z/
   @postgres_image "postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b"
   @ash_requirement ">= 3.31.3 and < 4.0.0-0"
+  @replicant_requirement ">= 1.0.0 and < 2.0.0-0"
   @checkout "actions/checkout@11d5960a326750d5838078e36cf38b85af677262"
   @setup_beam "erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236"
   @cache "actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830"
@@ -28,13 +29,18 @@ defmodule AshReplicant.ReleaseContract do
   docker exec pg pg_isready -U postgres || { docker logs pg; exit 1; }
   """
 
-  @resolve_ash """
-  if [[ '${{ matrix.unlock }}' == 'true' ]]; then
+  @resolve_dependencies """
+  if [[ '${{ matrix.ash_unlock }}' == 'true' ]]; then
     mix deps.unlock ash
+  fi
+  if [[ '${{ matrix.replicant_unlock }}' == 'true' ]]; then
+    mix deps.unlock replicant
   fi
   mix deps.get
   mix deps ash
-  scripts/assert-dependency-version.sh ash '${{ matrix.requirement }}'
+  mix deps replicant
+  scripts/assert-dependency-version.sh ash '${{ matrix.ash_requirement }}'
+  scripts/assert-dependency-version.sh replicant '${{ matrix.replicant_requirement }}'
   """
 
   @create_database """
@@ -42,23 +48,26 @@ defmodule AshReplicant.ReleaseContract do
   mix ecto.migrate
   """
 
-  @public_ash_check """
-  env -u ASH_REPLICANT_ASH_VERSION mix run --no-start -e '
-  requirement =
-    Mix.Project.config()
-    |> Keyword.fetch!(:deps)
-    |> List.keyfind!(:ash, 0)
-    |> elem(1)
+  @public_dependency_check """
+  env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION mix run --no-start -e '
+  deps = Mix.Project.config() |> Keyword.fetch!(:deps)
 
-  unless requirement == ">= 3.31.3 and < 4.0.0-0" do
-    raise "unexpected public Ash requirement: \#{inspect(requirement)}"
-  end'
+  expected = %{
+    ash: ">= 3.31.3 and < 4.0.0-0",
+    replicant: ">= 1.0.0 and < 2.0.0-0"
+  }
+
+  Enum.each(expected, fn {dependency, requirement} ->
+    actual = deps |> List.keyfind!(dependency, 0) |> elem(1)
+    unless actual == requirement, do: raise("unexpected public dependency requirement")
+  end)
+  '
   """
 
   @package_inspection """
   package_dir=$(mktemp -d)
   trap 'rm -rf "$package_dir"' EXIT
-  env -u ASH_REPLICANT_ASH_VERSION mix hex.build --unpack --output "$package_dir"
+  env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION mix hex.build --unpack --output "$package_dir"
 
   for required in lib .formatter.exs mix.exs README.md LICENSE NOTICE CHANGELOG.md usage-rules.md; do
     test -e "$package_dir/$required" || {
@@ -82,7 +91,8 @@ defmodule AshReplicant.ReleaseContract do
     "no-database" => %{"MIX_ENV" => "test"},
     "compatibility" => %{
       "MIX_ENV" => "test",
-      "ASH_REPLICANT_ASH_VERSION" => "${{ matrix.selector }}",
+      "ASH_REPLICANT_ASH_VERSION" => "${{ matrix.ash_selector }}",
+      "ASH_REPLICANT_REPLICANT_VERSION" => "${{ matrix.replicant_selector }}",
       "ASH_REPLICANT_TEST_URL" => "postgres://postgres@localhost:5432/postgres"
     },
     "release-artifact" => %{"MIX_ENV" => "dev"}
@@ -90,22 +100,31 @@ defmodule AshReplicant.ReleaseContract do
 
   @matrix [
     %{
-      "label" => "floor-3.31.3",
-      "selector" => "3.31.3",
-      "unlock" => true,
-      "requirement" => "== 3.31.3"
+      "label" => "exact-floors",
+      "ash_selector" => "3.31.3",
+      "ash_unlock" => true,
+      "ash_requirement" => "== 3.31.3",
+      "replicant_selector" => "1.0.0",
+      "replicant_unlock" => true,
+      "replicant_requirement" => "== 1.0.0"
     },
     %{
       "label" => "current-lock",
-      "selector" => "",
-      "unlock" => false,
-      "requirement" => @ash_requirement
+      "ash_selector" => "",
+      "ash_unlock" => false,
+      "ash_requirement" => @ash_requirement,
+      "replicant_selector" => "",
+      "replicant_unlock" => false,
+      "replicant_requirement" => @replicant_requirement
     },
     %{
-      "label" => "latest-3.x",
-      "selector" => "latest",
-      "unlock" => true,
-      "requirement" => @ash_requirement
+      "label" => "latest-compatible",
+      "ash_selector" => "latest",
+      "ash_unlock" => true,
+      "ash_requirement" => @ash_requirement,
+      "replicant_selector" => "latest",
+      "replicant_unlock" => true,
+      "replicant_requirement" => @replicant_requirement
     }
   ]
 
@@ -148,7 +167,7 @@ defmodule AshReplicant.ReleaseContract do
          "key" =>
            "${{ runner.os }}-ash-${{ matrix.label }}-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}"
        }},
-      {:run, String.trim(@resolve_ash)},
+      {:run, String.trim(@resolve_dependencies)},
       {:run, "mix deps.compile"},
       {:run, "mix compile --warnings-as-errors"},
       {:run, "elixir --version"},
@@ -171,13 +190,13 @@ defmodule AshReplicant.ReleaseContract do
          "key" =>
            "${{ runner.os }}-release-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}"
        }},
-      {:run, "env -u ASH_REPLICANT_ASH_VERSION mix deps.get"},
+      {:run, "env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION mix deps.get"},
       {:run, "mix deps.compile"},
       {:run, "mix compile --warnings-as-errors"},
       {:run, "elixir --version"},
       {:run, "scripts/assert-runtime-version.sh"},
       {:run, "scripts/assert-release-contract.sh"},
-      {:run, String.trim(@public_ash_check)},
+      {:run, String.trim(@public_dependency_check)},
       {:run, "mix docs --warnings-as-errors"},
       {:run, String.trim(@package_inspection)}
     ]
@@ -194,17 +213,20 @@ defmodule AshReplicant.ReleaseContract do
     {"README.md", "### Supported foundation",
      [
        "- Elixir 1.20.3 on Erlang/OTP 29;",
-       "- Ash `#{@ash_requirement}` and AshPostgres 2.11.x;"
+       "- Ash `#{@ash_requirement}` and AshPostgres 2.11.x;",
+       "- Replicant `#{@replicant_requirement}` (current release-candidate lock 1.1.0)"
      ]},
     {"CONTRIBUTING.md", "## Prerequisites",
      [
        "- **Elixir 1.20.3** and **Erlang/OTP 29**",
-       "- Ash `#{@ash_requirement}`; selector-free development uses this public range"
+       "- Ash `#{@ash_requirement}`; selector-free development uses this public range",
+       "- Replicant `#{@replicant_requirement}` from Hex; the release-candidate lock is 1.1.0."
      ]},
     {"AGENTS.md", "## Development workflow",
      [
        "The supported release foundation is Elixir 1.20.3 on Erlang/OTP 29 with Ash\n" <>
-         "`#{@ash_requirement}`."
+         "`#{@ash_requirement}` and Replicant\n" <>
+         "`#{@replicant_requirement}` (current release-candidate lock 1.1.0)."
      ]}
   ]
 
@@ -218,6 +240,7 @@ defmodule AshReplicant.ReleaseContract do
     assert_compatibility(workflow)
     assert_cache_partition(workflow)
     assert_mix_contract(root)
+    assert_replicant_contract(root)
     assert_docs(root)
   rescue
     _error in [YamlElixir.ParsingError, File.Error] -> fail("release contract input is invalid")
@@ -332,10 +355,12 @@ defmodule AshReplicant.ReleaseContract do
     projects = find_definitions(body, :def, :project)
     dependency_lists = find_definitions(body, :defp, :deps)
     ash_requirements = find_module_attributes(body, :ash_requirement)
+    replicant_requirements = find_module_attributes(body, :replicant_requirement)
 
     assert(
       exact_project_contract?(projects) and exact_dependency_contract?(dependency_lists) and
-        ash_requirements == [@ash_requirement],
+        ash_requirements == [@ash_requirement] and
+        replicant_requirements == [@replicant_requirement],
       "Mix release contract is incomplete"
     )
   rescue
@@ -357,13 +382,90 @@ defmodule AshReplicant.ReleaseContract do
   defp exact_project_contract?(_projects), do: false
 
   defp exact_dependency_contract?([dependencies]) when is_list(dependencies) do
-    case Enum.filter(dependencies, &match?({:ash, _requirement}, &1)) do
-      [{:ash, {:ash_requirement, _, []}}] -> true
-      _entries -> false
+    case Enum.filter(dependencies, fn
+           {:ash, _requirement} -> true
+           {:replicant, _requirement} -> true
+           _dependency -> false
+         end) do
+      [
+        {:ash, {:ash_requirement, _, []}},
+        {:replicant, {:replicant_requirement, _, []}}
+      ] ->
+        true
+
+      _dependencies ->
+        false
     end
   end
 
   defp exact_dependency_contract?(_dependency_lists), do: false
+
+  defp assert_replicant_contract(root) do
+    lock = root |> Path.join("mix.lock") |> File.read!()
+
+    assert_hex_lock(lock, "replicant", "1.1.0")
+    assert_hex_lock(lock, "postgrex", "0.22.4")
+
+    session_source = read_dependency_source!(root, "lib/replicant/session_identity.ex")
+    sink_source = read_dependency_source!(root, "lib/replicant/sink.ex")
+    connection_source = read_dependency_source!(root, "lib/replicant/connection.ex")
+
+    assert(
+      String.contains?(session_source, "defmodule Replicant.SessionIdentity"),
+      "Replicant package contract is incomplete"
+    )
+
+    assert(
+      String.contains?(sink_source, "@callback handle_session_identity"),
+      "Replicant package contract is incomplete"
+    )
+
+    identity_parse =
+      text_position(connection_source, "Replicant.SessionIdentity.from_result(result)")
+
+    identity_accept = text_position(connection_source, "Replicant.Sink.accept_session_identity")
+    recovery_call = text_position(connection_source, "      begin_recovery(state)\n    else")
+    recovery_definition = text_position(connection_source, "  defp begin_recovery(state) do")
+
+    checkpoint =
+      text_position(
+        connection_source,
+        "{checkpoint_state, checkpoint_lsn} = read_checkpoint(state)"
+      )
+
+    assert(
+      identity_parse < identity_accept and identity_accept < recovery_call and
+        recovery_definition < checkpoint,
+      "Replicant actual-session ordering contract is incomplete"
+    )
+  rescue
+    _error in [File.Error, SyntaxError, TokenMissingError] ->
+      fail("Replicant package contract input is invalid")
+  end
+
+  defp assert_hex_lock(lock, dependency, expected_version) do
+    escaped_dependency = Regex.escape(dependency)
+    escaped_version = Regex.escape(expected_version)
+
+    pattern =
+      Regex.compile!(
+        "^\\s*\"#{escaped_dependency}\": \\{:hex, :#{escaped_dependency}, \"#{escaped_version}\", " <>
+          "\"[0-9a-f]{64}\", \\[[^\\n]*\\], \\[[^\\n]*\\], \"hexpm\", \"[0-9a-f]{64}\"\\},$",
+        "m"
+      )
+
+    assert(Regex.match?(pattern, lock), "Replicant dependency lock contract is incomplete")
+  end
+
+  defp read_dependency_source!(root, path),
+    do: root |> Path.join("deps/replicant") |> Path.join(path) |> File.read!()
+
+  defp text_position(content, needle) do
+    case :binary.match(content, needle) do
+      {position, _length} -> position
+      :nomatch -> fail("Replicant package contract is incomplete")
+    end
+  end
 
   defp find_definitions(expressions, kind, name) do
     Enum.flat_map(expressions, fn
