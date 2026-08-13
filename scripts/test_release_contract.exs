@@ -143,6 +143,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   def run do
     valid_fixture_probes()
     action_probes()
+    action_input_probes()
     command_probes()
     compatibility_probes()
     workflow_structure_probes()
@@ -234,6 +235,83 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     prepare_fixture()
     insert_after_first_checkout!("      - uses: #{@checkout} # unexpected duplicate\n")
     assert_invalid!()
+  end
+
+  defp action_input_probes do
+    jobs = ["no-database", "compatibility", "release-artifact"]
+
+    Enum.each(jobs, fn job ->
+      prepare_fixture()
+
+      mutate_job!(
+        job,
+        "      - uses: #{@checkout} # v4\n",
+        "      - uses: #{@checkout} # v4\n        with:\n          ref: stale-gate-revision\n"
+      )
+
+      assert_invalid!()
+    end)
+
+    for job <- jobs,
+        {input, environment, replacement} <- [
+          {"elixir-version", "ELIXIR_VERSION", "1.18.0"},
+          {"otp-version", "OTP_VERSION", "28"}
+        ] do
+      prepare_fixture()
+
+      mutate_job!(
+        job,
+        "          #{input}: ${{ env.#{environment} }}\n",
+        "          #{input}: #{replacement}\n"
+      )
+
+      assert_invalid!()
+    end
+
+    Enum.each(jobs, fn job ->
+      prepare_fixture()
+
+      mutate_job!(
+        job,
+        "          otp-version: ${{ env.OTP_VERSION }}\n",
+        "          otp-version: ${{ env.OTP_VERSION }}\n          version-type: strict\n"
+      )
+
+      assert_invalid!()
+
+      prepare_fixture()
+
+      mutate_job!(
+        job,
+        "          key: ",
+        "          restore-keys: stale-gate-bytes\n          key: "
+      )
+
+      assert_invalid!()
+    end)
+
+    for {job, path, key} <- [
+          {"no-database", "deps\n            _build",
+           "${{ runner.os }}-no-db-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}"},
+          {"compatibility", "deps\n            _build\n            priv/plts",
+           "${{ runner.os }}-ash-${{ matrix.label }}-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}"},
+          {"release-artifact", "deps\n            _build",
+           "${{ runner.os }}-release-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}"}
+        ] do
+      prepare_fixture()
+
+      mutate_job!(
+        job,
+        "          path: |\n            #{path}\n",
+        "          path: |\n            #{path}\n            scripts\n            .github/workflows\n"
+      )
+
+      assert_invalid!()
+
+      prepare_fixture()
+      mutate_job!(job, "          key: #{key}\n", "          key: #{key}-stale\n")
+      assert_invalid!()
+    end
   end
 
   defp command_probes do
@@ -436,33 +514,6 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     assert_invalid!()
 
     prepare_fixture()
-
-    mutate_job!(
-      "no-database",
-      "          elixir-version: ${{ env.ELIXIR_VERSION }}\n",
-      "          elixir-version: 1.18.0\n"
-    )
-
-    assert_invalid!()
-
-    prepare_fixture()
-
-    mutate_job!(
-      "no-database",
-      "          path: |\n            deps\n            _build\n",
-      """
-                path: |
-                  deps
-                  _build
-                  scripts/assert-release-contract.sh
-                  scripts/test-release-contract.sh
-                  .github/workflows/ci.yml
-      """
-    )
-
-    assert_invalid!()
-
-    prepare_fixture()
     mutate_job!("compatibility", "      fail-fast: false\n", "      fail-fast: true\n")
     assert_invalid!()
 
@@ -512,16 +563,6 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     prepare_fixture()
     replace_once!(@workflow, "  ELIXIR_VERSION: \"1.20.3\"", "  ELIXIR_VERSION: \"1.19.5\"")
-    assert_invalid!()
-
-    prepare_fixture()
-
-    replace_once!(
-      @workflow,
-      "key: ${{ runner.os }}-ash-${{ matrix.label }}",
-      "key: ${{ runner.os }}-ash-shared"
-    )
-
     assert_invalid!()
   end
 

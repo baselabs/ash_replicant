@@ -477,7 +477,7 @@ defmodule AshReplicant.ReleaseContract do
 
   defp normalize_markdown(content) do
     content
-    |> String.replace(~r/[\s\p{Z}\p{Cf}]+/u, " ")
+    |> String.replace(~r/[\s\p{Cf}]+/u, " ")
     |> String.trim()
   end
 
