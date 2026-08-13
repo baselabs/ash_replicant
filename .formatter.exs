@@ -1,5 +1,5 @@
 [
   import_deps: [:ash, :ash_postgres, :ash_cloak],
-  inputs: ["{mix,.formatter}.exs", "{config,lib,test}/**/*.{ex,exs}"],
+  inputs: ["{mix,.formatter}.exs", "{config,lib,test}/**/*.{ex,exs}", "scripts/*.exs"],
   locals_without_parens: []
 ]

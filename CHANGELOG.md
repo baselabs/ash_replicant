@@ -38,6 +38,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `mix test --exclude integration` runs successfully without starting TestRepo.
 - Cover SCD2 resources in migration drift and observe TestRepo start attempts in
   the same VM as the database-free suite.
+- Decode release workflows as YAML, require independently executable gate steps,
+  bind compatibility selection to its exact unlock/assert block, and validate
+  visible non-contradictory runtime documentation. Independent mutations now
+  cover every protected release-evidence decision.
 
 ## [0.4.0] - 2026-08-03
 

@@ -49,10 +49,15 @@ Release evidence is separated by what it proves:
    `scripts/with-release-runtime.sh` gives local commands the same coherent
    Elixir/OTP path. Third-party Actions and the PostgreSQL integration image are
    pinned to immutable digests.
-6. `scripts/assert-release-contract.sh` verifies the pinned workflow structure,
-   compatibility cells, audits, cache partitioning, gate commands, and current
-   published runtime statements. Its mutation tests prove these checks reject
-   missing or stale contract elements.
+6. `scripts/assert-release-contract.sh` loads the workflow through the same
+   YAML decoding model GitHub Actions consumes. It traverses every semantic
+   `uses` key, requires immutable third-party Action revisions, requires each
+   release command as an independently executable step, and binds the exact
+   compatibility matrix selector to one contiguous resolve/unlock/assert block.
+   Published runtime statements must live visibly in dedicated Markdown
+   sections; comments, code fences, and additive contradictions do not count.
+   Independent mutation cases cover every required command and each matrix,
+   documentation, and Action-pinning decision.
 7. The selector-free release job asserts the public Ash range, builds docs with
    warnings as errors, unpacks the Hex package, requires its code/docs/license
    paths, and rejects test, Forge, build, environment, and credential-shaped
@@ -80,7 +85,8 @@ for the production gate.
 - Gate implementations: `.github/workflows/ci.yml`,
   `scripts/run-structural-tests.sh`, `scripts/assert-exunit-output.sh`,
   `scripts/assert-dependency-version.sh`, and
-  `scripts/assert-release-contract.sh`.
+  `scripts/assert-release-contract.sh` with its decoded-YAML validator and
+  mutation battery.
 - Local red probes: DataCase/no-Repo, missing integration tag, fabricated ExUnit
   results, assertion and background-process failures, nonmatching dependency
   requirements, workflow mutations, stale runtime documentation, and

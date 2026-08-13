@@ -42,12 +42,10 @@ jobs:
       - run: mix deps.compile
       - run: mix format --check-formatted
       - run: mix compile --warnings-as-errors
-      - name: Assert release runtime
-        run: |
-          elixir --version
-          scripts/assert-runtime-version.sh
-          scripts/test-release-checkers.sh
-          scripts/test-release-contract.sh
+      - run: elixir --version
+      - run: scripts/assert-runtime-version.sh
+      - run: scripts/test-release-checkers.sh
+      - run: scripts/test-release-contract.sh
       - run: mix credo --strict
       - name: Dependency hygiene
         run: mix deps.audit
@@ -120,12 +118,10 @@ jobs:
       - run: mix deps.compile
       - run: mix compile --warnings-as-errors
 
-      - name: Assert release runtime and checker integrity
-        run: |
-          elixir --version
-          scripts/assert-runtime-version.sh
-          scripts/test-release-checkers.sh
-          scripts/assert-release-contract.sh
+      - run: elixir --version
+      - run: scripts/assert-runtime-version.sh
+      - run: scripts/test-release-checkers.sh
+      - run: scripts/assert-release-contract.sh
 
       - name: Dependency hygiene
         run: mix deps.audit
@@ -170,11 +166,9 @@ jobs:
       - run: env -u ASH_REPLICANT_ASH_VERSION mix deps.get
       - run: mix deps.compile
       - run: mix compile --warnings-as-errors
-      - name: Assert release runtime
-        run: |
-          elixir --version
-          scripts/assert-runtime-version.sh
-          scripts/assert-release-contract.sh
+      - run: elixir --version
+      - run: scripts/assert-runtime-version.sh
+      - run: scripts/assert-release-contract.sh
       - name: Assert selector-free public Ash requirement
         run: |
           env -u ASH_REPLICANT_ASH_VERSION mix run --no-start -e '

@@ -106,7 +106,6 @@ re-streams and dedups on resume.
 
 The supported release foundation is Elixir 1.20.3 on Erlang/OTP 29 with Ash
 `>= 3.31.3 and < 4.0.0-0`.
-Python 3 is required by the release-contract checker.
 
 ```bash
 asdf install
