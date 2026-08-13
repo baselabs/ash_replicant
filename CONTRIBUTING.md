@@ -6,9 +6,12 @@ Thank you for your interest in contributing to AshReplicant!
 
 - **Elixir 1.20.3** and **Erlang/OTP 29** (run `asdf install` from the repository root)
 - Ash `>= 3.31.3 and < 4.0.0-0`; selector-free development uses this public range
-- `replicant` is a **Hex dependency** (`{:replicant, "~> 0.3.0"}` in `mix.exs`), pulled by
+- `replicant` is a **Hex dependency** (`{:replicant, "~> 0.3.0"}` in the current
+  hardening baseline), pulled by
   `mix deps.get` — no sibling checkout is required to build or test. A local checkout at
-  `../replicant` is only needed for cross-repo design/brainstorm work (see `CLAUDE.md`).
+  `../replicant` is only needed for cross-repo design work. AshReplicant 1.0.0 will
+  move to Replicant `~> 1.0` only after that package is published and fetched; a
+  sibling path is not release evidence.
 - **PostgreSQL 16** for the current integration gate (with `wal_level=logical`); the
   integration suite runs against a live Postgres with a logical replication slot
   and publication
@@ -90,9 +93,10 @@ scripts/with-release-runtime.sh mix hex.build
 
 From `AGENTS.md`:
 
-1. **Route writes through Ash actions, never raw Ecto.** The resource's mirror
-   action fires AshCloak encryption, policies, and multitenancy validation.
-2. **Multitenancy is fail-closed.** nil/blank tenant → error, never a base-tenant
+1. **Route writes through Ash actions, never raw Ecto.** The resource's host
+   actions run validations, changes, AshCloak hooks, and multitenancy. The sink
+   uses `authorize?: false`, so policies are not re-gated.
+2. **Multitenancy is fail-closed.** nil/`false`/blank tenant → error, never a base-tenant
    fallback.
 3. **Sensitive = AshCloak-encrypted or binary or skip.** Verified by compile-time
    verifier.

@@ -16,17 +16,17 @@ the narrative "why"; an ADR is the tracked, per-decision record with code eviden
 | [0001](0001-fail-closed-multitenancy.md) | Multitenancy is fail-closed; a declared tenant source requires a multitenancy block | [D2] |
 | [0002](0002-supported-runtime-and-dependencies.md) | Support Elixir 1.20.3/OTP 29 and an audit-clean Ash 3 line | 1.0.0 release contract |
 | [0003](0003-verification-and-release-evidence.md) | Release evidence must prove no-database, live integration, drift, docs, and package substrates independently | 1.0.0 release contract |
+| [0004](0004-public-authority-and-release-history.md) | Public authority follows live code and immutable receipts; historical gaps are reported, not invented | A4 / E1 |
 
 ## On-touch gap list (not yet authored — author when a slice next touches the surface)
 
-These product-shaping decisions are currently governed by CHARTER prose only. Each is
-authored as an ADR by the next slice that touches its surface (do NOT bulk-author):
+These decisions are authored by their owning roadmap row (do not bulk-author them
+from historical testimony):
 
-| Decision | Charter ref | Surface / code evidence |
+| Decision | Owner | Surface / code evidence |
 |---|---|---|
-| Effect-once via txn-granularity commit-LSN watermark | [D1] | `sink/impl.ex:285-296`, `checkpoint.ex` |
-| Sensitive = AshCloak-encrypted / binary, type-shape verified | [D3] | `validate_sensitive.ex`, `resolver.ex` |
-| Tenant-blind layering | [D4] | `resolver.ex`, `ash_replicant.ex` |
-| Value-free boundary | [D5] | `error.ex`, `telemetry.ex` |
-| SCD2 surrogate-PK disjoint from business key | CHARTER SCD2 | `validate_history.ex:114-123` |
-| `REPLICA IDENTITY FULL` operational precondition | AGENTS Rule 2 | `resource.ex:51,109` (tenant + SCD2 business-key notes) |
+| Source-bound effect-once checkpoint and serialization | B2 | `Sink.Impl.run_transaction/4`, `AshReplicant.Checkpoint` |
+| Sensitive type-shape and value-free boundary | B5 | `ValidateSensitive`, `AshReplicant.Error`, `AshReplicant.Telemetry` |
+| Tenant-blind layering and pipeline ownership | B7 | `AshReplicant`, `AshReplicant.Resolver` |
+| SCD2 destination constraints and continuous validation | C5 | `ValidateHistory`, `AshReplicant.Apply.Scd2` |
+| `REPLICA IDENTITY FULL` operational precondition | B4 / ADR-0001 amendment | `AshReplicant.Resource`, `Resolver.tenant_changed?/2` |

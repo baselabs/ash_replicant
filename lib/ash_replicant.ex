@@ -21,7 +21,10 @@ defmodule AshReplicant do
     * `:sink` — a module built with `use AshReplicant.Sink` (carries repo/domains/checkpoint/slot).
     * `:connection` — Postgrex opts (point at a standby).
     * `:publication` — replication identifier.
-    * `:go_forward_only`, `:snapshot` — passed through to `Replicant.start_link/1`.
+    * `:go_forward_only` — passed through to `Replicant.start_link/1`.
+    * `:snapshot` — `false` or Replicant's v1 snapshot (`true`). Incremental
+      snapshot options are unsupported until the adapter implements durable
+      progress and target provenance.
 
   The `slot_name` is NOT a `start_link` option — it is baked into the sink via
   `use AshReplicant.Sink, slot_name: ...` and is the single source of truth for

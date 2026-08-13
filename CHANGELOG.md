@@ -34,6 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Reconcile public policy, snapshot, tenancy, notifier, and release-history
+  documentation with live code. Host policies are not re-gated, the current
+  adapter supports v1 snapshots only, and tenant reassignment requires the old
+  tenant record shape.
 - Split checkpoint policy introspection from its six live enforcement cases so
   `mix test --exclude integration` runs successfully without starting TestRepo.
 - Cover SCD2 resources in migration drift and observe TestRepo start attempts in
@@ -63,6 +67,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `authorize?: false` path bypasses both.
 
 ## [0.3.3] - 2026-08-02
+
+> **Release provenance:** 0.3.3 was published to
+> [Hex](https://hex.pm/packages/ash_replicant/0.3.3). Every packaged
+> source/document byte matches commit
+> [`3b61d3a`](https://github.com/baselabs/ash_replicant/commit/3b61d3a9ae553fb96ff26e9fcf581416af723843).
+> The publishing checkout itself is not independently recorded. No `v0.3.3` Git
+> tag or GitHub Release was created; current documentation does not invent one.
 
 ### Fixed
 
@@ -267,10 +278,10 @@ sensitive-column verification.
   `docs/CHARTER.md` (only `/docs/superpowers/` lifecycle artifacts are local-only).
 
 [Unreleased]: https://github.com/baselabs/ash_replicant/compare/v0.4.0...HEAD
-[0.4.0]: https://github.com/baselabs/ash_replicant/releases/tag/v0.4.0
-[0.3.3]: https://github.com/baselabs/ash_replicant/releases/tag/v0.3.3
-[0.3.2]: https://github.com/baselabs/ash_replicant/releases/tag/v0.3.2
-[0.3.1]: https://github.com/baselabs/ash_replicant/releases/tag/v0.3.1
-[0.3.0]: https://github.com/baselabs/ash_replicant/releases/tag/v0.3.0
-[0.2.0]: https://github.com/baselabs/ash_replicant/releases/tag/v0.2.0
-[0.1.0]: https://github.com/baselabs/ash_replicant/releases/tag/v0.1.0
+[0.4.0]: https://github.com/baselabs/ash_replicant/tree/v0.4.0
+[0.3.3]: https://github.com/baselabs/ash_replicant/commit/3b61d3a9ae553fb96ff26e9fcf581416af723843
+[0.3.2]: https://github.com/baselabs/ash_replicant/tree/v0.3.2
+[0.3.1]: https://github.com/baselabs/ash_replicant/tree/v0.3.1
+[0.3.0]: https://github.com/baselabs/ash_replicant/tree/v0.3.0
+[0.2.0]: https://github.com/baselabs/ash_replicant/tree/v0.2.0
+[0.1.0]: https://github.com/baselabs/ash_replicant/tree/v0.1.0

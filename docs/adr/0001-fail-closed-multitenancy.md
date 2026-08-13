@@ -19,7 +19,8 @@ sink resolves the tenant per row and passes it to the host Ash action as the `te
 
 Two failure modes must be closed:
 
-1. **Nil/blank tenant at runtime.** A source row whose tenant resolves to nil/blank must not
+1. **Nil/`false`/blank tenant at runtime.** A source row whose tenant resolves to
+   nil/`false`/blank must not
    fall back to a "base tenant" or span tenants — that would mirror one tenant's data into
    another's scope.
 2. **No Ash `multitenancy` block declared (silent, verified against Ash source).**
@@ -40,8 +41,12 @@ Two failure modes must be closed:
   top of Ash's own multitenancy validation. `false` is included because Ash treats a falsy
   tenant as **no scoping** (neither force-set nor required — `create.ex` `handle_multitenancy`
   guards on truthiness), so a `tenant_mfa` returning `false` would otherwise write unscoped.
-  A tenant-scoped delete / key-changing update needs the tenant in `old_record`, so the source
-  table must be `REPLICA IDENTITY FULL` (see AGENTS.md Critical Rule 2 and the operational note).
+  A tenant-scoped delete, key-changing update, or tenant reassignment needs the old
+  tenant in `old_record`, so the source table must be `REPLICA IDENTITY FULL` (see
+  AGENTS.md Critical Rule 2). A `tenant_mfa` must resolve deterministically from both
+  record shapes. The current reassignment detector treats an absent/raising old-side
+  resolution as indeterminate and retains the non-relocating path; roadmap B4 owns
+  the value-free fail-closed halt for that case.
 
 - **Compile time (mode 2):** a declared tenant source requires an Ash `multitenancy` block —
   **symmetrically for both sources**:
@@ -92,8 +97,8 @@ project's fail-closed-at-compile-time posture (`ValidateSensitive`, `ValidateTen
 
 ## Evidence
 
-- Runtime: `lib/ash_replicant/resolver.ex:60-93,267-277` (incl. the `false` fail-close clause);
-  `apply.ex:95,128`; `apply/scd2.ex:30,34,44`.
+- Runtime: `AshReplicant.Resolver.resolve_tenant/2`, `resolve_tenant!/3`, and
+  `tenant_changed?/2`; `AshReplicant.Apply`; `AshReplicant.Apply.Scd2`.
 - Compile: `lib/ash_replicant/resource/verifiers/validate_multitenancy.ex` (both arms),
   `validate_tenant_source.ex` (converse), `validate_action_multitenancy.ex` (sink-action bypass).
 - Tests: `test/ash_replicant/validate_multitenancy_test.exs` + `validate_action_multitenancy_test.exs`

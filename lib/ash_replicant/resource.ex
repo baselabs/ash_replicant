@@ -33,7 +33,7 @@ defmodule AshReplicant.Resource do
     name: :replicant,
     describe:
       "Marks a host resource as a CDC mirror target and declares its source " <>
-        "mapping, tenant resolution, classification, and per-resource policies.",
+        "mapping, tenant resolution, classification, and host action contract.",
     schema: [
       source_table: [
         type: :string,
@@ -48,8 +48,8 @@ defmodule AshReplicant.Resource do
         type: :atom,
         doc:
           "Source column carrying the tenant. Resolved per row and passed as `tenant:` to the mirror action. " <>
-            "The source table must be `REPLICA IDENTITY FULL` so a delete's / PK-changing update's `old_record` " <>
-            "carries the tenant column (key-only under the default identity → fail-closed `:tenant_required`)."
+            "The source table must be `REPLICA IDENTITY FULL` so deletes, PK changes, and tenant " <>
+            "reassignments carry the old tenant (key-only under the default identity)."
       ],
       tenant_mfa: [
         # `{module, function, extra_args_LIST}` — the 3rd element is a list of
@@ -62,7 +62,8 @@ defmodule AshReplicant.Resource do
         type: {:tuple, [:atom, :atom, {:list, :any}]},
         doc:
           "`{m, f, a}` where `a` is a list of extra args, applied as " <>
-            "`apply(m, f, [record | a])` yielding the tenant for a row."
+            "`apply(m, f, [record | a])` yielding the tenant for a row. The function must resolve " <>
+            "deterministically from both new and old record shapes."
       ],
       sensitive: [
         type: {:wrap_list, :atom},

@@ -3,7 +3,7 @@
 ```elixir
 Mix.install([
   # This notebook lives in `notebooks/`, so `..` is the repo root. Swap for
-  # `{:ash_replicant, "~> 0.3"}` to run it against the published Hex package.
+  # `{:ash_replicant, "~> 0.4.0"}` to run it against the published Hex package.
   {:ash_replicant, path: Path.join(__DIR__, "..")},
   {:kino, "~> 0.14"}
 ])
@@ -44,7 +44,7 @@ re-implement Ash core's multitenancy concept.
 flowchart TD
   A["Ash core<br/>multitenancy DSL · policies · the tenant concept"]
   B["AshReplicant  ← HERE<br/>resource resolution · tenant routing<br/>sensitive-column verification · mirror actions"]
-  C["replicant<br/>Postgres logical replication (pgoutput)<br/>transaction assembly · exactly-once watermark"]
+  C["replicant<br/>Postgres logical replication (pgoutput)<br/>transaction assembly · WAL ordering"]
   D["Postgres<br/>logical decoding output"]
   A --> B --> C --> D
 ```
@@ -69,7 +69,7 @@ one tangible:
 
 ```elixir
 AshReplicant.version()
-# => "0.3.0"
+# => "0.4.0"
 ```
 
 ## 3 · The value-free boundary (rule 4)
@@ -350,11 +350,12 @@ end
 # => %{present: {:ok, "tenant-42"}, missing: {:error, :tenant_required}}
 ```
 
-> **Operational note.** A `:delete` (or a PK-changing `:update`) resolves the tenant
-> from `old_record`, which under the Postgres-default replica identity carries **only
-> the primary-key columns** — the tenant discriminator would be absent and the pipeline
-> would (correctly) halt fail-closed. Set `ALTER TABLE <src> REPLICA IDENTITY FULL` on
-> every source table backing a tenant-scoped mirror.
+> **Operational note.** A `:delete`, PK-changing `:update`, or tenant reassignment
+> needs the old tenant from `old_record`, which under the Postgres-default replica
+> identity carries **only the primary-key columns**. Set `ALTER TABLE <src> REPLICA
+> IDENTITY FULL` on every source table backing a tenant-scoped mirror. A
+> `tenant_mfa` must resolve deterministically from both record shapes; an
+> indeterminate old-side result remains a roadmap B4 fail-closed hardening item.
 
 ## 6 · The resolver index (rule 1 · routing)
 
@@ -590,6 +591,10 @@ AshReplicant.start_link(
   snapshot: false
 )
 ```
+
+`snapshot: false` disables snapshots; `snapshot: true` selects Replicant's v1
+snapshot. Incremental snapshot options are not supported until roadmap C3 adds
+durable progress and target provenance.
 
 Stop it (idempotent; clears the cached index) with
 `AshReplicant.stop_supervised("shop_orders")`.

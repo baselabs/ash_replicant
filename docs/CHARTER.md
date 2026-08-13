@@ -1,6 +1,10 @@
 # AshReplicant — Project Charter
 
-**Status: realized, v0.3.0, actively maintained.** The original 17-task build shipped & closeout-reviewed 2026-07-08; later runs added the 3-task hardening + 7/11-task SCD2 history-mirror (`ValidateHistory`, `on_truncate :close`) 2026-07-09, the multitenancy tenant-scope + fail-open fix (`ValidateTenantSource`, `ValidateMultitenancy` require-a-block) 2026-07-10, and the 2026-07-14 tenancy fail-open hardening (false-tenant fail-close, `ValidateActionMultitenancy` bypass gate, multitenancy-`:attribute` shape). Product-shaping decisions are tracked in `docs/adr/`; per-run per-task ledgers live under `docs/superpowers/plans/` (gitignored, local-only).
+**Status: realized, latest published package 0.4.0; 1.0.0 hardening in progress.**
+The original state-mirror and SCD2 capabilities are shipped. The canonical
+production-readiness scope and dependency order live in `docs/ROADMAP.md`.
+Product-shaping decisions are tracked in `docs/adr/`; historical lifecycle
+artifacts preserve their point-in-time testimony and are not current work queues.
 
 ## Purpose
 
@@ -11,8 +15,11 @@ consumer) to Ash resources, with effect-once semantics and fail-closed multitena
 ## Mission
 
 **AshReplicant** is the Ash `Replicant.Sink` adapter. It owns multitenancy
-resolution, sensitive-data verification, policy enforcement, and resource mapping,
-while delegating transport and exactly-once watermark to `replicant`.
+resolution, sensitive-data verification, resource mapping, host action execution,
+and the atomic destination checkpoint. It delegates WAL transport, decoding,
+transaction assembly, and acknowledgement ordering to `replicant`. Host validations,
+changes, AshCloak hooks, and multitenancy run; policies are not re-gated because the
+trusted sink executes with `authorize?: false`.
 
 ```
 replicant (tenant-blind CDC)
@@ -31,7 +38,7 @@ This is "the `ash_postgres` of `replicant`" — just as `ash_postgres` is not
 |-------|-----------------|
 | **Ash core** | multitenancy DSL, policies, the tenant concept |
 | **AshReplicant** ← HERE | resource resolution, tenant routing, sensitive-column verification, mirror actions |
-| **replicant** | PostgreSQL logical replication (pgoutput), transaction assembly, exactly-once watermark |
+| **replicant** | PostgreSQL logical replication (pgoutput), transaction assembly, WAL ordering and acknowledgement |
 | **Postgres** | logical decoding output |
 
 ## Scope
@@ -42,12 +49,13 @@ This is "the `ash_postgres` of `replicant`" — just as `ash_postgres` is not
 - Checkpoint-tracking resource macro (`use AshReplicant.Checkpoint`)
 - Sink-config wrapper macro (`use AshReplicant.Sink`)
 - `Replicant.Sink` behaviour implementation
-- Multitenancy fail-closed validation (nil/blank tenant → error)
+- Multitenancy fail-closed validation (nil/`false`/blank tenant → error)
 - Sensitive-column verification (AshCloak-encrypted or binary or skip)
 - Resource resolver index (`{schema,table}` → resource mapping)
 - Value-free error/telemetry boundaries
 - Tenant-aware action execution (the `tenant:` option on the Ash action, resolved per-row from the source record's `tenant_attribute`)
 - Validity-windowed SCD2 history mode (opt-in; close-current + insert-version)
+- Destination commit-LSN checkpoint and snapshot callbacks
 
 ### Out (tenant-blind; lives in `replicant`)
 
@@ -56,8 +64,7 @@ This is "the `ash_postgres` of `replicant`" — just as `ash_postgres` is not
 - WAL message decoding
 - Transaction assembly and commit-LSN ordering
 - Schema-change detection
-- Exactly-once watermark (commit-LSN checkpoint)
-- Snapshot / initial sync
+- Snapshot extraction, chunking, and transport
 - Multi-DC / physical-multitenancy logic
 
 ## Key Decisions (Resolved)
@@ -76,17 +83,20 @@ sibling `replicant` crash-injection suite.
 
 ### [D2] Multitenancy is fail-closed; never a "base tenant" fallback
 
-**Decision:** If a source row's `tenant_attribute` or `tenant_mfa` resolves to nil/blank,
+**Decision:** If a source row's `tenant_attribute` or `tenant_mfa` resolves to nil/`false`/blank,
 the mirror write fails and the transaction rolls back — no silent base-tenant fallback.
 The sink fails closed EARLY: `Resolver.resolve_tenant/2` returns `{:error, :tenant_required}`
-(nil/blank/whitespace) and `Resolver.resolve_tenant!/3` raises before the write is attempted
+(nil/`false`/blank/whitespace) and `Resolver.resolve_tenant!/3` raises before the write is attempted
 (defense in depth on top of Ash's own multitenancy validation). Additionally, at COMPILE time
 a declared tenant source requires an Ash `multitenancy` block — `ValidateMultitenancy` rejects
 a `tenant_attribute` **or** `tenant_mfa` with no block (Ash would otherwise silently ignore
 `tenant:` and mirror every tenant unscoped), and the converse `ValidateTenantSource` rejects a
-non-global multitenant resource with no tenant source. Note: a tenant-scoped delete needs the
-tenant in `old_record`, so the source table must be `REPLICA IDENTITY FULL` (closeout amendment;
-see AGENTS Critical Rule 2). Recorded as [ADR-0001](adr/0001-fail-closed-multitenancy.md).
+non-global multitenant resource with no tenant source. A tenant-scoped delete,
+PK-changing update, or tenant reassignment needs the old tenant in `old_record`, so
+the source table normally must be `REPLICA IDENTITY FULL`. A `tenant_mfa` must
+resolve both new and old record shapes; an indeterminate old-side result is the
+open fail-closed guard in roadmap B4. Recorded as
+[ADR-0001](adr/0001-fail-closed-multitenancy.md).
 
 **Proof:** Compile-time `validate_multitenancy.ex` (both `tenant_attribute` and `tenant_mfa`
 arms) + `validate_tenant_source.ex` (converse) + runtime `:tenant_required` in
@@ -130,44 +140,46 @@ error reasons) — never row values. Including the halt path.
 
 ## Status Build Log
 
-The original 17-task build shipped and was closeout-reviewed on 2026-07-08. Subsequent
-runs, each with its own gitignored per-task ledger under `docs/superpowers/plans/`:
-3-task hardening + 7/11-task SCD2 history-mirror (2026-07-09), the multitenancy
-tenant-scope + require-a-block fix (2026-07-10, `c0a379f`/`ca32e21`), and the tenancy
-fail-open hardening (2026-07-14: `6dc51d7` false-tenant, `8a06ea9` action-bypass gate,
-`b81b2cd` multitenancy-`:attribute` shape, plus the `tenant_mfa` require-a-block symmetry).
-The **authoritative per-task ledgers** (task → commit sha, RED evidence, review rounds)
-live in those `docs/superpowers/plans/` files (local-only); product decisions are in
-`docs/adr/`. This charter does not duplicate the ledgers (a second copy only drifts).
+The original 17-task build shipped on 2026-07-08. SCD2, fail-closed tenancy
+verifiers, tenant reassignment, a dedicated integration database, CI, and optional
+checkpoint policy authorization followed through 0.4.0. The 2026-08-13 hardening
+foundation moved the repository to Elixir 1.20.3/OTP 29, Ash 3.31.3,
+AshPostgres 2.11, Postgrex 0.22.4, ymlr 5.1.6, and AshOnetime 0.6.0 with clean
+dependency audits and non-vacuous release gates.
 
-## Backlog (future, not committed)
+Release history has one forensic caveat: Hex package 0.3.3 is real and its
+packaged bytes match commit `3b61d3a9ae553fb96ff26e9fcf581416af723843`,
+but no local or remote `v0.3.3` tag exists. It is an untagged release; the project
+does not invent or move historical tags. GitHub Releases is incomplete for the
+0.3.3 and 0.4.0 packages, so Hex plus immutable git commits/tags is the 0.x
+release authority.
 
-### [B1] Adopt `ash_onetime` for authoritative Rule-3 admission (enhances [D1])
+The current implementation order and acceptance criteria are derived from
+`docs/ROADMAP.md`. Historical specs, plans, handoffs, and review reports remain
+evidence for their original runs; they do not override the roadmap or live code.
 
-**Opportunity:** [D1] today implements effect-once with a hand-rolled transaction-granularity
-`commit_lsn` watermark — skip `commit_lsn <= checkpoint`, upsert rows by PK, upsert the checkpoint
-in the same `Repo.transaction`. It works (loss=0, effect-dup=0, crash-proven) but it is bespoke
-admission: the sibling [`ash_onetime`](https://hex.pm/packages/ash_onetime) library provides the
-authoritative version for Ash/Postgres — `protect` the apply action with `strategy :idempotency`
-keyed on the transaction's `commit_lsn`, and the Postgres unique constraint (not an application-level
-pre-check) decides the replay within the retention boundary. `replicant`'s published
-[`docs/INVARIANTS.md`](../replicant/docs/INVARIANTS.md) §3 now points Ash sinks at `ash_onetime` as
-the recommended admission layer, so adopting it here aligns the sink with that guidance.
+## AshOnetime boundary for 1.0.0
 
-**Two concrete moves if adopted:**
-1. Replace the [D1] watermark admission with `ash_onetime` `strategy :idempotency` keyed on
-   `commit_lsn` — stronger race-protection (DB-constraint, no pre-read) and a uniform mechanism.
-2. Upgrade the at-least-once **non-transactional** `handle_message/2` path to effect-once *at the
-   sink* via `strategy :one_time_nonce` keyed on the message's `{lsn, ordinal}` — `replicant` still
-   states that path's *delivery* honestly as at-least-once; the nonce makes the *effect* once.
+AshOnetime 0.6.0 is a governed dependency for roadmap C1, not a replacement for
+the transaction checkpoint. The sink has no single universal Ash "apply action":
+one destination transaction invokes heterogeneous host actions and then persists
+its checkpoint. Protecting every row action with only `commit_lsn` would collide
+for distinct rows in the same transaction, and those host actions do not declare
+that LSN as an action input.
 
-**Trade-off:** a new dep (`ash_onetime`) + migrating the admission path off the working watermark,
-in exchange for authoritative admission and a single idempotency mechanism across both the
-transactional and non-transactional effect paths. `ash_onetime` rejects non-transactional /
-non-Postgres actions, which fits this sink (it is already Ash/Postgres + transactional).
+The accepted boundary is:
 
-**Status:** future, not committed; scope on touch. (A corresponding note lives in `replicant`'s
-1.0 tracker D2 / `ash_replicant` coordination row.)
+- keep the permanent source-bound commit-LSN checkpoint for WAL replay, resume,
+  transactional admission, and batch/snapshot frontiers;
+- route transactional logical messages inside their Replicant transaction;
+- use AshOnetime idempotency only around a declared non-transactional host message
+  action with a verified operation identity and three-state recovery where an
+  external peer can be ambiguous;
+- never use `one_time_nonce` for WAL retries, and never assume a non-transactional
+  message has a transactional ordinal.
+
+The full action, key, digest, recovery, retention, and value-free contract is the
+C1 row in `docs/ROADMAP.md`. No message action is implemented in 0.4.0.
 
 ## References
 

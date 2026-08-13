@@ -7,8 +7,10 @@ loss = 0), resolving resource, tenant, and classification in the Ash layer while
 keeping `replicant` tenant-blind.
 
 AshReplicant is the "`ash_postgres` of `replicant`": define Ash resources backed by
-a Postgres source's CDC stream, with multitenancy, sensitive-data encryption
-verification, and policies **enforced Ash-natively**. It executes through the
+a Postgres source's CDC stream, with multitenancy and sensitive-data encryption
+verification enforced through host Ash actions. Validations, changes, AshCloak
+hooks, and multitenancy run; the sink uses `authorize?: false`, so host policies are
+not re-gated. It executes through the
 [`replicant`](https://github.com/baselabs/replicant) client (the transport — the
 "`postgrex` of CDC").
 
@@ -29,7 +31,7 @@ Ash core        multitenancy DSL, policies, the tenant concept
 AshReplicant ← HERE   Ash resource extension: tenant routing, sensitive verification,
    │                   resource mapping, mirror actions
    │
-replicant       Postgres logical replication (pgoutput), exactly-once watermark
+replicant       Postgres logical replication (pgoutput), WAL ordering and delivery
    │
 Postgres        logical decoding output (pgoutput protocol)
 ```
@@ -52,17 +54,19 @@ as a transitive dependency.
 
 ### Supported foundation
 
-The 1.0.0 release line is built and tested with:
+The current 1.0.0 hardening baseline is built and tested with:
 
 - Elixir 1.20.3 on Erlang/OTP 29;
 - Ash `>= 3.31.3 and < 4.0.0-0` and AshPostgres 2.11.x;
-- Replicant 0.3.x and AshOnetime 0.6.x;
+- Replicant 0.3.x pending the dependency-ordered Replicant 1.x coordination, and
+  AshOnetime 0.6.x;
 - PostgreSQL 16 with `wal_level=logical` for the current live integration gate.
 
 The Ash lower bound excludes known-vulnerable patches, and the upper bound
 excludes Ash 4 prereleases. AshOnetime is present for the logical-message
-idempotency contract being implemented for 1.0.0; it does not replace the durable
-commit-LSN checkpoint used for transaction replay and resume.
+idempotency contract tracked for 1.0.0; no message action is shipped yet. It does
+not replace the durable commit-LSN checkpoint used for transaction replay and
+resume.
 
 See [ADR-0002](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0002-supported-runtime-and-dependencies.md)
 for the dependency decision and
@@ -180,11 +184,14 @@ end
   table/schema via reflection. Optionally override to map a different source.
 - **`tenant_attribute`** — source column carrying the tenant. Resolved per row and
   passed as `tenant:` to the mirror action. Fail-closed if nil/`false`/blank (Ash treats
-  a falsy tenant as unscoped). The source table must be `REPLICA IDENTITY FULL` so a
-  delete's / PK-changing update's `old_record` carries the tenant column (key-only under
-  the default identity).
+  a falsy tenant as unscoped). The source table must be `REPLICA IDENTITY FULL` so
+  `old_record` carries the tenant for deletes, PK changes, and same-PK tenant
+  reassignment (it is key-only under the default identity).
 - **`tenant_mfa`** — alternative tenant source: `{Module, :function, [extra_args]}`
   applied as `apply(Module, :function, [record | extra_args])` yielding the tenant.
+  It must resolve deterministically from both new and old record shapes. An old-side
+  raise currently makes reassignment indeterminate; that fail-closed guard is tracked
+  in roadmap B4.
 - **Compile-time tenancy checks** (fail-closed at build, `ValidateMultitenancy` /
   `ValidateActionMultitenancy` — see
   [ADR-0001](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0001-fail-closed-multitenancy.md)):
@@ -240,6 +247,9 @@ AshReplicant.start_link(
 - The `slot_name` comes from the sink (not a `start_link` option).
 - The resolver index is built and cached in `:persistent_term` keyed by `slot_name`.
 - Rows arrive from the source's CDC stream and are upserted into the mirrors.
+- `snapshot: false` and Replicant's v1 snapshot (`snapshot: true`) are supported.
+  Incremental snapshot configuration is rejected until roadmap C3 adds durable
+  progress and target provenance.
 
 ## Effect-Once Semantics
 
@@ -257,7 +267,7 @@ tests against real PG16).
 
 ## Multitenancy & Classification
 
-- **Fail-closed:** nil/blank tenant → error, never a base-tenant fallback.
+- **Fail-closed:** nil/`false`/blank tenant → error, never a base-tenant fallback.
 - **Per-row:** each source row's tenant is resolved via `tenant_attribute` or `tenant_mfa`,
   then passed as `tenant:` to the mirror action. Ash's multitenancy DSL validates it.
 - **One layer up:** multitenancy logic stays here; `replicant` is tenant-blind.

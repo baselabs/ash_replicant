@@ -57,15 +57,18 @@ close), which would otherwise let Ash ignore the tenant on a write OR a `bulk_up
 `bulk_destroy` row match.
 
 > **Operational requirement — tenant-scoped source tables must be `REPLICA IDENTITY FULL`.**
-> A `:delete` (and a PK-changing `:update`) derives the tenant from `old_record`, but
+> A `:delete`, PK-changing `:update`, or tenant-reassigning `:update` derives the
+> old tenant from `old_record`, but
 > under the Postgres-DEFAULT replica identity `old_record` carries **only the primary-key
 > columns** — the tenant discriminator (a non-PK attribute) is absent, so tenant
 > resolution fails and the pipeline halts **fail-closed** (`:tenant_required`, never a
 > base-tenant delete). Set `ALTER TABLE <src> REPLICA IDENTITY FULL` on every source
-> table backing a tenant-scoped mirror so `old_record` carries the tenant column. Insert
-> and non-PK-changing update need only the new `record` (which always carries all
-> columns), so they are unaffected; the requirement is specific to delete / PK-change of
-> tenant-scoped resources. (Non-tenant mirrors work under the default identity.)
+> table backing a tenant-scoped mirror so `old_record` carries the tenant column.
+> Ordinary same-tenant, non-PK-changing updates need only the new `record`; tenant
+> reassignment also needs the old record and is not exempt. A `tenant_mfa` must resolve
+> deterministically from both record shapes. Until roadmap B4 lands, an absent or
+> raising old-side resolution cannot prove reassignment and may retain the old SCD1
+> owner or SCD2 current version. (Non-tenant mirrors work under the default identity.)
 >
 > The same `REPLICA IDENTITY FULL` requirement applies to an **SCD2 resource whose
 > `history_business_key` is not the source primary key** — a delete / key-changing

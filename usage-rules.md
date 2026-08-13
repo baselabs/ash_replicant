@@ -10,7 +10,9 @@ _An Ash adapter for the `replicant` CDC framework — the "`ash_postgres` of
   changes to Ash resources with effect-once semantics (dup = 0, loss = 0).
 - **Is not:** the CDC transport itself. That is `replicant`'s job. AshReplicant
   consumes a `Replicant.Sink` interface and owns the Ash-layer semantics
-  (multitenancy, policies, encryption) above it.
+  (resource resolution, multitenancy, encryption, and trusted system action
+  execution) above it. The sink uses `authorize?: false`, so host policies are not
+  re-gated.
 - **Is:** integrated with AshCloak. Sensitive columns must be encrypted by AshCloak
   or stored as binary (user-managed), verified at compile time.
 - **Is not:** tenant-aware in the transport — multitenancy is Ash-aware here.
@@ -108,11 +110,13 @@ end
 - **`tenant_attribute`** — source column carrying the tenant. Must be a plaintext,
   declared, non-sensitive attribute. Resolved per row and passed as `tenant:` to
   the mirror action. **The source table must be `REPLICA IDENTITY FULL`** — a
-  `:delete` / PK-changing `:update` resolves the tenant from `old_record`, which is
-  key-only under the default replica identity (the tenant column would be absent →
-  fail-closed `:tenant_required`).
+  `:delete`, PK-changing `:update`, or same-PK tenant reassignment needs the tenant
+  from `old_record`, which is key-only under the default replica identity.
 - **`tenant_mfa`** — alternative: `{Module, :function, [extra_args]}` applied as
-  `apply(Module, :function, [record | extra_args])` yielding the tenant.
+  `apply(Module, :function, [record | extra_args])` yielding the tenant. It must be
+  deterministic and non-raising for both the new and old record shapes. An
+  indeterminate old-side result currently cannot prove reassignment; roadmap B4
+  owns the fail-closed runtime guard.
 - **Multitenancy block required for either source.** Declaring `tenant_attribute` or
   `tenant_mfa` requires an Ash `multitenancy` block (any strategy — `:attribute`/`:context`,
   incl. `global?`); `ValidateMultitenancy` fails the build closed otherwise. Without a block
@@ -156,8 +160,10 @@ AshReplicant.start_link(
 - `:connection` — Postgrex connection options (required). Point at a standby or
   replica to avoid load on the primary.
 - `:publication` — Postgres publication name (required).
-- `:go_forward_only`, `:snapshot` — passed to `Replicant.start_link/1`. See
-  `replicant`'s usage docs for details.
+- `:go_forward_only` — passed to `Replicant.start_link/1`.
+- `:snapshot` — `false` disables snapshots and `true` selects Replicant's v1
+  snapshot. Incremental snapshot options are not supported by this adapter until
+  roadmap C3 adds `snapshot_progress/0` and target provenance.
 
 **Key:** the `slot_name` comes from the sink, not `start_link` options. It keys the
 resolver index and the replication slot name.
@@ -229,13 +235,13 @@ source primary key, set `ALTER TABLE <src> REPLICA IDENTITY FULL` so `old_record
 carries the business-key columns — the same requirement, and the same fail-closed
 reason, as a non-PK `tenant_attribute`.
 
-**A mutable tenant must be part of the business key.** The per-change close is scoped to
-the change record's resolved tenant. Tenant (`tenant_attribute`) is normally an immutable
-owner scope; but if a source row can change tenant while keeping the same business key,
-include the tenant column in `history_business_key` so the move is treated as a business-key
-change (the old-tenant version is then closed). Otherwise keep the partial-unique-open index
-**global** on the business key (its shape above): a same-key tenant move then fails closed on
-a unique violation rather than silently leaving the old tenant's version open.
+**Tenant reassignment needs the old tenant.** The SCD2 path closes the old tenant's
+open version and opens under the new tenant even when the business key is unchanged;
+the tenant does not need to be added to `history_business_key`. The source must expose
+the old tenant (`REPLICA IDENTITY FULL` for a non-PK tenant column), and a `tenant_mfa`
+must resolve both record shapes. If the old tenant is absent or the MFA raises, the
+current code cannot prove a reassignment; roadmap B4 owns the value-free fail-closed
+halt for that indeterminate case.
 
 **History is retained on delete (soft-close).** A source delete **closes** the current
 version (stamps `valid_to_lsn`); it never erases prior versions. SCD2 therefore does
@@ -285,10 +291,12 @@ at compile time.
 
 `replicant` is the CDC transport layer — tenant-blind, Ash-agnostic. It owns the
 Postgres logical replication slot, the `pgoutput` protocol, transaction assembly,
-and exactly-once watermark (`commit_lsn` at transaction granularity).
+WAL ordering, and acknowledgement after sink success. AshReplicant owns its durable
+commit-LSN checkpoint and persists it with the Ash effects.
 
 AshReplicant consumes a `Replicant.Sink` interface and layers Ash semantics on top:
-resource resolution, tenant routing, sensitive verification, and policies.
+resource resolution, tenant routing, sensitive verification, host actions, and the
+atomic checkpoint. Host policies are not re-gated.
 
 Never add multitenancy or classification logic to `replicant`. The split is the
 reason they are separate libraries.

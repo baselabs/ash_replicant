@@ -1,5 +1,10 @@
 # Handoff — `ash_replicant` kickoff (cold-start for a fresh session)
 
+> **Historical, superseded.** This is the pre-build kickoff testimony. The
+> library shipped and the instructions below are not actionable. Use
+> `docs/ROADMAP.md` and live code for current work; do not restart services or
+> re-run this greenfield sequence from this document.
+
 **Date:** 2026-07-08 · **Type:** forward-looking KICKOFF (not a compaction of prior build work — `ash_replicant` has no build yet). Seeds a new session that will **design then build** `ash_replicant`, now that its gating dependency (`replicant`) is published.
 
 ---

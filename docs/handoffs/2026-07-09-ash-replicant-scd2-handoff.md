@@ -1,5 +1,10 @@
 # AshReplicant handoff — 2026-07-09 (post-0.2.0 release + SCD2 plan ready)
 
+> **Historical, superseded.** SCD2 shipped in 0.3.0 and remains implemented in
+> `AshReplicant.Apply.Scd2`. The execution and Docker instructions below are
+> preserved as point-in-time testimony only. Use `docs/ROADMAP.md` and live code;
+> do not start or restart services from this document.
+
 _For a fresh agent with zero conversation history, after a machine reboot + Claude account switch._
 
 ## ⚠️ Worst open item first

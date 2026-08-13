@@ -1,5 +1,10 @@
 # ash_replicant — closeout + verifier handoff (2026-07-09)
 
+> **Frozen historical evidence.** Every status/action statement in the body is
+> scoped to the 2026-07-09 closeout. Releases through 0.4.0 and the canonical
+> 1.0.0 roadmap supersede its continuation instructions. Do not act from its
+> "Open" or release language; use `docs/ROADMAP.md` and live code.
+>
 > **[Superseded 2026-07-09]** The two carried F13/F14 optimizations this doc hands off
 > were implemented and closed at **100/100** (`/review-autopilot --fix`, slice commits
 > `4ee5338`/`cab54b8`/`82652e7` + closeout fix commits `9052e0c`/`7cd8860`/`4d438b8`),
@@ -7,7 +12,7 @@
 > (`test/ash_replicant/notifier_suppression_test.exs`). Repo HEAD `2e50844`, `main`,
 > all gates green (87 tests / 0 failures). Retained as the historical record of the
 > state at `f3f2a1f`; do **not** act on its "Open / not done" F13/F14 items — they are
-> done. The only remaining work is the deliberately-deferred release/publish path.
+> done. The final sentence below was true only at this historical boundary.
 
 ## ⚠️ Worst open item first
 

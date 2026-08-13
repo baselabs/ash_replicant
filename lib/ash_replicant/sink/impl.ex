@@ -5,12 +5,11 @@ defmodule AshReplicant.Sink.Impl do
   `Repo.transaction` wrapping {dedup-check → single-pass apply → checkpoint
   upsert}, value-free and fail-closed.
 
-  Mirrored writes run inside the host transaction and pass
-  `return_notifications?: true`, so Ash bundles any notification into the return
-  value (never firing a notifier) and the sink discards it — Ash notifiers/pubsub
-  do NOT fire for mirrored changes. (Ash cannot emit notifications from within a
-  host-managed transaction anyway; `notify?: false` is not honored by
-  single-record create/destroy in Ash 3.x, only `return_notifications?`.)
+  Mirrored creates and SCD2 updates run inside the host transaction with
+  `return_notifications?: true`, so Ash bundles notifications into the return
+  value and the sink discards them. Mirrored bulk destroys use Ash's default
+  `notify?: false`. Ash notifiers/pubsub therefore do not fire for mirrored
+  changes; the mechanisms differ by action path.
   """
 
   alias AshPostgres.DataLayer.Info, as: PGInfo
