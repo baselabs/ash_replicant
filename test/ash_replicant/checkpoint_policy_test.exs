@@ -1,16 +1,10 @@
 defmodule AshReplicant.CheckpointPolicyTest do
   @moduledoc """
-  The `authorizers:` opt on `use AshReplicant.Checkpoint` (0.4). Two layers:
-
-    * introspection (no DB) — the opt actually reaches `use Ash.Resource`: the policied
-      checkpoint carries `Ash.Policy.Authorizer` + declared policies, and the default
-      checkpoint (no opt) carries neither. This is the gap closing — before the opt, a
-      `policies do` block on the generated resource was an unknown-section compile error.
-    * enforcement (`:integration`, needs live PG) — the policies actually bite: a
-      non-system actor is denied, a system actor is allowed, and the sink's
-      `authorize?: false` path bypasses both regardless.
+  Database-free introspection for the `authorizers:` option on
+  `use AshReplicant.Checkpoint`. Live policy enforcement is covered separately under
+  `test/integration/checkpoint_policy_test.exs`.
   """
-  use AshReplicant.DataCase, async: false
+  use ExUnit.Case, async: true
 
   alias AshReplicant.Test.{Checkpoint, CheckpointPolicied}
 
@@ -32,82 +26,6 @@ defmodule AshReplicant.CheckpointPolicyTest do
         assert :read in action_names
         assert Ash.Resource.Info.identity(resource, :unique_slot)
       end
-    end
-  end
-
-  describe "enforcement — the declared policies bite (needs live PG)" do
-    @describetag :integration
-
-    setup do
-      # Seed via the sink's own path (authorize?: false) so the row exists regardless of
-      # policy — exactly how the sink writes it.
-      {:ok, row} =
-        Ash.create(CheckpointPolicied, %{slot_name: "policy-slot", commit_lsn: 7},
-          action: :upsert,
-          authorize?: false
-        )
-
-      %{row: row}
-    end
-
-    test "the sink path (authorize?: false) reads + upserts regardless of policy" do
-      # Read bypass.
-      assert Ash.get!(CheckpointPolicied, "policy-slot", authorize?: false).commit_lsn == 7
-
-      # Upsert bypass — effect-once path is untouched by the authorizer.
-      assert {:ok, _} =
-               Ash.create(CheckpointPolicied, %{slot_name: "policy-slot", commit_lsn: 99},
-                 action: :upsert,
-                 authorize?: false
-               )
-
-      assert Ash.get!(CheckpointPolicied, "policy-slot", authorize?: false).commit_lsn == 99
-    end
-
-    test "a system actor is allowed to read (non-vacuity — policies are not blanket-deny)" do
-      assert {:ok, %{commit_lsn: 7}} =
-               Ash.get(CheckpointPolicied, "policy-slot",
-                 actor: %{system: true},
-                 authorize?: true
-               )
-    end
-
-    test "a non-system actor is denied the read (hard Forbidden, not a silent empty)" do
-      # The check is actor-only, so a denial is a hard 403 — the watermark's existence is
-      # never leaked as an empty result. This is the shape a host's own trust-band check
-      # (a SimpleCheck) produces, which is the real consumption pattern.
-      assert {:error, %Ash.Error.Forbidden{}} =
-               Ash.get(CheckpointPolicied, "policy-slot",
-                 actor: %{system: false},
-                 authorize?: true
-               )
-    end
-
-    test "a nil actor is denied the read (fail-closed under :strict)" do
-      assert {:error, %Ash.Error.Forbidden{}} =
-               Ash.get(CheckpointPolicied, "policy-slot", actor: nil, authorize?: true)
-    end
-
-    test "a non-system actor is denied a non-sink create (only the sink's authorize?: false writes)" do
-      assert {:error, %Ash.Error.Forbidden{}} =
-               Ash.create(CheckpointPolicied, %{slot_name: "policy-slot-2", commit_lsn: 1},
-                 action: :upsert,
-                 actor: %{system: false},
-                 authorize?: true
-               )
-    end
-
-    test "the DEFAULT checkpoint stays open under authorize?: true (no authorizer to enforce)" do
-      {:ok, _} =
-        Ash.create(Checkpoint, %{slot_name: "open-slot", commit_lsn: 3},
-          action: :upsert,
-          authorize?: false
-        )
-
-      # No authorizer → authorize?: true is a no-op → the row is returned. This is the
-      # pre-0.4 behaviour, proving the opt is purely additive.
-      assert Ash.get!(Checkpoint, "open-slot", actor: %{system: false}, authorize?: true).commit_lsn ==
-               3
     end
   end
 end
