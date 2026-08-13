@@ -14,6 +14,8 @@ the narrative "why"; an ADR is the tracked, per-decision record with code eviden
 | # | Decision | Charter ref |
 |---|---|---|
 | [0001](0001-fail-closed-multitenancy.md) | Multitenancy is fail-closed; a declared tenant source requires a multitenancy block | [D2] |
+| [0002](0002-supported-runtime-and-dependencies.md) | Support Elixir 1.20.3/OTP 29 and an audit-clean Ash 3 line | 1.0.0 release contract |
+| [0003](0003-verification-and-release-evidence.md) | Release evidence must prove no-database, live integration, drift, docs, and package substrates independently | 1.0.0 release contract |
 
 ## On-touch gap list (not yet authored — author when a slice next touches the surface)
 

@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Raise the 1.0.0 dependency floor to audit-clean Ash 3.31.3 and exclude Ash 4
+  prereleases; resolve Postgrex 0.22.4 and ymlr 5.1.6 so `mix hex.audit` and
+  `mix deps.audit` report no known advisories.
+
+### Added
+
+- Add AshOnetime 0.6.0 as the governed idempotency dependency for the logical-message
+  actions planned for 1.0.0. The permanent commit-LSN checkpoint remains the
+  transaction replay and resume authority.
+- Add independent CI paths for no-database tests, exact-floor/latest-Ash live
+  PostgreSQL integration, migration drift, Dialyzer, warnings-as-errors docs, and
+  selector-free Hex package inspection. Checked-in assertions reject missing,
+  skipped, excluded, or failing integration evidence.
+
+### Changed
+
+- Require Elixir 1.20.3/OTP 29 and the AshPostgres 2.11 dependency family for the
+  1.0.0 release line.
+
+### Fixed
+
+- Split checkpoint policy introspection from its six live enforcement cases so
+  `mix test --exclude integration` runs successfully without starting TestRepo.
+
 ## [0.4.0] - 2026-08-03
 
 ### Added

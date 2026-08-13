@@ -12,7 +12,7 @@ verification, and policies **enforced Ash-natively**. It executes through the
 [`replicant`](https://github.com/baselabs/replicant) client (the transport — the
 "`postgrex` of CDC").
 
-> **Status: v0.3.0.** Full working library with effect-once guarantees, fail-closed
+> **Status: v0.4.0; 1.0.0 hardening in progress.** Full working library with effect-once guarantees, fail-closed
 > multitenancy (compile-time verified), SCD2 history mirroring, and AshCloak integration.
 > Working rules are in
 > [`AGENTS.md`](https://github.com/baselabs/ash_replicant/blob/main/AGENTS.md) — read it
@@ -44,11 +44,30 @@ Add `ash_replicant` to your dependencies in `mix.exs`:
 
 ```elixir
 # mix.exs
-{:ash_replicant, "~> 0.3.0"}
+{:ash_replicant, "~> 0.4.0"}
 ```
 
 It pulls in [`replicant`](https://github.com/baselabs/replicant) (the CDC transport)
 as a transitive dependency.
+
+### Supported foundation
+
+The 1.0.0 release line is built and tested with:
+
+- Elixir 1.20.3 on Erlang/OTP 29;
+- Ash `>= 3.31.3 and < 4.0.0-0` and AshPostgres 2.11.x;
+- Replicant 0.3.x and AshOnetime 0.6.x;
+- PostgreSQL 16 with `wal_level=logical` for the current live integration gate.
+
+The Ash lower bound excludes known-vulnerable patches, and the upper bound
+excludes Ash 4 prereleases. AshOnetime is present for the logical-message
+idempotency contract being implemented for 1.0.0; it does not replace the durable
+commit-LSN checkpoint used for transaction replay and resume.
+
+See [ADR-0002](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0002-supported-runtime-and-dependencies.md)
+for the dependency decision and
+[ADR-0003](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0003-verification-and-release-evidence.md)
+for the release-evidence contract.
 
 ## Quick Start
 
@@ -258,8 +277,20 @@ violates one of these rules.
 
 ```bash
 mix deps.get
-mix test
-mix quality   # format --check-formatted + credo --strict + dialyzer
+env -u ASH_REPLICANT_TEST_URL mix test --exclude integration
+
+export ASH_REPLICANT_TEST_URL="postgres://postgres@localhost:5599/postgres"
+MIX_ENV=test mix ecto.create
+MIX_ENV=test mix ecto.migrate
+mix test --include integration
+
+mix format --check-formatted
+mix compile --warnings-as-errors
+mix credo --strict
+mix deps.audit
+mix dialyzer
+mix docs --warnings-as-errors
+mix hex.build
 ```
 
 All gates pass before commit. Update `CHANGELOG.md` under `[Unreleased]`.

@@ -4,11 +4,11 @@ Thank you for your interest in contributing to AshReplicant!
 
 ## Prerequisites
 
-- **Elixir** 1.15+ and **Erlang/OTP** 26+
-- `replicant` is a **Hex dependency** (`{:replicant, "~> 0.1.0"}` in `mix.exs`), pulled by
+- **Elixir 1.20.3** and **Erlang/OTP 29** (run `asdf install` from the repository root)
+- `replicant` is a **Hex dependency** (`{:replicant, "~> 0.3.0"}` in `mix.exs`), pulled by
   `mix deps.get` — no sibling checkout is required to build or test. A local checkout at
   `../replicant` is only needed for cross-repo design/brainstorm work (see `CLAUDE.md`).
-- **PostgreSQL** 14+ for integration tests (with `wal_level=logical`); the
+- **PostgreSQL 16** for the current integration gate (with `wal_level=logical`); the
   integration suite runs against a live Postgres with a logical replication slot
   and publication
 
@@ -17,8 +17,9 @@ Thank you for your interest in contributing to AshReplicant!
 ```bash
 git clone https://github.com/baselabs/ash_replicant.git
 cd ash_replicant
+asdf install
 mix deps.get
-mix test
+env -u ASH_REPLICANT_TEST_URL mix test --exclude integration
 ```
 
 ## Development Workflow
@@ -28,13 +29,14 @@ mix test
 3. Ensure all checks pass before opening a PR:
 
 ```bash
-mix format
-mix credo --strict
+mix format --check-formatted
 mix compile --warnings-as-errors
-mix test
+mix credo --strict
+env -u ASH_REPLICANT_TEST_URL mix test --exclude integration
+mix deps.audit
 mix dialyzer
-# or all gates at once:
-mix quality
+mix docs --warnings-as-errors
+mix hex.build
 ```
 
 4. Update `CHANGELOG.md` under `[Unreleased]`.
@@ -58,8 +60,21 @@ mix quality
   export ASH_REPLICANT_TEST_URL="postgres://postgres@localhost:5599/postgres"
   MIX_ENV=test mix ecto.create   # creates ash_replicant_test
   MIX_ENV=test mix ecto.migrate
-  mix test                       # unit + integration (the env var enables integration)
+  mix test --include integration # unit + integration
+  mix test test/integration --include integration --trace
   ```
+
+  Check resource snapshots against migrations with the same explicit-domain
+  command used by CI:
+
+  ```bash
+  MIX_ENV=test mix run --no-start -e '
+  Code.ensure_loaded!(AshPostgres.CustomIndex)
+  Mix.Task.run("ash_postgres.generate_migrations", ["--check", "--domains", "AshReplicant.Test.Domain"])'
+  ```
+
+  The full release battery is intentionally not represented by `mix quality`;
+  that alias covers format, Credo, and Dialyzer only.
 
 ## Critical rules (binding)
 
