@@ -129,6 +129,12 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   @checkout "actions/checkout@11d5960a326750d5838078e36cf38b85af677262"
   @setup_beam "erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236"
   @cache "actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830"
+  @named_separator_entities ~w(
+    af ApplyFunction emsp13 emsp14 emsp ensp hairsp ic InvisibleComma
+    InvisibleTimes it lrm MediumSpace nbsp NegativeMediumSpace NegativeThickSpace
+    NegativeThinSpace NegativeVeryThinSpace NewLine NoBreak NonBreakingSpace numsp
+    puncsp rlm shy Tab ThickSpace thinsp ThinSpace VeryThinSpace ZeroWidthSpace zwj zwnj
+  )
   @mix_contracts [
     ~s(@ash_requirement ">= 3.31.3 and < 4.0.0-0"),
     ~s(elixir: "~> 1.20.3")
@@ -400,6 +406,24 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       assert_invalid!()
     end
 
+    for job <- ["no-database", "compatibility", "release-artifact"] do
+      prepare_fixture()
+
+      mutate_job!(
+        job,
+        "    runs-on: ubuntu-latest\n",
+        """
+            runs-on: ubuntu-latest
+            container:
+              image: ubuntu:24.04
+              env:
+                BASH_ENV: /tmp/release-bypass
+        """
+      )
+
+      assert_invalid!()
+    end
+
     prepare_fixture()
 
     insert_after_first_checkout!("""
@@ -409,6 +433,37 @@ defmodule AshReplicant.ReleaseContractSelfTest do
               printf '%s\\n' 'BASH_ENV=/tmp/release-bypass' >> "$GITHUB_ENV"
     """)
 
+    assert_invalid!()
+
+    prepare_fixture()
+
+    mutate_job!(
+      "no-database",
+      "          elixir-version: ${{ env.ELIXIR_VERSION }}\n",
+      "          elixir-version: 1.18.0\n"
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
+    mutate_job!(
+      "no-database",
+      "          path: |\n            deps\n            _build\n",
+      """
+                path: |
+                  deps
+                  _build
+                  scripts/assert-release-contract.sh
+                  scripts/test-release-contract.sh
+                  .github/workflows/ci.yml
+      """
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+    mutate_job!("compatibility", "      fail-fast: false\n", "      fail-fast: true\n")
     assert_invalid!()
 
     for replacement <- [
@@ -524,30 +579,25 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
       assert_invalid!()
 
-      prepare_fixture()
-
-      replace_once!(
-        path,
-        heading,
-        "#{heading}\n\nThis package does&#32;not support Elixir 1.20.3 or Erlang/OTP 29."
-      )
-
-      assert_invalid!()
-
-      for entity <- [
-            "&thinsp;",
-            "&hairsp;",
-            "&MediumSpace;",
-            "&NegativeThinSpace;",
-            "&Tab;",
-            "&NewLine;"
-          ] do
+      for entity <- ["&#32;", "&#160;", "&#x2009;", "&#8203;"] do
         prepare_fixture()
 
         replace_once!(
           path,
           heading,
           "#{heading}\n\nThis package does#{entity}not support Elixir 1.20.3 or Erlang/OTP 29."
+        )
+
+        assert_invalid!()
+      end
+
+      for name <- @named_separator_entities do
+        prepare_fixture()
+
+        replace_once!(
+          path,
+          heading,
+          "#{heading}\n\nThis package does&#{name};not support Elixir 1.20.3 or Erlang/OTP 29."
         )
 
         assert_invalid!()
@@ -680,19 +730,19 @@ defmodule AshReplicant.ReleaseContractSelfTest do
            line -> "          " <> line
          end)) <> "\n"
 
-    cond do
-      String.contains?(content, direct) ->
-        mutate_job!(job, direct, "")
+    job_regex = ~r/^  #{Regex.escape(job)}:\n.*?(?=^  [a-z][a-z0-9-]+:\n|\z)/ms
+    [{job_start, job_length}] = Regex.run(job_regex, content, return: :index)
+    job_block = binary_part(content, job_start, job_length)
 
-      String.contains?(content, named) ->
-        mutate_job!(job, named, "        run: echo release-contract-command-removed\n")
+    step =
+      Regex.scan(~r/^      - .*?(?=^      - |\z)/ms, job_block)
+      |> List.flatten()
+      |> Enum.find(fn step ->
+        String.contains?(step, direct) or String.contains?(step, named) or
+          String.contains?(step, multiline)
+      end)
 
-      String.contains?(content, multiline) ->
-        mutate_job!(job, multiline, "        run: echo release-contract-command-removed\n")
-
-      true ->
-        raise "run fixture anchor missing: #{command}"
-    end
+    if step, do: mutate_job!(job, step, ""), else: raise("run fixture anchor missing: #{command}")
   end
 
   defp swap_run_commands!(job, first, second) do
@@ -719,6 +769,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   end
 
   defp assert_invalid! do
+    YamlElixir.read_from_file!(fixture_path(@workflow))
     AshReplicant.ReleaseContract.run(@fixture_root)
     raise "release contract checker accepted a negative fixture"
   rescue

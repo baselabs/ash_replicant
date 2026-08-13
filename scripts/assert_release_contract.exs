@@ -6,6 +6,14 @@ defmodule AshReplicant.ReleaseContract do
   @immutable_action ~r/\A[^@\s]+@[0-9a-f]{40}\z/
   @postgres_image "postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b"
   @ash_requirement ">= 3.31.3 and < 4.0.0-0"
+  @checkout "actions/checkout@11d5960a326750d5838078e36cf38b85af677262"
+  @setup_beam "erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236"
+  @cache "actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830"
+
+  @setup_beam_inputs %{
+    "elixir-version" => "${{ env.ELIXIR_VERSION }}",
+    "otp-version" => "${{ env.OTP_VERSION }}"
+  }
 
   @postgres_run """
   docker run -d --name pg \\
@@ -101,11 +109,22 @@ defmodule AshReplicant.ReleaseContract do
     }
   ]
 
+  @job_keys %{
+    "no-database" => ~w(env name runs-on steps),
+    "compatibility" => ~w(env name runs-on steps strategy),
+    "release-artifact" => ~w(env name runs-on steps)
+  }
+
   @job_steps %{
     "no-database" => [
-      {:uses, "actions/checkout@11d5960a326750d5838078e36cf38b85af677262"},
-      {:uses, "erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236"},
-      {:uses, "actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830"},
+      {:uses, @checkout, :absent},
+      {:uses, @setup_beam, @setup_beam_inputs},
+      {:uses, @cache,
+       %{
+         "path" => "deps\n_build\n",
+         "key" =>
+           "${{ runner.os }}-no-db-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}"
+       }},
       {:run, "mix deps.get"},
       {:run, "mix deps.compile"},
       {:run, "mix format --check-formatted"},
@@ -120,10 +139,15 @@ defmodule AshReplicant.ReleaseContract do
        "env -u ASH_REPLICANT_TEST_URL scripts/run-structural-tests.sh --allow-excluded --exclude integration"}
     ],
     "compatibility" => [
-      {:uses, "actions/checkout@11d5960a326750d5838078e36cf38b85af677262"},
+      {:uses, @checkout, :absent},
       {:run, String.trim(@postgres_run)},
-      {:uses, "erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236"},
-      {:uses, "actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830"},
+      {:uses, @setup_beam, @setup_beam_inputs},
+      {:uses, @cache,
+       %{
+         "path" => "deps\n_build\npriv/plts\n",
+         "key" =>
+           "${{ runner.os }}-ash-${{ matrix.label }}-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}"
+       }},
       {:run, String.trim(@resolve_ash)},
       {:run, "mix deps.compile"},
       {:run, "mix compile --warnings-as-errors"},
@@ -139,9 +163,14 @@ defmodule AshReplicant.ReleaseContract do
       {:run, "mix dialyzer"}
     ],
     "release-artifact" => [
-      {:uses, "actions/checkout@11d5960a326750d5838078e36cf38b85af677262"},
-      {:uses, "erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236"},
-      {:uses, "actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830"},
+      {:uses, @checkout, :absent},
+      {:uses, @setup_beam, @setup_beam_inputs},
+      {:uses, @cache,
+       %{
+         "path" => "deps\n_build\n",
+         "key" =>
+           "${{ runner.os }}-release-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}"
+       }},
       {:run, "env -u ASH_REPLICANT_ASH_VERSION mix deps.get"},
       {:run, "mix deps.compile"},
       {:run, "mix compile --warnings-as-errors"},
@@ -153,6 +182,13 @@ defmodule AshReplicant.ReleaseContract do
       {:run, String.trim(@package_inspection)}
     ]
   }
+
+  @named_separator_entities ~w(
+    af ApplyFunction emsp13 emsp14 emsp ensp hairsp ic InvisibleComma
+    InvisibleTimes it lrm MediumSpace nbsp NegativeMediumSpace NegativeThickSpace
+    NegativeThinSpace NegativeVeryThinSpace NewLine NoBreak NonBreakingSpace numsp
+    puncsp rlm shy Tab ThickSpace thinsp ThinSpace VeryThinSpace ZeroWidthSpace zwj zwnj
+  )
 
   @doc_contracts [
     {"README.md", "### Supported foundation",
@@ -238,9 +274,10 @@ defmodule AshReplicant.ReleaseContract do
     Enum.each(@job_steps, fn {name, expected_steps} ->
       job = jobs[name] || fail("CI release jobs are incomplete")
 
-      for key <- ["if", "needs", "continue-on-error", "defaults"] do
-        assert(not Map.has_key?(job, key), "CI release job control is invalid")
-      end
+      assert(
+        Enum.sort(Map.keys(job)) == Enum.sort(@job_keys[name]),
+        "CI release job control is invalid"
+      )
 
       assert(job["runs-on"] == "ubuntu-latest", "CI release runner is invalid")
       assert(job["env"] == @job_env[name], "CI release job environment is invalid")
@@ -263,16 +300,18 @@ defmodule AshReplicant.ReleaseContract do
       "CI release Action step control is invalid"
     )
 
-    {:uses, action}
+    {:uses, action, Map.get(step, "with", :absent)}
   end
 
   defp step_signature(_step), do: fail("CI release step is invalid")
 
   defp assert_compatibility(workflow) do
     job = get_in(workflow, ["jobs", "compatibility"]) || fail("CI compatibility job is missing")
-    rows = get_in(job, ["strategy", "matrix", "include"]) || []
 
-    assert(rows == @matrix, "CI Ash compatibility matrix is invalid")
+    assert(
+      job["strategy"] == %{"fail-fast" => false, "matrix" => %{"include" => @matrix}},
+      "CI Ash compatibility matrix is invalid"
+    )
   end
 
   defp assert_cache_partition(workflow) do
@@ -280,7 +319,7 @@ defmodule AshReplicant.ReleaseContract do
 
     assert(
       Enum.any?(steps, fn step ->
-        step["uses"] == "actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830" and
+        step["uses"] == @cache and
           String.contains?(get_in(step, ["with", "key"]) || "", "${{ matrix.label }}")
       end),
       "CI compatibility cache contract is incomplete"
@@ -426,19 +465,19 @@ defmodule AshReplicant.ReleaseContract do
         digits |> String.to_integer(16) |> List.wrap() |> List.to_string()
       end)
     )
-    |> then(&Regex.replace(named_whitespace_entity(), &1, " "))
+    |> then(
+      &Regex.replace(~r/&([A-Za-z][A-Za-z0-9]+);/, &1, fn entity, name ->
+        if name in @named_separator_entities, do: " ", else: entity
+      end)
+    )
   rescue
     _error in [ArgumentError, UnicodeConversionError] ->
       fail("published contract entity is invalid")
   end
 
-  defp named_whitespace_entity do
-    ~r/&(?:Tab|NewLine|nbsp|ensp|emsp|emsp13|emsp14|numsp|puncsp|thinsp|hairsp|MediumSpace|ThickSpace|VeryThinSpace|NegativeMediumSpace|NegativeThickSpace|NegativeThinSpace|NegativeVeryThinSpace);/
-  end
-
   defp normalize_markdown(content) do
     content
-    |> String.replace(~r/\s+/, " ")
+    |> String.replace(~r/[\s\p{Z}\p{Cf}]+/u, " ")
     |> String.trim()
   end
 
