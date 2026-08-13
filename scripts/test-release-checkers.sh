@@ -27,6 +27,12 @@ for fixture in zero excluded skipped failed invalid masked masked_reverse missin
     echo "ExUnit checker accepted a negative fixture" >&2
     exit 1
   fi
+
+  if [[ "$fixture" != "excluded" ]] && \
+    scripts/assert-exunit-output.sh "$fixture_dir/$fixture.txt" --allow-excluded >/dev/null 2>&1; then
+    echo "ExUnit checker accepted a negative fixture with exclusions authorized" >&2
+    exit 1
+  fi
 done
 
 if scripts/assert-exunit-output.sh "$fixture_dir/intentional-exclusion.txt" >/dev/null 2>&1; then

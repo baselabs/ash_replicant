@@ -104,6 +104,9 @@ re-streams and dedups on resume.
 
 ## Development workflow
 
+The supported release foundation is Elixir 1.20.3 on Erlang/OTP 29 with Ash
+`>= 3.31.3 and < 4.0.0-0`.
+
 ```bash
 asdf install
 scripts/with-release-runtime.sh scripts/assert-runtime-version.sh

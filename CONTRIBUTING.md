@@ -5,6 +5,7 @@ Thank you for your interest in contributing to AshReplicant!
 ## Prerequisites
 
 - **Elixir 1.20.3** and **Erlang/OTP 29** (run `asdf install` from the repository root)
+- Ash `>= 3.31.3 and < 4.0.0-0`; selector-free development uses this public range
 - `replicant` is a **Hex dependency** (`{:replicant, "~> 0.3.0"}` in `mix.exs`), pulled by
   `mix deps.get` — no sibling checkout is required to build or test. A local checkout at
   `../replicant` is only needed for cross-repo design/brainstorm work (see `CLAUDE.md`).

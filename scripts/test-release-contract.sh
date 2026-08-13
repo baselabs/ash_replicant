@@ -25,6 +25,10 @@ sed -i.bak 's#actions/checkout@11d5960a326750d5838078e36cf38b85af677262#actions/
 assert_fixture_rejected
 
 prepare_fixture
+perl -0pi -e 's/actions\/checkout\@11d5960a326750d5838078e36cf38b85af677262/actions\/checkout\@v4.2.2/' "$fixture_root/.github/workflows/ci.yml"
+assert_fixture_rejected
+
+prepare_fixture
 sed -i.bak 's#postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b#postgres:16#' "$fixture_root/.github/workflows/ci.yml"
 assert_fixture_rejected
 
@@ -33,11 +37,31 @@ sed -i.bak '/mix deps.audit/d' "$fixture_root/.github/workflows/ci.yml"
 assert_fixture_rejected
 
 prepare_fixture
+sed -i.bak "s/run: mix deps.audit/run: echo 'mix deps.audit'/" "$fixture_root/.github/workflows/ci.yml"
+assert_fixture_rejected
+
+prepare_fixture
 sed -i.bak '/label: latest-3.x/d' "$fixture_root/.github/workflows/ci.yml"
 assert_fixture_rejected
 
 prepare_fixture
+sed -i.bak '/scripts\/test-release-contract.sh/d; /scripts\/assert-release-contract.sh/d' "$fixture_root/.github/workflows/ci.yml"
+assert_fixture_rejected
+
+prepare_fixture
+sed -i.bak '/mix compile --warnings-as-errors/d' "$fixture_root/.github/workflows/ci.yml"
+assert_fixture_rejected
+
+prepare_fixture
+perl -0pi -e 's/(label: current-lock\n\s+selector:) ""\n\s+unlock: false/$1 latest\n            unlock: true/' "$fixture_root/.github/workflows/ci.yml"
+assert_fixture_rejected
+
+prepare_fixture
 sed -i.bak 's/Elixir 1.20.3/Elixir 1.19.5/' "$fixture_root/README.md"
+assert_fixture_rejected
+
+prepare_fixture
+sed -i.bak '/Elixir 1\.20\.3 on Erlang\/OTP 29/d' "$fixture_root/README.md"
 assert_fixture_rejected
 
 echo "release contract self-tests: PASS"

@@ -19,10 +19,79 @@ for required_file in "${required_files[@]}"; do
   fi
 done
 
-if grep -Eq 'uses: [^[:space:]]+@(v[0-9]+|main|master)([[:space:]]|$)' "$workflow"; then
-  echo "CI contains a mutable Action reference" >&2
-  exit 1
-fi
+WORKFLOW="$workflow" python3 - <<'PY'
+import os
+import re
+import sys
+from pathlib import Path
+
+workflow = Path(os.environ["WORKFLOW"]).read_text(encoding="utf-8")
+
+uses = re.findall(r"^\s*-?\s*uses:\s*([^\s#]+)", workflow, re.MULTILINE)
+if not uses or any(not re.fullmatch(r"[^@]+@[0-9a-f]{40}", value) for value in uses):
+    sys.stderr.write("CI contains a non-immutable Action reference\n")
+    raise SystemExit(1)
+
+job_matches = list(re.finditer(r"^  ([a-z][a-z0-9-]+):\n", workflow, re.MULTILINE))
+jobs = {}
+for index, match in enumerate(job_matches):
+    end = job_matches[index + 1].start() if index + 1 < len(job_matches) else len(workflow)
+    jobs[match.group(1)] = workflow[match.start():end]
+
+required_jobs = {"no-database", "compatibility", "release-artifact"}
+if not required_jobs.issubset(jobs):
+    sys.stderr.write("CI release jobs are incomplete\n")
+    raise SystemExit(1)
+
+def ordered(job, *needles):
+    position = -1
+    for needle in needles:
+        position = job.find(needle, position + 1)
+        if position < 0:
+            return False
+    return True
+
+checks = [
+    ordered(
+        jobs["no-database"],
+        "mix compile --warnings-as-errors",
+        "scripts/test-release-checkers.sh",
+        "scripts/test-release-contract.sh",
+    ),
+    ordered(
+        jobs["compatibility"],
+        "mix compile --warnings-as-errors",
+        "scripts/test-release-checkers.sh",
+        "scripts/assert-release-contract.sh",
+    ),
+    ordered(
+        jobs["release-artifact"],
+        "mix compile --warnings-as-errors",
+        "scripts/assert-runtime-version.sh",
+        "scripts/assert-release-contract.sh",
+    ),
+    re.search(r"^\s*run:\s*mix deps\.audit\s*$", jobs["no-database"], re.MULTILINE),
+    re.search(r"^\s*run:\s*mix deps\.audit\s*$", jobs["compatibility"], re.MULTILINE),
+]
+
+matrix_tuples = [
+    ("floor-3.31.3", '"3.31.3"', "true", '"== 3.31.3"'),
+    ("current-lock", '""', "false", '">= 3.31.3 and < 4.0.0-0"'),
+    ("latest-3.x", "latest", "true", '">= 3.31.3 and < 4.0.0-0"'),
+]
+for label, selector, unlock, requirement in matrix_tuples:
+    pattern = (
+        rf"- label: {re.escape(label)}\n"
+        rf"\s+selector: {re.escape(selector)}\n"
+        rf"\s+unlock: {unlock}\n"
+        rf"\s+requirement: {re.escape(requirement)}"
+    )
+    checks.append(re.search(pattern, jobs["compatibility"]))
+
+if not all(checks):
+    sys.stderr.write("CI release contract structure is incomplete\n")
+    raise SystemExit(1)
+PY
 
 # The GitHub expression is intentionally literal input to grep.
 # shellcheck disable=SC2016
@@ -31,26 +100,17 @@ for required_pattern in \
   'actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830' \
   'erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236' \
   'postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b' \
-  'label: floor-3.31.3' \
-  'label: current-lock' \
-  'label: latest-3.x' \
   'key: ${{ runner.os }}-ash-${{ matrix.label }}' \
   'scripts/run-structural-tests.sh --allow-excluded --exclude integration' \
   'scripts/run-structural-tests.sh --include integration' \
   'scripts/run-structural-tests.sh test/integration --include integration' \
   'scripts/test-migration-drift-gate.sh' \
-  'scripts/assert-runtime-version.sh' \
-  'scripts/test-release-checkers.sh'; do
+  'scripts/assert-runtime-version.sh'; do
   if ! grep -Fq "$required_pattern" "$workflow"; then
     echo "CI release contract is incomplete" >&2
     exit 1
   fi
 done
-
-if [[ "$(grep -Fc 'mix deps.audit' "$workflow")" -lt 2 ]]; then
-  echo "CI dependency audits are incomplete" >&2
-  exit 1
-fi
 
 if grep -Eq 'Elixir 1\.1[0-9]|OTP 2[0-8]|PostgreSQL 14\+|replicant.*~> 0\.1|>= 3\.31\.[12]' \
   "$contract_root/README.md" "$contract_root/CONTRIBUTING.md" "$contract_root/AGENTS.md"; then
@@ -58,14 +118,16 @@ if grep -Eq 'Elixir 1\.1[0-9]|OTP 2[0-8]|PostgreSQL 14\+|replicant.*~> 0\.1|>= 3
   exit 1
 fi
 
-for required_pattern in \
-  'Elixir 1.20.3' \
-  'Erlang/OTP 29' \
-  '>= 3.31.3 and < 4.0.0-0'; do
-  if ! grep -Fq "$required_pattern" "$contract_root/README.md" "$contract_root/CONTRIBUTING.md"; then
-    echo "published runtime or dependency contract is incomplete" >&2
-    exit 1
-  fi
+for contract_document in README.md CONTRIBUTING.md AGENTS.md; do
+  for required_pattern in \
+    'Elixir 1.20.3' \
+    'Erlang/OTP 29' \
+    '>= 3.31.3 and < 4.0.0-0'; do
+    if ! grep -Fq "$required_pattern" "$contract_root/$contract_document"; then
+      echo "published runtime or dependency contract is incomplete" >&2
+      exit 1
+    fi
+  done
 done
 
 echo "release contract: PASS"

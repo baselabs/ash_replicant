@@ -2,12 +2,15 @@
 set -euo pipefail
 
 resource_file="test/support/resources.ex"
-backup_file="$(mktemp "${TMPDIR:-/tmp}/ash-replicant-resources.XXXXXX")"
-cp "$resource_file" "$backup_file"
+probe_line="    attribute :migration_drift_guard_probe, :string, public?: true"
 
 restore_resource() {
-  cp "$backup_file" "$resource_file"
-  rm -f "$backup_file"
+  PROBE_LINE="$probe_line" RESOURCE_FILE="$resource_file" perl -0pi -e '
+    BEGIN {
+      $probe = quotemeta($ENV{"PROBE_LINE"});
+    }
+    s/^$probe\n//m;
+  ' "$resource_file"
 }
 
 trap restore_resource EXIT
@@ -19,7 +22,9 @@ check_command=(
 
 env MIX_ENV=test "${check_command[@]}"
 
-ASH_REPLICANT_DRIFT_RESOURCE="$resource_file" elixir -e '
+ASH_REPLICANT_DRIFT_RESOURCE="$resource_file" \
+ASH_REPLICANT_DRIFT_PROBE="$probe_line" \
+  elixir -e '
   path = System.fetch_env!("ASH_REPLICANT_DRIFT_RESOURCE")
   source = File.read!(path)
   module_marker = "defmodule AshReplicant.Test.OrderVersion do"
@@ -32,7 +37,7 @@ ASH_REPLICANT_DRIFT_RESOURCE="$resource_file" elixir -e '
       module_marker <>
       module_prefix <>
       attribute_marker <>
-      "    attribute :migration_drift_guard_probe, :string, public?: true\n" <>
+      System.fetch_env!("ASH_REPLICANT_DRIFT_PROBE") <> "\n" <>
       module_rest
 
   File.write!(path, mutated)
