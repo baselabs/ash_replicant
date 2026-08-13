@@ -25,6 +25,24 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   docker exec pg pg_isready -U postgres || { docker logs pg; exit 1; }
   """
 
+  @create_database """
+  mix ecto.create
+  mix ecto.migrate
+  """
+
+  @public_ash_check """
+  env -u ASH_REPLICANT_ASH_VERSION mix run --no-start -e '
+  requirement =
+    Mix.Project.config()
+    |> Keyword.fetch!(:deps)
+    |> List.keyfind!(:ash, 0)
+    |> elem(1)
+
+  unless requirement == ">= 3.31.3 and < 4.0.0-0" do
+    raise "unexpected public Ash requirement: \#{inspect(requirement)}"
+  end'
+  """
+
   @package_inspection """
   package_dir=$(mktemp -d)
   trap 'rm -rf "$package_dir"' EXIT
@@ -71,6 +89,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       "scripts/test-release-checkers.sh",
       "scripts/assert-release-contract.sh",
       "mix deps.audit",
+      String.trim(@create_database),
       "scripts/test-migration-drift-gate.sh",
       "scripts/run-structural-tests.sh --include integration",
       "scripts/run-structural-tests.sh test/integration --include integration",
@@ -83,6 +102,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       "elixir --version",
       "scripts/assert-runtime-version.sh",
       "scripts/assert-release-contract.sh",
+      String.trim(@public_ash_check),
       "mix docs --warnings-as-errors",
       String.trim(@package_inspection)
     ]
@@ -107,6 +127,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   ]
 
   @checkout "actions/checkout@11d5960a326750d5838078e36cf38b85af677262"
+  @setup_beam "erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236"
+  @cache "actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830"
   @mix_contracts [
     ~s(@ash_requirement ">= 3.31.3 and < 4.0.0-0"),
     ~s(elixir: "~> 1.20.3")
@@ -195,6 +217,16 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     prepare_fixture()
     replace_once!(@workflow, @checkout, "actions/checkout@not-a-sha")
+    assert_invalid!()
+
+    for action <- [@setup_beam, @cache] do
+      prepare_fixture()
+      replace_once!(@workflow, action, action <> "0")
+      assert_invalid!()
+    end
+
+    prepare_fixture()
+    insert_after_first_checkout!("      - uses: #{@checkout} # unexpected duplicate\n")
     assert_invalid!()
   end
 
@@ -368,6 +400,17 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       assert_invalid!()
     end
 
+    prepare_fixture()
+
+    insert_after_first_checkout!("""
+          - name: Inject inherited Bash control
+            run: |
+              printf '%s\\n' "trap 'exit 0' DEBUG" > /tmp/release-bypass
+              printf '%s\\n' 'BASH_ENV=/tmp/release-bypass' >> "$GITHUB_ENV"
+    """)
+
+    assert_invalid!()
+
     for replacement <- [
           "      - run: scripts/test-release-contract.sh\n        shell: echo {0}\n",
           "      - run: scripts/test-release-contract.sh\n        continue-on-error: ${{ true }}\n",
@@ -465,6 +508,16 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
       replace_once!(
         path,
+        hd(required_texts),
+        "```text\n    ```\n#{hd(required_texts)}\n```"
+      )
+
+      assert_invalid!()
+
+      prepare_fixture()
+
+      replace_once!(
+        path,
         heading,
         "#{heading}\n\nThis package does not support Elixir 1.20.3 or Erlang/OTP 29."
       )
@@ -480,6 +533,25 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       )
 
       assert_invalid!()
+
+      for entity <- [
+            "&thinsp;",
+            "&hairsp;",
+            "&MediumSpace;",
+            "&NegativeThinSpace;",
+            "&Tab;",
+            "&NewLine;"
+          ] do
+        prepare_fixture()
+
+        replace_once!(
+          path,
+          heading,
+          "#{heading}\n\nThis package does#{entity}not support Elixir 1.20.3 or Erlang/OTP 29."
+        )
+
+        assert_invalid!()
+      end
 
       prepare_fixture()
 
@@ -506,6 +578,47 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       "mix.exs",
       ~s(elixir: "~> 1.20.3"),
       ~s(elixir: "~> 1.18", release_contract_decoy: [elixir: "~> 1.20.3"])
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
+    replace_once!(
+      "mix.exs",
+      ~s(@ash_requirement ">= 3.31.3 and < 4.0.0-0"),
+      ~s(@ash_requirement ">= 3.31.3 and < 4.0.0-0"\n  @ash_requirement ">= 3.0.0 and < 4.0.0-0")
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
+    replace_once!(
+      "mix.exs",
+      "\n  def cli, do:",
+      """
+
+        defoverridable project: 0
+
+        def project do
+          super()
+          |> Keyword.put(:elixir, ">= 1.18.0")
+        end
+
+        def cli, do:
+      """
+      |> String.trim_trailing()
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
+    replace_once!(
+      "mix.exs",
+      "{:ash, ash_requirement()}",
+      "{:ash, String.replace(ash_requirement(), \">= 3.31.3\", \">= 3.0.0\")}"
     )
 
     assert_invalid!()
@@ -568,10 +681,17 @@ defmodule AshReplicant.ReleaseContractSelfTest do
          end)) <> "\n"
 
     cond do
-      String.contains?(content, direct) -> mutate_job!(job, direct, "")
-      String.contains?(content, named) -> mutate_job!(job, named, "        run: :\n")
-      String.contains?(content, multiline) -> mutate_job!(job, multiline, "        run: :\n")
-      true -> raise "run fixture anchor missing: #{command}"
+      String.contains?(content, direct) ->
+        mutate_job!(job, direct, "")
+
+      String.contains?(content, named) ->
+        mutate_job!(job, named, "        run: echo release-contract-command-removed\n")
+
+      String.contains?(content, multiline) ->
+        mutate_job!(job, multiline, "        run: echo release-contract-command-removed\n")
+
+      true ->
+        raise "run fixture anchor missing: #{command}"
     end
   end
 

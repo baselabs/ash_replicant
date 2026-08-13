@@ -29,6 +29,24 @@ defmodule AshReplicant.ReleaseContract do
   scripts/assert-dependency-version.sh ash '${{ matrix.requirement }}'
   """
 
+  @create_database """
+  mix ecto.create
+  mix ecto.migrate
+  """
+
+  @public_ash_check """
+  env -u ASH_REPLICANT_ASH_VERSION mix run --no-start -e '
+  requirement =
+    Mix.Project.config()
+    |> Keyword.fetch!(:deps)
+    |> List.keyfind!(:ash, 0)
+    |> elem(1)
+
+  unless requirement == ">= 3.31.3 and < 4.0.0-0" do
+    raise "unexpected public Ash requirement: \#{inspect(requirement)}"
+  end'
+  """
+
   @package_inspection """
   package_dir=$(mktemp -d)
   trap 'rm -rf "$package_dir"' EXIT
@@ -83,44 +101,56 @@ defmodule AshReplicant.ReleaseContract do
     }
   ]
 
-  @job_commands %{
+  @job_steps %{
     "no-database" => [
-      "mix deps.get",
-      "mix deps.compile",
-      "mix format --check-formatted",
-      "mix compile --warnings-as-errors",
-      "elixir --version",
-      "scripts/assert-runtime-version.sh",
-      "scripts/test-release-checkers.sh",
-      "scripts/test-release-contract.sh",
-      "mix credo --strict",
-      "mix deps.audit",
-      "env -u ASH_REPLICANT_TEST_URL scripts/run-structural-tests.sh --allow-excluded --exclude integration"
+      {:uses, "actions/checkout@11d5960a326750d5838078e36cf38b85af677262"},
+      {:uses, "erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236"},
+      {:uses, "actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830"},
+      {:run, "mix deps.get"},
+      {:run, "mix deps.compile"},
+      {:run, "mix format --check-formatted"},
+      {:run, "mix compile --warnings-as-errors"},
+      {:run, "elixir --version"},
+      {:run, "scripts/assert-runtime-version.sh"},
+      {:run, "scripts/test-release-checkers.sh"},
+      {:run, "scripts/test-release-contract.sh"},
+      {:run, "mix credo --strict"},
+      {:run, "mix deps.audit"},
+      {:run,
+       "env -u ASH_REPLICANT_TEST_URL scripts/run-structural-tests.sh --allow-excluded --exclude integration"}
     ],
     "compatibility" => [
-      String.trim(@postgres_run),
-      String.trim(@resolve_ash),
-      "mix deps.compile",
-      "mix compile --warnings-as-errors",
-      "elixir --version",
-      "scripts/assert-runtime-version.sh",
-      "scripts/test-release-checkers.sh",
-      "scripts/assert-release-contract.sh",
-      "mix deps.audit",
-      "scripts/test-migration-drift-gate.sh",
-      "scripts/run-structural-tests.sh --include integration",
-      "scripts/run-structural-tests.sh test/integration --include integration",
-      "mix dialyzer"
+      {:uses, "actions/checkout@11d5960a326750d5838078e36cf38b85af677262"},
+      {:run, String.trim(@postgres_run)},
+      {:uses, "erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236"},
+      {:uses, "actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830"},
+      {:run, String.trim(@resolve_ash)},
+      {:run, "mix deps.compile"},
+      {:run, "mix compile --warnings-as-errors"},
+      {:run, "elixir --version"},
+      {:run, "scripts/assert-runtime-version.sh"},
+      {:run, "scripts/test-release-checkers.sh"},
+      {:run, "scripts/assert-release-contract.sh"},
+      {:run, "mix deps.audit"},
+      {:run, String.trim(@create_database)},
+      {:run, "scripts/test-migration-drift-gate.sh"},
+      {:run, "scripts/run-structural-tests.sh --include integration"},
+      {:run, "scripts/run-structural-tests.sh test/integration --include integration"},
+      {:run, "mix dialyzer"}
     ],
     "release-artifact" => [
-      "env -u ASH_REPLICANT_ASH_VERSION mix deps.get",
-      "mix deps.compile",
-      "mix compile --warnings-as-errors",
-      "elixir --version",
-      "scripts/assert-runtime-version.sh",
-      "scripts/assert-release-contract.sh",
-      "mix docs --warnings-as-errors",
-      String.trim(@package_inspection)
+      {:uses, "actions/checkout@11d5960a326750d5838078e36cf38b85af677262"},
+      {:uses, "erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236"},
+      {:uses, "actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830"},
+      {:run, "env -u ASH_REPLICANT_ASH_VERSION mix deps.get"},
+      {:run, "mix deps.compile"},
+      {:run, "mix compile --warnings-as-errors"},
+      {:run, "elixir --version"},
+      {:run, "scripts/assert-runtime-version.sh"},
+      {:run, "scripts/assert-release-contract.sh"},
+      {:run, String.trim(@public_ash_check)},
+      {:run, "mix docs --warnings-as-errors"},
+      {:run, String.trim(@package_inspection)}
     ]
   }
 
@@ -205,7 +235,7 @@ defmodule AshReplicant.ReleaseContract do
   defp assert_jobs(workflow) do
     jobs = Map.get(workflow, "jobs", %{})
 
-    Enum.each(@job_commands, fn {name, commands} ->
+    Enum.each(@job_steps, fn {name, expected_steps} ->
       job = jobs[name] || fail("CI release jobs are incomplete")
 
       for key <- ["if", "needs", "continue-on-error", "defaults"] do
@@ -215,31 +245,28 @@ defmodule AshReplicant.ReleaseContract do
       assert(job["runs-on"] == "ubuntu-latest", "CI release runner is invalid")
       assert(job["env"] == @job_env[name], "CI release job environment is invalid")
 
-      positions = Enum.map(commands, &dedicated_run_position(job, &1))
-
-      assert(Enum.all?(positions, &is_integer/1), "CI release gate step is incomplete")
-
       assert(
-        positions == Enum.sort(positions) and positions == Enum.uniq(positions),
-        "CI release gate ordering is invalid"
+        Enum.map(Map.get(job, "steps", []), &step_signature/1) == expected_steps,
+        "CI release step contract is invalid"
       )
     end)
   end
 
-  defp dedicated_run_position(job, command) do
-    job
-    |> Map.get("steps", [])
-    |> Enum.with_index()
-    |> Enum.find_value(fn {step, index} ->
-      run = step |> Map.get("run", "") |> String.trim()
-
-      controls_clear? =
-        Enum.all?(["if", "continue-on-error", "shell", "env"], &(not Map.has_key?(step, &1)))
-
-      if run == command and controls_clear?,
-        do: index
-    end)
+  defp step_signature(%{"run" => run} = step) when is_binary(run) do
+    assert(Map.keys(step) -- ["name", "run"] == [], "CI release run step control is invalid")
+    {:run, String.trim(run)}
   end
+
+  defp step_signature(%{"uses" => action} = step) when is_binary(action) do
+    assert(
+      Map.keys(step) -- ["name", "uses", "with"] == [],
+      "CI release Action step control is invalid"
+    )
+
+    {:uses, action}
+  end
+
+  defp step_signature(_step), do: fail("CI release step is invalid")
 
   defp assert_compatibility(workflow) do
     job = get_in(workflow, ["jobs", "compatibility"]) || fail("CI compatibility job is missing")
@@ -263,12 +290,13 @@ defmodule AshReplicant.ReleaseContract do
   defp assert_mix_contract(root) do
     ast = root |> Path.join("mix.exs") |> File.read!() |> Code.string_to_quoted!()
     body = mix_project_body(ast)
-    project = find_definition(body, :project)
-    ash_requirement = find_module_attribute(body, :ash_requirement)
+    projects = find_definitions(body, :def, :project)
+    dependency_lists = find_definitions(body, :defp, :deps)
+    ash_requirements = find_module_attributes(body, :ash_requirement)
 
     assert(
-      is_list(project) and Keyword.get(project, :elixir) == "~> 1.20.3" and
-        ash_requirement == @ash_requirement,
+      exact_project_contract?(projects) and exact_dependency_contract?(dependency_lists) and
+        ash_requirements == [@ash_requirement],
       "Mix release contract is incomplete"
     )
   rescue
@@ -282,17 +310,33 @@ defmodule AshReplicant.ReleaseContract do
 
   defp mix_project_body(_ast), do: fail("Mix release contract is incomplete")
 
-  defp find_definition(expressions, name) do
-    Enum.find_value(expressions, fn
-      {:def, _, [{^name, _, context}, [do: body]]} when context in [nil, []] -> body
-      _node -> nil
+  defp exact_project_contract?([project]) when is_list(project) do
+    Keyword.get_values(project, :elixir) == ["~> 1.20.3"] and
+      match?({:deps, _, []}, Keyword.get(project, :deps))
+  end
+
+  defp exact_project_contract?(_projects), do: false
+
+  defp exact_dependency_contract?([dependencies]) when is_list(dependencies) do
+    case Enum.filter(dependencies, &match?({:ash, _requirement}, &1)) do
+      [{:ash, {:ash_requirement, _, []}}] -> true
+      _entries -> false
+    end
+  end
+
+  defp exact_dependency_contract?(_dependency_lists), do: false
+
+  defp find_definitions(expressions, kind, name) do
+    Enum.flat_map(expressions, fn
+      {^kind, _, [{^name, _, context}, [do: body]]} when context in [nil, []] -> [body]
+      _node -> []
     end)
   end
 
-  defp find_module_attribute(expressions, name) do
-    Enum.find_value(expressions, fn
-      {:@, _, [{^name, _, [value]}]} -> value
-      _node -> nil
+  defp find_module_attributes(expressions, name) do
+    Enum.flat_map(expressions, fn
+      {:@, _, [{^name, _, [value]}]} -> [value]
+      _node -> []
     end)
   end
 
@@ -357,14 +401,14 @@ defmodule AshReplicant.ReleaseContract do
   end
 
   defp fence_marker(line) do
-    case Regex.run(~r/^\s*(`{3,}|~{3,})/, line) do
+    case Regex.run(~r/^ {0,3}(`{3,}|~{3,})/, line) do
       [_, marker] -> {String.first(marker), String.length(marker)}
       _ -> nil
     end
   end
 
   defp closing_fence?(line, {character, length}) do
-    case Regex.run(~r/^\s*(`+|~+)\s*$/, line) do
+    case Regex.run(~r/^ {0,3}(`+|~+)[ \t]*$/, line) do
       [_, marker] -> String.first(marker) == character and String.length(marker) >= length
       _ -> false
     end
@@ -382,12 +426,14 @@ defmodule AshReplicant.ReleaseContract do
         digits |> String.to_integer(16) |> List.wrap() |> List.to_string()
       end)
     )
-    |> then(fn decoded ->
-      Enum.reduce(["&nbsp;", "&ensp;", "&emsp;"], decoded, &String.replace(&2, &1, " "))
-    end)
+    |> then(&Regex.replace(named_whitespace_entity(), &1, " "))
   rescue
     _error in [ArgumentError, UnicodeConversionError] ->
       fail("published contract entity is invalid")
+  end
+
+  defp named_whitespace_entity do
+    ~r/&(?:Tab|NewLine|nbsp|ensp|emsp|emsp13|emsp14|numsp|puncsp|thinsp|hairsp|MediumSpace|ThickSpace|VeryThinSpace|NegativeMediumSpace|NegativeThickSpace|NegativeThinSpace|NegativeVeryThinSpace);/
   end
 
   defp normalize_markdown(content) do
