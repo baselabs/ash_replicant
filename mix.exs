@@ -3,12 +3,13 @@ defmodule AshReplicant.MixProject do
 
   @version "0.4.0"
   @source_url "https://github.com/baselabs/ash_replicant"
+  @ash_requirement ">= 3.31.3 and < 4.0.0-0"
 
   def project do
     [
       app: :ash_replicant,
       version: @version,
-      elixir: "~> 1.15",
+      elixir: "~> 1.20.3",
       elixirc_paths: elixirc_paths(Mix.env()),
       consolidate_protocols: Mix.env() != :test,
       start_permanent: Mix.env() == :prod,
@@ -38,14 +39,17 @@ defmodule AshReplicant.MixProject do
 
   defp deps do
     [
-      {:ash, "~> 3.11"},
-      {:ash_postgres, "~> 2.6"},
+      {:ash, ash_requirement()},
+      {:ash_postgres, "~> 2.11.0"},
+      {:ash_onetime, "~> 0.6.0"},
       {:ash_cloak, "~> 0.1"},
-      {:replicant, "~> 0.3"},
-      {:spark, ">= 2.3.3 and < 3.0.0-0"},
+      {:replicant, "~> 0.3.0"},
+      {:spark, "~> 2.7.0"},
       {:splode, "~> 0.3"},
       {:jason, "~> 1.4"},
-      {:telemetry, "~> 1.0"},
+      {:telemetry, "~> 1.4.0"},
+      {:postgrex, "~> 0.22.4"},
+      {:ymlr, "~> 5.1.6"},
       {:simple_sat, "~> 0.1"},
       {:ex_doc, "~> 0.31", only: :dev, runtime: false},
       {:cloak, "~> 1.1", only: [:dev, :test], runtime: false},
@@ -53,6 +57,22 @@ defmodule AshReplicant.MixProject do
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:mix_audit, "~> 2.1", only: [:dev, :test], runtime: false}
     ]
+  end
+
+  defp ash_requirement do
+    case System.get_env("ASH_REPLICANT_ASH_VERSION") do
+      value when value in [nil, "", "latest"] ->
+        @ash_requirement
+
+      value ->
+        with {:ok, _version} <- Version.parse(value),
+             true <- Version.match?(value, @ash_requirement) do
+          "== #{value}"
+        else
+          _ ->
+            raise "ASH_REPLICANT_ASH_VERSION must be a semantic version matching #{@ash_requirement}, got: #{inspect(value)}"
+        end
+    end
   end
 
   defp aliases do

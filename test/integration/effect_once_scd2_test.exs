@@ -277,8 +277,6 @@ defmodule AshReplicant.EffectOnceScd2Test do
 
       # The new open version's sensitive column ROUND-TRIPS through AshCloak (decrypts to the
       # expected plaintext) — end-to-end proof the open path encrypted a recoverable value.
-      require Ash.Query
-
       loaded =
         AshReplicant.Test.Marquee.CloakVersionOrder
         |> Ash.Query.do_filter(%{order_id: "o1", valid_from_lsn: 200})
