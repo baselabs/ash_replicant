@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+fixture_dir="$(mktemp -d "${TMPDIR:-/tmp}/ash-replicant-checker-fixtures.XXXXXX")"
+trap 'rm -rf "$fixture_dir"' EXIT
+
+printf 'Result: 2 passed\n' > "$fixture_dir/positive.txt"
+scripts/assert-exunit-output.sh "$fixture_dir/positive.txt" >/dev/null
+
+for fixture in zero excluded skipped failed masked missing; do
+  case "$fixture" in
+    zero) printf 'Result: 0 tests\n' > "$fixture_dir/$fixture.txt" ;;
+    excluded) printf 'Result: 1 passed, 1 excluded\n' > "$fixture_dir/$fixture.txt" ;;
+    skipped) printf 'Result: 1 passed, 1 skipped\n' > "$fixture_dir/$fixture.txt" ;;
+    failed) printf 'Result: 1 passed, 1 failure\n' > "$fixture_dir/$fixture.txt" ;;
+    masked) printf 'Result: 1 passed, 1 skipped\nResult: 1 passed\n' > "$fixture_dir/$fixture.txt" ;;
+    missing) printf 'Finished without a result summary\n' > "$fixture_dir/$fixture.txt" ;;
+  esac
+
+  if scripts/assert-exunit-output.sh "$fixture_dir/$fixture.txt" >/dev/null 2>&1; then
+    echo "ExUnit checker accepted a negative fixture" >&2
+    exit 1
+  fi
+done
+
+scripts/assert-dependency-version.sh ash '>= 3.31.3 and < 4.0.0-0' >/dev/null
+
+if scripts/assert-dependency-version.sh ash '== 0.0.0' >/dev/null 2>&1; then
+  echo "dependency checker accepted a nonmatching requirement" >&2
+  exit 1
+fi
+
+selector_sentinel="ASH_REPLICANT_SELECTOR_SENTINEL"
+set +e
+selector_output="$(ASH_REPLICANT_ASH_VERSION="$selector_sentinel" mix run --no-start -e ':ok' 2>&1)"
+selector_exit=$?
+set -e
+
+if [[ "$selector_exit" -eq 0 ]] || [[ "$selector_output" != *"must be a semantic version matching"* ]] || [[ "$selector_output" == *"$selector_sentinel"* ]]; then
+  echo "Ash selector guard did not fail structurally" >&2
+  exit 1
+fi
+
+set +e
+ash4_output="$(ASH_REPLICANT_ASH_VERSION='4.0.0-rc.0' mix run --no-start -e ':ok' 2>&1)"
+ash4_exit=$?
+set -e
+
+if [[ "$ash4_exit" -eq 0 ]] || [[ "$ash4_output" != *"must be a semantic version matching"* ]] || [[ "$ash4_output" == *"because mix.lock"* ]]; then
+  echo "Ash major guard did not reject before dependency resolution" >&2
+  exit 1
+fi
+
+echo "release checker self-tests: PASS"

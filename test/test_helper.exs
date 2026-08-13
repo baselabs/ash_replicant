@@ -11,6 +11,17 @@ if AshReplicant.Test.PG.enabled?() do
 
   ExUnit.start()
 else
+  Application.put_env(:ash_replicant, :forbid_test_repo_start?, true)
+  :persistent_term.erase(AshReplicant.TestRepo.start_attempt_key())
   ExUnit.configure(exclude: [:integration])
   ExUnit.start()
+
+  ExUnit.after_suite(fn _result ->
+    if :persistent_term.get(AshReplicant.TestRepo.start_attempt_key(), false) do
+      IO.puts(:stderr, "TestRepo start attempt detected")
+      System.halt(1)
+    else
+      IO.puts("TestRepo start attempts: 0")
+    end
+  end)
 end

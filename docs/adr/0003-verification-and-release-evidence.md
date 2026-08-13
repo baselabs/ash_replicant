@@ -25,19 +25,24 @@ Release evidence is separated by what it proves:
 
 1. The no-database job has no PostgreSQL service and no
    `ASH_REPLICANT_TEST_URL`. Pure tests use `ExUnit.Case`; `DataCase` remains
-   strict and always owns a live sandbox. The job also observes that
-   `AshReplicant.TestRepo` has no registered process.
+   strict and always owns a live sandbox. A same-VM start-attempt marker and
+   after-suite assertion prove that `AshReplicant.TestRepo` was never started.
 2. The live compatibility jobs start PostgreSQL with logical replication,
    create and migrate the isolated test database, run the full suite, and run
    `test/integration/` explicitly.
-3. `scripts/assert-exunit-output.sh` is the one parser used by real CI output and
-   red probes. It accepts only `Result: N passed` where `N > 0`; zero tests,
-   failures, skips, and exclusions all fail.
-4. Migration drift is checked against `AshReplicant.Test.Domain`. The command
+3. CI uses a structural ExUnit formatter so a failing assertion cannot publish
+   row values. `scripts/assert-exunit-output.sh` requires exactly one
+   `Result: N passed` line where `N > 0`; zero tests, failures, skips,
+   exclusions, and a later clean-looking summary all fail. Checked-in negative
+   self-tests protect both release-evidence checkers.
+4. Migration drift is checked against both configured domains,
+   `AshReplicant.Test.Domain` and `AshReplicant.Test.HistoryDomain`. The command
    preloads `AshPostgres.CustomIndex` because AshPostgres decodes snapshot keys
    as existing atoms; after that preload, unchanged snapshots pass and a
    resource-only attribute mutation raises pending-codegen failure.
-5. The selector-free release job asserts the public Ash range, builds docs with
+5. Every job asserts the running Elixir/OTP identity. Third-party Actions and
+   the PostgreSQL integration image are pinned to immutable digests.
+6. The selector-free release job asserts the public Ash range, builds docs with
    warnings as errors, unpacks the Hex package, requires its code/docs/license
    paths, and rejects test, Forge, build, environment, and credential-shaped
    residue.
@@ -50,7 +55,7 @@ for the production gate.
 
 - No-database and live-database failures are independently attributable.
 - Removing an integration tag, deleting the integration suite, skipping cases,
-  or producing zero tests cannot yield a green live job.
+  or producing zero tests cannot yield a green workflow.
 - Compatibility selectors cannot contaminate selector-free package evidence.
 - Migration drift is caught before a release even when runtime migrations still
   apply successfully.

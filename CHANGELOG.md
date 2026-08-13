@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   PostgreSQL integration, migration drift, Dialyzer, warnings-as-errors docs, and
   selector-free Hex package inspection. Checked-in assertions reject missing,
   skipped, excluded, or failing integration evidence.
+- Pin third-party CI actions to immutable commits, assert the executing
+  Elixir/OTP identity, redact test failures structurally, and self-test the
+  release-evidence checkers against masking and constant-accept regressions.
 
 ### Changed
 
@@ -32,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Split checkpoint policy introspection from its six live enforcement cases so
   `mix test --exclude integration` runs successfully without starting TestRepo.
+- Cover SCD2 resources in migration drift and observe TestRepo start attempts in
+  the same VM as the database-free suite.
 
 ## [0.4.0] - 2026-08-03
 

@@ -18,25 +18,27 @@ Thank you for your interest in contributing to AshReplicant!
 git clone https://github.com/baselabs/ash_replicant.git
 cd ash_replicant
 asdf install
-mix deps.get
-env -u ASH_REPLICANT_TEST_URL mix test --exclude integration
+asdf exec mix deps.get
+env -u ASH_REPLICANT_TEST_URL asdf exec mix test --exclude integration \
+  --formatter AshReplicant.StructuralFormatter
 ```
 
 ## Development Workflow
 
 1. Create a feature branch from `main`.
 2. Make your changes with clear, descriptive commit messages.
-3. Ensure all checks pass before opening a PR:
+3. Run the database-free and static checks before opening a PR:
 
 ```bash
-mix format --check-formatted
-mix compile --warnings-as-errors
-mix credo --strict
-env -u ASH_REPLICANT_TEST_URL mix test --exclude integration
-mix deps.audit
-mix dialyzer
-mix docs --warnings-as-errors
-mix hex.build
+asdf exec mix format --check-formatted
+asdf exec mix compile --warnings-as-errors
+asdf exec mix credo --strict
+env -u ASH_REPLICANT_TEST_URL asdf exec mix test --exclude integration \
+  --formatter AshReplicant.StructuralFormatter
+asdf exec mix deps.audit
+asdf exec mix dialyzer
+asdf exec mix docs --warnings-as-errors
+asdf exec mix hex.build
 ```
 
 4. Update `CHANGELOG.md` under `[Unreleased]`.
@@ -58,20 +60,25 @@ mix hex.build
 
   ```bash
   export ASH_REPLICANT_TEST_URL="postgres://postgres@localhost:5599/postgres"
-  MIX_ENV=test mix ecto.create   # creates ash_replicant_test
-  MIX_ENV=test mix ecto.migrate
-  mix test --include integration # unit + integration
-  mix test test/integration --include integration --trace
+  MIX_ENV=test asdf exec mix ecto.create   # creates ash_replicant_test
+  MIX_ENV=test asdf exec mix ecto.migrate
+  asdf exec mix test --include integration \
+    --formatter AshReplicant.StructuralFormatter # unit + integration
+  asdf exec mix test test/integration --include integration \
+    --formatter AshReplicant.StructuralFormatter
   ```
 
   Check resource snapshots against migrations with the same explicit-domain
   command used by CI:
 
   ```bash
-  MIX_ENV=test mix run --no-start -e '
+  MIX_ENV=test asdf exec mix run --no-start -e '
   Code.ensure_loaded!(AshPostgres.CustomIndex)
-  Mix.Task.run("ash_postgres.generate_migrations", ["--check", "--domains", "AshReplicant.Test.Domain"])'
+  Mix.Task.run("ash_postgres.generate_migrations", ["--check", "--domains", "AshReplicant.Test.Domain,AshReplicant.Test.HistoryDomain"])'
   ```
+
+  These live-suite and migration-drift commands are mandatory parts of the
+  pre-PR release battery, in addition to the checks in step 3.
 
   The full release battery is intentionally not represented by `mix quality`;
   that alias covers format, Credo, and Dialyzer only.

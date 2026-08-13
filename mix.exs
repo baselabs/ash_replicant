@@ -70,7 +70,7 @@ defmodule AshReplicant.MixProject do
           "== #{value}"
         else
           _ ->
-            raise "ASH_REPLICANT_ASH_VERSION must be a semantic version matching #{@ash_requirement}, got: #{inspect(value)}"
+            raise "ASH_REPLICANT_ASH_VERSION must be a semantic version matching #{@ash_requirement}"
         end
     end
   end

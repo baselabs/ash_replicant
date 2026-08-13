@@ -24,14 +24,14 @@ jobs:
       MIX_ENV: test
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: erlef/setup-beam@v1
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236 # v1
         with:
           elixir-version: ${{ env.ELIXIR_VERSION }}
           otp-version: ${{ env.OTP_VERSION }}
 
       - name: Cache dependencies and build
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             deps
@@ -40,21 +40,20 @@ jobs:
 
       - run: mix deps.get
       - run: mix deps.compile
+      - name: Assert release runtime
+        run: |
+          elixir --version
+          scripts/assert-runtime-version.sh
+          scripts/test-release-checkers.sh
       - run: mix format --check-formatted
       - run: mix compile --warnings-as-errors
       - run: mix credo --strict
       - name: Dependency hygiene
         run: mix deps.audit
       - name: Test without a Repo
-        run: env -u ASH_REPLICANT_TEST_URL mix test --exclude integration
-      - name: Prove TestRepo was not started
         run: |
-          env -u ASH_REPLICANT_TEST_URL mix run --no-start -e '
-          Code.require_file("test/test_helper.exs")
-          case Process.whereis(AshReplicant.TestRepo) do
-            nil -> :ok
-            pid -> IO.puts(:stderr, "TestRepo unexpectedly started: #{inspect(pid)}"); System.halt(1)
-          end'
+          env -u ASH_REPLICANT_TEST_URL mix test --exclude integration \
+            --formatter AshReplicant.StructuralFormatter
 
   compatibility:
     name: Ash ${{ matrix.label }} / PostgreSQL 16
@@ -75,14 +74,14 @@ jobs:
       ASH_REPLICANT_TEST_URL: postgres://postgres@localhost:5432/postgres
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Start PostgreSQL 16 with logical replication
         run: |
           docker run -d --name pg \
             -e POSTGRES_HOST_AUTH_METHOD=trust \
             -p 5432:5432 \
-            postgres:16 \
+            postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b \
             -c wal_level=logical -c max_replication_slots=20 -c max_wal_senders=20
           for _ in $(seq 1 30); do
             docker exec pg pg_isready -U postgres && break
@@ -90,13 +89,13 @@ jobs:
           done
           docker exec pg pg_isready -U postgres || { docker logs pg; exit 1; }
 
-      - uses: erlef/setup-beam@v1
+      - uses: erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236 # v1
         with:
           elixir-version: ${{ env.ELIXIR_VERSION }}
           otp-version: ${{ env.OTP_VERSION }}
 
       - name: Cache dependencies, build, and Dialyzer PLT
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             deps
@@ -110,6 +109,12 @@ jobs:
           mix deps.get
           mix deps ash
           scripts/assert-dependency-version.sh ash '${{ matrix.requirement }}'
+
+      - name: Assert release runtime and checker integrity
+        run: |
+          elixir --version
+          scripts/assert-runtime-version.sh
+          scripts/test-release-checkers.sh
 
       - run: mix deps.compile
       - run: mix compile --warnings-as-errors
@@ -125,18 +130,21 @@ jobs:
         run: |
           mix run --no-start -e '
           Code.ensure_loaded!(AshPostgres.CustomIndex)
-          Mix.Task.run("ash_postgres.generate_migrations", ["--check", "--domains", "AshReplicant.Test.Domain"])'
+          Mix.Task.run("ash_postgres.generate_migrations", ["--check", "--domains", "AshReplicant.Test.Domain,AshReplicant.Test.HistoryDomain"])'
 
       - name: Full live suite
         run: |
           set -o pipefail
-          mix test --include integration 2>&1 | tee full-test-output.txt
+          mix test --include integration --formatter AshReplicant.StructuralFormatter \
+            2>&1 | tee full-test-output.txt
           scripts/assert-exunit-output.sh full-test-output.txt
 
       - name: Explicit integration discovery
         run: |
           set -o pipefail
-          mix test test/integration --include integration --trace 2>&1 | tee integration-test-output.txt
+          mix test test/integration --include integration \
+            --formatter AshReplicant.StructuralFormatter \
+            2>&1 | tee integration-test-output.txt
           scripts/assert-exunit-output.sh integration-test-output.txt
 
       - run: mix dialyzer
@@ -148,14 +156,14 @@ jobs:
       MIX_ENV: dev
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: erlef/setup-beam@v1
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236 # v1
         with:
           elixir-version: ${{ env.ELIXIR_VERSION }}
           otp-version: ${{ env.OTP_VERSION }}
 
       - name: Cache dependencies and build
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             deps
@@ -164,6 +172,10 @@ jobs:
 
       - run: env -u ASH_REPLICANT_ASH_VERSION mix deps.get
       - run: mix deps.compile
+      - name: Assert release runtime
+        run: |
+          elixir --version
+          scripts/assert-runtime-version.sh
       - name: Assert selector-free public Ash requirement
         run: |
           env -u ASH_REPLICANT_ASH_VERSION mix run --no-start -e '

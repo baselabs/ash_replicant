@@ -23,9 +23,18 @@ ASH_REPLICANT_ASSERTED_REQUIREMENT="$requirement" \
     version = System.fetch_env!("ASH_REPLICANT_ASSERTED_VERSION")
     requirement = System.fetch_env!("ASH_REPLICANT_ASSERTED_REQUIREMENT")
 
-    unless Version.match?(version, requirement) do
-      IO.puts(:stderr, "#{version} does not satisfy #{requirement}")
-      System.halt(1)
+    with {:ok, parsed_version} <- Version.parse(version),
+         {:ok, parsed_requirement} <- Version.parse_requirement(requirement),
+         true <- Version.match?(parsed_version, parsed_requirement) do
+      :ok
+    else
+      {:error, _reason} ->
+        IO.puts(:stderr, "dependency version assertion input is invalid")
+        System.halt(2)
+
+      false ->
+        IO.puts(:stderr, "dependency version does not satisfy requirement")
+        System.halt(1)
     end
   '
 

@@ -276,21 +276,29 @@ violates one of these rules.
 ## Development
 
 ```bash
-mix deps.get
-env -u ASH_REPLICANT_TEST_URL mix test --exclude integration
+asdf install
+asdf exec mix deps.get
+env -u ASH_REPLICANT_TEST_URL asdf exec mix test --exclude integration \
+  --formatter AshReplicant.StructuralFormatter
 
 export ASH_REPLICANT_TEST_URL="postgres://postgres@localhost:5599/postgres"
-MIX_ENV=test mix ecto.create
-MIX_ENV=test mix ecto.migrate
-mix test --include integration
+MIX_ENV=test asdf exec mix ecto.create
+MIX_ENV=test asdf exec mix ecto.migrate
+asdf exec mix test --include integration --formatter AshReplicant.StructuralFormatter
+asdf exec mix test test/integration --include integration \
+  --formatter AshReplicant.StructuralFormatter
 
-mix format --check-formatted
-mix compile --warnings-as-errors
-mix credo --strict
-mix deps.audit
-mix dialyzer
-mix docs --warnings-as-errors
-mix hex.build
+MIX_ENV=test asdf exec mix run --no-start -e '
+Code.ensure_loaded!(AshPostgres.CustomIndex)
+Mix.Task.run("ash_postgres.generate_migrations", ["--check", "--domains", "AshReplicant.Test.Domain,AshReplicant.Test.HistoryDomain"])'
+
+asdf exec mix format --check-formatted
+asdf exec mix compile --warnings-as-errors
+asdf exec mix credo --strict
+asdf exec mix deps.audit
+asdf exec mix dialyzer
+asdf exec mix docs --warnings-as-errors
+asdf exec mix hex.build
 ```
 
 All gates pass before commit. Update `CHANGELOG.md` under `[Unreleased]`.

@@ -105,16 +105,23 @@ re-streams and dedups on resume.
 ## Development workflow
 
 ```bash
-mix deps.get
-mix format
-mix credo --strict
-mix compile --warnings-as-errors
-mix test
-mix dialyzer
-# or: mix quality
+asdf install
+asdf exec mix deps.get
+asdf exec mix format --check-formatted
+asdf exec mix compile --warnings-as-errors
+asdf exec mix credo --strict
+env -u ASH_REPLICANT_TEST_URL asdf exec mix test --exclude integration \
+  --formatter AshReplicant.StructuralFormatter
+asdf exec mix deps.audit
+asdf exec mix dialyzer
+asdf exec mix docs --warnings-as-errors
+asdf exec mix hex.build
 ```
 
-All gates pass before commit/PR. Update `CHANGELOG.md` under `[Unreleased]`.
+Live PostgreSQL integration, explicit integration discovery, and resource-snapshot
+drift checks are also mandatory before commit/PR; use the exact commands in
+`CONTRIBUTING.md`. `mix quality` is only a convenience alias for format, Credo,
+and Dialyzer. Update `CHANGELOG.md` under `[Unreleased]`.
 
 ## Testing
 

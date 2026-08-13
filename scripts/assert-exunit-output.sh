@@ -8,10 +8,17 @@ if [[ ! -f "$output_file" ]]; then
   exit 2
 fi
 
-result_line="$(awk '/^Result: / { result = $0 } END { print result }' "$output_file")"
+mapfile -t result_lines < <(grep '^Result: ' "$output_file" || true)
+
+if [[ "${#result_lines[@]}" -ne 1 ]]; then
+  echo "ExUnit evidence must contain exactly one Result line" >&2
+  exit 1
+fi
+
+result_line="${result_lines[0]}"
 
 if [[ ! "$result_line" =~ ^Result:\ ([1-9][0-9]*)\ passed$ ]]; then
-  echo "ExUnit evidence is not a positive clean run: ${result_line:-missing Result line}" >&2
+  echo "ExUnit evidence is not a positive clean run" >&2
   exit 1
 fi
 
