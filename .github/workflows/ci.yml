@@ -12,38 +12,78 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-jobs:
-  test:
-    name: Test & quality (Elixir ${{ matrix.elixir }} / OTP ${{ matrix.otp }})
-    runs-on: ubuntu-latest
+env:
+  ELIXIR_VERSION: "1.20.3"
+  OTP_VERSION: "29"
 
+jobs:
+  no-database:
+    name: No-database tests
+    runs-on: ubuntu-latest
+    env:
+      MIX_ENV: test
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+          otp-version: ${{ env.OTP_VERSION }}
+
+      - name: Cache dependencies and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-no-db-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}
+
+      - run: mix deps.get
+      - run: mix deps.compile
+      - run: mix format --check-formatted
+      - run: mix compile --warnings-as-errors
+      - run: mix credo --strict
+      - name: Dependency hygiene
+        run: mix deps.audit
+      - name: Test without a Repo
+        run: env -u ASH_REPLICANT_TEST_URL mix test --exclude integration
+      - name: Prove TestRepo was not started
+        run: |
+          env -u ASH_REPLICANT_TEST_URL mix run --no-start -e '
+          Code.require_file("test/test_helper.exs")
+          case Process.whereis(AshReplicant.TestRepo) do
+            nil -> :ok
+            pid -> IO.puts(:stderr, "TestRepo unexpectedly started: #{inspect(pid)}"); System.halt(1)
+          end'
+
+  compatibility:
+    name: Ash ${{ matrix.label }} / PostgreSQL 16
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
-          - elixir: "1.18"
-            otp: "27"
-
+          - label: floor-3.31.3
+            ash: "3.31.3"
+            requirement: "== 3.31.3"
+          - label: latest-3.x
+            ash: latest
+            requirement: ">= 3.31.3 and < 4.0.0-0"
     env:
       MIX_ENV: test
-      # PG.enabled? (test/support/pg.ex) gates the :integration suite on this being set.
-      # config/test.exs FORCES the database to a dedicated `ash_replicant_test` regardless of
-      # the URL's db, so the value only needs a valid host/port/user for the CI Postgres below.
+      ASH_REPLICANT_ASH_VERSION: ${{ matrix.ash }}
       ASH_REPLICANT_TEST_URL: postgres://postgres@localhost:5432/postgres
 
     steps:
       - uses: actions/checkout@v4
 
-      # The CDC integration tests use logical replication (publications + slots), which needs
-      # `wal_level=logical`. A GitHub Actions `services:` postgres can't override the server
-      # command, so run the container manually with the replication settings enabled.
-      - name: Start PostgreSQL 16 (wal_level=logical)
+      - name: Start PostgreSQL 16 with logical replication
         run: |
           docker run -d --name pg \
             -e POSTGRES_HOST_AUTH_METHOD=trust \
             -p 5432:5432 \
             postgres:16 \
-            -c wal_level=logical -c max_replication_slots=10 -c max_wal_senders=10
+            -c wal_level=logical -c max_replication_slots=20 -c max_wal_senders=20
           for _ in $(seq 1 30); do
             docker exec pg pg_isready -U postgres && break
             sleep 1
@@ -52,47 +92,112 @@ jobs:
 
       - uses: erlef/setup-beam@v1
         with:
-          elixir-version: ${{ matrix.elixir }}
-          otp-version: ${{ matrix.otp }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+          otp-version: ${{ env.OTP_VERSION }}
 
-      - name: Cache deps, build, and dialyzer PLT
+      - name: Cache dependencies, build, and Dialyzer PLT
         uses: actions/cache@v4
         with:
           path: |
             deps
             _build
             priv/plts
-          key: ${{ runner.os }}-mix-${{ matrix.otp }}-${{ matrix.elixir }}-${{ hashFiles('**/mix.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-mix-${{ matrix.otp }}-${{ matrix.elixir }}-
+          key: ${{ runner.os }}-ash-${{ matrix.label }}-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}
 
-      - run: mix deps.get
+      - name: Resolve and assert Ash version
+        run: |
+          mix deps.unlock ash
+          mix deps.get
+          mix deps ash
+          scripts/assert-dependency-version.sh ash '${{ matrix.requirement }}'
+
       - run: mix deps.compile
-
-      # Fast, cheap gates first (fail before the slow dialyzer/PLT build).
-      - run: mix format --check-formatted
       - run: mix compile --warnings-as-errors
-      - run: mix credo --strict
-      - name: Dependency hygiene (unused / retired / CVEs)
+      - name: Dependency hygiene
         run: mix deps.audit
 
-      # Provision the isolated integration database, then run unit + integration together
-      # (ASH_REPLICANT_TEST_URL is set, so PG.enabled? is true and integration is NOT excluded).
-      - run: mix ecto.create
-      - run: mix ecto.migrate
+      - name: Create and migrate the integration database
+        run: |
+          mix ecto.create
+          mix ecto.migrate
 
-      # Run unit + integration together, and FAIL if integration was excluded — otherwise a
-      # misconfigured substrate would make CI green while silently testing only the unit suite.
-      # When PG.enabled? is true the suite runs with no exclusions; a skipped integration suite
-      # prints "(N excluded)".
-      - name: Test (unit + integration; fail if integration excluded)
+      - name: Check migration and resource snapshot drift
+        run: |
+          mix run --no-start -e '
+          Code.ensure_loaded!(AshPostgres.CustomIndex)
+          Mix.Task.run("ash_postgres.generate_migrations", ["--check", "--domains", "AshReplicant.Test.Domain"])'
+
+      - name: Full live suite
         run: |
           set -o pipefail
-          mix test 2>&1 | tee test_output.txt
-          if grep -qE '[0-9]+ excluded' test_output.txt; then
-            echo "::error::Integration suite was EXCLUDED — ASH_REPLICANT_TEST_URL not honored; CI must not pass without integration."
+          mix test --include integration 2>&1 | tee full-test-output.txt
+          scripts/assert-exunit-output.sh full-test-output.txt
+
+      - name: Explicit integration discovery
+        run: |
+          set -o pipefail
+          mix test test/integration --include integration --trace 2>&1 | tee integration-test-output.txt
+          scripts/assert-exunit-output.sh integration-test-output.txt
+
+      - run: mix dialyzer
+
+  release-artifact:
+    name: Selector-free docs and package
+    runs-on: ubuntu-latest
+    env:
+      MIX_ENV: dev
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+          otp-version: ${{ env.OTP_VERSION }}
+
+      - name: Cache dependencies and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-release-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}
+
+      - run: env -u ASH_REPLICANT_ASH_VERSION mix deps.get
+      - run: mix deps.compile
+      - name: Assert selector-free public Ash requirement
+        run: |
+          env -u ASH_REPLICANT_ASH_VERSION mix run --no-start -e '
+          requirement =
+            Mix.Project.config()
+            |> Keyword.fetch!(:deps)
+            |> List.keyfind!(:ash, 0)
+            |> elem(1)
+
+          unless requirement == ">= 3.31.3 and < 4.0.0-0" do
+            raise "unexpected public Ash requirement: #{inspect(requirement)}"
+          end'
+
+      - run: mix docs --warnings-as-errors
+
+      - name: Build and inspect unpacked Hex package
+        run: |
+          package_dir=$(mktemp -d)
+          trap 'rm -rf "$package_dir"' EXIT
+          env -u ASH_REPLICANT_ASH_VERSION mix hex.build --unpack --output "$package_dir"
+
+          for required in lib .formatter.exs mix.exs README.md LICENSE NOTICE CHANGELOG.md usage-rules.md; do
+            test -e "$package_dir/$required" || {
+              echo "::error::Missing package path: $required"
+              exit 1
+            }
+          done
+
+          if find "$package_dir" -type d \( -name test -o -name .forge -o -name _build \) -print -quit | grep -q .; then
+            echo "::error::Package contains test, Forge, or build residue"
             exit 1
           fi
 
-      # Slowest gate last (builds/caches the PLT).
-      - run: mix dialyzer
+          if find "$package_dir" -type f \( -name '.env*' -o -name '*.pem' -o -name '*.key' \) -print -quit | grep -q .; then
+            echo "::error::Package contains a credential-shaped file"
+            exit 1
+          fi
