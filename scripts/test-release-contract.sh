@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+fixture_root="$(mktemp -d "${TMPDIR:-/tmp}/ash-replicant-release-contract.XXXXXX")"
+trap 'rm -rf "$fixture_root"' EXIT
+
+prepare_fixture() {
+  rm -rf "$fixture_root/.github"
+  mkdir -p "$fixture_root/.github/workflows"
+  cp .github/workflows/ci.yml "$fixture_root/.github/workflows/ci.yml"
+  cp README.md CONTRIBUTING.md AGENTS.md mix.exs "$fixture_root/"
+}
+
+assert_fixture_rejected() {
+  if scripts/assert-release-contract.sh "$fixture_root" >/dev/null 2>&1; then
+    echo "release contract checker accepted a negative fixture" >&2
+    exit 1
+  fi
+}
+
+scripts/assert-release-contract.sh >/dev/null
+
+prepare_fixture
+sed -i.bak 's#actions/checkout@11d5960a326750d5838078e36cf38b85af677262#actions/checkout@v4#' "$fixture_root/.github/workflows/ci.yml"
+assert_fixture_rejected
+
+prepare_fixture
+sed -i.bak 's#postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b#postgres:16#' "$fixture_root/.github/workflows/ci.yml"
+assert_fixture_rejected
+
+prepare_fixture
+sed -i.bak '/mix deps.audit/d' "$fixture_root/.github/workflows/ci.yml"
+assert_fixture_rejected
+
+prepare_fixture
+sed -i.bak '/label: latest-3.x/d' "$fixture_root/.github/workflows/ci.yml"
+assert_fixture_rejected
+
+prepare_fixture
+sed -i.bak 's/Elixir 1.20.3/Elixir 1.19.5/' "$fixture_root/README.md"
+assert_fixture_rejected
+
+echo "release contract self-tests: PASS"

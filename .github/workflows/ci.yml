@@ -40,20 +40,19 @@ jobs:
 
       - run: mix deps.get
       - run: mix deps.compile
+      - run: mix format --check-formatted
+      - run: mix compile --warnings-as-errors
       - name: Assert release runtime
         run: |
           elixir --version
           scripts/assert-runtime-version.sh
           scripts/test-release-checkers.sh
-      - run: mix format --check-formatted
-      - run: mix compile --warnings-as-errors
+          scripts/test-release-contract.sh
       - run: mix credo --strict
       - name: Dependency hygiene
         run: mix deps.audit
       - name: Test without a Repo
-        run: |
-          env -u ASH_REPLICANT_TEST_URL mix test --exclude integration \
-            --formatter AshReplicant.StructuralFormatter
+        run: env -u ASH_REPLICANT_TEST_URL scripts/run-structural-tests.sh --allow-excluded --exclude integration
 
   compatibility:
     name: Ash ${{ matrix.label }} / PostgreSQL 16
@@ -63,14 +62,20 @@ jobs:
       matrix:
         include:
           - label: floor-3.31.3
-            ash: "3.31.3"
+            selector: "3.31.3"
+            unlock: true
             requirement: "== 3.31.3"
+          - label: current-lock
+            selector: ""
+            unlock: false
+            requirement: ">= 3.31.3 and < 4.0.0-0"
           - label: latest-3.x
-            ash: latest
+            selector: latest
+            unlock: true
             requirement: ">= 3.31.3 and < 4.0.0-0"
     env:
       MIX_ENV: test
-      ASH_REPLICANT_ASH_VERSION: ${{ matrix.ash }}
+      ASH_REPLICANT_ASH_VERSION: ${{ matrix.selector }}
       ASH_REPLICANT_TEST_URL: postgres://postgres@localhost:5432/postgres
 
     steps:
@@ -105,19 +110,23 @@ jobs:
 
       - name: Resolve and assert Ash version
         run: |
-          mix deps.unlock ash
+          if [[ '${{ matrix.unlock }}' == 'true' ]]; then
+            mix deps.unlock ash
+          fi
           mix deps.get
           mix deps ash
           scripts/assert-dependency-version.sh ash '${{ matrix.requirement }}'
+
+      - run: mix deps.compile
+      - run: mix compile --warnings-as-errors
 
       - name: Assert release runtime and checker integrity
         run: |
           elixir --version
           scripts/assert-runtime-version.sh
           scripts/test-release-checkers.sh
+          scripts/assert-release-contract.sh
 
-      - run: mix deps.compile
-      - run: mix compile --warnings-as-errors
       - name: Dependency hygiene
         run: mix deps.audit
 
@@ -127,25 +136,13 @@ jobs:
           mix ecto.migrate
 
       - name: Check migration and resource snapshot drift
-        run: |
-          mix run --no-start -e '
-          Code.ensure_loaded!(AshPostgres.CustomIndex)
-          Mix.Task.run("ash_postgres.generate_migrations", ["--check", "--domains", "AshReplicant.Test.Domain,AshReplicant.Test.HistoryDomain"])'
+        run: scripts/test-migration-drift-gate.sh
 
       - name: Full live suite
-        run: |
-          set -o pipefail
-          mix test --include integration --formatter AshReplicant.StructuralFormatter \
-            2>&1 | tee full-test-output.txt
-          scripts/assert-exunit-output.sh full-test-output.txt
+        run: scripts/run-structural-tests.sh --include integration
 
       - name: Explicit integration discovery
-        run: |
-          set -o pipefail
-          mix test test/integration --include integration \
-            --formatter AshReplicant.StructuralFormatter \
-            2>&1 | tee integration-test-output.txt
-          scripts/assert-exunit-output.sh integration-test-output.txt
+        run: scripts/run-structural-tests.sh test/integration --include integration
 
       - run: mix dialyzer
 
@@ -172,10 +169,12 @@ jobs:
 
       - run: env -u ASH_REPLICANT_ASH_VERSION mix deps.get
       - run: mix deps.compile
+      - run: mix compile --warnings-as-errors
       - name: Assert release runtime
         run: |
           elixir --version
           scripts/assert-runtime-version.sh
+          scripts/assert-release-contract.sh
       - name: Assert selector-free public Ash requirement
         run: |
           env -u ASH_REPLICANT_ASH_VERSION mix run --no-start -e '

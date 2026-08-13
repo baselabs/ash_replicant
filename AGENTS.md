@@ -106,22 +106,25 @@ re-streams and dedups on resume.
 
 ```bash
 asdf install
-asdf exec mix deps.get
-asdf exec mix format --check-formatted
-asdf exec mix compile --warnings-as-errors
-asdf exec mix credo --strict
-env -u ASH_REPLICANT_TEST_URL asdf exec mix test --exclude integration \
-  --formatter AshReplicant.StructuralFormatter
-asdf exec mix deps.audit
-asdf exec mix dialyzer
-asdf exec mix docs --warnings-as-errors
-asdf exec mix hex.build
+scripts/with-release-runtime.sh scripts/assert-runtime-version.sh
+scripts/with-release-runtime.sh mix deps.get
+scripts/with-release-runtime.sh mix format --check-formatted
+scripts/with-release-runtime.sh mix compile --warnings-as-errors
+scripts/with-release-runtime.sh mix credo --strict
+env -u ASH_REPLICANT_TEST_URL \
+  scripts/with-release-runtime.sh scripts/run-structural-tests.sh \
+    --allow-excluded --exclude integration
+scripts/with-release-runtime.sh mix deps.audit
+scripts/with-release-runtime.sh mix dialyzer
+scripts/with-release-runtime.sh mix docs --warnings-as-errors
+scripts/with-release-runtime.sh mix hex.build
 ```
 
-Live PostgreSQL integration, explicit integration discovery, and resource-snapshot
-drift checks are also mandatory before commit/PR; use the exact commands in
-`CONTRIBUTING.md`. `mix quality` is only a convenience alias for format, Credo,
-and Dialyzer. Update `CHANGELOG.md` under `[Unreleased]`.
+The complete release battery also includes the live PostgreSQL integration,
+explicit integration discovery, resource-snapshot drift, checker self-tests,
+and release-contract tests listed in `CONTRIBUTING.md`. `mix quality` covers only
+format, Credo, and Dialyzer. Changes are recorded under `[Unreleased]` in
+`CHANGELOG.md`.
 
 ## Testing
 

@@ -18,9 +18,11 @@ Thank you for your interest in contributing to AshReplicant!
 git clone https://github.com/baselabs/ash_replicant.git
 cd ash_replicant
 asdf install
-asdf exec mix deps.get
-env -u ASH_REPLICANT_TEST_URL asdf exec mix test --exclude integration \
-  --formatter AshReplicant.StructuralFormatter
+scripts/with-release-runtime.sh scripts/assert-runtime-version.sh
+scripts/with-release-runtime.sh mix deps.get
+env -u ASH_REPLICANT_TEST_URL \
+  scripts/with-release-runtime.sh scripts/run-structural-tests.sh \
+    --allow-excluded --exclude integration
 ```
 
 ## Development Workflow
@@ -30,15 +32,16 @@ env -u ASH_REPLICANT_TEST_URL asdf exec mix test --exclude integration \
 3. Run the database-free and static checks before opening a PR:
 
 ```bash
-asdf exec mix format --check-formatted
-asdf exec mix compile --warnings-as-errors
-asdf exec mix credo --strict
-env -u ASH_REPLICANT_TEST_URL asdf exec mix test --exclude integration \
-  --formatter AshReplicant.StructuralFormatter
-asdf exec mix deps.audit
-asdf exec mix dialyzer
-asdf exec mix docs --warnings-as-errors
-asdf exec mix hex.build
+scripts/with-release-runtime.sh mix format --check-formatted
+scripts/with-release-runtime.sh mix compile --warnings-as-errors
+scripts/with-release-runtime.sh mix credo --strict
+env -u ASH_REPLICANT_TEST_URL \
+  scripts/with-release-runtime.sh scripts/run-structural-tests.sh \
+    --allow-excluded --exclude integration
+scripts/with-release-runtime.sh mix deps.audit
+scripts/with-release-runtime.sh mix dialyzer
+scripts/with-release-runtime.sh mix docs --warnings-as-errors
+scripts/with-release-runtime.sh mix hex.build
 ```
 
 4. Update `CHANGELOG.md` under `[Unreleased]`.
@@ -60,21 +63,20 @@ asdf exec mix hex.build
 
   ```bash
   export ASH_REPLICANT_TEST_URL="postgres://postgres@localhost:5599/postgres"
-  MIX_ENV=test asdf exec mix ecto.create   # creates ash_replicant_test
-  MIX_ENV=test asdf exec mix ecto.migrate
-  asdf exec mix test --include integration \
-    --formatter AshReplicant.StructuralFormatter # unit + integration
-  asdf exec mix test test/integration --include integration \
-    --formatter AshReplicant.StructuralFormatter
+  MIX_ENV=test scripts/with-release-runtime.sh mix ecto.create
+  MIX_ENV=test scripts/with-release-runtime.sh mix ecto.migrate
+  scripts/with-release-runtime.sh scripts/run-structural-tests.sh --include integration
+  scripts/with-release-runtime.sh scripts/run-structural-tests.sh \
+    test/integration --include integration
   ```
 
   Check resource snapshots against migrations with the same explicit-domain
   command used by CI:
 
   ```bash
-  MIX_ENV=test asdf exec mix run --no-start -e '
-  Code.ensure_loaded!(AshPostgres.CustomIndex)
-  Mix.Task.run("ash_postgres.generate_migrations", ["--check", "--domains", "AshReplicant.Test.Domain,AshReplicant.Test.HistoryDomain"])'
+  scripts/with-release-runtime.sh scripts/test-migration-drift-gate.sh
+  scripts/with-release-runtime.sh scripts/test-release-checkers.sh
+  scripts/with-release-runtime.sh scripts/test-release-contract.sh
   ```
 
   These live-suite and migration-drift commands are mandatory parts of the

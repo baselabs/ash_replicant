@@ -28,21 +28,32 @@ Release evidence is separated by what it proves:
    strict and always owns a live sandbox. A same-VM start-attempt marker and
    after-suite assertion prove that `AshReplicant.TestRepo` was never started.
 2. The live compatibility jobs start PostgreSQL with logical replication,
-   create and migrate the isolated test database, run the full suite, and run
-   `test/integration/` explicitly.
-3. CI uses a structural ExUnit formatter so a failing assertion cannot publish
-   row values. `scripts/assert-exunit-output.sh` requires exactly one
-   `Result: N passed` line where `N > 0`; zero tests, failures, skips,
-   exclusions, and a later clean-looking summary all fail. Checked-in negative
-   self-tests protect the ExUnit, dependency, selector, and runtime checkers.
+   create and migrate the isolated test database, and exercise the exact Ash
+   floor, the checked-in lock, and the newest compatible Ash 3 release. They
+   run the full suite and run `test/integration/` explicitly.
+3. `scripts/run-structural-tests.sh` captures raw ExUnit output without
+   publishing it, rejects uncontrolled process errors, and exposes only the
+   value-free structural result. `scripts/assert-exunit-output.sh` requires
+   exactly one positive result: failures, skips, invalid cases, zero tests, and
+   a later clean-looking summary all fail. Exclusions require the explicit
+   `--allow-excluded` mode used only by the database-free run. Checked-in
+   negative tests exercise assertion failures and background-process crashes
+   and prove that their values are not printed.
 4. Migration drift is checked against both configured domains,
    `AshReplicant.Test.Domain` and `AshReplicant.Test.HistoryDomain`. The command
    preloads `AshPostgres.CustomIndex` because AshPostgres decodes snapshot keys
    as existing atoms; after that preload, unchanged snapshots pass and a
    resource-only attribute mutation raises pending-codegen failure.
-5. Every job asserts the running Elixir/OTP identity. Third-party Actions and
-   the PostgreSQL integration image are pinned to immutable digests.
-6. The selector-free release job asserts the public Ash range, builds docs with
+5. Every job compiles with warnings as errors before any `mix run` checker can
+   reuse compiled code. Every job asserts the running Elixir/OTP identity.
+   `scripts/with-release-runtime.sh` gives local commands the same coherent
+   Elixir/OTP path. Third-party Actions and the PostgreSQL integration image are
+   pinned to immutable digests.
+6. `scripts/assert-release-contract.sh` verifies the pinned workflow structure,
+   compatibility cells, audits, cache partitioning, gate commands, and current
+   published runtime statements. Its mutation tests prove these checks reject
+   missing or stale contract elements.
+7. The selector-free release job asserts the public Ash range, builds docs with
    warnings as errors, unpacks the Hex package, requires its code/docs/license
    paths, and rejects test, Forge, build, environment, and credential-shaped
    residue.
@@ -67,7 +78,10 @@ for the production gate.
 - Test split: `test/ash_replicant/checkpoint_policy_test.exs` and
   `test/integration/checkpoint_policy_test.exs`.
 - Gate implementations: `.github/workflows/ci.yml`,
-  `scripts/assert-exunit-output.sh`, and
-  `scripts/assert-dependency-version.sh`.
+  `scripts/run-structural-tests.sh`, `scripts/assert-exunit-output.sh`,
+  `scripts/assert-dependency-version.sh`, and
+  `scripts/assert-release-contract.sh`.
 - Local red probes: DataCase/no-Repo, missing integration tag, fabricated ExUnit
-  results, nonmatching dependency requirement, and migration-resource drift.
+  results, assertion and background-process failures, nonmatching dependency
+  requirements, workflow mutations, stale runtime documentation, and
+  migration-resource drift.

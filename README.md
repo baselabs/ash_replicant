@@ -277,28 +277,30 @@ violates one of these rules.
 
 ```bash
 asdf install
-asdf exec mix deps.get
-env -u ASH_REPLICANT_TEST_URL asdf exec mix test --exclude integration \
-  --formatter AshReplicant.StructuralFormatter
+scripts/with-release-runtime.sh scripts/assert-runtime-version.sh
+scripts/with-release-runtime.sh mix deps.get
+env -u ASH_REPLICANT_TEST_URL \
+  scripts/with-release-runtime.sh scripts/run-structural-tests.sh \
+    --allow-excluded --exclude integration
 
 export ASH_REPLICANT_TEST_URL="postgres://postgres@localhost:5599/postgres"
-MIX_ENV=test asdf exec mix ecto.create
-MIX_ENV=test asdf exec mix ecto.migrate
-asdf exec mix test --include integration --formatter AshReplicant.StructuralFormatter
-asdf exec mix test test/integration --include integration \
-  --formatter AshReplicant.StructuralFormatter
+MIX_ENV=test scripts/with-release-runtime.sh mix ecto.create
+MIX_ENV=test scripts/with-release-runtime.sh mix ecto.migrate
+scripts/with-release-runtime.sh scripts/run-structural-tests.sh --include integration
+scripts/with-release-runtime.sh scripts/run-structural-tests.sh \
+  test/integration --include integration
 
-MIX_ENV=test asdf exec mix run --no-start -e '
-Code.ensure_loaded!(AshPostgres.CustomIndex)
-Mix.Task.run("ash_postgres.generate_migrations", ["--check", "--domains", "AshReplicant.Test.Domain,AshReplicant.Test.HistoryDomain"])'
+scripts/with-release-runtime.sh scripts/test-migration-drift-gate.sh
+scripts/with-release-runtime.sh scripts/test-release-checkers.sh
+scripts/with-release-runtime.sh scripts/test-release-contract.sh
 
-asdf exec mix format --check-formatted
-asdf exec mix compile --warnings-as-errors
-asdf exec mix credo --strict
-asdf exec mix deps.audit
-asdf exec mix dialyzer
-asdf exec mix docs --warnings-as-errors
-asdf exec mix hex.build
+scripts/with-release-runtime.sh mix format --check-formatted
+scripts/with-release-runtime.sh mix compile --warnings-as-errors
+scripts/with-release-runtime.sh mix credo --strict
+scripts/with-release-runtime.sh mix deps.audit
+scripts/with-release-runtime.sh mix dialyzer
+scripts/with-release-runtime.sh mix docs --warnings-as-errors
+scripts/with-release-runtime.sh mix hex.build
 ```
 
 All gates pass before commit. Update `CHANGELOG.md` under `[Unreleased]`.

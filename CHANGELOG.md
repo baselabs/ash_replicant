@@ -18,13 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add AshOnetime 0.6.0 as the governed idempotency dependency for the logical-message
   actions planned for 1.0.0. The permanent commit-LSN checkpoint remains the
   transaction replay and resume authority.
-- Add independent CI paths for no-database tests, exact-floor/latest-Ash live
-  PostgreSQL integration, migration drift, Dialyzer, warnings-as-errors docs, and
-  selector-free Hex package inspection. Checked-in assertions reject missing,
-  skipped, excluded, or failing integration evidence.
+- Add independent CI paths for no-database tests, exact-floor/current-lock/latest-Ash
+  live PostgreSQL integration, migration drift, Dialyzer, warnings-as-errors docs,
+  and selector-free Hex package inspection. Checked-in assertions reject missing,
+  skipped, invalid, excluded-without-authorization, or failing test evidence.
 - Pin third-party CI actions to immutable commits, assert the executing
-  Elixir/OTP identity, redact test failures structurally, and self-test the
-  release-evidence checkers against masking and constant-accept regressions.
+  Elixir/OTP identity, capture raw test failures without publishing values, and
+  mutation-test the release-evidence, workflow, documentation, and migration
+  checkers against masking and constant-accept regressions.
 
 ### Changed
 

@@ -6,12 +6,14 @@ expected_otp="29"
 
 case "${1:-}" in
   "") ;;
-  --self-test-mismatch)
+  --self-test-elixir-mismatch)
     expected_elixir="0.0.0"
+    ;;
+  --self-test-otp-mismatch)
     expected_otp="0"
     ;;
   *)
-    echo "usage: assert-runtime-version.sh [--self-test-mismatch]" >&2
+    echo "usage: assert-runtime-version.sh [--self-test-elixir-mismatch|--self-test-otp-mismatch]" >&2
     exit 2
     ;;
 esac
