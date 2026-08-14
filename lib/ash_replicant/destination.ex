@@ -1,0 +1,732 @@
+defmodule AshReplicant.Destination do
+  @moduledoc false
+
+  alias AshReplicant.DestinationParticipant
+  alias AshReplicant.DestinationParticipant.{ActionRef, Context, ReplayIdentity}
+  alias AshReplicant.Resource.Info
+  alias Spark.Dsl.Extension, as: DslExtension
+
+  defmodule Entry do
+    @moduledoc false
+    @enforce_keys [
+      :role,
+      :resource,
+      :action,
+      :source,
+      :tenant_mode,
+      :replay_identity,
+      :protection
+    ]
+    defstruct [:role, :resource, :action, :source, :tenant_mode, :replay_identity, :protection]
+
+    @type t :: %__MODULE__{
+            role: atom(),
+            resource: module(),
+            action: atom(),
+            source: module() | :framework,
+            tenant_mode: :inherit,
+            replay_identity: ReplayIdentity.t() | nil,
+            protection: map() | nil
+          }
+  end
+
+  defmodule Manifest do
+    @moduledoc false
+    @enforce_keys [:repo, :entries, :digest]
+    defstruct [:repo, :entries, :digest]
+
+    @type t :: %__MODULE__{repo: module(), entries: [Entry.t()], digest: binary()}
+  end
+
+  @safe_changes [
+    AshCloak.Changes.Encrypt,
+    Ash.Resource.Change.Atomic,
+    Ash.Resource.Change.AtomicSet,
+    Ash.Resource.Change.Filter,
+    Ash.Resource.Change.GetAndLock,
+    Ash.Resource.Change.GetAndLockForUpdate,
+    Ash.Resource.Change.Increment,
+    Ash.Resource.Change.OptimisticLock,
+    Ash.Resource.Change.PreventChange,
+    Ash.Resource.Change.RelateActor,
+    Ash.Resource.Change.Select,
+    Ash.Resource.Change.SetAttribute,
+    Ash.Resource.Change.SetContext
+  ]
+
+  @safe_validations [
+    Ash.Resource.Validation.ActionIs,
+    Ash.Resource.Validation.All,
+    Ash.Resource.Validation.Any,
+    Ash.Resource.Validation.ArgumentDoesNotEqual,
+    Ash.Resource.Validation.ArgumentEquals,
+    Ash.Resource.Validation.ArgumentIn,
+    Ash.Resource.Validation.AttributeDoesNotEqual,
+    Ash.Resource.Validation.AttributeEquals,
+    Ash.Resource.Validation.AttributeIn,
+    Ash.Resource.Validation.AttributesPresent,
+    Ash.Resource.Validation.ByteSize,
+    Ash.Resource.Validation.Changing,
+    Ash.Resource.Validation.Compare,
+    Ash.Resource.Validation.Confirm,
+    Ash.Resource.Validation.DataOneOf,
+    Ash.Resource.Validation.Match,
+    Ash.Resource.Validation.Negate,
+    Ash.Resource.Validation.OneOf,
+    Ash.Resource.Validation.Present,
+    Ash.Resource.Validation.StringLength
+  ]
+
+  @safe_preparations [
+    Ash.Resource.Preparation.Build,
+    Ash.Resource.Preparation.SetContext
+  ]
+
+  @unsafe_function_modules [
+    Ash.Resource.Change.AfterAction,
+    Ash.Resource.Change.AfterTransaction,
+    Ash.Resource.Change.BeforeAction,
+    Ash.Resource.Change.BeforeTransaction,
+    Ash.Resource.Change.Function,
+    Ash.Resource.Preparation.AfterAction,
+    Ash.Resource.Preparation.BeforeAction,
+    Ash.Resource.Preparation.Function,
+    Ash.Resource.Validation.Function,
+    Ash.Resource.Validation.PreFlightAuthorization
+  ]
+
+  @relationship_changes [
+    Ash.Resource.Change.ManageRelationship,
+    Ash.Resource.Change.CascadeDestroy,
+    Ash.Resource.Change.CascadeUpdate
+  ]
+
+  @type reason ::
+          {:invalid_destination_config, atom()}
+          | {:destination_repo_mismatch, module()}
+          | {:destination_repo_dynamic, module()}
+          | {:destination_repo_not_postgres, module()}
+          | {:destination_action_missing, module(), atom()}
+          | {:destination_participant_required, module(), atom(), module()}
+          | {:destination_participant_invalid, module()}
+          | {:destination_participant_mismatch, module(), atom()}
+          | {:destination_participant_cycle, module(), atom()}
+
+  @spec manifest(map()) :: {:ok, Manifest.t()} | {:error, reason()}
+  def manifest(%{repo: repo, domains: domains, checkpoint_resource: checkpoint})
+      when is_atom(repo) and is_list(domains) and is_atom(checkpoint) do
+    with :ok <- validate_repo_module(repo),
+         {:ok, roots} <- root_actions(domains, checkpoint),
+         {:ok, _completed, entries} <-
+           walk(roots, repo, %{}, %{}, []) do
+      entries =
+        entries
+        |> Enum.uniq()
+        |> Enum.sort_by(&entry_sort_key/1)
+
+      digest = :crypto.hash(:sha256, :erlang.term_to_binary({repo, entries}))
+      {:ok, %Manifest{repo: repo, entries: entries, digest: digest}}
+    end
+  rescue
+    _error -> {:error, {:invalid_destination_config, :reflection_failed}}
+  catch
+    _kind, _reason -> {:error, {:invalid_destination_config, :reflection_failed}}
+  end
+
+  def manifest(_), do: {:error, {:invalid_destination_config, :shape}}
+
+  @doc false
+  def __after_compile__(env, _bytecode) do
+    config = env.module.__ash_replicant_config__()
+
+    case manifest(config) do
+      {:ok, _manifest} ->
+        :ok
+
+      {:error, reason} ->
+        raise CompileError,
+          file: env.file,
+          line: env.line,
+          description: "unsafe AshReplicant destination: #{inspect(reason)}"
+    end
+  end
+
+  defp root_actions(domains, checkpoint) do
+    with {:ok, mapped_roots} <- mapped_root_actions(domains),
+         {:ok, checkpoint_read} <- required_primary_action(checkpoint, :read) do
+      {:ok,
+       mapped_roots ++
+         [
+           root_ref(checkpoint, checkpoint_read, :checkpoint),
+           root_ref(checkpoint, :upsert, :checkpoint)
+         ]}
+    end
+  end
+
+  defp mapped_root_actions(domains) do
+    domains
+    |> AshReplicant.Resolver.resources()
+    |> Enum.reduce_while({:ok, []}, fn resource, {:ok, roots} ->
+      case mapped_resource_roots(resource) do
+        {:ok, resource_roots} -> {:cont, {:ok, resource_roots ++ roots}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp mapped_resource_roots(resource) do
+    with {:ok, read} <- required_primary_action(resource, :read),
+         {:ok, create} <- required_primary_action(resource, :create),
+         {:ok, destroy} <- required_primary_action(resource, :destroy) do
+      base = Enum.map([read, create, destroy], &root_ref(resource, &1, :mapped))
+
+      if Info.history_scd2?(resource) do
+        {:ok,
+         [
+           root_ref(resource, Info.replicant_history_close_action!(resource), :history_close)
+           | base
+         ]}
+      else
+        {:ok, base}
+      end
+    end
+  end
+
+  defp required_primary_action(resource, type) do
+    case Ash.Resource.Info.primary_action(resource, type) do
+      nil -> {:error, {:destination_action_missing, resource, type}}
+      action -> {:ok, action.name}
+    end
+  end
+
+  defp walk([], _repo, _active, completed, entries), do: {:ok, completed, entries}
+
+  defp walk(
+         [
+           {resource, action_name, role, source, tenant_mode, replay_identity}
+           | rest
+         ],
+         repo,
+         active,
+         completed,
+         entries
+       ) do
+    key = {resource, action_name}
+    protection = normalized_protection(resource, action_name)
+
+    entry = %Entry{
+      role: role,
+      resource: resource,
+      action: action_name,
+      source: source,
+      tenant_mode: tenant_mode,
+      replay_identity: replay_identity,
+      protection: protection
+    }
+
+    cond do
+      Map.has_key?(active, key) ->
+        {:error, {:destination_participant_cycle, resource, action_name}}
+
+      Map.has_key?(completed, key) ->
+        walk(rest, repo, active, completed, [entry | entries])
+
+      true ->
+        with :ok <- validate_resource_repo(resource, repo),
+             %{} = action <- Ash.Resource.Info.action(resource, action_name),
+             {:ok, refs} <- inspect_action(resource, action),
+             :ok <- validate_touches(resource, action, refs),
+             {:ok, completed, entries} <-
+               walk(
+                 participant_roots(refs),
+                 repo,
+                 Map.put(active, key, true),
+                 completed,
+                 [entry | entries]
+               ) do
+          walk(rest, repo, active, Map.put(completed, key, true), entries)
+        else
+          nil -> {:error, {:destination_action_missing, resource, action_name}}
+          {:error, _reason} = error -> error
+        end
+    end
+  end
+
+  defp participant_roots(refs) do
+    Enum.map(refs, fn {%ActionRef{} = ref, ref_source} ->
+      {
+        ref.resource,
+        ref.action,
+        :auxiliary,
+        ref_source,
+        ref.tenant_mode,
+        ref.replay_identity
+      }
+    end)
+  end
+
+  defp inspect_action(resource, action) do
+    context = %Context{resource: resource, action: action.name, kind: :manual}
+
+    with {:ok, manual_refs} <- inspect_manual(action_implementation(action), context),
+         {:ok, callback_refs} <- inspect_action_callbacks(action, context),
+         {:ok, type_refs} <- inspect_action_types(resource, action),
+         :ok <- inspect_tenant_resolver(resource, action),
+         {:ok, change_refs} <-
+           inspect_items(
+             resource,
+             action,
+             Ash.Resource.Info.action_changes(resource, action),
+             :change
+           ),
+         {:ok, validation_refs} <-
+           inspect_items(resource, action, action_validations(resource, action), :validation),
+         {:ok, preparation_refs} <-
+           inspect_items(resource, action, action_preparations(resource, action), :preparation) do
+      {:ok,
+       manual_refs ++
+         callback_refs ++ type_refs ++ change_refs ++ validation_refs ++ preparation_refs}
+    end
+  end
+
+  defp inspect_action_callbacks(action, context) do
+    [:modify_query, :error_handler]
+    |> Enum.map(&Map.get(action, &1))
+    |> Enum.reduce_while({:ok, []}, fn callback, {:ok, refs} ->
+      case inspect_callback(callback, %{context | kind: :callback}) do
+        {:ok, found} -> {:cont, {:ok, refs ++ found}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp inspect_callback(nil, _context), do: {:ok, []}
+
+  defp inspect_callback({module, function, args}, context)
+       when is_atom(module) and is_atom(function) and is_list(args),
+       do: inspect_provider(module, [function: function], context)
+
+  defp inspect_callback(_callback, context),
+    do: {:error, {:destination_participant_required, context.resource, context.action, Function}}
+
+  defp inspect_action_types(resource, action) do
+    fields =
+      action.arguments ++
+        accepted_attributes(resource, action) ++
+        Map.get(action, :metadata, []) ++ return_type(action)
+
+    Enum.reduce_while(fields, {:ok, []}, fn field, {:ok, refs} ->
+      context = %Context{resource: resource, action: action.name, kind: :type}
+
+      case inspect_type(field.type, Map.get(field, :constraints, []), context) do
+        {:ok, found} -> {:cont, {:ok, refs ++ found}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp accepted_attributes(resource, action) do
+    action
+    |> Map.get(:accept, [])
+    |> List.wrap()
+    |> Enum.map(&Ash.Resource.Info.attribute(resource, &1))
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp return_type(%{type: :action, returns: nil}), do: []
+
+  defp return_type(%{type: :action} = action) do
+    [%{type: action.returns, constraints: Map.get(action, :constraints, [])}]
+  end
+
+  defp return_type(_action), do: []
+
+  defp inspect_type({:array, type}, constraints, context) do
+    inspect_type(type, Keyword.get(constraints, :items, []), context)
+  end
+
+  defp inspect_type(type, constraints, context) do
+    module = Ash.Type.get_type!(type)
+
+    if Ash.Type.builtin?(module) do
+      {:ok, []}
+    else
+      inspect_provider(module, constraints, context)
+    end
+  end
+
+  defp inspect_tenant_resolver(resource, action)
+       when action.type in [:create, :update, :destroy] do
+    if AshReplicant.Resource in Spark.extensions(resource) do
+      inspect_tenant_mfa(Info.replicant_tenant_mfa(resource), resource, action)
+    else
+      :ok
+    end
+  end
+
+  defp inspect_tenant_resolver(_resource, _action), do: :ok
+
+  defp inspect_tenant_mfa(
+         {:ok, {module, function, args}},
+         resource,
+         action
+       )
+       when is_atom(module) and is_atom(function) and is_list(args) do
+    context = %Context{resource: resource, action: action.name, kind: :tenant_resolver}
+
+    case inspect_provider(module, [function: function], context) do
+      {:ok, []} -> :ok
+      {:ok, _refs} -> {:error, {:destination_participant_invalid, module}}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp inspect_tenant_mfa(_mfa, _resource, _action), do: :ok
+
+  defp inspect_manual(nil, _context), do: {:ok, []}
+
+  defp inspect_manual({AshOnetime.GenericAction, opts}, context) do
+    with :ok <- validate_wrapper_protection(opts, context) do
+      inspect_manual(Keyword.get(opts, :original), context)
+    end
+  end
+
+  defp inspect_manual({module, opts}, context), do: inspect_provider(module, opts, context)
+
+  defp inspect_manual(module, context) when is_atom(module),
+    do: inspect_provider(module, [], context)
+
+  defp inspect_manual(_other, context),
+    do: {:error, {:destination_participant_required, context.resource, context.action, Function}}
+
+  defp inspect_items(resource, action, items, kind) do
+    Enum.reduce_while(items, {:ok, []}, fn item, {:ok, refs} ->
+      {module, opts} = item_module_opts(item, kind)
+      context = %Context{resource: resource, action: action.name, kind: kind}
+
+      with {:ok, found} <- inspect_item(module, opts, context),
+           {:ok, conditional} <- inspect_raw_items(Map.get(item, :where, []), context) do
+        {:cont, {:ok, refs ++ found ++ conditional}}
+      else
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp inspect_raw_items(items, context) do
+    Enum.reduce_while(List.wrap(items), {:ok, []}, fn item, {:ok, refs} ->
+      {module, opts} = raw_module_opts(item)
+
+      case inspect_item(module, opts, %{context | kind: :validation}) do
+        {:ok, found} -> {:cont, {:ok, refs ++ found}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp inspect_item(module, opts, context)
+       when module in [Ash.Resource.Validation.All, Ash.Resource.Validation.Any] do
+    inspect_raw_items(Keyword.get(opts, :validations, []), context)
+  end
+
+  defp inspect_item(Ash.Resource.Validation.Negate, opts, context) do
+    inspect_raw_items([Keyword.get(opts, :validation)], context)
+  end
+
+  defp inspect_item(module, opts, context)
+       when module in [Ash.Resource.Change.SetContext, Ash.Resource.Preparation.SetContext] do
+    if is_map(Keyword.get(opts, :context)) do
+      {:ok, []}
+    else
+      inspect_provider(module, opts, context)
+    end
+  end
+
+  defp inspect_item(module, opts, context)
+       when module in [AshOnetime.Change, AshOnetime.GenericAction] do
+    case validate_wrapper_protection(opts, context) do
+      :ok -> {:ok, []}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp inspect_item(module, _opts, _context)
+       when module in @safe_changes or module in @safe_validations or
+              module in @safe_preparations,
+       do: {:ok, []}
+
+  defp inspect_item(module, opts, context) when module in @relationship_changes,
+    do: relationship_refs(module, opts, context)
+
+  defp inspect_item(module, opts, context) when module in @unsafe_function_modules,
+    do: inspect_provider(module, opts, context)
+
+  defp inspect_item(module, opts, context) when is_atom(module) do
+    inspect_provider(module, opts, context)
+  end
+
+  defp inspect_provider(module, opts, context) when is_atom(module) do
+    if participant?(module) do
+      case module.destination_participants(opts, context) do
+        {:ok, :no_database} -> {:ok, []}
+        {:ok, {:actions, [_ | _] = refs}} -> validate_refs(refs, module)
+        _other -> {:error, {:destination_participant_invalid, module}}
+      end
+    else
+      {:error, {:destination_participant_required, context.resource, context.action, module}}
+    end
+  rescue
+    _error -> {:error, {:destination_participant_invalid, module}}
+  catch
+    _kind, _reason -> {:error, {:destination_participant_invalid, module}}
+  end
+
+  defp inspect_provider(_module, _opts, context),
+    do: {:error, {:destination_participant_required, context.resource, context.action, Function}}
+
+  defp validate_refs(refs, module) do
+    if Enum.all?(refs, fn
+         %ActionRef{
+           resource: resource,
+           action: action,
+           tenant_mode: :inherit,
+           replay_identity: replay_identity
+         }
+         when is_atom(resource) and is_atom(action) ->
+           valid_replay_identity?(replay_identity)
+
+         _other ->
+           false
+       end) do
+      {:ok, Enum.map(refs, &{&1, module})}
+    else
+      {:error, {:destination_participant_invalid, module}}
+    end
+  end
+
+  defp valid_replay_identity?(nil), do: true
+
+  defp valid_replay_identity?(%ReplayIdentity{components: [_ | _] = components, participant: p})
+       when is_atom(p) do
+    allowed = [
+      :source_system_identifier,
+      :source_database,
+      :slot_name,
+      :commit_lsn,
+      :ordinal,
+      :participant
+    ]
+
+    Enum.uniq(components) == components and Enum.all?(components, &(&1 in allowed))
+  end
+
+  defp valid_replay_identity?(_other), do: false
+
+  defp relationship_refs(module, opts, context) do
+    relationship_name = Keyword.get(opts, :relationship)
+
+    case Ash.Resource.Info.relationship(context.resource, relationship_name) do
+      %{destination: destination} = relationship ->
+        relationship_action_refs(module, opts, relationship, destination)
+
+      _other ->
+        {:error, {:destination_participant_invalid, module}}
+    end
+  end
+
+  defp relationship_action_refs(Ash.Resource.Change.ManageRelationship, opts, relationship, _) do
+    helper = Ash.Changeset.ManagedRelationshipHelpers
+    manage_opts = Keyword.get(opts, :opts, [])
+
+    refs =
+      [
+        helper.on_match_destination_actions(manage_opts, relationship),
+        helper.on_no_match_destination_actions(manage_opts, relationship),
+        helper.on_missing_destination_actions(manage_opts, relationship),
+        helper.on_lookup_update_action(manage_opts, relationship),
+        helper.on_lookup_read_action(manage_opts, relationship)
+      ]
+      |> List.flatten()
+      |> Enum.reject(&is_nil/1)
+      |> Enum.map(&managed_action_ref(&1, relationship))
+      |> Enum.uniq()
+
+    {:ok, Enum.map(refs, &{&1, :framework})}
+  rescue
+    _error -> {:error, {:destination_participant_invalid, Ash.Resource.Change.ManageRelationship}}
+  end
+
+  defp relationship_action_refs(module, opts, _relationship, destination) do
+    type = if module == Ash.Resource.Change.CascadeDestroy, do: :destroy, else: :update
+
+    action =
+      Keyword.get(opts, :action) || Ash.Resource.Info.primary_action!(destination, type).name
+
+    read_action =
+      Keyword.get(opts, :read_action) ||
+        Ash.Resource.Info.primary_action!(destination, :read).name
+
+    {:ok,
+     [
+       {%ActionRef{resource: destination, action: read_action}, :framework},
+       {%ActionRef{resource: destination, action: action}, :framework}
+     ]}
+  end
+
+  defp managed_action_ref({:destination, action}, relationship),
+    do: %ActionRef{resource: relationship.destination, action: action}
+
+  defp managed_action_ref({:join, action, _keys}, relationship),
+    do: %ActionRef{resource: relationship.through, action: action}
+
+  defp validate_touches(resource, action, refs) do
+    declared = action.touches_resources |> List.wrap() |> MapSet.new()
+
+    discovered =
+      refs |> Enum.map(fn {%ActionRef{} = ref, _source} -> ref.resource end) |> MapSet.new()
+
+    if MapSet.equal?(declared, discovered) do
+      :ok
+    else
+      {:error, {:destination_participant_mismatch, resource, action.name}}
+    end
+  end
+
+  defp validate_resource_repo(resource, repo) do
+    raw = DslExtension.get_opt(resource, [:postgres], :repo, nil, false)
+    configured = DslExtension.get_opt(resource, [:postgres], :repo, nil, true)
+
+    cond do
+      Ash.Resource.Info.data_layer(resource) != AshPostgres.DataLayer ->
+        {:error, {:destination_repo_not_postgres, resource}}
+
+      is_function(raw) or is_function(configured) ->
+        {:error, {:destination_repo_dynamic, resource}}
+
+      raw != repo ->
+        {:error, {:destination_repo_mismatch, resource}}
+
+      AshPostgres.DataLayer.Info.repo(resource, :read) != repo ->
+        {:error, {:destination_repo_mismatch, resource}}
+
+      AshPostgres.DataLayer.Info.repo(resource, :mutate) != repo ->
+        {:error, {:destination_repo_mismatch, resource}}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_repo_module(repo) do
+    Code.ensure_loaded(repo)
+
+    behaviours = repo.__info__(:attributes) |> Keyword.get_values(:behaviour) |> List.flatten()
+
+    cond do
+      AshPostgres.Repo not in behaviours ->
+        {:error, {:invalid_destination_config, :repo}}
+
+      repo.__adapter__() != Ecto.Adapters.Postgres ->
+        {:error, {:invalid_destination_config, :adapter}}
+
+      true ->
+        :ok
+    end
+  rescue
+    _error -> {:error, {:invalid_destination_config, :repo}}
+  end
+
+  defp action_validations(resource, action) do
+    global =
+      if action.type in [:read, :create, :update, :destroy],
+        do: Ash.Resource.Info.validations(resource, action.type),
+        else: []
+
+    global ++ Map.get(action, :validations, [])
+  end
+
+  defp action_preparations(resource, %{type: :read} = action),
+    do: Ash.Resource.Info.preparations(resource, :read) ++ Map.get(action, :preparations, [])
+
+  defp action_preparations(resource, %{type: :action} = action),
+    do: Ash.Resource.Info.preparations(resource, :action) ++ Map.get(action, :preparations, [])
+
+  defp action_preparations(_resource, _action), do: []
+
+  defp item_module_opts(item, field) do
+    value = Map.get(item, field)
+
+    case value do
+      {module, opts} when is_atom(module) and is_list(opts) -> {module, opts}
+      module when is_atom(module) -> {module, []}
+      _other -> {Function, []}
+    end
+  end
+
+  defp raw_module_opts({module, opts}) when is_atom(module) and is_list(opts),
+    do: {module, opts}
+
+  defp raw_module_opts(module) when is_atom(module), do: {module, []}
+  defp raw_module_opts(_other), do: {Function, []}
+
+  defp participant?(module) do
+    behaviours = module.__info__(:attributes) |> Keyword.get_values(:behaviour) |> List.flatten()
+
+    function_exported?(module, :destination_participants, 2) and
+      DestinationParticipant in behaviours
+  rescue
+    _error -> false
+  end
+
+  defp action_implementation(%{type: :action} = action), do: Map.get(action, :run)
+  defp action_implementation(action), do: Map.get(action, :manual)
+
+  defp validate_wrapper_protection(opts, context) do
+    declared = AshOnetime.Resource.Info.protection(context.resource, context.action)
+
+    if declared && Keyword.get(opts, :protection) == declared do
+      :ok
+    else
+      {:error, {:destination_participant_invalid, AshOnetime.Resource}}
+    end
+  end
+
+  defp normalized_protection(resource, action) do
+    case AshOnetime.Resource.Info.protection(resource, action) do
+      nil -> nil
+      protection -> normalize_structural(protection)
+    end
+  end
+
+  defp normalize_structural(%_module{} = struct) do
+    struct
+    |> Map.from_struct()
+    |> Map.delete(:__spark_metadata__)
+    |> normalize_structural()
+  end
+
+  defp normalize_structural(map) when is_map(map) do
+    Map.new(map, fn {key, value} -> {key, normalize_structural(value)} end)
+  end
+
+  defp normalize_structural(list) when is_list(list), do: Enum.map(list, &normalize_structural/1)
+
+  defp normalize_structural(tuple) when is_tuple(tuple),
+    do: tuple |> Tuple.to_list() |> Enum.map(&normalize_structural/1) |> List.to_tuple()
+
+  defp normalize_structural(other), do: other
+
+  defp root_ref(resource, action, role),
+    do: {resource, action, role, :framework, :inherit, nil}
+
+  defp entry_sort_key(entry) do
+    {
+      Atom.to_string(entry.resource),
+      Atom.to_string(entry.action),
+      Atom.to_string(entry.role),
+      inspect(entry.source),
+      :erlang.term_to_binary(entry.replay_identity),
+      :erlang.term_to_binary(entry.protection)
+    }
+  end
+end

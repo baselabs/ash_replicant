@@ -551,7 +551,7 @@ defmodule AshReplicant.Test.DupA do
   end
 
   actions do
-    defaults [:read]
+    defaults [:read, :destroy, create: :*]
   end
 end
 
@@ -577,7 +577,7 @@ defmodule AshReplicant.Test.DupB do
   end
 
   actions do
-    defaults [:read]
+    defaults [:read, :destroy, create: :*]
   end
 end
 

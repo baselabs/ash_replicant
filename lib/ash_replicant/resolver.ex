@@ -30,8 +30,7 @@ defmodule AshReplicant.Resolver do
           | {:error, {:missing_source_table, module()}}
   def build_index(domains) when is_list(domains) do
     domains
-    |> Enum.flat_map(&Ash.Domain.Info.resources/1)
-    |> Enum.filter(&replicant_resource?/1)
+    |> resources()
     |> Enum.reduce_while({:ok, %{}}, fn resource, {:ok, acc} ->
       key = {Info.source_schema(resource), Info.source_table(resource)}
 
@@ -46,6 +45,16 @@ defmodule AshReplicant.Resolver do
           {:cont, {:ok, Map.put(acc, key, resource)}}
       end
     end)
+  end
+
+  @doc "Returns the configured Replicant resources in deterministic module order."
+  @spec resources([module()]) :: [module()]
+  def resources(domains) when is_list(domains) do
+    domains
+    |> Enum.flat_map(&Ash.Domain.Info.resources/1)
+    |> Enum.filter(&replicant_resource?/1)
+    |> Enum.uniq()
+    |> Enum.sort()
   end
 
   @doc """

@@ -29,6 +29,7 @@ defmodule AshReplicant.Sink do
 
     quote do
       @behaviour Replicant.Sink
+      @after_compile {AshReplicant.Destination, :__after_compile__}
 
       @doc false
       def __ash_replicant_config__ do
