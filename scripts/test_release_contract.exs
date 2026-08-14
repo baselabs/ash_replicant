@@ -132,6 +132,41 @@ defmodule AshReplicant.ReleaseContractSelfTest do
      ]}
   ]
 
+  @b1_doc_contracts [
+    {"README.md", "## Destination transaction boundary",
+     [
+       "Every admitted destination resource uses the sink's literal AshPostgres Repo and the same effective dynamic Repo.",
+       "Declarations are trusted metadata; they do not prove an arbitrary Elixir body.",
+       "AshOnetime one-time nonces are rejected for WAL replay.",
+       "A Replicant v1 snapshot batch is atomic, but an incomplete multi-batch restart can physically repeat already committed batch effects."
+     ]},
+    {"usage-rules.md", "## Destination transaction boundary",
+     [
+       "Every admitted destination resource uses the sink's literal AshPostgres Repo and the same effective dynamic Repo.",
+       "Declarations are trusted metadata; they do not prove an arbitrary Elixir body.",
+       "AshOnetime one-time nonces are rejected for WAL replay.",
+       "A Replicant v1 snapshot batch is atomic, but an incomplete multi-batch restart can physically repeat already committed batch effects."
+     ]},
+    {"AGENTS.md", "## Critical rules",
+     [
+       "**6. Effect-once = one admitted destination graph, one transaction, watermark dedup.**",
+       "A declaration is trusted metadata, not proof of an arbitrary body;",
+       "Reject nonce, independent, external,"
+     ]},
+    {"docs/CHARTER.md", "## Destination and AshOnetime boundary for 1.0.0",
+     [
+       "The B1 implementation admits one recursive destination action graph before delivery.",
+       "This verifies the declaration, not the truth of an arbitrary Elixir body",
+       "Nonce and independent-commit modes are rejected for WAL retry."
+     ]}
+  ]
+
+  @b1_forbidden_positive_claims [
+    "Every mapped row action is protected by AshOnetime one_time_nonce.",
+    "Replicant v1 snapshot retries are physically duplicate-free.",
+    "DestinationParticipant proves arbitrary callback bodies contain no undeclared effects."
+  ]
+
   @checkout "actions/checkout@11d5960a326750d5838078e36cf38b85af677262"
   @setup_beam "erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236"
   @cache "actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830"
@@ -159,6 +194,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       mix_contract_probes()
       replicant_selector_probes()
       documentation_probes()
+      b1_documentation_probes()
     end)
 
     IO.puts("release contract self-tests: PASS")
@@ -783,6 +819,56 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     end)
   end
 
+  defp b1_documentation_probes do
+    Enum.each(@b1_doc_contracts, fn {path, heading, required_texts} ->
+      prepare_fixture()
+      replace_once!(path, heading, "#{heading} changed")
+      assert_invalid!()
+
+      Enum.each(required_texts, fn required ->
+        prepare_fixture()
+        replace_contract_text_once!(path, required, "destination boundary contract text removed")
+        assert_invalid!()
+      end)
+    end)
+
+    prepare_fixture()
+
+    replace_contract_text_once!(
+      "README.md",
+      "Declarations are trusted metadata; they do not prove an arbitrary Elixir body.",
+      "<!-- Declarations are trusted metadata; they do not prove an arbitrary Elixir body. -->"
+    )
+
+    assert_invalid!()
+
+    Enum.each(@b1_forbidden_positive_claims, fn claim ->
+      prepare_fixture()
+
+      replace_once!(
+        "README.md",
+        "## Destination transaction boundary",
+        "## Destination transaction boundary\n\n#{claim}"
+      )
+
+      assert_invalid!()
+    end)
+
+    prepare_fixture()
+    replace_once!("README.md", "%ActionRef{", "%MissingActionRef{")
+    assert_invalid!()
+
+    prepare_fixture()
+
+    replace_once!(
+      "README.md",
+      "<!-- ash-replicant-destination-participant-example:start -->",
+      "<!-- destination participant example marker removed -->"
+    )
+
+    assert_invalid!()
+  end
+
   defp mix_contract_probes do
     Enum.each(@mix_contracts, fn required ->
       prepare_fixture()
@@ -941,6 +1027,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           "README.md",
           "CONTRIBUTING.md",
           "AGENTS.md",
+          "usage-rules.md",
+          "docs/CHARTER.md",
           "mix.exs",
           "mix.lock",
           "scripts/test-release-checkers.sh"
@@ -1030,6 +1118,30 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   defp replace_once!(path, old, replacement) do
     full_path = fixture_path(path)
     File.write!(full_path, full_path |> File.read!() |> replace_once(old, replacement))
+  end
+
+  defp replace_contract_text_once!(path, text, replacement) do
+    full_path = fixture_path(path)
+    content = File.read!(full_path)
+
+    pattern =
+      text
+      |> String.split(~r/\s+/, trim: true)
+      |> Enum.map_join("\\s+", &Regex.escape/1)
+      |> Regex.compile!()
+
+    case Regex.scan(pattern, content, return: :index) do
+      [[{start, length}]] ->
+        File.write!(
+          full_path,
+          binary_part(content, 0, start) <>
+            replacement <>
+            binary_part(content, start + length, byte_size(content) - start - length)
+        )
+
+      matches ->
+        raise "fixture contract mutation anchor count invalid: #{length(matches)}"
+    end
   end
 
   defp replace_once(content, old, replacement) do

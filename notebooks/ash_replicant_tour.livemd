@@ -13,9 +13,9 @@ Mix.install([
 
 **AshReplicant** is the Ash [`Replicant.Sink`](https://github.com/baselabs/replicant)
 adapter for CDC mirror targets — the *"`ash_postgres` of `replicant`."* It mirrors a
-source Postgres database's committed changes into AshPostgres resources with
-**effect-once semantics** (dup = 0, loss = 0), resolving **resource**, **tenant**, and
-**classification** in the Ash layer while keeping `replicant` tenant-blind.
+source Postgres database's committed streaming transactions into AshPostgres
+resources with durable **effect-once semantics**, resolving **resource**, **tenant**,
+and **classification** in the Ash layer while keeping `replicant` tenant-blind.
 
 This notebook is a **developer tour**. It is split into two kinds of section:
 
@@ -686,7 +686,13 @@ Key SCD2 facts (full contract in [`usage-rules.md`](../usage-rules.md)):
 Every `replicant` transaction is applied in a **single** `Repo.transaction`: skip any
 change at or below the watermark, apply the rows, then upsert the checkpoint — all or
 nothing. A failure rolls the whole transaction back; on resume the un-acked WAL
-re-streams and dedups against the durable checkpoint. **dup = 0, loss = 0.**
+re-streams and dedups against the durable checkpoint. For committed streaming
+transactions, append-only fault probes prove zero physical duplicates and zero loss.
+
+Replicant v1 snapshot batches are individually atomic. An incomplete multi-batch
+snapshot restart can physically repeat committed batch effects before clearing and
+rebuilding the target. Roadmap C3 must prove zero physical repeats for v1 and
+incremental restart before that claim extends to snapshot recovery.
 
 ```mermaid
 flowchart TD

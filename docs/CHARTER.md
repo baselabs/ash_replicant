@@ -158,28 +158,30 @@ The current implementation order and acceptance criteria are derived from
 `docs/ROADMAP.md`. Historical specs, plans, handoffs, and review reports remain
 evidence for their original runs; they do not override the roadmap or live code.
 
-## AshOnetime boundary for 1.0.0
+## Destination and AshOnetime boundary for 1.0.0
 
-AshOnetime 0.6.0 is a governed dependency for roadmap C1, not a replacement for
-the transaction checkpoint. The sink has no single universal Ash "apply action":
-one destination transaction invokes heterogeneous host actions and then persists
-its checkpoint. Protecting every row action with only `commit_lsn` would collide
-for distinct rows in the same transaction, and those host actions do not declare
-that LSN as an action input.
+The B1 implementation admits one recursive destination action graph before
+delivery. Every mapped, checkpoint, relationship, cascade, and declared auxiliary
+resource must use the same literal and effective AshPostgres Repo. Arbitrary
+custom code declares its database effects through
+`AshReplicant.DestinationParticipant`; `touches_resources` must match that closure.
+This verifies the declaration, not the truth of an arbitrary Elixir body, so raw
+SQL, another Repo, asynchronous work, and external effects remain forbidden behind
+custom providers.
 
-The accepted boundary is:
+AshOnetime 0.6.0 is now used for WAL-safe local auxiliary idempotency as well as
+being the governed mechanism for future C1 message actions. It does not replace
+the transaction checkpoint. The accepted local profile is idempotency with the
+action, fail-closed PostgreSQL storage in the admitted Repo, no external effect,
+and the exact source-system/database/slot/commit-LSN/ordinal/participant identity.
+The claim, response, auxiliary effect, mapped rows, and checkpoint share one
+transaction. Nonce and independent-commit modes are rejected for WAL retry.
 
-- keep the permanent source-bound commit-LSN checkpoint for WAL replay, resume,
-  transactional admission, and batch/snapshot frontiers;
-- route transactional logical messages inside their Replicant transaction;
-- use AshOnetime idempotency only around a declared non-transactional host message
-  action with a verified operation identity and three-state recovery where an
-  external peer can be ambiguous;
-- never use `one_time_nonce` for WAL retries, and never assume a non-transactional
-  message has a transactional ordinal.
-
-The full action, key, digest, recovery, retention, and value-free contract is the
-C1 row in `docs/ROADMAP.md`. No message action is implemented in 0.4.0.
+The permanent checkpoint remains the replay and resume authority. Transactional
+logical messages will run inside their Replicant transaction; C1 separately owns
+confidential message digests and ambiguous external-peer recovery. No message
+action is implemented in 0.4.0. The full current boundary and trust limit are in
+[ADR-0006](adr/0006-destination-transaction-boundary.md).
 
 ## References
 

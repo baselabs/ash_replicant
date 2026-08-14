@@ -2,9 +2,9 @@
 
 An [Ash Framework](https://ash-hq.org) adapter for [replicant](https://github.com/baselabs/replicant) — the
 framework-agnostic Postgres CDC consumer. Mirrors a source Postgres database's
-committed changes into AshPostgres resources with **effect-once semantics** (dup = 0,
-loss = 0), resolving resource, tenant, and classification in the Ash layer while
-keeping `replicant` tenant-blind.
+committed streaming transactions into AshPostgres resources with durable
+**effect-once semantics**, resolving resource, tenant, and classification in the Ash
+layer while keeping `replicant` tenant-blind.
 
 AshReplicant is the "`ash_postgres` of `replicant`": define Ash resources backed by
 a Postgres source's CDC stream, with multitenancy and sensitive-data encryption
@@ -63,10 +63,11 @@ The current 1.0.0 hardening baseline is built and tested with:
 - PostgreSQL 16 with `wal_level=logical` for the current live integration gate.
 
 The Ash lower bound excludes known-vulnerable patches, and the upper bound
-excludes Ash 4 prereleases. AshOnetime is present for the logical-message
-idempotency contract tracked for 1.0.0; no message action is shipped yet. It does
-not replace the durable commit-LSN checkpoint used for transaction replay and
-resume.
+excludes Ash 4 prereleases. AshOnetime protects admitted local auxiliary actions
+that need a WAL replay guard and is also the governed mechanism for the
+logical-message idempotency contract tracked for 1.0.0; no message action is
+shipped yet. It does not replace the durable commit-LSN checkpoint used for
+transaction replay and resume.
 
 See [ADR-0002](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0002-supported-runtime-and-dependencies.md)
 for the dependency decision and
@@ -272,8 +273,75 @@ Each transaction is applied in **one** `Repo.transaction`:
 On failure (schema change, multitenancy error, write fault), the entire transaction
 rolls back. The un-acked WAL re-streams on resume and dedups against the checkpoint.
 
-**Result:** dup = 0, loss = 0 across restarts and crashes (proven by crash-injection
-tests against real PG16).
+**Result for committed streaming transactions:** zero physical duplicate effects
+and zero loss across replay, restart, and injected rollback faults. Replicant v1
+snapshot batches are individually atomic, but an incomplete multi-batch snapshot
+restart clears and rebuilds the target and can physically repeat already committed
+batch effects. Roadmap C3 must eliminate those repeats before the stable release
+extends the physical effect-once claim to snapshot restart.
+
+## Destination transaction boundary
+
+Every admitted destination resource uses the sink's literal AshPostgres Repo and
+the same effective dynamic Repo. The activation manifest starts from the checkpoint
+and mapped read/create/destroy/SCD2-close actions, recursively follows framework
+relationships and declared custom actions, and rejects a missing action, foreign or
+dynamic Repo, non-Postgres data layer, recursive cycle, or `touches_resources`
+mismatch before delivery.
+
+Arbitrary changes, validations, preparations, manual actions, callbacks, custom
+types, and tenant resolvers must implement `AshReplicant.DestinationParticipant`.
+Return `:no_database` or literal Ash resource/action references. Declarations are
+trusted metadata; they do not prove an arbitrary Elixir body. A declaration cannot
+make raw SQL, another Repo, asynchronous work, or an external effect part of the
+atomic guarantee.
+
+<!-- ash-replicant-destination-participant-example:start -->
+```elixir
+defmodule MyApp.ReplicantReceiptParticipant do
+  @behaviour AshReplicant.DestinationParticipant
+
+  alias AshReplicant.DestinationParticipant.{ActionRef, Context, ReplayIdentity}
+
+  @impl AshReplicant.DestinationParticipant
+  def destination_participants(_opts, %Context{}) do
+    {:ok,
+     {:actions,
+      [
+        %ActionRef{
+          resource: MyApp.MirrorReceipt,
+          action: :record,
+          replay_identity: %ReplayIdentity{
+            participant: :mirror_receipt,
+            components: [
+              :source_system_identifier,
+              :source_database,
+              :slot_name,
+              :commit_lsn,
+              :ordinal,
+              :participant
+            ]
+          }
+        }
+      ]}}
+  end
+end
+```
+<!-- ash-replicant-destination-participant-example:end -->
+
+The containing Ash action's `touches_resources` must exactly match the resources
+discovered from its providers. When the declared auxiliary action needs a replay
+guard, it may use only local AshOnetime idempotency committed with the action in
+the admitted Repo. It must take the private, non-null `operation_key` produced by
+`AshReplicant.DestinationParticipant.operation_key/2` and use the exact versioned
+participant scope and replay identity shown above. AshOnetime one-time nonces are
+rejected for WAL replay. Independent commits and external effects are rejected too.
+
+A Replicant v1 snapshot batch is atomic, but an incomplete multi-batch restart can
+physically repeat already committed batch effects. Message, sink-owned batch,
+incremental snapshot-progress, and append-log callbacks are not exported yet; their
+roadmap rows must compose with this same boundary. See
+[ADR-0006](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0006-destination-transaction-boundary.md).
 
 ## Multitenancy & Classification
 

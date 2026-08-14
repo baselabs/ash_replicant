@@ -13,9 +13,10 @@ AshPostgres `~> 2.6`, while its release lock carried known Ash, Postgrex, and
 ymlr advisories. Those broad requirements did not describe the runtime or
 dependency graph being prepared for the stable release.
 
-AshOnetime 0.6.0 is the project-owned idempotency mechanism selected for future
-logical-message actions. It requires the Elixir 1.20 and current AshPostgres
-families. Live floor resolution also established two stricter facts:
+AshOnetime 0.6.0 is the project-owned idempotency mechanism for admitted local
+auxiliary actions and the future logical-message actions that need replay guards.
+It requires the Elixir 1.20 and current AshPostgres families. Live floor
+resolution also established two stricter facts:
 
 - Ash 3.31.1 is retired;
 - Ash 3.31.2 has HIGH CVE-2026-67579.
@@ -44,10 +45,14 @@ bound does not mean “Ash 3 only.”
   while a separate selector-free job proves the dependency requirement shipped
   in the package.
 
-AshOnetime supplements message idempotency when those actions are implemented.
-It does not replace the indefinitely durable commit-LSN checkpoint: transaction
-admission, restart position, and checkpoint dedup remain one destination
-transaction with the mirrored Ash actions.
+AshOnetime supplements the checkpoint for an admitted local auxiliary action when
+its claim, response, effect, mapped rows, and checkpoint share the destination
+transaction. It will also support message idempotency when C1 implements those
+actions. It does not replace the indefinitely durable commit-LSN checkpoint:
+transaction admission, restart position, and checkpoint dedup remain one
+destination transaction with the mirrored Ash actions. The accepted WAL profile
+and nonce rejection are recorded in
+[ADR-0006](0006-destination-transaction-boundary.md).
 
 ## Consequences
 

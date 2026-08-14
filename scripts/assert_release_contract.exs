@@ -10,6 +10,8 @@ defmodule AshReplicant.ReleaseContract do
   @checkout "actions/checkout@11d5960a326750d5838078e36cf38b85af677262"
   @setup_beam "erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236"
   @cache "actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830"
+  @participant_example_start "<!-- ash-replicant-destination-participant-example:start -->"
+  @participant_example_end "<!-- ash-replicant-destination-participant-example:end -->"
 
   @setup_beam_inputs %{
     "elixir-version" => "${{ env.ELIXIR_VERSION }}",
@@ -230,6 +232,42 @@ defmodule AshReplicant.ReleaseContract do
      ]}
   ]
 
+  @b1_doc_contracts [
+    {"README.md", "## Destination transaction boundary",
+     [
+       "Every admitted destination resource uses the sink's literal AshPostgres Repo and the same effective dynamic Repo.",
+       "Declarations are trusted metadata; they do not prove an arbitrary Elixir body.",
+       "AshOnetime one-time nonces are rejected for WAL replay.",
+       "A Replicant v1 snapshot batch is atomic, but an incomplete multi-batch restart can physically repeat already committed batch effects."
+     ]},
+    {"usage-rules.md", "## Destination transaction boundary",
+     [
+       "Every admitted destination resource uses the sink's literal AshPostgres Repo and the same effective dynamic Repo.",
+       "Declarations are trusted metadata; they do not prove an arbitrary Elixir body.",
+       "AshOnetime one-time nonces are rejected for WAL replay.",
+       "A Replicant v1 snapshot batch is atomic, but an incomplete multi-batch restart can physically repeat already committed batch effects."
+     ]},
+    {"AGENTS.md", "## Critical rules",
+     [
+       "**6. Effect-once = one admitted destination graph, one transaction, watermark dedup.**",
+       "A declaration is trusted metadata, not proof of an arbitrary body;",
+       "Reject nonce, independent, external,"
+     ]},
+    {"docs/CHARTER.md", "## Destination and AshOnetime boundary for 1.0.0",
+     [
+       "The B1 implementation admits one recursive destination action graph before delivery.",
+       "This verifies the declaration, not the truth of an arbitrary Elixir body",
+       "Nonce and independent-commit modes are rejected for WAL retry."
+     ]}
+  ]
+
+  @b1_contract_paths ["README.md", "usage-rules.md", "AGENTS.md", "docs/CHARTER.md"]
+  @b1_forbidden_positive_claims [
+    "Every mapped row action is protected by AshOnetime one_time_nonce.",
+    "Replicant v1 snapshot retries are physically duplicate-free.",
+    "DestinationParticipant proves arbitrary callback bodies contain no undeclared effects."
+  ]
+
   def run(root) do
     workflow = YamlElixir.read_from_file!(Path.join(root, ".github/workflows/ci.yml"))
 
@@ -243,6 +281,9 @@ defmodule AshReplicant.ReleaseContract do
     assert_replicant_contract(root)
     assert_checker_wiring(root)
     assert_docs(root)
+    assert_b1_docs(root)
+    assert_b1_examples(root)
+    assert_no_b1_positive_contradictions(root)
   rescue
     _error in [YamlElixir.ParsingError, File.Error] -> fail("release contract input is invalid")
   end
@@ -558,6 +599,81 @@ defmodule AshReplicant.ReleaseContract do
         "published runtime or dependency contract is contradictory"
       )
     end)
+  end
+
+  defp assert_b1_docs(root) do
+    Enum.each(@b1_doc_contracts, fn {path, heading, required_texts} ->
+      visible = root |> Path.join(path) |> File.read!() |> visible_markdown()
+      section = section(visible, heading)
+
+      assert(section != nil, "published destination boundary section is missing")
+      normalized_section = normalize_markdown(section)
+
+      assert(
+        Enum.all?(required_texts, &String.contains?(normalized_section, normalize_markdown(&1))),
+        "published destination boundary contract is incomplete"
+      )
+    end)
+  end
+
+  defp assert_b1_examples(root) do
+    Enum.each(["README.md", "usage-rules.md"], fn path ->
+      content = root |> Path.join(path) |> File.read!()
+
+      pattern =
+        Regex.compile!(
+          Regex.escape(@participant_example_start) <>
+            "\\s*```elixir\\s*\\n(?<source>.*?)\\n```\\s*" <>
+            Regex.escape(@participant_example_end),
+          "s"
+        )
+
+      case Regex.scan(pattern, content, capture: :all_names) do
+        [[source]] -> compile_b1_example(source, path)
+        _matches -> fail("published destination participant example count is invalid")
+      end
+    end)
+  end
+
+  defp compile_b1_example(source, path) do
+    {result, diagnostics} =
+      Code.with_diagnostics([log: false], fn ->
+        try do
+          {:ok, Code.compile_string(source, path)}
+        rescue
+          _error -> :error
+        catch
+          _kind, _reason -> :error
+        end
+      end)
+
+    compiled =
+      case {result, diagnostics} do
+        {{:ok, [_ | _] = compiled}, []} -> compiled
+        _other -> fail("published destination participant example does not compile cleanly")
+      end
+
+    Enum.each(compiled, fn {module, _binary} ->
+      :code.purge(module)
+      :code.delete(module)
+    end)
+  end
+
+  defp assert_no_b1_positive_contradictions(root) do
+    visible =
+      @b1_contract_paths
+      |> Enum.map_join("\n", fn path ->
+        root |> Path.join(path) |> File.read!() |> visible_markdown()
+      end)
+      |> normalize_markdown()
+      |> String.downcase()
+
+    assert(
+      Enum.all?(@b1_forbidden_positive_claims, fn claim ->
+        not String.contains?(visible, claim |> normalize_markdown() |> String.downcase())
+      end),
+      "published destination boundary contract contains a stale positive claim"
+    )
   end
 
   defp visible_markdown(content) do

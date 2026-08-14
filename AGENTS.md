@@ -101,13 +101,35 @@ and classification-blind by design — multitenancy and classification live here
 `replicant`. Never import `ash_replicant` in `replicant`. The split is verified by
 separate repos and separate test fixtures.
 
-**6. Effect-once = one transaction, dedup by watermark, upsert by PK.** Every
-transaction is applied in ONE `Repo.transaction`. Skip any change whose
-`commit_lsn <= checkpoint` (the watermark is the durable LSN last persisted to the
-checkpoint table). Apply each change per-record (upsert-by-PK-identity / destroy /
-truncate per policy), then upsert the checkpoint **in the same transaction**.
-A failure rolls the whole transaction back (fail-closed); the un-acked WAL
-re-streams and dedups on resume.
+**6. Effect-once = one admitted destination graph, one transaction, watermark dedup.**
+Before delivery, build the recursive destination manifest from the checkpoint and
+every mapped read/create/destroy/SCD2-close action. Follow framework relationships
+and custom `AshReplicant.DestinationParticipant` declarations; require exact
+`touches_resources` tie-out. Every resource must use `AshPostgres.DataLayer`, the
+sink's literal Repo, and that Repo's admitted effective dynamic identity. Callable,
+foreign, non-Postgres, missing, opaque, cyclic, or mismatched participants fail
+before effects. A declaration is trusted metadata, not proof of an arbitrary body;
+it never authorizes raw SQL, another Repo, asynchronous work, or external effects.
+
+Every committed streaming transaction is applied in ONE `Repo.transaction` while
+the per-slot generation lease is held through commit/rollback. Skip any change whose
+`commit_lsn <= checkpoint`, apply each change through the admitted Ash action graph,
+then upsert the checkpoint in the same transaction. A failure rolls back every mapped
+row, declared local auxiliary effect, AshOnetime claim/response, and checkpoint; the
+un-acked WAL re-streams and dedups on resume.
+
+AshOnetime is permitted only for an admitted local auxiliary action using
+`:idempotency` with `:with_action`, fail-closed PostgreSQL storage in the same Repo,
+no external effect, a private non-null `operation_key`, and the exact versioned
+source-system/database/slot/commit-LSN/ordinal/participant identity. Use
+`DestinationParticipant.operation_key/2`. Reject nonce, independent, external,
+opaque-store, or incomplete-identity profiles. Static stores preflight at activation;
+context-tenant stores preflight inside the outer transaction.
+
+Current v1 snapshot batches are atomic, but an incomplete multi-batch restart can
+physically repeat committed batch effects before rebuilding the target. Do not claim
+snapshot-wide physical effect-once until C3 proves zero repeats. Message, sink-owned
+batch, incremental-progress, and append-log callbacks remain absent until C1–C4.
 
 ## Development workflow
 

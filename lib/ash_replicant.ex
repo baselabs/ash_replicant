@@ -1,9 +1,13 @@
 defmodule AshReplicant do
   @moduledoc """
   An Ash-native `Replicant.Sink` adapter. Mirrors a source Postgres database's
-  committed CDC changes into AshPostgres resources with effect-once semantics
-  (dup = 0, loss = 0), resolving resource, tenant, and classification in the Ash
-  layer while keeping `replicant` tenant-blind.
+  committed streaming transactions into AshPostgres resources with durable
+  effect-once semantics, resolving resource, tenant, and classification in the
+  Ash layer while keeping `replicant` tenant-blind.
+
+  Replicant v1 snapshot batches are atomic. An incomplete multi-batch snapshot
+  restart can physically repeat committed batch effects while rebuilding the
+  target; zero-repeat snapshot restart remains roadmap C3 work.
 
   This is the `ash_postgres`-of-`replicant`: `replicant` is the tenant-blind CDC
   transport; multitenancy and classification live here, one layer up.

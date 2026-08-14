@@ -18,6 +18,7 @@ the narrative "why"; an ADR is the tracked, per-decision record with code eviden
 | [0003](0003-verification-and-release-evidence.md) | Release evidence must prove no-database, live integration, drift, docs, and package substrates independently | 1.0.0 release contract |
 | [0004](0004-public-authority-and-release-history.md) | Public authority follows live code and immutable receipts; historical gaps are reported, not invented | A4 / E1 |
 | [0005](0005-replicant-coordination.md) | Support Replicant 1.x from Hex, pin actual-session identity at activation, and preserve explicit capability gates | A3 / B2 / C1–C3 |
+| [0006](0006-destination-transaction-boundary.md) | Admit one recursive AshPostgres destination action graph and only WAL-safe local AshOnetime participants | B1 / C1–C4 |
 
 ## On-touch gap list (not yet authored — author when a slice next touches the surface)
 

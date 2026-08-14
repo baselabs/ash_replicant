@@ -21,8 +21,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add live Replicant 1.1.0 proofs for actual-session ordering, v1 snapshot-to-stream
   convergence, post-handoff restart, and operator-reset retry after an incomplete snapshot.
 - Add AshOnetime 0.6.0 as the governed idempotency dependency for the logical-message
-  actions planned for 1.0.0. The permanent commit-LSN checkpoint remains the
-  transaction replay and resume authority.
+  actions planned for 1.0.0 and for admitted local auxiliary actions that need a
+  WAL replay guard. The permanent commit-LSN checkpoint remains the transaction
+  replay and resume authority.
+- Add a deterministic recursive destination manifest covering checkpoint, mapped,
+  framework-reached, SCD2, and declared auxiliary actions. It rejects foreign or
+  dynamic Repos, non-Postgres resources, missing/opaque/cyclic participants, and
+  `touches_resources` mismatches before delivery, then pins one effective Repo and
+  generation through commit or rollback.
+- Add `AshReplicant.DestinationParticipant` and a WAL-safe AshOnetime admission
+  profile for local auxiliary actions: exact source/database/slot/LSN/ordinal/
+  participant identity, private operation key, same-transaction fail-closed store,
+  and explicit rejection of nonce, independent, external, and opaque profiles.
 - Add independent CI paths for no-database tests, exact-floor/current-lock/latest-Ash
   live PostgreSQL integration, migration drift, Dialyzer, warnings-as-errors docs,
   and selector-free Hex package inspection. Checked-in assertions reject missing,
@@ -38,6 +48,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and forward Replicant's safe `streaming`, `max_inflight_lag`,
   `max_command_retries`, and `failover` transport options. Incremental snapshots,
   batch delivery, and logical messages remain capability-gated for their owning rows.
+- Scope the current physical effect-once guarantee to committed streaming
+  transactions and atomic snapshot batches. An incomplete Replicant v1 multi-batch
+  snapshot restart can repeat already committed batch effects before rebuilding the
+  target; C3 must remove those repeats before the stable snapshot-restart claim.
 - Require Elixir 1.20.3/OTP 29 and the AshPostgres 2.11 dependency family for the
   1.0.0 release line.
 

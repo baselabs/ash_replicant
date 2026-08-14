@@ -7,7 +7,8 @@ _An Ash adapter for the `replicant` CDC framework — the "`ash_postgres` of
 
 - **Is:** an Ash-native CDC mirror / incremental-sync adapter. Resolves resources,
   enforces multitenancy per row, verifies sensitive-column encryption, and applies
-  changes to Ash resources with effect-once semantics (dup = 0, loss = 0).
+  committed streaming transactions to Ash resources with durable effect-once
+  semantics.
 - **Is not:** the CDC transport itself. That is `replicant`'s job. AshReplicant
   consumes a `Replicant.Sink` interface and owns the Ash-layer semantics
   (resource resolution, multitenancy, encryption, and trusted system action
@@ -264,6 +265,71 @@ tenant-blind** (stamps `valid_to_lsn` on all rows where it is NULL), retiring th
 window without deleting history. `on_truncate :close` on a non-SCD2 resource is rejected
 at compile time.
 
+## Destination transaction boundary
+
+Every admitted destination resource uses the sink's literal AshPostgres Repo and
+the same effective dynamic Repo. Admission recursively walks checkpoint, mapped,
+relationship, cascade, SCD2, and declared auxiliary actions. It fails before
+delivery on a foreign/dynamic Repo, non-Postgres resource, missing action, recursive
+participant cycle, or mismatch between the discovered closure and the containing
+action's `touches_resources`.
+
+Custom changes, validations, preparations, manual actions, callbacks, types, and
+tenant resolvers implement `AshReplicant.DestinationParticipant` and return either
+`:no_database` or literal resource/action references:
+
+<!-- ash-replicant-destination-participant-example:start -->
+```elixir
+defmodule MyApp.UsageRulesReceiptParticipant do
+  @behaviour AshReplicant.DestinationParticipant
+
+  alias AshReplicant.DestinationParticipant.{ActionRef, Context, ReplayIdentity}
+
+  @impl AshReplicant.DestinationParticipant
+  def destination_participants(_opts, %Context{}) do
+    {:ok,
+     {:actions,
+      [
+        %ActionRef{
+          resource: MyApp.MirrorReceipt,
+          action: :record,
+          replay_identity: %ReplayIdentity{
+            participant: :mirror_receipt,
+            components: [
+              :source_system_identifier,
+              :source_database,
+              :slot_name,
+              :commit_lsn,
+              :ordinal,
+              :participant
+            ]
+          }
+        }
+      ]}}
+  end
+end
+```
+<!-- ash-replicant-destination-participant-example:end -->
+
+Declarations are trusted metadata; they do not prove an arbitrary Elixir body.
+Never conceal raw SQL, another Repo, asynchronous work, or an external effect
+behind one. The containing action's `touches_resources` must exactly equal the
+resources reached through all providers.
+
+An auxiliary action that needs replay protection may use AshOnetime only as local
+idempotency committed with the action in the admitted Repo. It must be
+transactional, fail closed on store failure, accept a private non-null string
+`operation_key`, use the exact versioned participant scope, and derive its key with
+`AshReplicant.DestinationParticipant.operation_key/2`. AshOnetime one-time nonces
+are rejected for WAL replay. Independent commits, external effects, opaque stores,
+and incomplete replay identities are rejected.
+
+A Replicant v1 snapshot batch is atomic, but an incomplete multi-batch restart can
+physically repeat already committed batch effects. The v1 target is cleared and
+rebuilt, so final-state convergence is not proof of zero physical repeats. Roadmap
+C3 owns zero-repeat v1 and incremental restart. Message, sink-owned batch,
+incremental-progress, and append-log callbacks remain absent until C1 through C4.
+
 ## Non-negotiable rules
 
 - **Route writes through Ash actions.** The mirror writes through the host resource's
@@ -292,10 +358,11 @@ at compile time.
   — never the column value, PK, tenant name, or offending data. Column names are
   strings, never atoms.
 
-- **Effect-once is one transaction + watermark dedup.** Every transaction applies in
-  a single `Repo.transaction`: skip any change whose `commit_lsn <= checkpoint`,
-  apply rows, upsert checkpoint atomically. On failure, the txn rolls back; on
-  resume, un-acked WAL re-streams and dedups.
+- **Streaming effect-once is one transaction + watermark dedup.** Every committed
+  streaming transaction applies in a single `Repo.transaction`: skip any change
+  whose `commit_lsn <= checkpoint`, apply rows, upsert checkpoint atomically. On
+  failure, the transaction rolls back; on resume, un-acked WAL re-streams and
+  dedups. The snapshot restart limitation above remains explicit until C3.
 
 ## Relationship to `replicant`
 
