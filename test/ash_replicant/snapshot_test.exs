@@ -81,7 +81,20 @@ defmodule AshReplicant.SnapshotTest do
     ordinal_key = {Impl, :snapshot_ordinals, "snap_slot"}
 
     assert :ok = Sink.handle_snapshot([snap("1")], ctx(true))
-    assert %{{"public", "orders"} => 1} = :persistent_term.get(ordinal_key)
+    # ONE run-keyed ordinal space (the run's consistent point + a continuing
+    # counter), never per-table — see snapshot_ordinal_base's comment.
+    assert %{run_lsn: 500, ordinal: 1} = :persistent_term.get(ordinal_key)
+
+    # A later batch in the SAME run continues the counter (no reset) — the
+    # cross-TABLE continuation is proven live by the two-table snapshot marquee.
+    second_batch = %{snapshot_lsn: 500, table: "public.orders", first_for_table?: false}
+    assert :ok = Sink.handle_snapshot([snap("3")], second_batch)
+    assert %{run_lsn: 500, ordinal: 2} = :persistent_term.get(ordinal_key)
+
+    # A DIFFERENT consistent point (a re-created slot) resets it.
+    fresh_run = %{snapshot_lsn: 900, table: "public.orders", first_for_table?: true}
+    assert :ok = Sink.handle_snapshot([snap("4")], fresh_run)
+    assert %{run_lsn: 900, ordinal: 1} = :persistent_term.get(ordinal_key)
 
     assert {:ok, 500} = Sink.handle_snapshot_complete(500)
     assert {:ok, 500} = Sink.checkpoint()

@@ -276,8 +276,9 @@ action's `touches_resources`.
 
 Generated callbacks call the admitted sink implementation directly and cannot be
 overridden through an internal effect hook. Admission rejects `SetContext` values
-that replace `:data_layer`, and AshOnetime-protected participants must use
-`AshOnetime.Cache.None` so cache work cannot escape rollback.
+that replace `:data_layer` (a dynamic/MFA context is admissible only when its
+module declares `DestinationParticipant`), and AshOnetime-protected participants
+must use `AshOnetime.Cache.None` so cache work cannot escape rollback.
 
 Custom changes, validations, preparations, manual actions, callbacks, types, and
 tenant resolvers implement `AshReplicant.DestinationParticipant` and return either

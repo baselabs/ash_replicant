@@ -65,7 +65,9 @@ also not unique when one transaction contains several effects.
   to the protected action. Nonce, independent-commit, external, opaque-store, and
   incomplete identity profiles are rejected.
 - Action and preparation `SetContext` declarations may not replace `:data_layer`;
-  admission rejects table/schema/Repo redirection. AshOnetime must use
+  admission rejects table/schema/Repo redirection. The dynamic (MFA) context form
+  cannot be inspected statically, so it is admissible ONLY when the module behind
+  the MFA declares its effects through `AshReplicant.DestinationParticipant`. AshOnetime must use
   `AshOnetime.Cache.None`; a behavior-conforming external cache is still an
   out-of-transaction effect and is rejected.
 - Static AshOnetime relations are checked at activation. Context-tenant relations

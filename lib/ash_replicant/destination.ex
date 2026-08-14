@@ -10,6 +10,7 @@ defmodule AshReplicant.Destination do
   @core_code_modules [
     AshReplicant,
     AshReplicant.Apply,
+    AshReplicant.Apply.Context,
     AshReplicant.Apply.Scd2,
     AshReplicant.Destination,
     AshReplicant.DestinationParticipant,
@@ -17,7 +18,8 @@ defmodule AshReplicant.Destination do
     AshReplicant.Resolver,
     AshReplicant.Resource.Info,
     AshReplicant.Sink,
-    AshReplicant.Sink.Impl
+    AshReplicant.Sink.Impl,
+    AshReplicant.Telemetry
   ]
 
   defmodule Entry do
@@ -874,11 +876,7 @@ defmodule AshReplicant.Destination do
 
   defp inspect_item(module, opts, context)
        when module in [Ash.Resource.Change.SetContext, Ash.Resource.Preparation.SetContext] do
-    if safe_context?(Keyword.get(opts, :context)) do
-      {:ok, []}
-    else
-      {:error, {:destination_participant_invalid, context.resource, context.action, module}}
-    end
+    inspect_set_context(Keyword.get(opts, :context), module, context)
   end
 
   defp inspect_item(module, opts, context)
@@ -902,6 +900,23 @@ defmodule AshReplicant.Destination do
 
   defp inspect_item(module, opts, context) when is_atom(module) do
     inspect_provider(module, opts, context)
+  end
+
+  # An MFA (dynamic) context cannot be inspected statically: it is admissible
+  # ONLY through the DestinationParticipant escape hatch — the module behind the
+  # MFA declares its effects like any other opaque module. A static map is
+  # admitted only when it does not replace :data_layer.
+  defp inspect_set_context({provider, _fun, _args}, _set_context_module, context)
+       when is_atom(provider),
+       do: inspect_provider(provider, [], context)
+
+  defp inspect_set_context(context_value, set_context_module, context) do
+    if safe_context?(context_value) do
+      {:ok, []}
+    else
+      {:error,
+       {:destination_participant_invalid, context.resource, context.action, set_context_module}}
+    end
   end
 
   defp safe_context?(context) when is_map(context),

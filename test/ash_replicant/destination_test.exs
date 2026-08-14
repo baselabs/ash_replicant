@@ -49,12 +49,16 @@ defmodule AshReplicant.DestinationTest do
     for module <- [
           AshReplicant,
           AshReplicant.Apply,
+          AshReplicant.Apply.Context,
           AshReplicant.Apply.Scd2,
           AshReplicant.Destination,
           AshReplicant.DestinationParticipant,
+          AshReplicant.Error,
           AshReplicant.Resolver,
+          AshReplicant.Resource.Info,
           AshReplicant.Sink,
-          AshReplicant.Sink.Impl
+          AshReplicant.Sink.Impl,
+          AshReplicant.Telemetry
         ] do
       assert module in modules
     end
@@ -443,6 +447,43 @@ defmodule AshReplicant.DestinationTest do
              })
   end
 
+  test "an MFA SetContext is admitted via its module's participant declaration and rejected without one" do
+    # The dynamic (MFA) context is admissible ONLY through the DestinationParticipant
+    # escape hatch — the module behind the MFA declares its effects.
+    assert {:ok, manifest} =
+             Destination.manifest(%{
+               repo: AshReplicant.TestRepo,
+               domains: [DestinationFixtures.DeclaredMfaContextDomain],
+               checkpoint_resource: AshReplicant.Test.Checkpoint
+             })
+
+    assert Enum.any?(
+             manifest.entries,
+             &(&1.resource == DestinationFixtures.DeclaredMfaContextRoot and &1.role == :mapped)
+           )
+
+    # The same MFA form with NO declaration fails closed.
+    assert {:error,
+            {:destination_participant_required, DestinationFixtures.UndeclaredMfaContextRoot,
+             :create, DestinationFixtures.UndeclaredMfaContextRoot}} =
+             Destination.manifest(%{
+               repo: AshReplicant.TestRepo,
+               domains: [DestinationFixtures.UndeclaredMfaContextDomain],
+               checkpoint_resource: AshReplicant.Test.Checkpoint
+             })
+  end
+
+  test "a Preparation.SetContext that replaces :data_layer is rejected" do
+    assert {:error,
+            {:destination_participant_invalid, DestinationFixtures.ContextRedirectPreparationRoot,
+             :read, Ash.Resource.Preparation.SetContext}} =
+             Destination.manifest(%{
+               repo: AshReplicant.TestRepo,
+               domains: [DestinationFixtures.ContextRedirectPreparationDomain],
+               checkpoint_resource: AshReplicant.Test.Checkpoint
+             })
+  end
+
   test "unknown lifecycle wrapper fails closed" do
     assert {:error,
             {:destination_participant_required, DestinationFixtures.UnknownWrapperRoot, :create,
@@ -766,6 +807,45 @@ defmodule AshReplicant.DestinationTest do
                domains: [DestinationFixtures.OnetimeOpaqueDomain],
                checkpoint_resource: AshReplicant.Test.Checkpoint
              })
+  end
+
+  @tag :integration
+  test "a live nonce protection is rejected at admission with zero claim rows" do
+    :ok = Sandbox.checkout(AshReplicant.TestRepo)
+
+    claims_before = fn ->
+      [[idem]] =
+        SQL.query!(AshReplicant.TestRepo, "SELECT count(*) FROM ash_onetime_idempotency_claims").rows
+
+      [[nonce]] =
+        SQL.query!(AshReplicant.TestRepo, "SELECT count(*) FROM ash_onetime_nonce_claims").rows
+
+      {idem, nonce}
+    end
+
+    before = claims_before.()
+
+    # The live-substrate proof the design names: a REAL nonce profile (not a
+    # struct mutation) fails sink admission on the onetime PROFILE (the verifier
+    # module declares :no_database participation, so the walk reaches the
+    # strategy check — the rejection isolates nonce-ness itself), and writes no
+    # claim row on the way out. Admission fires at the sink's @after_compile, so
+    # the sink cannot even compile — let alone start or claim.
+    error =
+      assert_raise CompileError, fn ->
+        Code.compile_string("""
+        defmodule AshReplicant.Test.NonceRejectionSink do
+          use AshReplicant.Sink,
+            repo: AshReplicant.TestRepo,
+            domains: [AshReplicant.Test.DestinationFixtures.NonceDomain],
+            checkpoint_resource: AshReplicant.Test.Checkpoint,
+            slot_name: "nonce_rejection_slot"
+        end
+        """)
+      end
+
+    assert error.description =~ "{:destination_participant_invalid, AshOnetime.Resource}"
+    assert claims_before.() == before
   end
 
   defp restore_env(app, key, nil), do: Application.delete_env(app, key)

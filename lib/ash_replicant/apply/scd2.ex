@@ -16,6 +16,7 @@ defmodule AshReplicant.Apply.Scd2 do
   alias AshReplicant.{Error, Resolver}
   alias AshReplicant.Resource.Info
   alias Ecto.Adapters.SQL
+  alias AshReplicant.Apply.Context
 
   @spec apply(map(), module(), Replicant.Change.t(), DateTime.t() | nil) :: :ok
   def apply(config, resource, %{op: op} = change, ts) when op in [:insert, :update] do
@@ -124,7 +125,7 @@ defmodule AshReplicant.Apply.Scd2 do
   defp close_current(config, resource, record, change, ts, tenant, opts) do
     lsn = change.commit_lsn
     action = Info.replicant_history_close_action!(resource)
-    preflight_onetime!(config, tenant, resource, action, :upsert)
+    Context.preflight_onetime!(config, tenant, resource, action, :upsert)
     # Fail closed on a nil business key BEFORE building the close query: a nil value
     # would produce `bk IS NULL and ...`, match 0 rows, and SILENTLY close nothing —
     # losing the no-silent-lost-delete contract on the terminal (delete) path (unlike
@@ -139,7 +140,7 @@ defmodule AshReplicant.Apply.Scd2 do
     query =
       resource
       |> Resolver.open_version_query(record, lsn, opts)
-      |> Ash.Query.set_context(action_context(config, change))
+      |> Ash.Query.set_context(Context.action_context(config, change))
 
     Ash.bulk_update!(
       query,
@@ -149,7 +150,7 @@ defmodule AshReplicant.Apply.Scd2 do
       transaction: false,
       tenant: tenant,
       authorize?: config.authorize?,
-      context: action_context(config, change),
+      context: Context.action_context(config, change),
       return_notifications?: true,
       return_errors?: true
     )
@@ -161,7 +162,7 @@ defmodule AshReplicant.Apply.Scd2 do
     record = change.record
     lsn = change.commit_lsn
     action = Resolver.upsert_action(resource)
-    preflight_onetime!(config, tenant, resource, action, :upsert)
+    Context.preflight_onetime!(config, tenant, resource, action, :upsert)
     {inputs, upsert_fields} = Resolver.version_open_input(resource, record, %{lsn: lsn, ts: ts})
 
     Ash.create!(resource, inputs,
@@ -171,7 +172,7 @@ defmodule AshReplicant.Apply.Scd2 do
       upsert_fields: upsert_fields,
       tenant: tenant,
       authorize?: config.authorize?,
-      context: action_context(config, change),
+      context: Context.action_context(config, change),
       transaction?: false,
       return_notifications?: true
     )
@@ -198,67 +199,4 @@ defmodule AshReplicant.Apply.Scd2 do
   defp opt(_), do: nil
   defp maybe_put(map, nil, _v), do: map
   defp maybe_put(map, k, v), do: Map.put(map, k, v)
-
-  defp action_context(config),
-    do: %{data_layer: Map.get(config, :data_layer_context, %{repo: config.repo})}
-
-  defp action_context(config, change) do
-    context = action_context(config)
-
-    case operation_context(config, change) do
-      {:ok, operation} -> Map.put(context, :ash_replicant_operation, operation)
-      :error -> context
-    end
-  end
-
-  defp operation_context(
-         %{
-           source_identity: %{system_identifier: system_identifier, database: database},
-           slot_name: slot_name
-         },
-         %{commit_lsn: commit_lsn, ordinal: ordinal}
-       )
-       when is_binary(system_identifier) and is_binary(database) and is_binary(slot_name) and
-              is_integer(commit_lsn) and commit_lsn >= 0 and is_integer(ordinal) and ordinal >= 0,
-       do:
-         {:ok,
-          %{
-            source_system_identifier: system_identifier,
-            source_database: database,
-            slot_name: slot_name,
-            commit_lsn: commit_lsn,
-            ordinal: ordinal
-          }}
-
-  defp operation_context(_config, _change), do: :error
-
-  defp preflight_onetime!(config, tenant, resource, action, operation) do
-    already_preflighted? =
-      config
-      |> Map.get(:onetime_preflighted, MapSet.new())
-      |> MapSet.member?({resource, action, tenant})
-
-    case {already_preflighted?, Map.get(config, :destination_manifest)} do
-      {true, _manifest} ->
-        :ok
-
-      {false, %AshReplicant.Destination.Manifest{} = manifest} ->
-        case AshReplicant.Destination.preflight_onetime_transaction(
-               manifest,
-               Map.get(config, :dynamic_repo, config.repo),
-               tenant,
-               resource,
-               action
-             ) do
-          :ok ->
-            :ok
-
-          {:error, reason} ->
-            raise Error.exception(reason: reason, resource: resource, op: operation)
-        end
-
-      {false, _other} ->
-        :ok
-    end
-  end
 end

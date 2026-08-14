@@ -285,8 +285,13 @@ defmodule AshReplicant.StartLinkTest do
     key = {AshReplicant, "valid_slot"}
     loser = make_ref()
 
+    # Stop the PIPELINE inside the capture window (not stop_supervised — this
+    # test needs the generation alive after): the port-1 connection retries with
+    # backoff, and an error logged after the window closes trips the structural
+    # gate's uncontrolled-error grep.
     capture_log(fn ->
       assert {:ok, _pid} = AshReplicant.start_link(start_opts())
+      assert :ok = Replicant.stop("valid_slot")
     end)
 
     assert %Generation{reference: winner} = runtime = :persistent_term.get(key)
@@ -362,6 +367,10 @@ defmodule AshReplicant.StartLinkTest do
   test "a foreign effective dynamic Repo is rejected at callback entry" do
     capture_log(fn ->
       assert {:ok, _pid} = AshReplicant.start_link(start_opts())
+      # Pipeline-only stop inside the window (the callback below needs the
+      # generation alive); keeps the retrying port-1 connection from logging
+      # past the window into the structural gate's uncontrolled-error grep.
+      assert :ok = Replicant.stop("valid_slot")
     end)
 
     task =
@@ -385,6 +394,10 @@ defmodule AshReplicant.StartLinkTest do
 
     capture_log(fn ->
       assert {:ok, _pid} = AshReplicant.start_link(start_opts(sink: LeaseSink))
+      # Pipeline-only stop inside the window; the lease callback below runs
+      # against the generation, and a surviving port-1 connection would log its
+      # retry error past the window (structural-gate flake).
+      assert :ok = Replicant.stop("lease_slot")
     end)
 
     callback =
@@ -422,6 +435,10 @@ defmodule AshReplicant.StartLinkTest do
 
       capture_log(fn ->
         assert {:ok, _pid} = AshReplicant.start_link(start_opts(sink: module))
+        # Pipeline-only stop inside the window (generation must survive for the
+        # drift assert below; the retrying port-1 connection must not log past
+        # the window into the structural gate's grep).
+        assert :ok = Replicant.stop("runtime_drift_slot")
       end)
 
       compile_runtime_sink(module, [DestinationFixtures.NamedDefaultDomain])
@@ -470,6 +487,9 @@ defmodule AshReplicant.StartLinkTest do
 
       capture_log(fn ->
         assert {:ok, _pid} = AshReplicant.start_link(start_opts(sink: module))
+        # Pipeline-only stop inside the window (generation must survive for the
+        # fingerprint-drift assert below; same structural-gate flake guard).
+        assert :ok = Replicant.stop("runtime_drift_slot")
       end)
 
       compile_runtime_sink(module, [AshReplicant.Test.Domain], :second)

@@ -16,6 +16,7 @@ defmodule AshReplicant.Apply do
   alias AshReplicant.{Error, Resolver}
   alias AshReplicant.Resource.Info
   alias Ecto.Adapters.SQL
+  alias AshReplicant.Apply.Context
 
   @doc """
   Apply a change under `config` (`%{resolver_index:, repo:, authorize?:}`).
@@ -103,7 +104,7 @@ defmodule AshReplicant.Apply do
     {inputs, upsert_fields} = Resolver.attrs_for_upsert(resource, change.record)
     tenant = Resolver.resolve_tenant!(resource, change.record, :upsert)
     action = Resolver.upsert_action(resource)
-    preflight_onetime!(config, tenant, resource, action, :upsert)
+    Context.preflight_onetime!(config, tenant, resource, action, :upsert)
 
     Ash.create!(resource, inputs,
       action: action,
@@ -112,7 +113,7 @@ defmodule AshReplicant.Apply do
       upsert_fields: upsert_fields,
       tenant: tenant,
       authorize?: config.authorize?,
-      context: action_context(config, change),
+      context: Context.action_context(config, change),
       # The sink owns the single outer Repo.transaction these actions join (spec
       # decision 7); `transaction?: false` skips a redundant per-row savepoint on
       # the upsert. (`Ash.destroy!` has no `transaction?` option — its per-action
@@ -139,12 +140,12 @@ defmodule AshReplicant.Apply do
 
     tenant = Resolver.resolve_tenant!(resource, old_record, :destroy)
     action = Resolver.destroy_action(resource)
-    preflight_onetime!(config, tenant, resource, action, :destroy)
+    Context.preflight_onetime!(config, tenant, resource, action, :destroy)
 
     query =
       resource
       |> Ash.Query.do_filter(pk_values)
-      |> Ash.Query.set_context(action_context(config, change))
+      |> Ash.Query.set_context(Context.action_context(config, change))
 
     # One atomic `DELETE ... WHERE pk` (single round-trip) instead of read-then-destroy.
     # `strategy: [:atomic, :stream]` takes the data-layer atomic path for the mirror's
@@ -165,7 +166,7 @@ defmodule AshReplicant.Apply do
       transaction: false,
       tenant: tenant,
       authorize?: config.authorize?,
-      context: action_context(config, change),
+      context: Context.action_context(config, change),
       return_errors?: true
     )
 
@@ -179,67 +180,4 @@ defmodule AshReplicant.Apply do
   end
 
   defp pk_changed?(_resource, _change), do: false
-
-  defp action_context(config),
-    do: %{data_layer: Map.get(config, :data_layer_context, %{repo: config.repo})}
-
-  defp action_context(config, change) do
-    context = action_context(config)
-
-    case operation_context(config, change) do
-      {:ok, operation} -> Map.put(context, :ash_replicant_operation, operation)
-      :error -> context
-    end
-  end
-
-  defp operation_context(
-         %{
-           source_identity: %{system_identifier: system_identifier, database: database},
-           slot_name: slot_name
-         },
-         %{commit_lsn: commit_lsn, ordinal: ordinal}
-       )
-       when is_binary(system_identifier) and is_binary(database) and is_binary(slot_name) and
-              is_integer(commit_lsn) and commit_lsn >= 0 and is_integer(ordinal) and ordinal >= 0,
-       do:
-         {:ok,
-          %{
-            source_system_identifier: system_identifier,
-            source_database: database,
-            slot_name: slot_name,
-            commit_lsn: commit_lsn,
-            ordinal: ordinal
-          }}
-
-  defp operation_context(_config, _change), do: :error
-
-  defp preflight_onetime!(config, tenant, resource, action, operation) do
-    already_preflighted? =
-      config
-      |> Map.get(:onetime_preflighted, MapSet.new())
-      |> MapSet.member?({resource, action, tenant})
-
-    case {already_preflighted?, Map.get(config, :destination_manifest)} do
-      {true, _manifest} ->
-        :ok
-
-      {false, %AshReplicant.Destination.Manifest{} = manifest} ->
-        case AshReplicant.Destination.preflight_onetime_transaction(
-               manifest,
-               Map.get(config, :dynamic_repo, config.repo),
-               tenant,
-               resource,
-               action
-             ) do
-          :ok ->
-            :ok
-
-          {:error, reason} ->
-            raise Error.exception(reason: reason, resource: resource, op: operation)
-        end
-
-      {false, _other} ->
-        :ok
-    end
-  end
 end

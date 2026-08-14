@@ -50,6 +50,65 @@ defmodule AshReplicant.Test.Marquee do
     :ok
   end
 
+  # Two-table same-participant marquee: BOTH source tables share ONE publication
+  # and ONE auxiliary participant atom — the v1 snapshot shape where a per-table
+  # ordinal space would mint identical operation keys across tables (one shared
+  # consistent point, same participant, same claims prefix). Own tables,
+  # publication, and slot so it never collides with the SCD1/SCD2 marquees'
+  # resolver indexes.
+  @multi_src_a "repl_multi_src_a"
+  @multi_src_b "repl_multi_src_b"
+  @multi_mirror_a "repl_multi_mirror_a"
+  @multi_mirror_b "repl_multi_mirror_b"
+  @multi_auxiliary "repl_multi_auxiliary"
+  @multi_pub "repl_multi_pub"
+  @multi_slot "multi_table_snapshot_slot"
+
+  def multi_src_a, do: @multi_src_a
+  def multi_src_b, do: @multi_src_b
+  def multi_mirror_a, do: @multi_mirror_a
+  def multi_mirror_b, do: @multi_mirror_b
+  def multi_auxiliary, do: @multi_auxiliary
+  def multi_publication, do: @multi_pub
+  def multi_slot, do: @multi_slot
+
+  def setup_multi_schema! do
+    q!("DROP PUBLICATION IF EXISTS #{@multi_pub}")
+
+    for src <- [@multi_src_a, @multi_src_b] do
+      q!("DROP TABLE IF EXISTS #{src}")
+      q!("CREATE TABLE #{src} (id text primary key, note text)")
+      q!("ALTER TABLE #{src} REPLICA IDENTITY FULL")
+    end
+
+    q!("CREATE PUBLICATION #{@multi_pub} FOR TABLE #{@multi_src_a}, #{@multi_src_b}")
+
+    for mirror <- [@multi_mirror_a, @multi_mirror_b] do
+      q!("DROP TABLE IF EXISTS #{mirror}")
+      q!("CREATE TABLE #{mirror} (id text primary key, note text)")
+    end
+
+    q!("DROP TABLE IF EXISTS #{@multi_auxiliary}")
+    q!("CREATE TABLE #{@multi_auxiliary} (id uuid primary key)")
+    :ok
+  end
+
+  def teardown_multi_schema! do
+    q!("DROP PUBLICATION IF EXISTS #{@multi_pub}")
+
+    for table <- [@multi_src_a, @multi_src_b, @multi_mirror_a, @multi_mirror_b, @multi_auxiliary] do
+      q!("DROP TABLE IF EXISTS #{table}")
+    end
+
+    :ok
+  end
+
+  def multi_mirror_rows(mirror),
+    do: q!("SELECT id, note FROM #{mirror} ORDER BY id").rows
+
+  def multi_auxiliary_count,
+    do: q!("SELECT count(*) FROM #{@multi_auxiliary}").rows |> hd() |> hd()
+
   @doc "Remove the SCD1 integration fixture's publication and tables."
   def teardown_schema! do
     q!("DROP PUBLICATION IF EXISTS #{@pub}")
@@ -585,6 +644,149 @@ defmodule AshReplicant.Test.Marquee do
       domains: [AshReplicant.Test.Marquee.Scd2Domain],
       checkpoint_resource: AshReplicant.Test.Checkpoint,
       slot_name: "marquee_scd2_slot"
+  end
+
+  defmodule MultiAuxiliary do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.Test.Marquee.MultiDomain,
+      data_layer: AshPostgres.DataLayer,
+      extensions: [AshOnetime.Resource]
+
+    postgres do
+      table "repl_multi_auxiliary"
+      repo AshReplicant.TestRepo
+    end
+
+    attributes do
+      uuid_primary_key :id
+    end
+
+    actions do
+      defaults [:read]
+
+      create :record do
+        transaction? true
+        argument :operation_key, :string, allow_nil?: false, public?: false
+        accept []
+      end
+    end
+
+    onetime do
+      protect :record do
+        strategy :idempotency
+
+        scope([
+          {:static, "ash_replicant:destination-participant:1"},
+          {:static, "multi_auxiliary"}
+        ])
+
+        key({:argument, :operation_key})
+        fingerprint(arguments: [:operation_key])
+
+        response(AshOnetime.Codec.Resource,
+          fields: [:id],
+          classify: AshReplicant.Test.Marquee.StoreResponse
+        )
+
+        retention({1, :day})
+      end
+    end
+  end
+
+  defmodule MultiOrderA do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.Test.Marquee.MultiDomain,
+      data_layer: AshPostgres.DataLayer,
+      extensions: [AshReplicant.Resource]
+
+    postgres do
+      table "repl_multi_mirror_a"
+      repo AshReplicant.TestRepo
+    end
+
+    replicant do
+      source_table("repl_multi_src_a")
+    end
+
+    attributes do
+      attribute :id, :string, primary_key?: true, allow_nil?: false, public?: true
+      attribute :note, :string, public?: true
+    end
+
+    actions do
+      defaults [:read, :destroy, update: :*]
+
+      create :create do
+        primary? true
+        accept [:id, :note]
+        touches_resources [AshReplicant.Test.Marquee.MultiAuxiliary]
+
+        change {AshReplicant.Test.Marquee.RecordAuxiliary,
+                resource: AshReplicant.Test.Marquee.MultiAuxiliary,
+                participant: :multi_auxiliary,
+                escape_table: "repl_multi_auxiliary"}
+      end
+    end
+  end
+
+  defmodule MultiOrderB do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.Test.Marquee.MultiDomain,
+      data_layer: AshPostgres.DataLayer,
+      extensions: [AshReplicant.Resource]
+
+    postgres do
+      table "repl_multi_mirror_b"
+      repo AshReplicant.TestRepo
+    end
+
+    replicant do
+      source_table("repl_multi_src_b")
+    end
+
+    attributes do
+      attribute :id, :string, primary_key?: true, allow_nil?: false, public?: true
+      attribute :note, :string, public?: true
+    end
+
+    actions do
+      defaults [:read, :destroy, update: :*]
+
+      create :create do
+        primary? true
+        accept [:id, :note]
+        touches_resources [AshReplicant.Test.Marquee.MultiAuxiliary]
+
+        change {AshReplicant.Test.Marquee.RecordAuxiliary,
+                resource: AshReplicant.Test.Marquee.MultiAuxiliary,
+                participant: :multi_auxiliary,
+                escape_table: "repl_multi_auxiliary"}
+      end
+    end
+  end
+
+  defmodule MultiDomain do
+    @moduledoc false
+    use Ash.Domain, validate_config_inclusion?: false
+
+    resources do
+      resource AshReplicant.Test.Marquee.MultiOrderA
+      resource AshReplicant.Test.Marquee.MultiOrderB
+      resource AshReplicant.Test.Marquee.MultiAuxiliary
+      resource AshReplicant.Test.Checkpoint
+    end
+  end
+
+  defmodule MultiSink do
+    @moduledoc false
+    use AshReplicant.Sink,
+      repo: AshReplicant.TestRepo,
+      domains: [AshReplicant.Test.Marquee.MultiDomain],
+      checkpoint_resource: AshReplicant.Test.Checkpoint,
+      slot_name: "multi_table_snapshot_slot"
   end
 
   defmodule CloakVersionOrder do

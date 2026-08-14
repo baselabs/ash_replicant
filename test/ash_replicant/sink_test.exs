@@ -40,6 +40,36 @@ defmodule AshReplicant.SinkTest do
     assert {:ok, 100} = TestSink.checkpoint()
   end
 
+  test "removed or unknown sink options fail compilation instead of silently dropping" do
+    # `apply_ledger` was removed this slice; a host upgrading across it must get a
+    # compile-time failure, not a silently-gone ledger.
+    assert_raise ArgumentError, ~r/apply_ledger/, fn ->
+      Code.compile_string("""
+      defmodule AshReplicant.Test.LegacyLedgerOptionSink do
+        use AshReplicant.Sink,
+          repo: AshReplicant.TestRepo,
+          domains: [AshReplicant.Test.Domain],
+          checkpoint_resource: AshReplicant.Test.Checkpoint,
+          slot_name: "legacy_ledger_option_slot",
+          apply_ledger: :removed_table
+      end
+      """)
+    end
+
+    assert_raise ArgumentError, ~r/:typo_option/, fn ->
+      Code.compile_string("""
+      defmodule AshReplicant.Test.TypoOptionSink do
+        use AshReplicant.Sink,
+          repo: AshReplicant.TestRepo,
+          domains: [AshReplicant.Test.Domain],
+          checkpoint_resource: AshReplicant.Test.Checkpoint,
+          slot_name: "typo_option_slot",
+          typo_option: true
+      end
+      """)
+    end
+  end
+
   test "a transaction at or below the checkpoint is skipped — zero changes applied" do
     assert {:ok, 100} = TestSink.handle_transaction(txn(100, [ins("1")]))
     assert {:ok, 100} = TestSink.handle_transaction(txn(100, [ins("999")]))

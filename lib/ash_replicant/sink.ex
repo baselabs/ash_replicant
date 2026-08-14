@@ -48,6 +48,20 @@ defmodule AshReplicant.Sink do
     checkpoint_resource = Keyword.fetch!(opts, :checkpoint_resource)
     slot_name = Keyword.fetch!(opts, :slot_name)
 
+    # Fail closed on removed or unknown options: a previously-valid key (e.g. the
+    # removed `apply_ledger`) must surface as a compile-time failure on the host,
+    # never silently no-op with its effect gone.
+    case Keyword.drop(opts, [:repo, :domains, :checkpoint_resource, :slot_name]) do
+      [] ->
+        :ok
+
+      extra ->
+        raise ArgumentError,
+              "unknown AshReplicant.Sink option(s) #{inspect(Keyword.keys(extra))} — " <>
+                "the sink admits only :repo, :domains, :checkpoint_resource, :slot_name " <>
+                "(apply_ledger was removed; a removed option must not silently no-op)"
+    end
+
     quote do
       @behaviour Replicant.Sink
       @after_compile {AshReplicant.Destination, :__after_compile__}

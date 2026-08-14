@@ -16,6 +16,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   directly; remove the overridable effect hook that could acknowledge WAL without
   applying rows/checkpointing. Reject data-layer `SetContext` redirection and
   behavior-conforming external AshOnetime caches at destination admission.
+- Give v1 snapshots ONE continuing operation-ordinal space per run (keyed by the
+  exported consistent point). A per-table space minted identical operation keys
+  for table A row i and table B row i whenever two mapped resources shared one
+  participant atom, and AshOnetime replayed A's stored response for B — silently
+  suppressing B's declared auxiliary effect. Proven live by a two-table
+  same-participant snapshot marquee.
+- Reject unknown or removed `use AshReplicant.Sink` options at compile time
+  (including the removed `apply_ledger`) instead of silently dropping them — a
+  host upgrading across the removal now gets a compile failure, not a
+  silently-gone ledger.
+- Admit the dynamic (MFA) `set_context` form only when the module behind the MFA
+  declares its effects through `AshReplicant.DestinationParticipant`; static-map
+  contexts still may not replace `:data_layer`. The core-code fingerprint now
+  covers every delivery-reachable module including the value-free telemetry
+  allowlist enforcer.
 
 ### Added
 

@@ -128,8 +128,9 @@ context-tenant stores preflight inside the outer transaction.
 
 Generated delivery callbacks are final and call `Sink.Impl` directly. Never add a
 host-overridable effect hook. Reject `SetContext` changes/preparations that replace
-`:data_layer`, and require `AshOnetime.Cache.None`; both otherwise create effects
-outside the admitted action/transaction boundary.
+`:data_layer` (a dynamic/MFA context is admissible only when its module declares
+`DestinationParticipant`), and require `AshOnetime.Cache.None`; both otherwise
+create effects outside the admitted action/transaction boundary.
 
 Current v1 snapshot batches are atomic, but an incomplete multi-batch restart can
 physically repeat committed batch effects before rebuilding the target. Do not claim

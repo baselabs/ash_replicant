@@ -1809,6 +1809,113 @@ defmodule AshReplicant.Test.DestinationFixtures do
     end
   end
 
+  # An MFA (dynamic) SetContext whose module DECLARES its effects through the
+  # DestinationParticipant escape hatch — admitted.
+  defmodule DeclaredMfaContextRoot do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.Test.DestinationFixtures.DeclaredMfaContextDomain,
+      data_layer: AshPostgres.DataLayer,
+      extensions: [AshReplicant.Resource]
+
+    @behaviour AshReplicant.DestinationParticipant
+
+    postgres do
+      table "destination_declared_mfa_context_roots"
+      repo AshReplicant.TestRepo
+    end
+
+    replicant do
+      source_table("destination_declared_mfa_context_sources")
+    end
+
+    attributes do
+      uuid_primary_key :id
+    end
+
+    actions do
+      defaults [:read, :destroy]
+
+      create :create do
+        primary? true
+        accept []
+        change set_context({__MODULE__, :compute_context, []})
+      end
+    end
+
+    @impl AshReplicant.DestinationParticipant
+    def destination_participants(_opts, %AshReplicant.DestinationParticipant.Context{}),
+      do: {:ok, :no_database}
+
+    def compute_context(_subject), do: %{private: %{mfa_marker: true}}
+  end
+
+  # The same MFA SetContext with NO declaration — rejected fail-closed.
+  defmodule UndeclaredMfaContextRoot do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.Test.DestinationFixtures.UndeclaredMfaContextDomain,
+      data_layer: AshPostgres.DataLayer,
+      extensions: [AshReplicant.Resource]
+
+    postgres do
+      table "destination_undeclared_mfa_context_roots"
+      repo AshReplicant.TestRepo
+    end
+
+    replicant do
+      source_table("destination_undeclared_mfa_context_sources")
+    end
+
+    attributes do
+      uuid_primary_key :id
+    end
+
+    actions do
+      defaults [:read, :destroy]
+
+      create :create do
+        primary? true
+        accept []
+        change set_context({__MODULE__, :compute_context, []})
+      end
+    end
+
+    def compute_context(_subject), do: %{data_layer: %{table: "unmanifested_mfa_target"}}
+  end
+
+  # The Preparation twin of the data-layer redirect — rejected like the change.
+  defmodule ContextRedirectPreparationRoot do
+    @moduledoc false
+    use Ash.Resource,
+      primary_read_warning?: false,
+      domain: AshReplicant.Test.DestinationFixtures.ContextRedirectPreparationDomain,
+      data_layer: AshPostgres.DataLayer,
+      extensions: [AshReplicant.Resource]
+
+    postgres do
+      table "destination_context_redirect_preparation_roots"
+      repo AshReplicant.TestRepo
+    end
+
+    replicant do
+      source_table("destination_context_redirect_preparation_sources")
+    end
+
+    attributes do
+      uuid_primary_key :id
+    end
+
+    actions do
+      defaults [:destroy, create: :*]
+
+      read :read do
+        primary? true
+        prepare set_context(%{data_layer: %{table: "unmanifested_preparation_target"}})
+      end
+    end
+  end
+
   defmodule ContextRedirectScd2Root do
     @moduledoc false
     use Ash.Resource,
@@ -2235,6 +2342,149 @@ defmodule AshReplicant.Test.DestinationFixtures do
     end
   end
 
+  # Live nonce-profile fixtures: a REAL AshOnetime :one_time_nonce protection
+  # (not a struct mutation) riding a declared participant — the live-substrate
+  # proof that nonce admission rejection writes zero claim rows.
+  defmodule NonceProofVerifier do
+    @moduledoc false
+    @behaviour AshOnetime.Verifier
+    @behaviour AshReplicant.DestinationParticipant
+
+    @impl AshOnetime.Verifier
+    def verify(_token, _context), do: {:error, :unverified}
+
+    @impl AshOnetime.Verifier
+    def algorithm, do: :hmac_sha256
+
+    @impl AshOnetime.Verifier
+    def trust_model, do: :same_service
+
+    # Declared so the manifest walk passes the verifier as a participant and the
+    # rejection isolates the NONCE STRATEGY itself (the profile check), not
+    # module opacity.
+    @impl AshReplicant.DestinationParticipant
+    def destination_participants(_opts, %AshReplicant.DestinationParticipant.Context{}),
+      do: {:ok, :no_database}
+  end
+
+  defmodule NonceAuxiliary do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.Test.DestinationFixtures.NonceDomain,
+      data_layer: AshPostgres.DataLayer,
+      extensions: [AshOnetime.Resource]
+
+    postgres do
+      table "destination_nonce_auxiliaries"
+      repo AshReplicant.TestRepo
+    end
+
+    attributes do
+      uuid_primary_key :id
+    end
+
+    actions do
+      defaults [:read]
+
+      create :record do
+        transaction? true
+        argument :proof, :string, allow_nil?: false, public?: false
+        accept []
+      end
+    end
+
+    onetime do
+      protect :record do
+        strategy :one_time_nonce
+
+        scope([
+          {:static, "ash_replicant:destination-participant:1"},
+          {:static, "nonce_auxiliary"}
+        ])
+
+        key({:verified, :proof, AshReplicant.Test.DestinationFixtures.NonceProofVerifier})
+        window(max_age: {5, :minute}, clock_skew: {30, :second})
+      end
+    end
+  end
+
+  defmodule NonceAuxiliaryChange do
+    @moduledoc false
+    use Ash.Resource.Change
+    @behaviour AshReplicant.DestinationParticipant
+
+    alias AshReplicant.DestinationParticipant.{ActionRef, Context, ReplayIdentity}
+
+    @impl Ash.Resource.Change
+    def change(changeset, _opts, _context), do: changeset
+
+    @impl AshReplicant.DestinationParticipant
+    def destination_participants(_opts, %Context{}) do
+      {:ok,
+       {:actions,
+        [
+          %ActionRef{
+            resource: AshReplicant.Test.DestinationFixtures.NonceAuxiliary,
+            action: :record,
+            replay_identity: %ReplayIdentity{
+              participant: :nonce_auxiliary,
+              components: [
+                :source_system_identifier,
+                :source_database,
+                :slot_name,
+                :commit_lsn,
+                :ordinal,
+                :participant
+              ]
+            }
+          }
+        ]}}
+    end
+  end
+
+  defmodule NonceRoot do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.Test.DestinationFixtures.NonceDomain,
+      data_layer: AshPostgres.DataLayer,
+      extensions: [AshReplicant.Resource]
+
+    postgres do
+      table "destination_nonce_roots"
+      repo AshReplicant.TestRepo
+    end
+
+    replicant do
+      source_table("destination_nonce_source_roots")
+    end
+
+    attributes do
+      uuid_primary_key :id
+    end
+
+    actions do
+      defaults [:read, :destroy]
+
+      create :create do
+        primary? true
+        accept []
+        touches_resources [AshReplicant.Test.DestinationFixtures.NonceAuxiliary]
+        change AshReplicant.Test.DestinationFixtures.NonceAuxiliaryChange
+      end
+    end
+  end
+
+  defmodule NonceDomain do
+    @moduledoc false
+    use Ash.Domain, validate_config_inclusion?: false
+
+    resources do
+      resource AshReplicant.Test.DestinationFixtures.NonceRoot
+      resource AshReplicant.Test.DestinationFixtures.NonceAuxiliary
+      resource AshReplicant.Test.Checkpoint
+    end
+  end
+
   defmodule OnetimeDomain do
     @moduledoc false
     use Ash.Domain, validate_config_inclusion?: false
@@ -2479,6 +2729,36 @@ defmodule AshReplicant.Test.DestinationFixtures do
 
     resources do
       resource AshReplicant.Test.DestinationFixtures.SafeContextRoot
+      resource AshReplicant.Test.Checkpoint
+    end
+  end
+
+  defmodule DeclaredMfaContextDomain do
+    @moduledoc false
+    use Ash.Domain, validate_config_inclusion?: false
+
+    resources do
+      resource AshReplicant.Test.DestinationFixtures.DeclaredMfaContextRoot
+      resource AshReplicant.Test.Checkpoint
+    end
+  end
+
+  defmodule UndeclaredMfaContextDomain do
+    @moduledoc false
+    use Ash.Domain, validate_config_inclusion?: false
+
+    resources do
+      resource AshReplicant.Test.DestinationFixtures.UndeclaredMfaContextRoot
+      resource AshReplicant.Test.Checkpoint
+    end
+  end
+
+  defmodule ContextRedirectPreparationDomain do
+    @moduledoc false
+    use Ash.Domain, validate_config_inclusion?: false
+
+    resources do
+      resource AshReplicant.Test.DestinationFixtures.ContextRedirectPreparationRoot
       resource AshReplicant.Test.Checkpoint
     end
   end

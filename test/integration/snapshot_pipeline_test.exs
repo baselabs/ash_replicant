@@ -228,6 +228,47 @@ defmodule AshReplicant.SnapshotPipelineTest do
     assert DestinationObserver.effect_count(run_id, "auxiliary", "INSERT") == 26
   end
 
+  test "a two-table snapshot gives each table's declared effects distinct operation keys" do
+    Marquee.setup_multi_schema!()
+    slot = Marquee.multi_slot()
+
+    on_exit(fn ->
+      AshReplicant.stop_supervised(slot)
+      Marquee.drop_slot!(slot)
+      Marquee.q!("DELETE FROM ash_replicant_checkpoints WHERE slot_name = $1", [slot])
+      Marquee.teardown_multi_schema!()
+    end)
+
+    for {src, prefix} <- [{Marquee.multi_src_a(), "a"}, {Marquee.multi_src_b(), "b"}] do
+      Marquee.q!("""
+      INSERT INTO #{src} (id, note)
+      SELECT g::text, '#{prefix}-' || g::text FROM generate_series(1, 3) g
+      """)
+    end
+
+    assert {:ok, _pid} =
+             AshReplicant.start_link(
+               sink: Marquee.MultiSink,
+               connection: Marquee.conn(),
+               publication: Marquee.multi_publication(),
+               source_identity: Marquee.source_identity(),
+               snapshot: true
+             )
+
+    PG.wait_until(fn ->
+      length(Marquee.multi_mirror_rows(Marquee.multi_mirror_a())) == 3 and
+        length(Marquee.multi_mirror_rows(Marquee.multi_mirror_b())) == 3
+    end)
+
+    # Both tables' rows are mirrored AND both tables' declared auxiliary effects
+    # executed. A v1 snapshot shares ONE consistent point (commit_lsn) across
+    # every table, and both resources share one auxiliary participant atom — a
+    # per-table ordinal space would collide the second table's operation keys
+    # into the first table's AshOnetime claims and silently replay-suppress its
+    # declared effects (mirror rows survive; only the protected effect dies).
+    assert Marquee.multi_auxiliary_count() == 6
+  end
+
   defp start_snapshot!(slot, sink) do
     assert {:ok, _pid} =
              AshReplicant.start_link(

@@ -167,17 +167,17 @@ defmodule AshReplicant.Sink.Impl do
           :ok
 
         resource ->
-          run_snapshot_batch(config, resource, changes, first?, {schema, table}, table, ctx)
+          run_snapshot_batch(config, resource, changes, first?, table, ctx)
       end
     end
   rescue
     e -> {:error, Error.scrub(e, nil, :snapshot)}
   end
 
-  defp run_snapshot_batch(config, resource, changes, first?, source_key, table, ctx) do
+  defp run_snapshot_batch(config, resource, changes, first?, table, ctx) do
     snapshot_lsn = Map.get(ctx, :snapshot_lsn)
 
-    with :ok <- run_snapshot(config, resource, changes, first?, snapshot_lsn, source_key) do
+    with :ok <- run_snapshot(config, resource, changes, first?, snapshot_lsn) do
       # Snapshot changes are a materialized list (the bulk path indexes them via
       # List.first), so counting is single-pass-safe here — unlike the streaming
       # path's lazy Enumerable.
@@ -191,33 +191,17 @@ defmodule AshReplicant.Sink.Impl do
     end
   end
 
-  defp run_snapshot(config, resource, changes, first?, snapshot_lsn, source_key) do
-    case snapshot_ordinal_base(config, source_key, first?) do
+  defp run_snapshot(config, resource, changes, first?, snapshot_lsn) do
+    case snapshot_ordinal_base(config, snapshot_lsn, first?) do
       {:ok, ordinal_base} ->
-        run_snapshot_transaction(
-          config,
-          resource,
-          changes,
-          first?,
-          snapshot_lsn,
-          source_key,
-          ordinal_base
-        )
+        run_snapshot_transaction(config, resource, changes, first?, snapshot_lsn, ordinal_base)
 
       :error ->
         {:error, Error.exception(reason: :config_invalid, resource: resource, op: :snapshot)}
     end
   end
 
-  defp run_snapshot_transaction(
-         config,
-         resource,
-         changes,
-         first?,
-         snapshot_lsn,
-         source_key,
-         ordinal_base
-       ) do
+  defp run_snapshot_transaction(config, resource, changes, first?, snapshot_lsn, ordinal_base) do
     result =
       config.repo.transaction(
         fn ->
@@ -235,7 +219,7 @@ defmodule AshReplicant.Sink.Impl do
 
     case result do
       {:ok, _} ->
-        put_snapshot_ordinal(config, source_key, ordinal_base + length(changes))
+        put_snapshot_ordinal(config, snapshot_lsn, ordinal_base + length(changes))
         :ok
 
       {:error, %Error{} = e} ->
@@ -261,28 +245,41 @@ defmodule AshReplicant.Sink.Impl do
     guard_generation!(config)
   end
 
-  defp snapshot_ordinal_base(config, source_key, true) do
-    put_snapshot_ordinal(config, source_key, 0)
-    {:ok, 0}
-  end
-
-  defp snapshot_ordinal_base(config, source_key, false) do
+  # ONE continuing ordinal space per snapshot RUN. A v1 snapshot shares ONE
+  # consistent point (`commit_lsn`) across every table, and two mapped resources
+  # can lawfully share a participant atom and claims prefix — a per-table
+  # ordinal space would then mint IDENTICAL operation keys for table A row i and
+  # table B row i, and AshOnetime would replay A's stored response for B
+  # (silent suppression of B's declared effect; proven live by the two-table
+  # snapshot marquee). Keyed by the run's consistent point: a re-created slot
+  # exports a new point (counter resets), while later tables in the same run
+  # continue it.
+  defp snapshot_ordinal_base(config, snapshot_lsn, first?) do
     case snapshot_ordinals(config) do
-      %{^source_key => ordinal} when is_integer(ordinal) and ordinal >= 0 -> {:ok, ordinal}
-      _other -> :error
+      %{run_lsn: ^snapshot_lsn, ordinal: ordinal} when is_integer(ordinal) and ordinal >= 0 ->
+        {:ok, ordinal}
+
+      _other when first? and is_integer(snapshot_lsn) ->
+        put_snapshot_ordinal(config, snapshot_lsn, 0)
+        {:ok, 0}
+
+      _other ->
+        :error
     end
   end
 
   defp snapshot_ordinals(config) do
-    case :persistent_term.get(snapshot_ordinals_key(config.slot_name), %{}) do
-      ordinals when is_map(ordinals) -> ordinals
-      _other -> %{}
+    case :persistent_term.get(snapshot_ordinals_key(config.slot_name), :none) do
+      %{run_lsn: _, ordinal: _} = run -> run
+      _other -> :none
     end
   end
 
-  defp put_snapshot_ordinal(config, source_key, ordinal) do
-    ordinals = Map.put(snapshot_ordinals(config), source_key, ordinal)
-    :persistent_term.put(snapshot_ordinals_key(config.slot_name), ordinals)
+  defp put_snapshot_ordinal(config, snapshot_lsn, ordinal) do
+    :persistent_term.put(snapshot_ordinals_key(config.slot_name), %{
+      run_lsn: snapshot_lsn,
+      ordinal: ordinal
+    })
   end
 
   defp snapshot_ordinals_key(slot_name),

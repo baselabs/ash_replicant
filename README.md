@@ -291,8 +291,10 @@ mismatch before delivery.
 
 Generated sink callbacks are final and invoke the admitted implementation
 directly; hosts cannot override an effect hook to bypass apply/checkpoint. A
-`SetContext` change or preparation that replaces `:data_layer` is rejected, as is
-any AshOnetime cache other than the effect-free `AshOnetime.Cache.None`.
+`SetContext` change or preparation that replaces `:data_layer` is rejected (a
+dynamic/MFA context is admissible only when its module declares
+`DestinationParticipant`), as is any AshOnetime cache other than the effect-free
+`AshOnetime.Cache.None`.
 
 Arbitrary changes, validations, preparations, manual actions, callbacks, custom
 types, and tenant resolvers must implement `AshReplicant.DestinationParticipant`.
