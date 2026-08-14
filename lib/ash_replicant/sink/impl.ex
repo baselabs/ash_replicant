@@ -491,22 +491,28 @@ defmodule AshReplicant.Sink.Impl do
       # mirrored nothing because the index was empty — that locks in invisible loss.
       {:error, Error.exception(reason: :config_invalid, resource: nil, op: :snapshot_complete)}
     else
-      config.repo.transaction(fn ->
-        guard_generation!(config)
+      config.repo.transaction(
+        fn ->
+          guard_generation!(config)
 
-        case locked_checkpoint!(config) do
-          # Monotonic handoff: a re-delivered/older consistent point never
-          # regresses the durable watermark. No write; the framework acks its
-          # own consistent point, never the sink's return value.
-          cp when is_integer(cp) and snapshot_lsn <= cp ->
-            :ok
+          case locked_checkpoint!(config) do
+            # Monotonic handoff: a re-delivered/older consistent point never
+            # regresses the durable watermark. No write; the framework acks its
+            # own consistent point, never the sink's return value.
+            cp when is_integer(cp) and snapshot_lsn <= cp ->
+              :ok
 
-          _ ->
-            upsert_checkpoint(config, snapshot_lsn)
-        end
+            _ ->
+              upsert_checkpoint(config, snapshot_lsn)
+          end
 
-        guard_generation!(config)
-      end)
+          guard_generation!(config)
+        end,
+        # Same ceiling as every other locked path: the first statement holds
+        # FOR UPDATE on the checkpoint row, so a lock wait must not run into
+        # the 15s DBConnection default (the deterministic-wedge class).
+        timeout: @snapshot_transaction_timeout
+      )
       |> case do
         {:ok, _} ->
           clear_snapshot_ordinals(config.slot_name)

@@ -599,8 +599,18 @@ defmodule AshReplicant.CheckpointBindingTest do
       assert row.publication_contract == nil
       assert row.publication_fingerprint == nil
 
-      # Adopting the identical row again is idempotent.
+      # Adopting the identical row again is idempotent; a DIFFERENT watermark
+      # (or a nil one over a durable row) is a mismatched re-adoption —
+      # refused, the durable watermark untouched.
       assert :ok = AshReplicant.adopt_checkpoint(SinkA, identity, watermark)
+
+      assert {:error, %AshReplicant.Error{reason: :checkpoint_adopt_conflict}} =
+               AshReplicant.adopt_checkpoint(SinkA, identity, watermark + 7)
+
+      assert {:error, %AshReplicant.Error{reason: :checkpoint_adopt_conflict}} =
+               AshReplicant.adopt_checkpoint(SinkA, identity, nil)
+
+      assert bound_row(@slot).commit_lsn == watermark
 
       # A different identity cannot own the slot name.
       assert {:error, %AshReplicant.Error{reason: :checkpoint_adopt_conflict}} =
@@ -650,6 +660,16 @@ defmodule AshReplicant.CheckpointBindingTest do
 
       # Idempotent at the same timeline.
       assert :ok = AshReplicant.acknowledge_checkpoint_timeline(SinkA, identity, 99)
+
+      # A row with NO recorded timeline (adopted, never bound) has nothing to
+      # acknowledge — refuse with the start-the-pipeline guidance.
+      Marquee.q!(
+        "UPDATE ash_replicant_checkpoints SET source_timeline = NULL WHERE slot_name = $1",
+        [@slot]
+      )
+
+      assert {:error, %AshReplicant.Error{reason: :checkpoint_adopt_invalid}} =
+               AshReplicant.acknowledge_checkpoint_timeline(SinkA, identity, 99)
     end
 
     test "reset destroys the bound row idempotently" do

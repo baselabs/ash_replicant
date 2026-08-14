@@ -263,7 +263,9 @@ defmodule AshReplicant.Checkpoint.Identity do
   table still carries rows — the operator must capture and delete them (or
   adopt after migrating) before `ecto.migrate` can run: the structural
   migration itself aborts on surviving NOT NULL-less legacy rows. The error
-  carries ONLY the row count and the two operator options.
+  carries ONLY the row count and the two operator options. A failed probe
+  (table unreadable) raises a distinct structural config error rather than
+  reading as "nothing ambiguous".
   """
   @spec refuse_ambiguous_legacy_rows!(module(), String.t()) :: :ok
   def refuse_ambiguous_legacy_rows!(repo, table \\ @checkpoint_table) when is_atom(repo) do

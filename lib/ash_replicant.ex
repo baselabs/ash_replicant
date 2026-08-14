@@ -81,19 +81,18 @@ defmodule AshReplicant do
   @doc """
   Adopt a legacy slot-only watermark into a source-bound checkpoint row (the
   explicit operator choice of roadmap B2's legacy policy). Offline: refuses
+  while the slot has a live pipeline generation, stamps the operator-declared
+  ACTUAL source identity and the preserved `commit_lsn`, and leaves the
+  contract NULL — the first connect classifies the NULL contract as
+  `:initialized` and fills it WITHOUT touching the watermark. Idempotent when
+  the identical row already exists (same identity AND watermark); refuses
+  (`:checkpoint_adopt_conflict`) when a different identity already owns the
+  slot name or the existing watermark differs. All errors are value-free.
 
   > Repo binding: the operator functions write through the CALLER'S current
   > dynamic-repo binding. On a host multiplexing databases through
   > `put_dynamic_repo/1`, call them from a process bound to the destination
   > repo (the same identity the pipeline's admitted generation pins).
-  > Offline: refuses
-  while the slot has a live pipeline generation, stamps the operator-declared
-  ACTUAL source identity and the preserved `commit_lsn`, and leaves the
-  contract NULL — the first connect classifies the NULL contract as
-  `:initialized` and fills it WITHOUT touching the watermark. Idempotent when
-  the identical row already exists; refuses (`:checkpoint_adopt_conflict`)
-  when a different identity already owns the slot name. All errors are
-  value-free.
   """
   @spec adopt_checkpoint(module(), keyword(), non_neg_integer() | nil) ::
           :ok | {:error, term()}
@@ -223,10 +222,10 @@ defmodule AshReplicant do
                   )
                 )
 
-              # Idempotence requires the IDENTICAL row: a different watermark is
-              # a mismatched adoption — refuse rather than silently keep the
-              # first (or overwrite the durable one).
-              not is_nil(commit_lsn) and row.commit_lsn != commit_lsn ->
+              # Idempotence requires the IDENTICAL row: a different watermark
+              # (including a nil argument over a durable one) is a mismatched
+              # adoption — refuse rather than silently keep the first.
+              row.commit_lsn != commit_lsn ->
                 config.repo.rollback(
                   Error.exception(
                     reason: :checkpoint_adopt_conflict,
