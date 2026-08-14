@@ -11,10 +11,10 @@ defmodule AshReplicant.Checkpoint.Identity do
   # governing design's "mapping-incompatible" halt class. Both sides of the
   # line are mechanically detectable because the declared skip set is recorded.
 
-  alias AshReplicant.Resource.Info
-  alias AshReplicant.Resolver
+  alias AshReplicant.{Error, Resource.Info, Resolver}
 
   @contract_version 1
+  @checkpoint_table "ash_replicant_checkpoints"
 
   @type manifest :: %{
           required(:contract_version) => pos_integer(),
@@ -226,6 +226,59 @@ defmodule AshReplicant.Checkpoint.Identity do
 
   defp check_same(_field, same, same, _reason), do: :ok
   defp check_same(_field, _stored, _current, reason), do: {:incompatible, reason}
+
+  @doc """
+  Count the rows a LEGACY (slot-only) checkpoint table still carries, or `0`
+  when the table already has the source-bound shape (nothing ambiguous can
+  remain). Callable from a host data migration / iex BEFORE migrating, while
+  the table still lacks `source_system_id`. The only raw SQL in the library:
+  a fixed-table-name, parameterless information-schema probe + count — never
+  a row value.
+  """
+  @spec legacy_checkpoint_row_count(module(), String.t()) :: {:ok, non_neg_integer()}
+  def legacy_checkpoint_row_count(repo, table \\ @checkpoint_table) when is_atom(repo) do
+    case repo.query(
+           "SELECT count(*) FROM information_schema.columns WHERE table_name = $1 AND column_name = 'source_system_id'",
+           [table]
+         ) do
+      # Migrated shape: nothing ambiguous can remain.
+      {:ok, %{rows: [[present]]}} when present > 0 ->
+        {:ok, 0}
+
+      # Legacy (slot-only) shape: count the rows that block the migration.
+      {:ok, %{rows: [[0]]}} ->
+        case repo.query("SELECT count(*) FROM #{table}", []) do
+          {:ok, %{rows: [[count]]}} -> {:ok, count}
+          _ -> {:ok, 0}
+        end
+
+      _ ->
+        {:ok, 0}
+    end
+  end
+
+  @doc """
+  Raise a value-free structural error when a legacy (slot-only) checkpoint
+  table still carries rows — the operator must capture and delete them (or
+  adopt after migrating) before `ecto.migrate` can run: the structural
+  migration itself aborts on surviving NOT NULL-less legacy rows. The error
+  carries ONLY the row count and the two operator options.
+  """
+  @spec refuse_ambiguous_legacy_rows!(module(), String.t()) :: :ok
+  def refuse_ambiguous_legacy_rows!(repo, table \\ @checkpoint_table) when is_atom(repo) do
+    case legacy_checkpoint_row_count(repo, table) do
+      {:ok, 0} ->
+        :ok
+
+      {:ok, count} ->
+        raise Error.exception(
+                reason: :checkpoint_legacy_rows_present,
+                resource: nil,
+                op: :migrate,
+                shape: "rows=#{count} options=capture_and_delete_then_adopt|reset"
+              )
+    end
+  end
 
   # --- construction ---
 

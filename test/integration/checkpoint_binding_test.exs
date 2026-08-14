@@ -506,6 +506,133 @@ defmodule AshReplicant.CheckpointBindingTest do
     })
   end
 
+  describe "operator adoption + timeline acknowledge (task 5)" do
+    setup do
+      ref = attach_events()
+
+      # A live slot with a bound row, then stopped — the state an operator
+      # migrates/adopts against.
+      assert {:ok, _pid} = start(SinkA, @slot)
+      assert_receive {:telemetry, ^ref, [:replicant, :connection, :slot_active], %{}}, 15_000
+      assert :ok = AshReplicant.stop_supervised(@slot)
+
+      %{ref: ref}
+    end
+
+    test "adopt preserves the watermark; the first bind initializes the contract without touching it",
+         %{ref: ref} do
+      identity = Marquee.source_identity()
+
+      # Simulate the legacy capture/delete/migrate step: drop the bound row,
+      # then adopt it back with the preserved watermark.
+      watermark = confirmed_flush(@slot)
+
+      Marquee.q!("DELETE FROM ash_replicant_checkpoints WHERE slot_name = $1", [@slot])
+
+      assert :ok = AshReplicant.adopt_checkpoint(SinkA, identity, watermark)
+
+      row = bound_row(@slot)
+      assert row.commit_lsn == watermark
+      assert row.publication_contract == nil
+      assert row.publication_fingerprint == nil
+
+      # Adopting the identical row again is idempotent.
+      assert :ok = AshReplicant.adopt_checkpoint(SinkA, identity, watermark)
+
+      # A different identity cannot own the slot name.
+      assert {:error, %AshReplicant.Error{reason: :checkpoint_adopt_conflict}} =
+               AshReplicant.adopt_checkpoint(
+                 SinkA,
+                 [system_identifier: "sentinel-other-system", database: identity[:database]],
+                 watermark
+               )
+
+      # The first connect fills the contract (:initialized) and the timeline,
+      # keeping the adopted watermark.
+      assert {:ok, _pid} = start(SinkA, @slot)
+      assert_receive {:telemetry, ^ref, [:replicant, :connection, :slot_active], %{}}, 15_000
+
+      row = bound_row(@slot)
+      contract = contract_for(SinkA)
+      assert row.publication_fingerprint == contract.fingerprint
+      assert row.source_timeline == live_timeline()
+      assert row.commit_lsn == watermark
+    end
+
+    test "acknowledge re-binds a changed timeline without touching watermark or contract" do
+      identity = Marquee.source_identity()
+      contract = contract_for(SinkA)
+
+      # Advance the watermark (the value the acknowledge must not touch), then
+      # plant a foreign/future timeline that halts the bind.
+      watermark = confirmed_flush(@slot)
+
+      Marquee.q!("UPDATE ash_replicant_checkpoints SET commit_lsn = $1 WHERE slot_name = $2", [
+        watermark,
+        @slot
+      ])
+
+      Marquee.q!(
+        "UPDATE ash_replicant_checkpoints SET source_timeline = 99 WHERE slot_name = $1",
+        [@slot]
+      )
+
+      # ...and the operator's continuity assertion re-binds it.
+      assert :ok = AshReplicant.acknowledge_checkpoint_timeline(SinkA, identity, 99)
+
+      row = bound_row(@slot)
+      assert row.source_timeline == 99
+      assert row.publication_fingerprint == contract.fingerprint
+      assert row.commit_lsn == watermark
+
+      # Idempotent at the same timeline.
+      assert :ok = AshReplicant.acknowledge_checkpoint_timeline(SinkA, identity, 99)
+    end
+
+    test "reset destroys the bound row idempotently" do
+      identity = Marquee.source_identity()
+
+      assert :ok = AshReplicant.reset_checkpoint(SinkA, identity)
+      assert bound_row(@slot) == :absent
+
+      # Idempotent when absent; a different identity's row is untouched (none here).
+      assert :ok = AshReplicant.reset_checkpoint(SinkA, identity)
+    end
+  end
+
+  describe "legacy refusal guard (task 5)" do
+    test "a migrated table reports zero ambiguous legacy rows" do
+      assert {:ok, 0} = Identity.legacy_checkpoint_row_count(AshReplicant.TestRepo)
+      assert :ok = Identity.refuse_ambiguous_legacy_rows!(AshReplicant.TestRepo)
+    end
+
+    test "a slot-only table with rows raises a count-only structural error" do
+      # Throwaway legacy shape under the guard's table parameter.
+      Marquee.q!(
+        "CREATE TABLE b2_legacy_checkpoints (slot_name text primary key, commit_lsn bigint not null)"
+      )
+
+      Marquee.q!("INSERT INTO b2_legacy_checkpoints VALUES ('legacy-1', 42), ('legacy-2', 43)")
+      on_exit(fn -> Marquee.q!("DROP TABLE IF EXISTS b2_legacy_checkpoints") end)
+
+      assert {:ok, 2} =
+               Identity.legacy_checkpoint_row_count(
+                 AshReplicant.TestRepo,
+                 "b2_legacy_checkpoints"
+               )
+
+      error =
+        assert_raise AshReplicant.Error, fn ->
+          Identity.refuse_ambiguous_legacy_rows!(AshReplicant.TestRepo, "b2_legacy_checkpoints")
+        end
+
+      # Count-only, value-free: no slot names or watermarks.
+      assert error.reason == :checkpoint_legacy_rows_present
+      assert error.shape == "rows=2 options=capture_and_delete_then_adopt|reset"
+      refute Exception.message(error) =~ "legacy-1"
+    end
+  end
+
   # --- helpers ---
 
   defp start(sink, _slot) do

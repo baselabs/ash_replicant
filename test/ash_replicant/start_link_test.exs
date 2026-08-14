@@ -146,6 +146,57 @@ defmodule AshReplicant.StartLinkTest do
     end)
   end
 
+  describe "checkpoint operator functions (validation + lease refusals)" do
+    test "adopt_checkpoint validates its arguments value-free" do
+      identity = [system_identifier: "741852963", database: "postgres"]
+
+      for bad <- [-1, "x", 1.5] do
+        assert {:error, %AshReplicant.Error{reason: :checkpoint_adopt_invalid}} =
+                 AshReplicant.adopt_checkpoint(ValidSink, identity, bad)
+      end
+
+      for bad_identity <- [
+            nil,
+            [],
+            [system_identifier: "", database: "postgres"],
+            [system_identifier: "1"]
+          ] do
+        assert {:error, _} = AshReplicant.adopt_checkpoint(ValidSink, bad_identity, 5)
+      end
+
+      assert {:error, %AshReplicant.Error{reason: :checkpoint_adopt_invalid}} =
+               AshReplicant.adopt_checkpoint(:not_a_sink, identity, 5)
+    end
+
+    test "acknowledge_checkpoint_timeline validates the timeline value" do
+      identity = [system_identifier: "741852963", database: "postgres"]
+
+      for bad <- [-1, "x", nil] do
+        assert {:error, %AshReplicant.Error{reason: :checkpoint_adopt_invalid}} =
+                 AshReplicant.acknowledge_checkpoint_timeline(ValidSink, identity, bad)
+      end
+    end
+
+    test "operator functions refuse a live slot (offline-only)" do
+      identity = [system_identifier: "741852963", database: "postgres"]
+
+      capture_log(fn ->
+        assert {:ok, _pid} = AshReplicant.start_link(start_opts())
+
+        assert {:error, %AshReplicant.Error{op: :slot_already_active}} =
+                 AshReplicant.adopt_checkpoint(ValidSink, identity, 5)
+
+        assert {:error, %AshReplicant.Error{op: :slot_already_active}} =
+                 AshReplicant.reset_checkpoint(ValidSink, identity)
+
+        assert {:error, %AshReplicant.Error{op: :slot_already_active}} =
+                 AshReplicant.acknowledge_checkpoint_timeline(ValidSink, identity, 1)
+
+        assert :ok = AshReplicant.stop_supervised("valid_slot")
+      end)
+    end
+  end
+
   test "source identity is required and compared without returning values" do
     assert {:error, :source_identity_required} =
              AshReplicant.start_link(Keyword.delete(start_opts(), :source_identity))

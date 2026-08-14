@@ -78,6 +78,283 @@ defmodule AshReplicant do
   def erase_generation(slot_name, generation),
     do: erase_generation_key({AshReplicant, slot_name}, generation)
 
+  @doc """
+  Adopt a legacy slot-only watermark into a source-bound checkpoint row (the
+  explicit operator choice of roadmap B2's legacy policy). Offline: refuses
+  while the slot has a live pipeline generation, stamps the operator-declared
+  ACTUAL source identity and the preserved `commit_lsn`, and leaves the
+  contract NULL — the first connect classifies the NULL contract as
+  `:initialized` and fills it WITHOUT touching the watermark. Idempotent when
+  the identical row already exists; refuses (`:checkpoint_adopt_conflict`)
+  when a different identity already owns the slot name. All errors are
+  value-free.
+  """
+  @spec adopt_checkpoint(module(), keyword(), non_neg_integer() | nil) ::
+          :ok | {:error, term()}
+  def adopt_checkpoint(sink, source_identity, commit_lsn) do
+    with {:ok, config} <- operator_sink(sink),
+         {:ok, identity} <- validate_identity_fields(source_identity),
+         :ok <- validate_watermark(commit_lsn) do
+      activation_lock(config.slot_name, fn ->
+        if :persistent_term.get({AshReplicant, config.slot_name}, :none) == :none do
+          adopt_row(config, identity, commit_lsn)
+        else
+          {:error,
+           Error.exception(reason: :config_invalid, resource: nil, op: :slot_already_active)}
+        end
+      end)
+    end
+  end
+
+  @doc """
+  Destroy the source-bound checkpoint row for the sink's slot (the operator
+  escape hatch for incompatible contract transitions and identity rebinding —
+  after reset, the next connect binds fresh and the operator has accepted
+  re-delivery / re-snapshot semantics; on an SCD2 mirror, pair a reset with a
+  full re-snapshot, never bare re-delivery). Idempotent when absent. Routes
+  through the generated resource's `:operator_reset` destroy action.
+  """
+  @spec reset_checkpoint(module(), keyword()) :: :ok | {:error, term()}
+  def reset_checkpoint(sink, source_identity) do
+    with {:ok, config} <- operator_sink(sink),
+         {:ok, identity} <- validate_identity_fields(source_identity) do
+      activation_lock(config.slot_name, fn ->
+        if :persistent_term.get({AshReplicant, config.slot_name}, :none) == :none do
+          reset_row(config, identity)
+        else
+          {:error,
+           Error.exception(reason: :config_invalid, resource: nil, op: :slot_already_active)}
+        end
+      end)
+    end
+  end
+
+  @doc """
+  The operator's WAL-history continuity assertion after a
+  `:source_timeline_changed` halt: re-binds the row's recorded source timeline
+  to the asserted value WITHOUT touching the watermark or contract — correct
+  for a same-primary crash-restart (whose new timeline replays the old WAL).
+  For a promotion/fork the operator cannot prove continuous, use
+  `reset_checkpoint/2` instead. Offline and idempotent.
+  """
+  @spec acknowledge_checkpoint_timeline(module(), keyword(), non_neg_integer()) ::
+          :ok | {:error, term()}
+  def acknowledge_checkpoint_timeline(sink, source_identity, timeline_id) do
+    with {:ok, config} <- operator_sink(sink),
+         {:ok, identity} <- validate_identity_fields(source_identity),
+         :ok <- validate_timeline(timeline_id) do
+      activation_lock(config.slot_name, fn ->
+        if :persistent_term.get({AshReplicant, config.slot_name}, :none) == :none do
+          acknowledge_timeline(config, identity, timeline_id)
+        else
+          {:error,
+           Error.exception(reason: :config_invalid, resource: nil, op: :slot_already_active)}
+        end
+      end)
+    end
+  end
+
+  defp operator_sink(sink) when is_atom(sink) do
+    case safe_sink_config(sink) do
+      %{repo: repo, checkpoint_resource: checkpoint, slot_name: slot}
+      when is_atom(repo) and is_atom(checkpoint) and is_binary(slot) ->
+        {:ok, %{repo: repo, checkpoint_resource: checkpoint, slot_name: slot}}
+
+      _other ->
+        {:error, Error.exception(reason: :checkpoint_adopt_invalid, resource: nil, op: :adopt)}
+    end
+  end
+
+  defp validate_watermark(lsn) when is_integer(lsn) and lsn >= 0, do: :ok
+  defp validate_watermark(nil), do: :ok
+  defp validate_watermark(_), do: {:error, invalid_adopt(:commit_lsn)}
+
+  defp validate_timeline(timeline) when is_integer(timeline) and timeline >= 0, do: :ok
+  defp validate_timeline(_), do: {:error, invalid_adopt(:timeline_id)}
+
+  defp invalid_adopt(field),
+    do:
+      Error.exception(
+        reason: :checkpoint_adopt_invalid,
+        resource: nil,
+        op: :adopt,
+        shape: to_string(field)
+      )
+
+  defp adopt_row(config, identity, commit_lsn) do
+    filter = checkpoint_identity_filter(config, identity)
+
+    result =
+      config.repo.transaction(fn ->
+        case locked_slot_rows(config) do
+          [] ->
+            Ash.create!(
+              config.checkpoint_resource,
+              Map.merge(filter, %{commit_lsn: commit_lsn}),
+              action: :upsert,
+              upsert?: true,
+              upsert_identity: :source_slot,
+              upsert_fields: [:commit_lsn],
+              authorize?: false,
+              return_notifications?: true
+            )
+
+            :ok
+
+          [row] ->
+            if row.source_system_id == filter.source_system_id and
+                 row.source_database == filter.source_database and
+                 row.slot_name == filter.slot_name do
+              # Idempotent: the identical bound row already exists.
+              :ok
+            else
+              config.repo.rollback(
+                Error.exception(
+                  reason: :checkpoint_adopt_conflict,
+                  resource: config.checkpoint_resource,
+                  op: :adopt
+                )
+              )
+            end
+
+          _many ->
+            config.repo.rollback(
+              Error.exception(
+                reason: :checkpoint_adopt_conflict,
+                resource: config.checkpoint_resource,
+                op: :adopt
+              )
+            )
+        end
+      end)
+
+    case result do
+      {:ok, :ok} -> :ok
+      {:error, %Error{} = error} -> {:error, error}
+      {:error, other} -> {:error, Error.scrub(other, config.checkpoint_resource, :adopt)}
+    end
+  end
+
+  defp reset_row(config, identity) do
+    filter = checkpoint_identity_filter(config, identity)
+
+    result =
+      config.repo.transaction(fn ->
+        for row <- locked_triple_rows(config, filter) do
+          Ash.destroy!(row,
+            action: :operator_reset,
+            authorize?: false,
+            return_notifications?: true
+          )
+        end
+
+        :ok
+      end)
+
+    case result do
+      {:ok, :ok} -> :ok
+      {:error, %Error{} = error} -> {:error, error}
+      {:error, other} -> {:error, Error.scrub(other, config.checkpoint_resource, :reset)}
+    end
+  end
+
+  defp acknowledge_timeline(config, identity, timeline_id) do
+    filter = checkpoint_identity_filter(config, identity)
+
+    result =
+      config.repo.transaction(fn ->
+        case locked_triple_rows(config, filter) do
+          [%{source_timeline: stored}] = rows when is_integer(stored) ->
+            if stored == timeline_id do
+              :ok
+            else
+              for row <- rows do
+                Ash.create!(
+                  config.checkpoint_resource,
+                  Map.merge(checkpoint_filter_from(config, row), %{source_timeline: timeline_id}),
+                  action: :upsert,
+                  upsert?: true,
+                  upsert_identity: :source_slot,
+                  upsert_fields: [:source_timeline],
+                  authorize?: false,
+                  return_notifications?: true
+                )
+              end
+
+              :ok
+            end
+
+          [_row] ->
+            config.repo.rollback(
+              Error.exception(
+                reason: :checkpoint_unbound,
+                resource: config.checkpoint_resource,
+                op: :acknowledge_timeline
+              )
+            )
+
+          _many_or_none ->
+            config.repo.rollback(
+              Error.exception(
+                reason: :checkpoint_unbound,
+                resource: config.checkpoint_resource,
+                op: :acknowledge_timeline
+              )
+            )
+        end
+      end)
+
+    case result do
+      {:ok, :ok} ->
+        :ok
+
+      {:error, %Error{} = error} ->
+        {:error, error}
+
+      {:error, other} ->
+        {:error, Error.scrub(other, config.checkpoint_resource, :acknowledge_timeline)}
+    end
+  end
+
+  defp checkpoint_identity_filter(config, identity) do
+    %{
+      source_system_id: identity.system_identifier,
+      source_database: identity.database,
+      slot_name: config.slot_name
+    }
+  end
+
+  defp checkpoint_filter_from(_config, row) do
+    %{
+      source_system_id: row.source_system_id,
+      source_database: row.source_database,
+      slot_name: row.slot_name
+    }
+  end
+
+  # Slot-wide locked read (adopt's conflict surface: every row owning the name).
+  defp locked_slot_rows(config) do
+    import Ash.Query, only: [filter: 2]
+
+    config.checkpoint_resource
+    |> filter(slot_name == ^config.slot_name)
+    |> Ash.read!(lock: :for_update, authorize?: false)
+    |> List.wrap()
+  end
+
+  # Exact-triple locked read (reset/acknowledge: only the operator's own row).
+  defp locked_triple_rows(config, filter) do
+    import Ash.Query, only: [filter: 2]
+
+    config.checkpoint_resource
+    |> filter(
+      slot_name == ^filter.slot_name and source_system_id == ^filter.source_system_id and
+        source_database == ^filter.source_database
+    )
+    |> Ash.read!(lock: :for_update, authorize?: false)
+    |> List.wrap()
+  end
+
   @doc false
   @spec run_callback(String.t(), module(), :read | :mutate, (map() -> term())) :: term()
   def run_callback(slot_name, sink, mode, effect)
@@ -348,7 +625,13 @@ defmodule AshReplicant do
   end
 
   defp validate_source_identity(opts) do
-    with identity when is_list(identity) <- Keyword.get(opts, :source_identity),
+    opts
+    |> Keyword.get(:source_identity)
+    |> validate_identity_fields()
+  end
+
+  defp validate_identity_fields(identity) do
+    with identity when is_list(identity) <- identity,
          {:ok, system_identifier} <- nonempty_binary(Keyword.get(identity, :system_identifier)),
          {:ok, database} <- nonempty_binary(Keyword.get(identity, :database)) do
       {:ok, %{system_identifier: system_identifier, database: database}}

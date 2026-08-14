@@ -26,6 +26,9 @@ defmodule AshReplicant.Error do
           | :source_behind_watermark
           | :publication_contract_incompatible
           | :checkpoint_unbound
+          | :checkpoint_adopt_conflict
+          | :checkpoint_adopt_invalid
+          | :checkpoint_legacy_rows_present
           | {:invalid_destination_config, :onetime_store}
 
   @type t :: %__MODULE__{
