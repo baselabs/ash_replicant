@@ -180,8 +180,25 @@ defmodule AshReplicant.EffectOnceTest do
       "ALTER TABLE ash_replicant_checkpoints ADD CONSTRAINT tmp_block CHECK (commit_lsn < 0) NOT VALID"
     )
 
+    query_ref = make_ref()
+    test_pid = self()
+
+    :telemetry.attach(
+      {__MODULE__, query_ref},
+      [:ash_replicant, :test_repo, :query],
+      fn _event, _measurements, metadata, _config ->
+        if is_binary(metadata[:query]) and
+             String.contains?(metadata.query, ~s(INSERT INTO "#{Marquee.mirror()}")) do
+          send(test_pid, {:mapped_statement_executed, query_ref})
+        end
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach({__MODULE__, query_ref}) end)
+
     Marquee.q!("INSERT INTO #{Marquee.src()} (id, note) VALUES ('2', 'b')")
-    Process.sleep(500)
+    assert_receive {:mapped_statement_executed, ^query_ref}, 15_000
     assert Marquee.mirror_rows() == [["1", "a"]]
     assert_effect_counts(run_id, 1, 1, 1)
     assert_onetime_effect_counts(run_id, 1, 1, 1)

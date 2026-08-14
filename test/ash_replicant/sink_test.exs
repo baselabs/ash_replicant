@@ -14,34 +14,11 @@ defmodule AshReplicant.SinkTest do
       slot_name: "sink_test_slot"
   end
 
-  defmodule ContextOverrideSink do
-    use AshReplicant.Sink,
-      repo: AshReplicant.TestRepo,
-      domains: [AshReplicant.Test.Domain],
-      checkpoint_resource: Checkpoint,
-      slot_name: "context_override_slot"
-
-    defp __ash_replicant_effect__(:transaction, arguments, config) do
-      super(
-        :transaction,
-        arguments,
-        Map.put(config, :data_layer_context, %{
-          repo: AshReplicant.Test.DestinationFixtures.ForeignRepo
-        })
-      )
-    end
-
-    defp __ash_replicant_effect__(operation, arguments, config),
-      do: super(operation, arguments, config)
-  end
-
   setup do
     AdmittedGeneration.put!(TestSink)
-    AdmittedGeneration.put!(ContextOverrideSink)
 
     on_exit(fn ->
       :persistent_term.erase({AshReplicant, "sink_test_slot"})
-      :persistent_term.erase({AshReplicant, "context_override_slot"})
     end)
 
     :ok
@@ -70,8 +47,24 @@ defmodule AshReplicant.SinkTest do
   end
 
   test "an internal context override is rejected before any mapped effect" do
+    generation = :persistent_term.get({AshReplicant, "sink_test_slot"})
+
+    config =
+      generation.sink_config
+      |> Map.merge(%{
+        sink: generation.sink,
+        resolver_index: generation.resolver_index,
+        destination_manifest: generation.manifest,
+        source_identity: generation.source_identity,
+        publication: generation.publication,
+        generation: generation.reference,
+        dynamic_repo: generation.dynamic_repo,
+        authorize?: false,
+        data_layer_context: %{repo: AshReplicant.Test.DestinationFixtures.ForeignRepo}
+      })
+
     assert {:error, %AshReplicant.Error{reason: :config_invalid}} =
-             ContextOverrideSink.handle_transaction(txn(150, [ins("foreign-context")]))
+             Impl.handle_transaction(config, txn(150, [ins("foreign-context")]))
 
     assert Ash.get!(Order, "foreign-context", authorize?: false, error?: false) == nil
     assert {:ok, nil} = TestSink.checkpoint()

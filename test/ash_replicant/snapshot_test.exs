@@ -63,6 +63,8 @@ defmodule AshReplicant.SnapshotTest do
   end
 
   test "a snapshot batch with a failing row RAISES (stop_on_error), never silently swallows" do
+    Ash.create!(Order, %{id: "ghost", note: "old"}, action: :create, authorize?: false)
+
     bad = %Replicant.Change{
       op: :snapshot,
       schema: "public",
@@ -71,6 +73,8 @@ defmodule AshReplicant.SnapshotTest do
     }
 
     assert {:error, %AshReplicant.Error{}} = Sink.handle_snapshot([snap("1"), bad], ctx(true))
+    assert %Order{note: "old"} = Ash.get!(Order, "ghost", authorize?: false)
+    assert Ash.get!(Order, "1", authorize?: false, error?: false) == nil
   end
 
   test "handle_snapshot_complete durably sets the checkpoint to snapshot_lsn" do

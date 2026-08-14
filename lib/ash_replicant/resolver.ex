@@ -47,9 +47,7 @@ defmodule AshReplicant.Resolver do
     end)
   end
 
-  @doc "Returns the configured Replicant resources in deterministic module order."
-  @spec resources([module()]) :: [module()]
-  def resources(domains) when is_list(domains) do
+  defp resources(domains) when is_list(domains) do
     domains
     |> Enum.flat_map(&Ash.Domain.Info.resources/1)
     |> Enum.filter(&replicant_resource?/1)

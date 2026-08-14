@@ -7,6 +7,16 @@ defmodule AshReplicant.DestinationTest do
   alias Ecto.Adapters.SQL
   alias Ecto.Adapters.SQL.Sandbox
 
+  defmodule Scd2Domain do
+    @moduledoc false
+    use Ash.Domain, validate_config_inclusion?: false
+
+    resources do
+      resource AshReplicant.Test.OrderVersion
+      resource AshReplicant.Test.Checkpoint
+    end
+  end
+
   test "builds one deterministic closed manifest for mapped, auxiliary, and checkpoint actions" do
     config = DestinationFixtures.Sink.__ash_replicant_config__()
 
@@ -31,12 +41,47 @@ defmodule AshReplicant.DestinationTest do
     assert :ordinal in auxiliary.replay_identity.components
   end
 
+  test "generation fingerprint includes every core admission and execution module" do
+    config = DestinationFixtures.Sink.__ash_replicant_config__()
+    assert {:ok, manifest} = Destination.manifest(config)
+    assert {:ok, modules} = Destination.code_modules(DestinationFixtures.Sink, manifest)
+
+    for module <- [
+          AshReplicant,
+          AshReplicant.Apply,
+          AshReplicant.Apply.Scd2,
+          AshReplicant.Destination,
+          AshReplicant.DestinationParticipant,
+          AshReplicant.Resolver,
+          AshReplicant.Sink,
+          AshReplicant.Sink.Impl
+        ] do
+      assert module in modules
+    end
+  end
+
+  test "SCD2 history close action is part of the admitted root graph" do
+    assert {:ok, manifest} =
+             Destination.manifest(%{
+               repo: AshReplicant.TestRepo,
+               domains: [Scd2Domain],
+               checkpoint_resource: AshReplicant.Test.Checkpoint
+             })
+
+    assert Enum.any?(
+             manifest.entries,
+             &(&1.resource == AshReplicant.Test.OrderVersion and &1.action == :close_version and
+                 &1.role == :history_close)
+           )
+  end
+
   test "resolver resources and index share one deterministic mapped-resource enumeration" do
     domains = [DestinationFixtures.Domain]
 
-    assert [DestinationFixtures.Root] = AshReplicant.Resolver.resources(domains)
-    assert {:ok, index} = AshReplicant.Resolver.build_index(domains)
-    assert Map.values(index) == AshReplicant.Resolver.resources(domains)
+    assert {:ok, first} = AshReplicant.Resolver.build_index(domains)
+    assert {:ok, second} = AshReplicant.Resolver.build_index(domains)
+    assert first == second
+    assert Map.values(first) == [DestinationFixtures.Root]
   end
 
   test "unknown custom action code fails closed" do
@@ -65,6 +110,15 @@ defmodule AshReplicant.DestinationTest do
              Destination.manifest(%{
                repo: AshReplicant.TestRepo,
                domains: [DestinationFixtures.SimpleDomain],
+               checkpoint_resource: AshReplicant.Test.Checkpoint
+             })
+  end
+
+  test "non-Postgres auxiliary resource is rejected" do
+    assert {:error, {:destination_repo_not_postgres, DestinationFixtures.SimpleAuxiliary}} =
+             Destination.manifest(%{
+               repo: AshReplicant.TestRepo,
+               domains: [DestinationFixtures.SimpleAuxiliaryDomain],
                checkpoint_resource: AshReplicant.Test.Checkpoint
              })
   end
@@ -115,9 +169,9 @@ defmodule AshReplicant.DestinationTest do
              })
   end
 
-  test "opaque custom input type is rejected" do
+  test "opaque custom type in a non-writable result attribute is rejected" do
     assert {:error,
-            {:destination_participant_required, DestinationFixtures.OpaqueTypeRoot, :create,
+            {:destination_participant_required, DestinationFixtures.OpaqueTypeRoot, :read,
              DestinationFixtures.OpaqueType}} =
              Destination.manifest(%{
                repo: AshReplicant.TestRepo,
@@ -304,6 +358,67 @@ defmodule AshReplicant.DestinationTest do
              })
   end
 
+  test "undeclared custom validation is rejected" do
+    assert {:error,
+            {:destination_participant_required, DestinationFixtures.OpaqueValidationRoot, :create,
+             DestinationFixtures.OpaqueValidation}} =
+             Destination.manifest(%{
+               repo: AshReplicant.TestRepo,
+               domains: [DestinationFixtures.OpaqueValidationDomain],
+               checkpoint_resource: AshReplicant.Test.Checkpoint
+             })
+  end
+
+  test "empty participant action declaration is rejected" do
+    assert {:error, {:destination_participant_invalid, DestinationFixtures.MalformedChange}} =
+             Destination.manifest(%{
+               repo: AshReplicant.TestRepo,
+               domains: [DestinationFixtures.MalformedParticipantDomain],
+               checkpoint_resource: AshReplicant.Test.Checkpoint
+             })
+  end
+
+  test "mapped create, destroy, and SCD2-close actions cannot redirect the data-layer target" do
+    for {domain, resource, action, module} <- [
+          {DestinationFixtures.ContextRedirectCreateDomain,
+           DestinationFixtures.ContextRedirectCreateRoot, :create,
+           Ash.Resource.Change.SetContext},
+          {DestinationFixtures.ContextRedirectDestroyDomain,
+           DestinationFixtures.ContextRedirectDestroyRoot, :destroy,
+           Ash.Resource.Change.SetContext},
+          {DestinationFixtures.ContextRedirectScd2Domain,
+           DestinationFixtures.ContextRedirectScd2Root, :close_version,
+           Ash.Resource.Change.SetContext}
+        ] do
+      assert {:error, {:destination_participant_invalid, ^resource, ^action, ^module}} =
+               Destination.manifest(%{
+                 repo: AshReplicant.TestRepo,
+                 domains: [domain],
+                 checkpoint_resource: AshReplicant.Test.Checkpoint
+               })
+    end
+  end
+
+  test "checkpoint upsert cannot redirect the admitted data-layer target" do
+    assert {:error,
+            {:destination_participant_invalid, DestinationFixtures.ContextRedirectCheckpoint,
+             :upsert, Ash.Resource.Change.SetContext}} =
+             Destination.manifest(%{
+               repo: AshReplicant.TestRepo,
+               domains: [DestinationFixtures.Domain],
+               checkpoint_resource: DestinationFixtures.ContextRedirectCheckpoint
+             })
+  end
+
+  test "non-data-layer SetContext remains supported" do
+    assert {:ok, _manifest} =
+             Destination.manifest(%{
+               repo: AshReplicant.TestRepo,
+               domains: [DestinationFixtures.SafeContextDomain],
+               checkpoint_resource: AshReplicant.Test.Checkpoint
+             })
+  end
+
   test "unknown lifecycle wrapper fails closed" do
     assert {:error,
             {:destination_participant_required, DestinationFixtures.UnknownWrapperRoot, :create,
@@ -446,7 +561,7 @@ defmodule AshReplicant.DestinationTest do
     assert :ok = Destination.validate_onetime_entries([accepted])
   end
 
-  test "AshOnetime cache must declare its non-authoritative cache behaviour" do
+  test "AshOnetime cache must be the effect-free cache" do
     previous = Application.get_env(:ash_onetime, :cache)
     on_exit(fn -> restore_env(:ash_onetime, :cache, previous) end)
 
@@ -569,7 +684,7 @@ defmodule AshReplicant.DestinationTest do
              |> elem(1)
   end
 
-  test "operation keys are closed, deterministic, and ordinal-sensitive" do
+  test "operation keys are closed, deterministic, and sensitive to every identity axis" do
     context = %{
       source_system_identifier: "system",
       source_database: "source",
@@ -584,12 +699,25 @@ defmodule AshReplicant.DestinationTest do
     assert {:ok, ^first} =
              DestinationParticipant.operation_key(context, :auxiliary)
 
-    assert {:ok, second} =
-             context
-             |> Map.put(:ordinal, 1)
-             |> DestinationParticipant.operation_key(:auxiliary)
+    for {component, replacement} <- [
+          source_system_identifier: "other-system",
+          source_database: "other-source",
+          slot_name: "other-slot",
+          commit_lsn: 43,
+          ordinal: 1
+        ] do
+      assert {:ok, changed} =
+               context
+               |> Map.put(component, replacement)
+               |> DestinationParticipant.operation_key(:auxiliary)
 
-    refute first == second
+      refute first == changed, Atom.to_string(component)
+    end
+
+    assert {:ok, changed_participant} =
+             DestinationParticipant.operation_key(context, :other_auxiliary)
+
+    refute first == changed_participant
 
     assert {:error, :invalid_declaration} =
              context

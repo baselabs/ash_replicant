@@ -28,18 +28,6 @@ defmodule AshReplicant.StartLinkTest do
       domains: [AshReplicant.Test.Domain],
       checkpoint_resource: AshReplicant.Test.Checkpoint,
       slot_name: "lease_slot"
-
-    defp __ash_replicant_effect__(:transaction, [transaction], config) do
-      observer = :persistent_term.get({__MODULE__, :observer})
-      send(observer, {:inside_callback, self(), config.dynamic_repo})
-
-      receive do
-        :release_callback -> {:ok, transaction.commit_lsn}
-      end
-    end
-
-    defp __ash_replicant_effect__(operation, arguments, config),
-      do: super(operation, arguments, config)
   end
 
   @source_identity [system_identifier: "741852963", database: "postgres"]
@@ -393,17 +381,23 @@ defmodule AshReplicant.StartLinkTest do
   end
 
   test "stop waits for a mutating callback to leave the destination lease" do
-    :persistent_term.put({LeaseSink, :observer}, self())
+    observer = self()
 
     capture_log(fn ->
       assert {:ok, _pid} = AshReplicant.start_link(start_opts(sink: LeaseSink))
     end)
 
-    transaction = %Replicant.Transaction{commit_lsn: 777, changes: []}
-
     callback =
       Task.async(fn ->
-        result = LeaseSink.handle_transaction(transaction)
+        result =
+          AshReplicant.run_callback("lease_slot", LeaseSink, :mutate, fn config ->
+            send(observer, {:inside_callback, self(), config.dynamic_repo})
+
+            receive do
+              :release_callback -> {:ok, 777}
+            end
+          end)
+
         {result, AshReplicant.TestRepo.get_dynamic_repo()}
       end)
 
@@ -466,7 +460,43 @@ defmodule AshReplicant.StartLinkTest do
     end
   end
 
-  test "all generated public callbacks are final while the internal effect hook is overridable" do
+  test "hot-loaded code with unchanged sink config is rejected by the fingerprint" do
+    module = AshReplicant.Test.RuntimeDriftSink
+    previous_ignore = Code.get_compiler_option(:ignore_module_conflict)
+    Code.put_compiler_option(:ignore_module_conflict, true)
+
+    try do
+      compile_runtime_sink(module, [AshReplicant.Test.Domain], :first)
+
+      capture_log(fn ->
+        assert {:ok, _pid} = AshReplicant.start_link(start_opts(sink: module))
+      end)
+
+      compile_runtime_sink(module, [AshReplicant.Test.Domain], :second)
+      handle_schema_change = Function.capture(module, :handle_schema_change, 2)
+
+      assert {:error, %AshReplicant.Error{reason: :config_invalid}} =
+               handle_schema_change.(
+                 %Replicant.SchemaChange{
+                   kind: :additive,
+                   change: :column_added,
+                   schema: "public",
+                   table: "orders",
+                   detail: "structural"
+                 },
+                 %{}
+               )
+
+      assert :ok = AshReplicant.stop_supervised("runtime_drift_slot")
+    after
+      Code.put_compiler_option(:ignore_module_conflict, previous_ignore)
+      :persistent_term.erase({AshReplicant, "runtime_drift_slot"})
+      :code.purge(module)
+      :code.delete(module)
+    end
+  end
+
+  test "all generated public callbacks are final and no effect override hook exists" do
     [{sink, _bytecode}] =
       Code.compile_string("""
       defmodule AshReplicant.Test.FinalCallbacksSink do
@@ -479,10 +509,10 @@ defmodule AshReplicant.StartLinkTest do
         @callback_overrides for callback <- #{inspect(final_callbacks())},
                                into: %{},
                                do: {callback, Module.overridable?(__MODULE__, callback)}
-        @hook_overridable Module.overridable?(__MODULE__, {:__ash_replicant_effect__, 3})
+        @effect_hook_defined Module.defines?(__MODULE__, {:__ash_replicant_effect__, 3})
 
         def callback_overrides, do: @callback_overrides
-        def hook_overridable?, do: @hook_overridable
+        def effect_hook_defined?, do: @effect_hook_defined
       end
       """)
 
@@ -490,7 +520,7 @@ defmodule AshReplicant.StartLinkTest do
              not overridable?
            end)
 
-    assert sink.hook_overridable?()
+    refute sink.effect_hook_defined?()
   end
 
   test "attempting to redefine any generated callback fails compilation" do
@@ -538,7 +568,7 @@ defmodule AshReplicant.StartLinkTest do
     }
   end
 
-  defp compile_runtime_sink(module, domains) do
+  defp compile_runtime_sink(module, domains, marker \\ :stable) do
     Code.compile_string("""
     defmodule #{inspect(module)} do
       use AshReplicant.Sink,
@@ -546,6 +576,8 @@ defmodule AshReplicant.StartLinkTest do
         domains: #{inspect(domains)},
         checkpoint_resource: AshReplicant.Test.Checkpoint,
         slot_name: "runtime_drift_slot"
+
+      def runtime_marker, do: #{inspect(marker)}
     end
     """)
   end

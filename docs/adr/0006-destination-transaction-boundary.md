@@ -47,6 +47,9 @@ also not unique when one transaction contains several effects.
   commit or rollback and rechecks the generation around each participant and the
   checkpoint. Supported replacement is stop, then start and re-admit; in-place
   code/config drift fails closed.
+- Generated Replicant callbacks invoke the admitted `Sink.Impl` operations
+  directly and are final. There is no host-overridable effect hook that can
+  acknowledge delivery without the mapped actions and checkpoint.
 - Mapped writes continue through host Ash actions with `authorize?: false` and
   their nested transaction disabled so they join the sink's ambient transaction.
   Host validations, changes, AshCloak hooks, and tenancy run; host policies are not
@@ -61,11 +64,16 @@ also not unique when one transaction contains several effects.
   commit LSN, ordinal, and participant. `operation_key/2` derives the key supplied
   to the protected action. Nonce, independent-commit, external, opaque-store, and
   incomplete identity profiles are rejected.
+- Action and preparation `SetContext` declarations may not replace `:data_layer`;
+  admission rejects table/schema/Repo redirection. AshOnetime must use
+  `AshOnetime.Cache.None`; a behavior-conforming external cache is still an
+  out-of-transaction effect and is rejected.
 - Static AshOnetime relations are checked at activation. Context-tenant relations
   are checked inside the destination transaction under the resolved tenant before
   the protected action. Claims, auxiliary effects, stored responses, mapped rows,
   and checkpoint therefore commit or roll back together.
-- Append-only effect observers and fault switches are test-owned only. No
+- Append-only effect observers, callback sequencing, and fault switches are
+  compiled from test configuration only. No
   production `apply_ledger` API or table participates in the guarantee.
 - The currently exported delivery callbacks cover streaming transactions and
   Replicant v1 snapshot batches/handoff. Message actions, sink-owned transaction

@@ -7,6 +7,19 @@ defmodule AshReplicant.Destination do
   alias Ecto.Adapters.SQL
   alias Spark.Dsl.Extension, as: DslExtension
 
+  @core_code_modules [
+    AshReplicant,
+    AshReplicant.Apply,
+    AshReplicant.Apply.Scd2,
+    AshReplicant.Destination,
+    AshReplicant.DestinationParticipant,
+    AshReplicant.Error,
+    AshReplicant.Resolver,
+    AshReplicant.Resource.Info,
+    AshReplicant.Sink,
+    AshReplicant.Sink.Impl
+  ]
+
   defmodule Entry do
     @moduledoc false
     @enforce_keys [
@@ -209,7 +222,7 @@ defmodule AshReplicant.Destination do
   @spec code_modules(module(), Manifest.t()) :: {:ok, [module()]} | {:error, reason()}
   def code_modules(sink, %Manifest{} = manifest) when is_atom(sink) do
     modules =
-      [sink, manifest]
+      [sink, manifest | @core_code_modules]
       |> collect_modules(MapSet.new())
       |> then(fn modules ->
         Enum.reduce(manifest.entries, modules, fn entry, acc ->
@@ -405,13 +418,21 @@ defmodule AshReplicant.Destination do
 
   defp mapped_root_actions(domains) do
     domains
-    |> AshReplicant.Resolver.resources()
+    |> destination_resources()
     |> Enum.reduce_while({:ok, []}, fn resource, {:ok, roots} ->
       case mapped_resource_roots(resource) do
         {:ok, resource_roots} -> {:cont, {:ok, resource_roots ++ roots}}
         {:error, _reason} = error -> {:halt, error}
       end
     end)
+  end
+
+  defp destination_resources(domains) do
+    domains
+    |> Enum.flat_map(&Ash.Domain.Info.resources/1)
+    |> Enum.filter(&(AshReplicant.Resource in Spark.extensions(&1)))
+    |> Enum.uniq()
+    |> Enum.sort()
   end
 
   defp mapped_resource_roots(resource) do
@@ -600,7 +621,8 @@ defmodule AshReplicant.Destination do
 
   defp inspect_action_types(resource, action) do
     fields =
-      action.arguments ++
+      Ash.Resource.Info.attributes(resource) ++
+        action.arguments ++
         accepted_attributes(resource, action) ++
         runtime_default_attributes(resource, action) ++
         Map.get(action, :metadata, []) ++ return_type(action)
@@ -845,10 +867,10 @@ defmodule AshReplicant.Destination do
 
   defp inspect_item(module, opts, context)
        when module in [Ash.Resource.Change.SetContext, Ash.Resource.Preparation.SetContext] do
-    if is_map(Keyword.get(opts, :context)) do
+    if safe_context?(Keyword.get(opts, :context)) do
       {:ok, []}
     else
-      inspect_provider(module, opts, context)
+      {:error, {:destination_participant_invalid, context.resource, context.action, module}}
     end
   end
 
@@ -874,6 +896,11 @@ defmodule AshReplicant.Destination do
   defp inspect_item(module, opts, context) when is_atom(module) do
     inspect_provider(module, opts, context)
   end
+
+  defp safe_context?(context) when is_map(context),
+    do: not Map.has_key?(context, :data_layer) and not Map.has_key?(context, "data_layer")
+
+  defp safe_context?(_context), do: false
 
   defp inspect_provider(module, opts, context) when is_atom(module) do
     if participant?(module) do
@@ -961,7 +988,7 @@ defmodule AshReplicant.Destination do
          true <- protection.scope == replay_scope(participant),
          true <- private_operation_key?(action),
          true <- valid_onetime_response?(protection.response),
-         true <- classified_cache?() do
+         true <- effect_free_cache?() do
       :ok
     else
       _other -> {:error, {:destination_participant_invalid, AshOnetime.Resource}}
@@ -1029,19 +1056,8 @@ defmodule AshReplicant.Destination do
 
   defp valid_onetime_response?(_response), do: false
 
-  defp classified_cache? do
-    module = Application.get_env(:ash_onetime, :cache, AshOnetime.Cache.None)
-
-    Code.ensure_loaded?(module) and AshOnetime.Cache in behaviours(module)
-  end
-
-  defp behaviours(module) do
-    module.__info__(:attributes)
-    |> Keyword.get_values(:behaviour)
-    |> List.flatten()
-  rescue
-    _error -> []
-  end
+  defp effect_free_cache?,
+    do: Application.get_env(:ash_onetime, :cache, AshOnetime.Cache.None) == AshOnetime.Cache.None
 
   defp relationship_refs(module, opts, context) do
     relationship_name = Keyword.get(opts, :relationship)

@@ -73,6 +73,29 @@ defmodule AshReplicant.Test.DestinationFixtures do
     def destination_participants(_opts, %Context{}), do: {:error, :invalid_declaration}
   end
 
+  defmodule MalformedChange do
+    @moduledoc false
+    use Ash.Resource.Change
+    @behaviour AshReplicant.DestinationParticipant
+
+    @impl Ash.Resource.Change
+    def change(changeset, _opts, _context), do: changeset
+
+    @impl AshReplicant.DestinationParticipant
+    def destination_participants(_opts, %Context{}), do: {:ok, {:actions, []}}
+  end
+
+  defmodule OpaqueValidation do
+    @moduledoc false
+    use Ash.Resource.Validation
+
+    @impl Ash.Resource.Validation
+    def supports(_opts), do: [Ash.Changeset]
+
+    @impl Ash.Resource.Validation
+    def validate(_changeset, _opts, _context), do: :ok
+  end
+
   defmodule MissingActionChange do
     @moduledoc false
     use Ash.Resource.Change
@@ -109,6 +132,27 @@ defmodule AshReplicant.Test.DestinationFixtures do
         [
           %ActionRef{
             resource: AshReplicant.Test.DestinationFixtures.ForeignAuxiliary,
+            action: :record
+          }
+        ]}}
+    end
+  end
+
+  defmodule SimpleAuxiliaryChange do
+    @moduledoc false
+    use Ash.Resource.Change
+    @behaviour AshReplicant.DestinationParticipant
+
+    @impl Ash.Resource.Change
+    def change(changeset, _opts, _context), do: changeset
+
+    @impl AshReplicant.DestinationParticipant
+    def destination_participants(_opts, %Context{}) do
+      {:ok,
+       {:actions,
+        [
+          %ActionRef{
+            resource: AshReplicant.Test.DestinationFixtures.SimpleAuxiliary,
             action: :record
           }
         ]}}
@@ -221,9 +265,15 @@ defmodule AshReplicant.Test.DestinationFixtures do
 
   defmodule OpaqueCache do
     @moduledoc false
+    @behaviour AshOnetime.Cache
 
+    @impl AshOnetime.Cache
     def get(_key), do: :miss
+
+    @impl AshOnetime.Cache
     def put(_key, _entry, _ttl), do: :ok
+
+    @impl AshOnetime.Cache
     def delete(_key), do: :ok
   end
 
@@ -690,11 +740,14 @@ defmodule AshReplicant.Test.DestinationFixtures do
 
     attributes do
       uuid_primary_key :id
-      attribute :custom, AshReplicant.Test.DestinationFixtures.OpaqueType, public?: true
+
+      attribute :custom, AshReplicant.Test.DestinationFixtures.OpaqueType,
+        public?: true,
+        writable?: false
     end
 
     actions do
-      defaults [:read, :destroy, create: [:custom]]
+      defaults [:read, :destroy, create: []]
     end
   end
 
@@ -927,6 +980,54 @@ defmodule AshReplicant.Test.DestinationFixtures do
 
     actions do
       defaults [:read, :destroy, create: :*]
+    end
+  end
+
+  defmodule SimpleAuxiliary do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.Test.DestinationFixtures.SimpleAuxiliaryDomain,
+      data_layer: Ash.DataLayer.Simple
+
+    attributes do
+      uuid_primary_key :id
+    end
+
+    actions do
+      defaults [:read]
+      create :record, accept: []
+    end
+  end
+
+  defmodule SimpleAuxiliaryRoot do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.Test.DestinationFixtures.SimpleAuxiliaryDomain,
+      data_layer: AshPostgres.DataLayer,
+      extensions: [AshReplicant.Resource]
+
+    postgres do
+      table "destination_simple_auxiliary_roots"
+      repo AshReplicant.TestRepo
+    end
+
+    replicant do
+      source_table("destination_simple_auxiliary_source_roots")
+    end
+
+    attributes do
+      uuid_primary_key :id
+    end
+
+    actions do
+      defaults [:read, :destroy]
+
+      create :create do
+        primary? true
+        accept []
+        touches_resources [AshReplicant.Test.DestinationFixtures.SimpleAuxiliary]
+        change AshReplicant.Test.DestinationFixtures.SimpleAuxiliaryChange
+      end
     end
   end
 
@@ -1554,6 +1655,235 @@ defmodule AshReplicant.Test.DestinationFixtures do
     end
   end
 
+  defmodule OpaqueValidationRoot do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.Test.DestinationFixtures.OpaqueValidationDomain,
+      data_layer: AshPostgres.DataLayer,
+      extensions: [AshReplicant.Resource]
+
+    postgres do
+      table "destination_opaque_validation_roots"
+      repo AshReplicant.TestRepo
+    end
+
+    replicant do
+      source_table("destination_opaque_validation_source_roots")
+    end
+
+    attributes do
+      uuid_primary_key :id
+    end
+
+    actions do
+      defaults [:read, :destroy]
+
+      create :create do
+        primary? true
+        accept []
+        validate AshReplicant.Test.DestinationFixtures.OpaqueValidation
+      end
+    end
+  end
+
+  defmodule MalformedParticipantRoot do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.Test.DestinationFixtures.MalformedParticipantDomain,
+      data_layer: AshPostgres.DataLayer,
+      extensions: [AshReplicant.Resource]
+
+    postgres do
+      table "destination_malformed_participant_roots"
+      repo AshReplicant.TestRepo
+    end
+
+    replicant do
+      source_table("destination_malformed_participant_source_roots")
+    end
+
+    attributes do
+      uuid_primary_key :id
+    end
+
+    actions do
+      defaults [:read, :destroy]
+
+      create :create do
+        primary? true
+        accept []
+        change AshReplicant.Test.DestinationFixtures.MalformedChange
+      end
+    end
+  end
+
+  defmodule ContextRedirectCreateRoot do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.Test.DestinationFixtures.ContextRedirectCreateDomain,
+      data_layer: AshPostgres.DataLayer,
+      extensions: [AshReplicant.Resource]
+
+    postgres do
+      table "destination_context_redirect_create_roots"
+      repo AshReplicant.TestRepo
+    end
+
+    replicant do
+      source_table("destination_context_redirect_create_sources")
+    end
+
+    attributes do
+      uuid_primary_key :id
+    end
+
+    actions do
+      defaults [:read, :destroy]
+
+      create :create do
+        primary? true
+        accept []
+        change set_context(%{data_layer: %{table: "unmanifested_create_target"}})
+      end
+    end
+  end
+
+  defmodule ContextRedirectDestroyRoot do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.Test.DestinationFixtures.ContextRedirectDestroyDomain,
+      data_layer: AshPostgres.DataLayer,
+      extensions: [AshReplicant.Resource]
+
+    postgres do
+      table "destination_context_redirect_destroy_roots"
+      repo AshReplicant.TestRepo
+    end
+
+    replicant do
+      source_table("destination_context_redirect_destroy_sources")
+    end
+
+    attributes do
+      uuid_primary_key :id
+    end
+
+    actions do
+      defaults [:read, create: :*]
+
+      destroy :destroy do
+        primary? true
+        change set_context(%{data_layer: %{schema: "unmanifested_destroy_schema"}})
+      end
+    end
+  end
+
+  defmodule SafeContextRoot do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.Test.DestinationFixtures.SafeContextDomain,
+      data_layer: AshPostgres.DataLayer,
+      extensions: [AshReplicant.Resource]
+
+    postgres do
+      table "destination_safe_context_roots"
+      repo AshReplicant.TestRepo
+    end
+
+    replicant do
+      source_table("destination_safe_context_sources")
+    end
+
+    attributes do
+      uuid_primary_key :id
+    end
+
+    actions do
+      defaults [:read, :destroy]
+
+      create :create do
+        primary? true
+        accept []
+        change set_context(%{private: %{safe_marker: true}})
+      end
+    end
+  end
+
+  defmodule ContextRedirectScd2Root do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.Test.DestinationFixtures.ContextRedirectScd2Domain,
+      data_layer: AshPostgres.DataLayer,
+      extensions: [AshReplicant.Resource]
+
+    postgres do
+      table "destination_context_redirect_scd2_roots"
+      repo AshReplicant.TestRepo
+    end
+
+    replicant do
+      source_table("destination_context_redirect_scd2_sources")
+      history_strategy(:scd2)
+      history_business_key([:business_id])
+      upsert_identity(:version)
+      history_close_action(:close_version)
+      history_current_attribute(:is_current)
+    end
+
+    attributes do
+      uuid_primary_key :id
+      attribute :business_id, :string, allow_nil?: false
+      attribute :valid_from_lsn, :integer, allow_nil?: false
+      attribute :valid_to_lsn, :integer
+      attribute :is_current, :boolean, allow_nil?: false, default: true
+    end
+
+    identities do
+      identity :version, [:business_id, :valid_from_lsn]
+    end
+
+    actions do
+      defaults [:read, :destroy, create: :*]
+
+      update :close_version do
+        accept [:valid_to_lsn, :is_current]
+        change set_context(%{data_layer: %{table: "unmanifested_scd2_target"}})
+      end
+    end
+  end
+
+  defmodule ContextRedirectCheckpoint do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.Test.DestinationFixtures.ContextRedirectCheckpointDomain,
+      data_layer: AshPostgres.DataLayer
+
+    postgres do
+      table "destination_context_redirect_checkpoints"
+      repo AshReplicant.TestRepo
+    end
+
+    attributes do
+      attribute :slot_name, :string, primary_key?: true, allow_nil?: false
+      attribute :commit_lsn, :integer, allow_nil?: false
+    end
+
+    identities do
+      identity :unique_slot, [:slot_name]
+    end
+
+    actions do
+      defaults [:read]
+
+      create :upsert do
+        upsert? true
+        upsert_identity :unique_slot
+        accept [:slot_name, :commit_lsn]
+        change set_context(%{data_layer: %{table: "unmanifested_checkpoint_target"}})
+      end
+    end
+  end
+
   defmodule UnknownWrapperRoot do
     @moduledoc false
     use Ash.Resource,
@@ -1872,6 +2202,17 @@ defmodule AshReplicant.Test.DestinationFixtures do
     end
   end
 
+  defmodule SimpleAuxiliaryDomain do
+    @moduledoc false
+    use Ash.Domain, validate_config_inclusion?: false
+
+    resources do
+      resource AshReplicant.Test.DestinationFixtures.SimpleAuxiliaryRoot
+      resource AshReplicant.Test.DestinationFixtures.SimpleAuxiliary
+      resource AshReplicant.Test.Checkpoint
+    end
+  end
+
   defmodule GenericDomain do
     @moduledoc false
     use Ash.Domain, validate_config_inclusion?: false
@@ -2089,6 +2430,75 @@ defmodule AshReplicant.Test.DestinationFixtures do
       resource AshReplicant.Test.DestinationFixtures.RelateActorRoot
       resource AshReplicant.Test.DestinationFixtures.ForeignChild
       resource AshReplicant.Test.Checkpoint
+    end
+  end
+
+  defmodule OpaqueValidationDomain do
+    @moduledoc false
+    use Ash.Domain, validate_config_inclusion?: false
+
+    resources do
+      resource AshReplicant.Test.DestinationFixtures.OpaqueValidationRoot
+      resource AshReplicant.Test.Checkpoint
+    end
+  end
+
+  defmodule MalformedParticipantDomain do
+    @moduledoc false
+    use Ash.Domain, validate_config_inclusion?: false
+
+    resources do
+      resource AshReplicant.Test.DestinationFixtures.MalformedParticipantRoot
+      resource AshReplicant.Test.Checkpoint
+    end
+  end
+
+  defmodule ContextRedirectCreateDomain do
+    @moduledoc false
+    use Ash.Domain, validate_config_inclusion?: false
+
+    resources do
+      resource AshReplicant.Test.DestinationFixtures.ContextRedirectCreateRoot
+      resource AshReplicant.Test.Checkpoint
+    end
+  end
+
+  defmodule ContextRedirectDestroyDomain do
+    @moduledoc false
+    use Ash.Domain, validate_config_inclusion?: false
+
+    resources do
+      resource AshReplicant.Test.DestinationFixtures.ContextRedirectDestroyRoot
+      resource AshReplicant.Test.Checkpoint
+    end
+  end
+
+  defmodule SafeContextDomain do
+    @moduledoc false
+    use Ash.Domain, validate_config_inclusion?: false
+
+    resources do
+      resource AshReplicant.Test.DestinationFixtures.SafeContextRoot
+      resource AshReplicant.Test.Checkpoint
+    end
+  end
+
+  defmodule ContextRedirectScd2Domain do
+    @moduledoc false
+    use Ash.Domain, validate_config_inclusion?: false
+
+    resources do
+      resource AshReplicant.Test.DestinationFixtures.ContextRedirectScd2Root
+      resource AshReplicant.Test.Checkpoint
+    end
+  end
+
+  defmodule ContextRedirectCheckpointDomain do
+    @moduledoc false
+    use Ash.Domain, validate_config_inclusion?: false
+
+    resources do
+      resource AshReplicant.Test.DestinationFixtures.ContextRedirectCheckpoint
     end
   end
 

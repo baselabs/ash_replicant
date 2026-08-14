@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Raise the 1.0.0 dependency floor to audit-clean Ash 3.31.3 and exclude Ash 4
   prereleases; resolve Postgrex 0.22.4 and ymlr 5.1.6 so `mix hex.audit` and
   `mix deps.audit` report no known advisories.
+- Make generated delivery callbacks invoke the admitted sink implementation
+  directly; remove the overridable effect hook that could acknowledge WAL without
+  applying rows/checkpointing. Reject data-layer `SetContext` redirection and
+  behavior-conforming external AshOnetime caches at destination admission.
 
 ### Added
 

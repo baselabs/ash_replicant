@@ -126,6 +126,11 @@ source-system/database/slot/commit-LSN/ordinal/participant identity. Use
 opaque-store, or incomplete-identity profiles. Static stores preflight at activation;
 context-tenant stores preflight inside the outer transaction.
 
+Generated delivery callbacks are final and call `Sink.Impl` directly. Never add a
+host-overridable effect hook. Reject `SetContext` changes/preparations that replace
+`:data_layer`, and require `AshOnetime.Cache.None`; both otherwise create effects
+outside the admitted action/transaction boundary.
+
 Current v1 snapshot batches are atomic, but an incomplete multi-batch restart can
 physically repeat committed batch effects before rebuilding the target. Do not claim
 snapshot-wide physical effect-once until C3 proves zero repeats. Message, sink-owned

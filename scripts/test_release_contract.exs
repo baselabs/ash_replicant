@@ -63,6 +63,11 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     exit 1
   fi
 
+  if test -e "$package_dir/priv"; then
+    echo "::error::Package contains private migrations"
+    exit 1
+  fi
+
   if find "$package_dir" -type f \\( -name '.env*' -o -name '*.pem' -o -name '*.key' \\) -print -quit | grep -q .; then
     echo "::error::Package contains a credential-shaped file"
     exit 1

@@ -289,6 +289,11 @@ relationships and declared custom actions, and rejects a missing action, foreign
 dynamic Repo, non-Postgres data layer, recursive cycle, or `touches_resources`
 mismatch before delivery.
 
+Generated sink callbacks are final and invoke the admitted implementation
+directly; hosts cannot override an effect hook to bypass apply/checkpoint. A
+`SetContext` change or preparation that replaces `:data_layer` is rejected, as is
+any AshOnetime cache other than the effect-free `AshOnetime.Cache.None`.
+
 Arbitrary changes, validations, preparations, manual actions, callbacks, custom
 types, and tenant resolvers must implement `AshReplicant.DestinationParticipant`.
 Return `:no_database` or literal Ash resource/action references. Declarations are

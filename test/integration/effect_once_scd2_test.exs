@@ -419,6 +419,11 @@ defmodule AshReplicant.EffectOnceScd2Test do
       assert "mapped" in participants
       assert "checkpoint" in participants
       assert Enum.count(rows, &(&1.participant == "checkpoint")) == 1
+
+      mapped_inserts =
+        Enum.count(rows, &(&1.participant == "mapped" and &1.operation == "INSERT"))
+
+      assert Enum.count(rows, &(&1.participant == "auxiliary")) == mapped_inserts
     end)
   end
 end

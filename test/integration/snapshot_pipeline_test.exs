@@ -1,4 +1,20 @@
 defmodule AshReplicant.SnapshotPipelineTest do
+  @moduledoc """
+  The v1 snapshot pipeline, observed through PUBLIC boundaries only: Replicant/
+  AshReplicant telemetry, a test-owned database trigger (the mid-snapshot failure
+  injection), the DestinationObserver write ledger, and durable mirror/checkpoint
+  state. No production interception surface.
+
+  The sequencing test needs no lock: `[:replicant, :snapshot, :started]` fires
+  from the snapshotter only AFTER the slot's exported snapshot (the consistent
+  point) exists, so a source write from that moment on is invisible to the
+  snapshot read and must arrive via the stream — deterministically. The
+  handoff-instant mirror state is captured INSIDE the
+  `[:ash_replicant, :snapshot, :complete]` handler: the handler runs in the
+  snapshotter before `handle_snapshot_complete/1` returns, so streaming cannot
+  have started and the read is race-free.
+  """
+
   use ExUnit.Case, async: false
   @moduletag :integration
   @moduletag timeout: 120_000
@@ -11,10 +27,8 @@ defmodule AshReplicant.SnapshotPipelineTest do
   @snapshot_slot "snapshot_pipeline_slot"
   @retry_slot "snapshot_retry_slot"
   @sequence_slot "snapshot_sequence_slot"
-  @retry_key {__MODULE__, :fail_second_batch}
-  @retry_observer {__MODULE__, :retry_observer}
-  @sequence_observer {__MODULE__, :sequence_observer}
-  @sequence_trace {__MODULE__, :sequence_trace}
+  @fail_second_batch_trigger "repl_fail_snapshot_second_batch"
+  @fail_second_batch_function "repl_fail_snapshot_second_batch_fn"
 
   defmodule SnapshotSink do
     @moduledoc false
@@ -32,31 +46,6 @@ defmodule AshReplicant.SnapshotPipelineTest do
       domains: [AshReplicant.Test.Marquee.Domain],
       checkpoint_resource: AshReplicant.Test.Checkpoint,
       slot_name: "snapshot_retry_slot"
-
-    defp __ash_replicant_effect__(
-           :snapshot,
-           [changes, %{first_for_table?: false} = context],
-           config
-         ) do
-      if :persistent_term.get(
-           {AshReplicant.SnapshotPipelineTest, :fail_second_batch},
-           false
-         ) do
-        :persistent_term.put({AshReplicant.SnapshotPipelineTest, :fail_second_batch}, false)
-
-        send(
-          :persistent_term.get({AshReplicant.SnapshotPipelineTest, :retry_observer}),
-          :snapshot_failure_injected
-        )
-
-        {:error, :injected_snapshot_failure}
-      else
-        super(:snapshot, [changes, context], config)
-      end
-    end
-
-    defp __ash_replicant_effect__(operation, arguments, config),
-      do: super(operation, arguments, config)
   end
 
   defmodule SequencedSnapshotSink do
@@ -66,48 +55,6 @@ defmodule AshReplicant.SnapshotPipelineTest do
       domains: [AshReplicant.Test.Marquee.Domain],
       checkpoint_resource: AshReplicant.Test.Checkpoint,
       slot_name: "snapshot_sequence_slot"
-
-    defp __ash_replicant_effect__(
-           :snapshot,
-           [changes, %{first_for_table?: true, snapshot_lsn: snapshot_lsn} = context],
-           config
-         ) do
-      observer = :persistent_term.get({AshReplicant.SnapshotPipelineTest, :sequence_observer})
-      send(observer, {:snapshot_paused, self(), snapshot_lsn})
-
-      receive do
-        :continue_snapshot -> super(:snapshot, [changes, context], config)
-      after
-        15_000 -> raise "snapshot sequencing release not received"
-      end
-    end
-
-    defp __ash_replicant_effect__(:snapshot_complete, [snapshot_lsn] = arguments, config) do
-      result = super(:snapshot_complete, arguments, config)
-      trace(:snapshot_complete)
-      observer = :persistent_term.get({AshReplicant.SnapshotPipelineTest, :sequence_observer})
-      send(observer, {:handoff_paused, self(), snapshot_lsn})
-
-      receive do
-        :continue_handoff -> result
-      after
-        15_000 -> raise "snapshot handoff release not received"
-      end
-    end
-
-    defp __ash_replicant_effect__(:transaction, arguments, config) do
-      trace(:transaction)
-      super(:transaction, arguments, config)
-    end
-
-    defp __ash_replicant_effect__(operation, arguments, config),
-      do: super(operation, arguments, config)
-
-    defp trace(event) do
-      {AshReplicant.SnapshotPipelineTest, :sequence_trace}
-      |> :persistent_term.get()
-      |> Agent.update(&(&1 ++ [event]))
-    end
   end
 
   setup do
@@ -124,12 +71,6 @@ defmodule AshReplicant.SnapshotPipelineTest do
       Marquee.q!("DELETE FROM ash_replicant_checkpoints WHERE slot_name = $1", [slot])
     end
 
-    :persistent_term.put(@retry_key, false)
-    :persistent_term.put(@retry_observer, self())
-    :persistent_term.put(@sequence_observer, self())
-    {:ok, trace} = Agent.start_link(fn -> [] end)
-    :persistent_term.put(@sequence_trace, trace)
-
     on_exit(fn ->
       for slot <- [@snapshot_slot, @retry_slot, @sequence_slot] do
         AshReplicant.stop_supervised(slot)
@@ -137,15 +78,12 @@ defmodule AshReplicant.SnapshotPipelineTest do
         Marquee.q!("DELETE FROM ash_replicant_checkpoints WHERE slot_name = $1", [slot])
       end
 
-      :persistent_term.erase(@retry_key)
-      :persistent_term.erase(@retry_observer)
-      :persistent_term.erase(@sequence_observer)
-      :persistent_term.erase(@sequence_trace)
+      drop_second_batch_failure!()
       DestinationObserver.teardown!(observer_triggers())
       Marquee.teardown_schema!()
     end)
 
-    {:ok, run_id: run_id, trace: trace}
+    {:ok, run_id: run_id}
   end
 
   test "v1 snapshot converges, hands off its checkpoint, and resumes ordinary streaming", %{
@@ -210,18 +148,27 @@ defmodule AshReplicant.SnapshotPipelineTest do
     on_exit(fn -> :telemetry.detach({__MODULE__, :incomplete}) end)
 
     capture_log(fn ->
-      :persistent_term.put(@retry_key, true)
+      # Fail EXACTLY the second batch, content-independently: the snapshotter
+      # delivers 1000-row batches, so the first mirror insert that can see >= 1000
+      # committed mapped-INSERT ledger rows (batch 1, durably applied) is
+      # necessarily in a later batch. The raised error aborts the sink's write
+      # transaction, the snapshotter rolls its read transaction back, and the
+      # reconnect halts on the incomplete slot.
+      install_second_batch_failure!(run_id)
+
       start_snapshot!(@retry_slot, RetrySnapshotSink)
 
-      assert_receive :snapshot_failure_injected, 60_000
       assert_receive :snapshot_incomplete, 60_000
 
       PG.wait_until(fn ->
         Registry.lookup(Replicant.Registry, {@retry_slot, :pipeline}) == []
       end)
 
+      # Batch 1 is durably applied; the failed batch left no rows.
       assert length(Marquee.mirror_rows()) == 1000
 
+      # Operator reset: remove the injected failure, then re-run from scratch.
+      drop_second_batch_failure!()
       :ok = AshReplicant.stop_supervised(@retry_slot)
       Marquee.drop_slot!(@retry_slot)
       start_snapshot!(@retry_slot, RetrySnapshotSink)
@@ -235,31 +182,47 @@ defmodule AshReplicant.SnapshotPipelineTest do
   end
 
   test "the exported snapshot point hands off before a later source write reaches the stream",
-       %{run_id: run_id, trace: trace} do
+       %{run_id: run_id} do
     Marquee.q!("""
     INSERT INTO #{Marquee.src()} (id, note)
     SELECT g::text, 'seed-' || g::text FROM generate_series(1, 25) g
     """)
 
+    started_ref = attach_snapshot_started()
+    handoff_ref = attach_handoff_capture()
+    applied_ref = attach_stream_applied()
+
     start_snapshot!(@sequence_slot, SequencedSnapshotSink)
-    assert_receive {:snapshot_paused, snapshot_pid, snapshot_lsn}, 15_000
+
+    # The export barrier: :started fires after the consistent point exists, so a
+    # write from here on is committed AFTER the export — invisible to the
+    # snapshot read, and necessarily in the WAL past the consistent point.
+    assert_receive {:snapshot_started, ^started_ref}, 15_000
+    Marquee.q!("INSERT INTO #{Marquee.src()} (id, note) VALUES ('26', 'after-export')")
+
+    assert_receive {:handoff, ^handoff_ref, snapshot_lsn, handoff_rows}, 15_000
     assert is_integer(snapshot_lsn) and snapshot_lsn > 0
 
-    Marquee.q!("INSERT INTO #{Marquee.src()} (id, note) VALUES ('26', 'after-export')")
-    assert Marquee.mirror_rows() == []
+    # Handoff-instant state: EXACTLY the 25 exported rows — the post-export write
+    # is neither in the snapshot nor streamed yet.
+    assert length(handoff_rows) == 25
+    refute ["26", "after-export"] in handoff_rows
 
-    send(snapshot_pid, :continue_snapshot)
-    assert_receive {:handoff_paused, handoff_pid, ^snapshot_lsn}, 15_000
+    # The durable handoff: the checkpoint sits at the snapshot's consistent point.
+    assert [[^snapshot_lsn]] =
+             Marquee.q!(
+               "SELECT commit_lsn FROM ash_replicant_checkpoints WHERE slot_name = $1",
+               [@sequence_slot]
+             ).rows
 
-    assert length(Marquee.mirror_rows()) == 25
-    refute ["26", "after-export"] in Marquee.mirror_rows()
-    assert Agent.get(trace, & &1) == [:snapshot_complete]
+    # The post-export write arrives via the STREAM, causally after the handoff,
+    # at a commit LSN past the consistent point.
+    assert_receive {:stream_applied, ^applied_ref, applied_lsn}, 15_000
+    assert is_integer(applied_lsn) and applied_lsn > snapshot_lsn
 
-    send(handoff_pid, :continue_handoff)
-    PG.wait_until(fn -> ["26", "after-export"] in Marquee.mirror_rows() end)
+    PG.wait_until(fn -> length(Marquee.mirror_rows()) == 26 end)
+    assert ["26", "after-export"] in Marquee.mirror_rows()
 
-    assert [:snapshot_complete, :transaction | _rest] = Agent.get(trace, & &1)
-    assert length(Marquee.mirror_rows()) == 26
     PG.wait_until(fn -> observer_checkpoint_count(run_id) == 2 end)
     assert DestinationObserver.effect_count(run_id, "mapped", "INSERT") == 26
     assert DestinationObserver.effect_count(run_id, "auxiliary", "INSERT") == 26
@@ -317,6 +280,87 @@ defmodule AshReplicant.SnapshotPipelineTest do
     on_exit(fn -> :telemetry.detach({__MODULE__, ref}) end)
     assert slot == @snapshot_slot
     ref
+  end
+
+  defp attach_snapshot_started do
+    ref = make_ref()
+    test_pid = self()
+
+    :telemetry.attach(
+      {__MODULE__, ref},
+      [:replicant, :snapshot, :started],
+      fn _event, _measurements, _metadata, _config ->
+        send(test_pid, {:snapshot_started, ref})
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach({__MODULE__, ref}) end)
+    ref
+  end
+
+  # Captures the mirror EXACTLY at the handoff instant: the handler runs inside
+  # `handle_snapshot_complete/1`'s success path (after the checkpoint transaction
+  # committed, before the callback returns), so streaming cannot have started and
+  # an in-handler read is race-free.
+  defp attach_handoff_capture do
+    ref = make_ref()
+    test_pid = self()
+
+    :telemetry.attach(
+      {__MODULE__, ref},
+      [:ash_replicant, :snapshot, :complete],
+      fn _event, _measurements, metadata, _config ->
+        send(test_pid, {:handoff, ref, metadata.commit_lsn, Marquee.mirror_rows()})
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach({__MODULE__, ref}) end)
+    ref
+  end
+
+  defp attach_stream_applied do
+    ref = make_ref()
+    test_pid = self()
+
+    :telemetry.attach(
+      {__MODULE__, ref},
+      [:ash_replicant, :sink, :applied],
+      fn _event, _measurements, metadata, _config ->
+        send(test_pid, {:stream_applied, ref, metadata.commit_lsn})
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach({__MODULE__, ref}) end)
+    ref
+  end
+
+  defp install_second_batch_failure!(run_id) do
+    Marquee.q!("""
+    CREATE FUNCTION #{@fail_second_batch_function}() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN
+      IF (SELECT count(*) FROM #{DestinationObserver.table()}
+          WHERE run_id = '#{run_id}' AND participant = 'mapped' AND operation = 'INSERT') >= 1000 THEN
+        RAISE EXCEPTION 'injected snapshot batch failure';
+      END IF;
+      RETURN NEW;
+    END
+    $$
+    """)
+
+    Marquee.q!(
+      "CREATE TRIGGER #{@fail_second_batch_trigger} BEFORE INSERT ON #{Marquee.mirror()} FOR EACH ROW EXECUTE FUNCTION #{@fail_second_batch_function}()"
+    )
+
+    :ok
+  end
+
+  defp drop_second_batch_failure! do
+    Marquee.q!("DROP TRIGGER IF EXISTS #{@fail_second_batch_trigger} ON #{Marquee.mirror()}")
+    Marquee.q!("DROP FUNCTION IF EXISTS #{@fail_second_batch_function}()")
+    :ok
   end
 
   defp observer_triggers do

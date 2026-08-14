@@ -274,6 +274,11 @@ delivery on a foreign/dynamic Repo, non-Postgres resource, missing action, recur
 participant cycle, or mismatch between the discovered closure and the containing
 action's `touches_resources`.
 
+Generated callbacks call the admitted sink implementation directly and cannot be
+overridden through an internal effect hook. Admission rejects `SetContext` values
+that replace `:data_layer`, and AshOnetime-protected participants must use
+`AshOnetime.Cache.None` so cache work cannot escape rollback.
+
 Custom changes, validations, preparations, manual actions, callbacks, types, and
 tenant resolvers implement `AshReplicant.DestinationParticipant` and return either
 `:no_database` or literal resource/action references:

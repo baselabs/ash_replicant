@@ -332,8 +332,8 @@ defmodule AshReplicant.Sink.Impl do
     # attribute-multitenant table (raises TenantRequired), so delete tenant-blind
     # on the mirror's own table, inside the snapshot transaction. Works uniformly
     # for non-tenant, global-tenant, and non-global-tenant resources. The table /
-    # schema come from the resource DSL (operator trust boundary, like
-    # maybe_append_ledger), not from a row value.
+    # schema come from the resource DSL at the admitted destination boundary,
+    # never from a row value.
     schema = PGInfo.schema(resource) || "public"
     table = PGInfo.table(resource)
     SQL.query!(config.repo, ~s(DELETE FROM "#{schema}"."#{table}"), [])

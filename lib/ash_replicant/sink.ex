@@ -65,21 +65,21 @@ defmodule AshReplicant.Sink do
       @impl Replicant.Sink
       def handle_session_identity(identity, context) do
         AshReplicant.run_callback(unquote(slot_name), __MODULE__, :read, fn config ->
-          __ash_replicant_effect__(:session_identity, [identity, context], config)
+          Impl.handle_session_identity(config, identity, context)
         end)
       end
 
       @impl Replicant.Sink
       def checkpoint do
         AshReplicant.run_callback(unquote(slot_name), __MODULE__, :read, fn config ->
-          __ash_replicant_effect__(:checkpoint, [], config)
+          Impl.checkpoint(config)
         end)
       end
 
       @impl Replicant.Sink
       def handle_transaction(txn) do
         AshReplicant.run_callback(unquote(slot_name), __MODULE__, :mutate, fn config ->
-          __ash_replicant_effect__(:transaction, [txn], config)
+          Impl.handle_transaction(config, txn)
         end)
       end
 
@@ -89,43 +89,23 @@ defmodule AshReplicant.Sink do
       @impl Replicant.Sink
       def handle_schema_change(sc, ctx) do
         AshReplicant.run_callback(unquote(slot_name), __MODULE__, :read, fn config ->
-          __ash_replicant_effect__(:schema_change, [sc, ctx], config)
+          Impl.handle_schema_change(config, sc, ctx)
         end)
       end
 
       @impl Replicant.Sink
       def handle_snapshot(changes, ctx) do
         AshReplicant.run_callback(unquote(slot_name), __MODULE__, :mutate, fn config ->
-          __ash_replicant_effect__(:snapshot, [changes, ctx], config)
+          Impl.handle_snapshot(config, changes, ctx)
         end)
       end
 
       @impl Replicant.Sink
       def handle_snapshot_complete(lsn) do
         AshReplicant.run_callback(unquote(slot_name), __MODULE__, :mutate, fn config ->
-          __ash_replicant_effect__(:snapshot_complete, [lsn], config)
+          Impl.handle_snapshot_complete(config, lsn)
         end)
       end
-
-      defp __ash_replicant_effect__(:session_identity, [identity, context], config),
-        do: Impl.handle_session_identity(config, identity, context)
-
-      defp __ash_replicant_effect__(:checkpoint, [], config),
-        do: Impl.checkpoint(config)
-
-      defp __ash_replicant_effect__(:transaction, [transaction], config),
-        do: Impl.handle_transaction(config, transaction)
-
-      defp __ash_replicant_effect__(:schema_change, [schema_change, context], config),
-        do: Impl.handle_schema_change(config, schema_change, context)
-
-      defp __ash_replicant_effect__(:snapshot, [changes, context], config),
-        do: Impl.handle_snapshot(config, changes, context)
-
-      defp __ash_replicant_effect__(:snapshot_complete, [lsn], config),
-        do: Impl.handle_snapshot_complete(config, lsn)
-
-      defoverridable __ash_replicant_effect__: 3
 
       @on_definition {AshReplicant.Sink, :__on_definition__}
     end
