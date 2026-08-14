@@ -48,7 +48,6 @@ defmodule AshReplicant.Destination do
     Ash.Resource.Change.Increment,
     Ash.Resource.Change.OptimisticLock,
     Ash.Resource.Change.PreventChange,
-    Ash.Resource.Change.RelateActor,
     Ash.Resource.Change.Select,
     Ash.Resource.Change.SetAttribute,
     Ash.Resource.Change.SetContext
@@ -98,7 +97,20 @@ defmodule AshReplicant.Destination do
   @relationship_changes [
     Ash.Resource.Change.ManageRelationship,
     Ash.Resource.Change.CascadeDestroy,
-    Ash.Resource.Change.CascadeUpdate
+    Ash.Resource.Change.CascadeUpdate,
+    Ash.Resource.Change.RelateActor
+  ]
+
+  @safe_default_callbacks [
+    {Ash.UUID, :generate, 0},
+    {Ash.UUIDv7, :generate, 0},
+    {DateTime, :utc_now, 0}
+  ]
+
+  @safe_onetime_callbacks [
+    AshOnetime.Codec.ActionResult,
+    AshOnetime.Codec.JSON,
+    AshOnetime.Codec.Resource
   ]
 
   @type reason ::
@@ -318,8 +330,10 @@ defmodule AshReplicant.Destination do
     Enum.reduce_while(fields, {:ok, []}, fn field, {:ok, refs} ->
       context = %Context{resource: resource, action: action.name, kind: :type}
 
-      case inspect_type(field.type, Map.get(field, :constraints, []), context) do
-        {:ok, found} -> {:cont, {:ok, refs ++ found}}
+      with {:ok, found} <- inspect_type(field.type, Map.get(field, :constraints, []), context),
+           {:ok, defaults} <- inspect_field_defaults(field, context) do
+        {:cont, {:ok, refs ++ found ++ defaults}}
+      else
         {:error, _reason} = error -> {:halt, error}
       end
     end)
@@ -341,18 +355,88 @@ defmodule AshReplicant.Destination do
 
   defp return_type(_action), do: []
 
-  defp inspect_type({:array, type}, constraints, context) do
-    inspect_type(type, Keyword.get(constraints, :items, []), context)
+  defp inspect_type(type, constraints, context),
+    do: inspect_type(type, constraints, context, %{})
+
+  defp inspect_type({:array, type}, constraints, context, seen) do
+    inspect_type(type, Keyword.get(constraints, :items, []), context, seen)
   end
 
-  defp inspect_type(type, constraints, context) do
+  defp inspect_type(type, constraints, context, seen) do
     module = Ash.Type.get_type!(type)
+    key = {module, constraints}
 
-    if Ash.Type.builtin?(module) do
+    if Map.has_key?(seen, key) do
       {:ok, []}
     else
-      inspect_provider(module, constraints, context)
+      seen = Map.put(seen, key, true)
+
+      with {:ok, own_refs} <- inspect_type_module(module, constraints, context),
+           {:ok, nested_refs} <- inspect_referenced_types(module, constraints, context, seen) do
+        {:ok, own_refs ++ nested_refs}
+      end
     end
+  end
+
+  defp inspect_type_module(module, constraints, context) do
+    if Ash.Type.builtin?(module),
+      do: {:ok, []},
+      else: inspect_provider(module, constraints, context)
+  end
+
+  defp inspect_referenced_types(module, constraints, context, seen) do
+    references =
+      if function_exported?(module, :referenced_types, 1),
+        do: module.referenced_types(constraints),
+        else: []
+
+    Enum.reduce_while(references, {:ok, []}, fn {type, nested_constraints, _via}, {:ok, refs} ->
+      case inspect_type(type, nested_constraints, context, seen) do
+        {:ok, found} -> {:cont, {:ok, refs ++ found}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp inspect_field_defaults(field, context) do
+    [:default, :update_default]
+    |> Enum.map(&Map.get(field, &1))
+    |> Enum.reduce_while({:ok, []}, fn default, {:ok, refs} ->
+      case inspect_default(default, %{context | kind: :callback}) do
+        {:ok, found} -> {:cont, {:ok, refs ++ found}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp inspect_default(nil, _context), do: {:ok, []}
+
+  defp inspect_default(default, context) when is_function(default) do
+    module = default |> Function.info(:module) |> elem(1)
+    name = default |> Function.info(:name) |> elem(1)
+    arity = default |> Function.info(:arity) |> elem(1)
+
+    cond do
+      {module, name, arity} in @safe_default_callbacks ->
+        {:ok, []}
+
+      generated_default?(name) ->
+        {:error, {:destination_participant_required, context.resource, context.action, Function}}
+
+      true ->
+        inspect_provider(module, [function: name, arity: arity], context)
+    end
+  end
+
+  defp inspect_default({module, function, args}, context)
+       when is_atom(module) and is_atom(function) and is_list(args),
+       do: inspect_provider(module, [function: function, arity: length(args)], context)
+
+  defp inspect_default(_literal, _context), do: {:ok, []}
+
+  defp generated_default?(name) do
+    value = Atom.to_string(name)
+    String.starts_with?(value, "-") or String.starts_with?(value, "default_")
   end
 
   defp inspect_tenant_resolver(resource, action)
@@ -386,8 +470,10 @@ defmodule AshReplicant.Destination do
   defp inspect_manual(nil, _context), do: {:ok, []}
 
   defp inspect_manual({AshOnetime.GenericAction, opts}, context) do
-    with :ok <- validate_wrapper_protection(opts, context) do
-      inspect_manual(Keyword.get(opts, :original), context)
+    with :ok <- validate_wrapper_protection(opts, context),
+         {:ok, protection_refs} <- inspect_onetime_protection(context),
+         {:ok, original_refs} <- inspect_manual(Keyword.get(opts, :original), context) do
+      {:ok, protection_refs ++ original_refs}
     end
   end
 
@@ -401,8 +487,8 @@ defmodule AshReplicant.Destination do
 
   defp inspect_items(resource, action, items, kind) do
     Enum.reduce_while(items, {:ok, []}, fn item, {:ok, refs} ->
-      {module, opts} = item_module_opts(item, kind)
-      context = %Context{resource: resource, action: action.name, kind: kind}
+      {module, opts, actual_kind} = item_module_opts(item, kind)
+      context = %Context{resource: resource, action: action.name, kind: actual_kind}
 
       with {:ok, found} <- inspect_item(module, opts, context),
            {:ok, conditional} <- inspect_raw_items(Map.get(item, :where, []), context) do
@@ -445,7 +531,7 @@ defmodule AshReplicant.Destination do
   defp inspect_item(module, opts, context)
        when module in [AshOnetime.Change, AshOnetime.GenericAction] do
     case validate_wrapper_protection(opts, context) do
-      :ok -> {:ok, []}
+      :ok -> inspect_onetime_protection(context)
       {:error, _reason} = error -> error
     end
   end
@@ -535,8 +621,47 @@ defmodule AshReplicant.Destination do
   end
 
   defp relationship_action_refs(Ash.Resource.Change.ManageRelationship, opts, relationship, _) do
-    helper = Ash.Changeset.ManagedRelationshipHelpers
     manage_opts = Keyword.get(opts, :opts, [])
+
+    managed_relationship_refs(manage_opts, relationship)
+  end
+
+  defp relationship_action_refs(Ash.Resource.Change.RelateActor, _opts, relationship, _) do
+    if relationship.type == :belongs_to do
+      {:ok, []}
+    else
+      manage_opts =
+        :append_and_remove
+        |> Ash.Changeset.manage_relationship_opts()
+        |> Keyword.put(:authorize?, false)
+
+      managed_relationship_refs(manage_opts, relationship)
+    end
+  end
+
+  defp relationship_action_refs(module, opts, relationship, destination) do
+    type = if module == Ash.Resource.Change.CascadeDestroy, do: :destroy, else: :update
+
+    action_name =
+      Keyword.get(opts, :action) || Ash.Resource.Info.primary_action!(destination, type).name
+
+    action = Ash.Resource.Info.action(destination, action_name)
+
+    read_action =
+      Keyword.get(opts, :read_action) ||
+        Map.get(relationship, :read_action) ||
+        Map.get(action || %{}, :atomic_upgrade_with) ||
+        Ash.Resource.Info.primary_action!(destination, :read).name
+
+    {:ok,
+     [
+       {%ActionRef{resource: destination, action: read_action}, :framework},
+       {%ActionRef{resource: destination, action: action_name}, :framework}
+     ]}
+  end
+
+  defp managed_relationship_refs(manage_opts, relationship) do
+    helper = Ash.Changeset.ManagedRelationshipHelpers
 
     refs =
       [
@@ -554,23 +679,6 @@ defmodule AshReplicant.Destination do
     {:ok, Enum.map(refs, &{&1, :framework})}
   rescue
     _error -> {:error, {:destination_participant_invalid, Ash.Resource.Change.ManageRelationship}}
-  end
-
-  defp relationship_action_refs(module, opts, _relationship, destination) do
-    type = if module == Ash.Resource.Change.CascadeDestroy, do: :destroy, else: :update
-
-    action =
-      Keyword.get(opts, :action) || Ash.Resource.Info.primary_action!(destination, type).name
-
-    read_action =
-      Keyword.get(opts, :read_action) ||
-        Ash.Resource.Info.primary_action!(destination, :read).name
-
-    {:ok,
-     [
-       {%ActionRef{resource: destination, action: read_action}, :framework},
-       {%ActionRef{resource: destination, action: action}, :framework}
-     ]}
   end
 
   defp managed_action_ref({:destination, action}, relationship),
@@ -653,13 +761,18 @@ defmodule AshReplicant.Destination do
 
   defp action_preparations(_resource, _action), do: []
 
-  defp item_module_opts(item, field) do
-    value = Map.get(item, field)
+  defp item_module_opts(item, fallback_kind) do
+    kind =
+      Enum.find([:change, :validation, :preparation], fallback_kind, fn field ->
+        not is_nil(Map.get(item, field))
+      end)
+
+    value = Map.get(item, kind)
 
     case value do
-      {module, opts} when is_atom(module) and is_list(opts) -> {module, opts}
-      module when is_atom(module) -> {module, []}
-      _other -> {Function, []}
+      {module, opts} when is_atom(module) and is_list(opts) -> {module, opts, kind}
+      module when is_atom(module) -> {module, [], kind}
+      _other -> {Function, [], kind}
     end
   end
 
@@ -690,6 +803,62 @@ defmodule AshReplicant.Destination do
       {:error, {:destination_participant_invalid, AshOnetime.Resource}}
     end
   end
+
+  defp inspect_onetime_protection(context) do
+    case AshOnetime.Resource.Info.protection(context.resource, context.action) do
+      %{external_effect: external_effect} when not is_nil(external_effect) ->
+        {:error, {:destination_participant_invalid, external_effect}}
+
+      protection when is_map(protection) ->
+        protection
+        |> onetime_callback_modules()
+        |> inspect_onetime_callbacks(context)
+
+      _other ->
+        {:error, {:destination_participant_invalid, AshOnetime.Resource}}
+    end
+  end
+
+  defp inspect_onetime_callbacks(callbacks, context) do
+    Enum.reduce_while(callbacks, {:ok, []}, fn {module, opts}, {:ok, refs} ->
+      case inspect_onetime_callback(module, opts, %{context | kind: :callback}) do
+        {:ok, found} -> {:cont, {:ok, refs ++ found}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp onetime_callback_modules(protection) do
+    scope_modules =
+      for {:tenant, module} <- List.wrap(protection.scope), do: {module, [function: :resolve]}
+
+    key_modules =
+      protection.key
+      |> List.wrap()
+      |> Enum.flat_map(fn
+        {:verified, _name, module} -> [{module, [function: :verify]}]
+        {:minted, module} -> [{module, [function: :mint]}]
+        _source -> []
+      end)
+
+    response_modules =
+      case protection.response do
+        %{codec: codec, classify: classifier} ->
+          [{codec, [function: :encode]}, {classifier, [function: :classify]}]
+
+        _other ->
+          []
+      end
+
+    Enum.uniq(scope_modules ++ key_modules ++ response_modules)
+  end
+
+  defp inspect_onetime_callback(module, _opts, _context)
+       when module in @safe_onetime_callbacks,
+       do: {:ok, []}
+
+  defp inspect_onetime_callback(module, opts, context),
+    do: inspect_provider(module, opts, context)
 
   defp normalized_protection(resource, action) do
     case AshOnetime.Resource.Info.protection(resource, action) do

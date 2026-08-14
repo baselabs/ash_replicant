@@ -178,6 +178,7 @@ defmodule AshReplicant.Test.DestinationFixtures do
   defmodule ProofVerifier do
     @moduledoc false
     @behaviour AshOnetime.Verifier
+    @behaviour AshReplicant.DestinationParticipant
 
     @impl AshOnetime.Verifier
     def verify(_raw_token, _context), do: {:error, :invalid}
@@ -187,6 +188,39 @@ defmodule AshReplicant.Test.DestinationFixtures do
 
     @impl AshOnetime.Verifier
     def trust_model, do: :same_service
+
+    @impl AshReplicant.DestinationParticipant
+    def destination_participants(_opts, %Context{}), do: {:ok, :no_database}
+  end
+
+  defmodule OpaqueProofVerifier do
+    @moduledoc false
+    @behaviour AshOnetime.Verifier
+
+    @impl AshOnetime.Verifier
+    def verify(_raw_token, _context), do: {:error, :invalid}
+
+    @impl AshOnetime.Verifier
+    def algorithm, do: :hmac_sha256
+
+    @impl AshOnetime.Verifier
+    def trust_model, do: :same_service
+  end
+
+  defmodule OpaquePreparation do
+    @moduledoc false
+    use Ash.Resource.Preparation
+
+    @impl Ash.Resource.Preparation
+    def prepare(query, _opts, _context), do: query
+  end
+
+  defmodule UnknownWrapper do
+    @moduledoc false
+    use Ash.Resource.Change
+
+    @impl Ash.Resource.Change
+    def change(changeset, _opts, _context), do: changeset
   end
 
   defmodule OnetimeAuxiliaryChange do
@@ -239,6 +273,13 @@ defmodule AshReplicant.Test.DestinationFixtures do
       :persistent_term.put(@probe, true)
       AshReplicant.TestRepo
     end
+  end
+
+  defmodule SplitRepo do
+    @moduledoc false
+
+    def resolve(_resource, :read), do: AshReplicant.TestRepo
+    def resolve(_resource, :mutate), do: AshReplicant.Test.DestinationFixtures.ForeignRepo
   end
 
   defmodule ForeignRepo do
@@ -927,7 +968,7 @@ defmodule AshReplicant.Test.DestinationFixtures do
     end
 
     actions do
-      defaults [:read, :destroy, create: :*]
+      defaults [:read, :destroy, create: :*, update: :*]
     end
   end
 
@@ -1009,6 +1050,301 @@ defmodule AshReplicant.Test.DestinationFixtures do
                  on_missing: :ignore,
                  on_lookup: :ignore
                )
+      end
+    end
+  end
+
+  defmodule SplitRepoRoot do
+    @moduledoc false
+    alias AshReplicant.Test.DestinationFixtures.SplitRepo
+
+    use Ash.Resource,
+      domain: AshReplicant.Test.DestinationFixtures.SplitRepoDomain,
+      data_layer: AshPostgres.DataLayer,
+      extensions: [AshReplicant.Resource]
+
+    postgres do
+      table "destination_split_repo_roots"
+      repo &SplitRepo.resolve/2
+    end
+
+    replicant do
+      source_table("destination_split_repo_source_roots")
+    end
+
+    attributes do
+      uuid_primary_key :id
+    end
+
+    actions do
+      defaults [:read, :destroy, create: :*]
+    end
+  end
+
+  defmodule UnionTypeRoot do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.Test.DestinationFixtures.UnionTypeDomain,
+      data_layer: AshPostgres.DataLayer,
+      extensions: [AshReplicant.Resource]
+
+    postgres do
+      table "destination_union_type_roots"
+      repo AshReplicant.TestRepo
+    end
+
+    replicant do
+      source_table("destination_union_type_source_roots")
+    end
+
+    attributes do
+      uuid_primary_key :id
+    end
+
+    actions do
+      defaults [:read, :destroy]
+
+      create :create do
+        primary? true
+        accept []
+
+        argument :payload, :union,
+          constraints: [types: [opaque: [type: AshReplicant.Test.DestinationFixtures.OpaqueType]]]
+      end
+    end
+  end
+
+  defmodule AnonymousDefaultRoot do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.Test.DestinationFixtures.AnonymousDefaultDomain,
+      data_layer: AshPostgres.DataLayer,
+      extensions: [AshReplicant.Resource]
+
+    postgres do
+      table "destination_anonymous_default_roots"
+      repo AshReplicant.TestRepo
+    end
+
+    replicant do
+      source_table("destination_anonymous_default_source_roots")
+    end
+
+    attributes do
+      uuid_primary_key :id
+    end
+
+    actions do
+      defaults [:read, :destroy]
+
+      create :create do
+        primary? true
+        accept []
+        argument :generated, :string, default: fn -> "generated" end
+      end
+    end
+  end
+
+  defmodule ValidationRoot do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.Test.DestinationFixtures.ValidationDomain,
+      data_layer: AshPostgres.DataLayer,
+      extensions: [AshReplicant.Resource]
+
+    postgres do
+      table "destination_validation_roots"
+      repo AshReplicant.TestRepo
+    end
+
+    replicant do
+      source_table("destination_validation_source_roots")
+    end
+
+    attributes do
+      uuid_primary_key :id
+    end
+
+    actions do
+      defaults [:read, :destroy]
+
+      create :create do
+        primary? true
+        accept []
+        validate present(:id)
+      end
+    end
+  end
+
+  defmodule UnknownWrapperRoot do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.Test.DestinationFixtures.UnknownWrapperDomain,
+      data_layer: AshPostgres.DataLayer,
+      extensions: [AshReplicant.Resource]
+
+    postgres do
+      table "destination_unknown_wrapper_roots"
+      repo AshReplicant.TestRepo
+    end
+
+    replicant do
+      source_table("destination_unknown_wrapper_source_roots")
+    end
+
+    attributes do
+      uuid_primary_key :id
+    end
+
+    actions do
+      defaults [:read, :destroy]
+
+      create :create do
+        primary? true
+        accept []
+        change AshReplicant.Test.DestinationFixtures.UnknownWrapper
+      end
+    end
+  end
+
+  defmodule OnetimeOpaqueRoot do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.Test.DestinationFixtures.OnetimeOpaqueDomain,
+      data_layer: AshPostgres.DataLayer,
+      extensions: [AshReplicant.Resource, AshOnetime.Resource]
+
+    postgres do
+      table "destination_onetime_opaque_roots"
+      repo AshReplicant.TestRepo
+    end
+
+    replicant do
+      source_table("destination_onetime_opaque_source_roots")
+    end
+
+    attributes do
+      uuid_primary_key :id
+    end
+
+    actions do
+      defaults [:read, :destroy]
+
+      create :create do
+        primary? true
+        transaction? true
+        argument :proof, :string, allow_nil?: false
+        accept []
+      end
+    end
+
+    onetime do
+      protect :create do
+        strategy :one_time_nonce
+        scope([{:static, "destination-onetime-opaque"}])
+        key({:verified, :proof, AshReplicant.Test.DestinationFixtures.OpaqueProofVerifier})
+        window(max_age: {5, :minute}, clock_skew: {30, :second})
+      end
+    end
+  end
+
+  defmodule CascadeReadChild do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.Test.DestinationFixtures.CascadeReadDomain,
+      data_layer: AshPostgres.DataLayer
+
+    postgres do
+      table "destination_cascade_read_children"
+      repo AshReplicant.TestRepo
+    end
+
+    attributes do
+      uuid_primary_key :id
+      attribute :root_id, :uuid, allow_nil?: false
+    end
+
+    actions do
+      defaults [:read, :destroy, create: :*]
+
+      read :unsafe_read do
+        prepare AshReplicant.Test.DestinationFixtures.OpaquePreparation
+      end
+    end
+  end
+
+  defmodule CascadeReadRoot do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.Test.DestinationFixtures.CascadeReadDomain,
+      data_layer: AshPostgres.DataLayer,
+      extensions: [AshReplicant.Resource]
+
+    postgres do
+      table "destination_cascade_read_roots"
+      repo AshReplicant.TestRepo
+    end
+
+    replicant do
+      source_table("destination_cascade_read_source_roots")
+    end
+
+    attributes do
+      uuid_primary_key :id
+    end
+
+    relationships do
+      has_many :children, AshReplicant.Test.DestinationFixtures.CascadeReadChild do
+        destination_attribute :root_id
+        read_action :unsafe_read
+      end
+    end
+
+    actions do
+      defaults [:read, create: :*]
+
+      destroy :destroy do
+        primary? true
+        touches_resources [AshReplicant.Test.DestinationFixtures.CascadeReadChild]
+        change cascade_destroy(:children)
+      end
+    end
+  end
+
+  defmodule RelateActorRoot do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.Test.DestinationFixtures.RelateActorDomain,
+      data_layer: AshPostgres.DataLayer,
+      extensions: [AshReplicant.Resource]
+
+    postgres do
+      table "destination_relate_actor_roots"
+      repo AshReplicant.TestRepo
+    end
+
+    replicant do
+      source_table("destination_relate_actor_source_roots")
+    end
+
+    attributes do
+      uuid_primary_key :id
+    end
+
+    relationships do
+      has_one :child, AshReplicant.Test.DestinationFixtures.ForeignChild do
+        destination_attribute :root_id
+      end
+    end
+
+    actions do
+      defaults [:read, :destroy]
+
+      create :create do
+        primary? true
+        accept []
+        touches_resources [AshReplicant.Test.DestinationFixtures.ForeignChild]
+        change relate_actor(:child)
       end
     end
   end
@@ -1229,6 +1565,88 @@ defmodule AshReplicant.Test.DestinationFixtures do
 
     resources do
       resource AshReplicant.Test.DestinationFixtures.CascadeRoot
+      resource AshReplicant.Test.DestinationFixtures.ForeignChild
+      resource AshReplicant.Test.Checkpoint
+    end
+  end
+
+  defmodule SplitRepoDomain do
+    @moduledoc false
+    use Ash.Domain, validate_config_inclusion?: false
+
+    resources do
+      resource AshReplicant.Test.DestinationFixtures.SplitRepoRoot
+      resource AshReplicant.Test.Checkpoint
+    end
+  end
+
+  defmodule UnionTypeDomain do
+    @moduledoc false
+    use Ash.Domain, validate_config_inclusion?: false
+
+    resources do
+      resource AshReplicant.Test.DestinationFixtures.UnionTypeRoot
+      resource AshReplicant.Test.Checkpoint
+    end
+  end
+
+  defmodule AnonymousDefaultDomain do
+    @moduledoc false
+    use Ash.Domain, validate_config_inclusion?: false
+
+    resources do
+      resource AshReplicant.Test.DestinationFixtures.AnonymousDefaultRoot
+      resource AshReplicant.Test.Checkpoint
+    end
+  end
+
+  defmodule ValidationDomain do
+    @moduledoc false
+    use Ash.Domain, validate_config_inclusion?: false
+
+    resources do
+      resource AshReplicant.Test.DestinationFixtures.ValidationRoot
+      resource AshReplicant.Test.Checkpoint
+    end
+  end
+
+  defmodule UnknownWrapperDomain do
+    @moduledoc false
+    use Ash.Domain, validate_config_inclusion?: false
+
+    resources do
+      resource AshReplicant.Test.DestinationFixtures.UnknownWrapperRoot
+      resource AshReplicant.Test.Checkpoint
+    end
+  end
+
+  defmodule OnetimeOpaqueDomain do
+    @moduledoc false
+    use Ash.Domain, validate_config_inclusion?: false
+
+    resources do
+      resource AshReplicant.Test.DestinationFixtures.OnetimeOpaqueRoot
+      resource AshReplicant.Test.Checkpoint
+    end
+  end
+
+  defmodule CascadeReadDomain do
+    @moduledoc false
+    use Ash.Domain, validate_config_inclusion?: false
+
+    resources do
+      resource AshReplicant.Test.DestinationFixtures.CascadeReadRoot
+      resource AshReplicant.Test.DestinationFixtures.CascadeReadChild
+      resource AshReplicant.Test.Checkpoint
+    end
+  end
+
+  defmodule RelateActorDomain do
+    @moduledoc false
+    use Ash.Domain, validate_config_inclusion?: false
+
+    resources do
+      resource AshReplicant.Test.DestinationFixtures.RelateActorRoot
       resource AshReplicant.Test.DestinationFixtures.ForeignChild
       resource AshReplicant.Test.Checkpoint
     end

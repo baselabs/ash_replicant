@@ -169,6 +169,15 @@ defmodule AshReplicant.DestinationTest do
     refute :persistent_term.get(key, false)
   end
 
+  test "split read and mutate Repo callable is rejected without invocation" do
+    assert {:error, {:destination_repo_dynamic, DestinationFixtures.SplitRepoRoot}} =
+             Destination.manifest(%{
+               repo: AshReplicant.TestRepo,
+               domains: [DestinationFixtures.SplitRepoDomain],
+               checkpoint_resource: AshReplicant.Test.Checkpoint
+             })
+  end
+
   test "callable application Repo override is rejected without invocation" do
     resource = DestinationFixtures.Auxiliary
     key = DestinationFixtures.CallableRepo.probe_key()
@@ -204,6 +213,48 @@ defmodule AshReplicant.DestinationTest do
              Destination.manifest(%{
                repo: AshReplicant.TestRepo,
                domains: [DestinationFixtures.AnonymousDomain],
+               checkpoint_resource: AshReplicant.Test.Checkpoint
+             })
+  end
+
+  test "anonymous action argument default is rejected as opaque application code" do
+    assert {:error,
+            {:destination_participant_required, DestinationFixtures.AnonymousDefaultRoot, :create,
+             Function}} =
+             Destination.manifest(%{
+               repo: AshReplicant.TestRepo,
+               domains: [DestinationFixtures.AnonymousDefaultDomain],
+               checkpoint_resource: AshReplicant.Test.Checkpoint
+             })
+  end
+
+  test "custom type nested inside a builtin union is inspected" do
+    assert {:error,
+            {:destination_participant_required, DestinationFixtures.UnionTypeRoot, :create,
+             DestinationFixtures.OpaqueType}} =
+             Destination.manifest(%{
+               repo: AshReplicant.TestRepo,
+               domains: [DestinationFixtures.UnionTypeDomain],
+               checkpoint_resource: AshReplicant.Test.Checkpoint
+             })
+  end
+
+  test "safe action-local validation remains supported" do
+    assert {:ok, _manifest} =
+             Destination.manifest(%{
+               repo: AshReplicant.TestRepo,
+               domains: [DestinationFixtures.ValidationDomain],
+               checkpoint_resource: AshReplicant.Test.Checkpoint
+             })
+  end
+
+  test "unknown lifecycle wrapper fails closed" do
+    assert {:error,
+            {:destination_participant_required, DestinationFixtures.UnknownWrapperRoot, :create,
+             DestinationFixtures.UnknownWrapper}} =
+             Destination.manifest(%{
+               repo: AshReplicant.TestRepo,
+               domains: [DestinationFixtures.UnknownWrapperDomain],
                checkpoint_resource: AshReplicant.Test.Checkpoint
              })
   end
@@ -279,6 +330,17 @@ defmodule AshReplicant.DestinationTest do
     refute Map.has_key?(entry.protection, :__spark_metadata__)
   end
 
+  test "AshOnetime verifier callback must declare destination participation" do
+    assert {:error,
+            {:destination_participant_required, DestinationFixtures.OnetimeOpaqueRoot, :create,
+             DestinationFixtures.OpaqueProofVerifier}} =
+             Destination.manifest(%{
+               repo: AshReplicant.TestRepo,
+               domains: [DestinationFixtures.OnetimeOpaqueDomain],
+               checkpoint_resource: AshReplicant.Test.Checkpoint
+             })
+  end
+
   test "managed relationship recursion rejects a foreign destination Repo" do
     assert {:error, {:destination_repo_mismatch, DestinationFixtures.ForeignChild}} =
              Destination.manifest(%{
@@ -295,6 +357,57 @@ defmodule AshReplicant.DestinationTest do
                domains: [DestinationFixtures.CascadeDomain],
                checkpoint_resource: AshReplicant.Test.Checkpoint
              })
+  end
+
+  test "cascade recursion inspects the relationship-selected read action" do
+    assert {:error,
+            {:destination_participant_required, DestinationFixtures.CascadeReadChild,
+             :unsafe_read, DestinationFixtures.OpaquePreparation}} =
+             Destination.manifest(%{
+               repo: AshReplicant.TestRepo,
+               domains: [DestinationFixtures.CascadeReadDomain],
+               checkpoint_resource: AshReplicant.Test.Checkpoint
+             })
+  end
+
+  test "relate_actor has-one recursion rejects a foreign destination Repo" do
+    assert {:error, {:destination_repo_mismatch, DestinationFixtures.ForeignChild}} =
+             Destination.manifest(%{
+               repo: AshReplicant.TestRepo,
+               domains: [DestinationFixtures.RelateActorDomain],
+               checkpoint_resource: AshReplicant.Test.Checkpoint
+             })
+  end
+
+  test "activation revalidates application Repo drift before writing generation state" do
+    resource = DestinationFixtures.Auxiliary
+    slot = DestinationFixtures.Sink.__ash_replicant_config__().slot_name
+    key = {AshReplicant, slot}
+    previous = Application.fetch_env(:ash_replicant, resource)
+
+    on_exit(fn ->
+      :persistent_term.erase(key)
+
+      case previous do
+        {:ok, value} -> Application.put_env(:ash_replicant, resource, value)
+        :error -> Application.delete_env(:ash_replicant, resource)
+      end
+    end)
+
+    Application.put_env(
+      :ash_replicant,
+      resource,
+      postgres: [repo: &DestinationFixtures.CallableRepo.resolve/2]
+    )
+
+    assert {:error, {:destination_repo_dynamic, DestinationFixtures.Auxiliary}} =
+             AshReplicant.start_link(
+               sink: DestinationFixtures.Sink,
+               source_identity: [system_identifier: "destination-system", database: "source"],
+               publication: "destination_publication"
+             )
+
+    assert :persistent_term.get(key, :absent) == :absent
   end
 
   test "after-compile gate rejects an invalid sink without writing generation state" do

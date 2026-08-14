@@ -107,12 +107,14 @@ defmodule AshReplicant do
          source_identity,
          publication
        ) do
-    with {:ok, index} <- AshReplicant.Resolver.build_index(domains) do
+    with {:ok, manifest} <- AshReplicant.Destination.manifest(safe_sink_config(sink)),
+         {:ok, index} <- AshReplicant.Resolver.build_index(domains) do
       generation = make_ref()
 
       runtime = %{
         generation: generation,
         resolver_index: index,
+        destination_manifest: manifest,
         source_identity: source_identity,
         publication: publication
       }
