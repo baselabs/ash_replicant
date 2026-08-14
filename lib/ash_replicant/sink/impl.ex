@@ -188,8 +188,15 @@ defmodule AshReplicant.Sink.Impl do
 
   defp run_snapshot(config, resource, changes, first?, snapshot_lsn) do
     config.repo.transaction(fn ->
-      if first?, do: clear_mirror(resource, config)
+      guard_generation!(config)
+
+      if first? do
+        clear_mirror(resource, config)
+        guard_generation!(config)
+      end
+
       apply_snapshot_batch(config, resource, changes, snapshot_lsn)
+      guard_generation!(config)
     end)
     |> case do
       {:ok, _} -> :ok
@@ -207,7 +214,11 @@ defmodule AshReplicant.Sink.Impl do
       # mirrored nothing because the index was empty — that locks in invisible loss.
       {:error, Error.exception(reason: :config_invalid, resource: nil, op: :snapshot_complete)}
     else
-      config.repo.transaction(fn -> upsert_checkpoint(config, snapshot_lsn) end)
+      config.repo.transaction(fn ->
+        guard_generation!(config)
+        upsert_checkpoint(config, snapshot_lsn)
+        guard_generation!(config)
+      end)
       |> case do
         {:ok, _} ->
           Telemetry.event([:ash_replicant, :snapshot, :complete], %{}, %{commit_lsn: snapshot_lsn})
@@ -252,7 +263,9 @@ defmodule AshReplicant.Sink.Impl do
     # per-record upsert (which reads only `change.record`).
     if sensitive?(resource) or tenant_scoped?(resource) or Info.history_scd2?(resource) do
       Enum.each(changes, fn c ->
+        guard_generation!(config)
         Apply.apply_change(config, %{c | op: :insert, commit_lsn: snapshot_lsn})
+        guard_generation!(config)
       end)
     else
       # Compute the batch-invariant reflection ONCE (F13): every row of a full-table
@@ -266,6 +279,8 @@ defmodule AshReplicant.Sink.Impl do
       # dump is column-homogeneous (every row carries the same source columns).
       {_inputs, upsert_fields} = List.first(mapped)
 
+      guard_generation!(config)
+
       result =
         Ash.bulk_create(inputs, resource, Resolver.upsert_action(resource),
           upsert?: true,
@@ -278,6 +293,8 @@ defmodule AshReplicant.Sink.Impl do
           authorize?: config.authorize?,
           transaction: false
         )
+
+      guard_generation!(config)
 
       case result.status do
         :success ->
@@ -305,14 +322,20 @@ defmodule AshReplicant.Sink.Impl do
 
     result =
       config.repo.transaction(fn ->
+        guard_generation!(config)
+
         case read_checkpoint(config) do
           cp when is_integer(cp) and lsn <= cp ->
+            guard_generation!(config)
             :skipped
 
           _ ->
             count = apply_all(config, changes, ts)
+            guard_generation!(config)
             upsert_checkpoint(config, lsn)
+            guard_generation!(config)
             maybe_append_ledger(config, lsn)
+            guard_generation!(config)
             {:applied, count}
         end
       end)
@@ -341,9 +364,18 @@ defmodule AshReplicant.Sink.Impl do
   # `Enum.count`/`length` would re-enumerate and blow up a spilled-txn stream).
   defp apply_all(config, changes, ts) do
     Enum.reduce(changes, 0, fn change, n ->
+      guard_generation!(config)
       Apply.apply_change(config, change, ts)
+      guard_generation!(config)
       n + 1
     end)
+  end
+
+  defp guard_generation!(config) do
+    case AshReplicant.guard_generation(config) do
+      :ok -> :ok
+      {:error, %Error{} = error} -> config.repo.rollback(error)
+    end
   end
 
   # Value-free fail-closed halt: scrub to a structural reason, emit `:halted`

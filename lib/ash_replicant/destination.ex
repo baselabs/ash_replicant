@@ -38,6 +38,40 @@ defmodule AshReplicant.Destination do
     @type t :: %__MODULE__{repo: module(), entries: [Entry.t()], digest: binary()}
   end
 
+  defmodule Generation do
+    @moduledoc false
+    @enforce_keys [
+      :reference,
+      :sink,
+      :sink_config,
+      :sink_config_digest,
+      :resolver_index,
+      :manifest,
+      :manifest_digest,
+      :code_modules,
+      :code_fingerprint,
+      :source_identity,
+      :publication,
+      :dynamic_repo
+    ]
+    defstruct @enforce_keys
+
+    @type t :: %__MODULE__{
+            reference: reference(),
+            sink: module(),
+            sink_config: map(),
+            sink_config_digest: binary(),
+            resolver_index: map(),
+            manifest: Manifest.t(),
+            manifest_digest: binary(),
+            code_modules: [module()],
+            code_fingerprint: binary(),
+            source_identity: map(),
+            publication: [String.t()],
+            dynamic_repo: atom() | pid()
+          }
+  end
+
   @safe_changes [
     AshCloak.Changes.Encrypt,
     Ash.Resource.Change.Atomic,
@@ -148,6 +182,76 @@ defmodule AshReplicant.Destination do
   def manifest(_), do: {:error, {:invalid_destination_config, :shape}}
 
   @doc false
+  @spec config_digest(map()) :: binary()
+  def config_digest(config),
+    do: :crypto.hash(:sha256, :erlang.term_to_binary(config, [:deterministic]))
+
+  @doc false
+  @spec code_modules(module(), Manifest.t()) :: {:ok, [module()]} | {:error, reason()}
+  def code_modules(sink, %Manifest{} = manifest) when is_atom(sink) do
+    modules =
+      [sink, manifest]
+      |> collect_modules(MapSet.new())
+      |> then(fn modules ->
+        Enum.reduce(manifest.entries, modules, fn entry, acc ->
+          entry.resource
+          |> resource_runtime_shape()
+          |> collect_modules(acc)
+        end)
+      end)
+      |> Enum.sort_by(&Atom.to_string/1)
+
+    {:ok, modules}
+  rescue
+    _error -> {:error, {:invalid_destination_config, :code_fingerprint}}
+  catch
+    _kind, _reason -> {:error, {:invalid_destination_config, :code_fingerprint}}
+  end
+
+  @doc false
+  @spec code_fingerprint([module()]) :: {:ok, binary()} | {:error, reason()}
+  def code_fingerprint(modules) when is_list(modules) do
+    fingerprints = Enum.map(modules, &{&1, module_fingerprint(&1)})
+    {:ok, :crypto.hash(:sha256, :erlang.term_to_binary(fingerprints, [:deterministic]))}
+  rescue
+    _error -> {:error, {:invalid_destination_config, :code_fingerprint}}
+  catch
+    _kind, _reason -> {:error, {:invalid_destination_config, :code_fingerprint}}
+  end
+
+  @doc false
+  @spec effective_dynamic_repo(module()) ::
+          {:ok, atom() | pid()} | {:error, {:invalid_destination_config, atom()}}
+  def effective_dynamic_repo(repo) when is_atom(repo) do
+    identity = repo.get_dynamic_repo()
+
+    if dynamic_repo_owned_by?(repo, identity) do
+      {:ok, identity}
+    else
+      {:error, {:invalid_destination_config, :effective_repo}}
+    end
+  rescue
+    _error -> {:error, {:invalid_destination_config, :effective_repo}}
+  catch
+    _kind, _reason -> {:error, {:invalid_destination_config, :effective_repo}}
+  end
+
+  @doc false
+  @spec dynamic_repo_owned_by?(module(), atom() | pid()) :: boolean()
+  def dynamic_repo_owned_by?(repo, repo), do: true
+
+  def dynamic_repo_owned_by?(repo, identity) when is_atom(identity) or is_pid(identity) do
+    %{repo: owner} = Ecto.Repo.Registry.lookup(identity)
+    owner == repo
+  rescue
+    _error -> false
+  catch
+    _kind, _reason -> false
+  end
+
+  def dynamic_repo_owned_by?(_repo, _identity), do: false
+
+  @doc false
   def __after_compile__(env, _bytecode) do
     config = env.module.__ash_replicant_config__()
 
@@ -202,6 +306,55 @@ defmodule AshReplicant.Destination do
         {:ok, base}
       end
     end
+  end
+
+  defp resource_runtime_shape(resource) do
+    if function_exported?(resource, :spark_dsl_config, 0) do
+      {resource, resource.spark_dsl_config()}
+    else
+      resource
+    end
+  end
+
+  defp collect_modules(term, modules) when is_function(term) do
+    module = term |> Function.info(:module) |> elem(1)
+    MapSet.put(modules, module)
+  end
+
+  defp collect_modules(term, modules) when is_atom(term) do
+    if module?(term), do: MapSet.put(modules, term), else: modules
+  end
+
+  defp collect_modules(term, modules) when is_list(term),
+    do: Enum.reduce(term, modules, &collect_modules/2)
+
+  defp collect_modules(term, modules) when is_tuple(term),
+    do: term |> Tuple.to_list() |> collect_modules(modules)
+
+  defp collect_modules(term, modules) when is_map(term) do
+    term
+    |> Map.to_list()
+    |> Enum.reduce(modules, fn {key, value}, acc ->
+      acc = collect_modules(key, acc)
+      collect_modules(value, acc)
+    end)
+  end
+
+  defp collect_modules(_term, modules), do: modules
+
+  defp module?(module) do
+    Code.ensure_loaded?(module) and function_exported?(module, :module_info, 1)
+  end
+
+  defp module_fingerprint(module) do
+    case :code.get_object_code(module) do
+      {^module, bytecode, _path} -> :crypto.hash(:sha256, bytecode)
+      :error -> module.module_info(:md5)
+    end
+  rescue
+    _error -> :unavailable
+  catch
+    _kind, _reason -> :unavailable
   end
 
   defp required_primary_action(resource, type) do

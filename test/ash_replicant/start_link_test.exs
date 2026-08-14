@@ -3,6 +3,9 @@ defmodule AshReplicant.StartLinkTest do
 
   import ExUnit.CaptureLog
 
+  alias AshReplicant.Destination.Generation
+  alias AshReplicant.Test.DestinationFixtures
+
   defmodule DupSink do
     use AshReplicant.Sink,
       repo: AshReplicant.TestRepo,
@@ -17,6 +20,26 @@ defmodule AshReplicant.StartLinkTest do
       domains: [AshReplicant.Test.Domain],
       checkpoint_resource: AshReplicant.Test.Checkpoint,
       slot_name: "valid_slot"
+  end
+
+  defmodule LeaseSink do
+    use AshReplicant.Sink,
+      repo: AshReplicant.TestRepo,
+      domains: [AshReplicant.Test.Domain],
+      checkpoint_resource: AshReplicant.Test.Checkpoint,
+      slot_name: "lease_slot"
+
+    defp __ash_replicant_effect__(:transaction, [transaction], config) do
+      observer = :persistent_term.get({__MODULE__, :observer})
+      send(observer, {:inside_callback, self(), config.dynamic_repo})
+
+      receive do
+        :release_callback -> {:ok, transaction.commit_lsn}
+      end
+    end
+
+    defp __ash_replicant_effect__(operation, arguments, config),
+      do: super(operation, arguments, config)
   end
 
   @source_identity [system_identifier: "741852963", database: "postgres"]
@@ -40,12 +63,18 @@ defmodule AshReplicant.StartLinkTest do
   end
 
   setup do
-    AshReplicant.stop_supervised("valid_slot")
-    :persistent_term.erase({AshReplicant, "valid_slot"})
+    for slot <- ["valid_slot", "lease_slot", "runtime_drift_slot"] do
+      AshReplicant.stop_supervised(slot)
+      :persistent_term.erase({AshReplicant, slot})
+    end
 
     on_exit(fn ->
-      AshReplicant.stop_supervised("valid_slot")
-      :persistent_term.erase({AshReplicant, "valid_slot"})
+      for slot <- ["valid_slot", "lease_slot", "runtime_drift_slot"] do
+        AshReplicant.stop_supervised(slot)
+        :persistent_term.erase({AshReplicant, slot})
+      end
+
+      :persistent_term.erase({LeaseSink, :observer})
     end)
 
     :ok
@@ -102,8 +131,25 @@ defmodule AshReplicant.StartLinkTest do
       assert Process.alive?(winner)
 
       generation = :persistent_term.get({AshReplicant, "valid_slot"}, :none)
-      assert %{generation: generation_ref, resolver_index: index} = generation
+
+      assert %Generation{
+               reference: generation_ref,
+               sink: ValidSink,
+               sink_config: sink_config,
+               sink_config_digest: config_digest,
+               resolver_index: index,
+               manifest_digest: manifest_digest,
+               code_modules: code_modules,
+               code_fingerprint: code_fingerprint,
+               dynamic_repo: AshReplicant.TestRepo
+             } = generation
+
       assert is_reference(generation_ref)
+      assert sink_config == ValidSink.__ash_replicant_config__()
+      assert byte_size(config_digest) == 32
+      assert byte_size(manifest_digest) == 32
+      assert ValidSink in code_modules
+      assert byte_size(code_fingerprint) == 32
       assert map_size(index) >= 1
 
       Process.sleep(25)
@@ -212,6 +258,8 @@ defmodule AshReplicant.StartLinkTest do
 
         refute sink.identity_overridable?()
 
+        assert {:ok, _pid} = AshReplicant.start_link(start_opts(sink: sink))
+
         assert {:error, :source_identity_mismatch} =
                  sink.handle_session_identity(
                    %Replicant.SessionIdentity{
@@ -222,6 +270,8 @@ defmodule AshReplicant.StartLinkTest do
                    },
                    %{slot_name: "override_identity_slot", publication: ["valid_pub"]}
                  )
+
+        assert :ok = AshReplicant.stop_supervised("override_identity_slot")
       end)
 
     refute log =~ "wrong"
@@ -245,10 +295,13 @@ defmodule AshReplicant.StartLinkTest do
 
   test "generation cleanup only erases the generation that lost activation" do
     key = {AshReplicant, "valid_slot"}
-    winner = make_ref()
     loser = make_ref()
-    runtime = %{generation: winner, resolver_index: %{winner: true}}
-    :persistent_term.put(key, runtime)
+
+    capture_log(fn ->
+      assert {:ok, _pid} = AshReplicant.start_link(start_opts())
+    end)
+
+    assert %Generation{reference: winner} = runtime = :persistent_term.get(key)
 
     assert :ok = AshReplicant.erase_generation("valid_slot", loser)
     assert runtime == :persistent_term.get(key)
@@ -303,5 +356,193 @@ defmodule AshReplicant.StartLinkTest do
     refute function_exported?(ValidSink, :handle_batch, 1)
     refute function_exported?(ValidSink, :handle_message, 2)
     refute function_exported?(ValidSink, :snapshot_progress, 0)
+  end
+
+  test "a foreign effective dynamic Repo is rejected before activation state" do
+    previous = AshReplicant.TestRepo.put_dynamic_repo(DestinationFixtures.ForeignRepo)
+
+    try do
+      assert {:error, {:invalid_destination_config, :effective_repo}} =
+               AshReplicant.start_link(start_opts())
+
+      assert :none == :persistent_term.get({AshReplicant, "valid_slot"}, :none)
+    after
+      AshReplicant.TestRepo.put_dynamic_repo(previous)
+    end
+  end
+
+  test "a foreign effective dynamic Repo is rejected at callback entry" do
+    capture_log(fn ->
+      assert {:ok, _pid} = AshReplicant.start_link(start_opts())
+    end)
+
+    task =
+      Task.async(fn ->
+        previous =
+          AshReplicant.TestRepo.put_dynamic_repo(DestinationFixtures.ForeignRepo)
+
+        try do
+          ValidSink.checkpoint()
+        after
+          AshReplicant.TestRepo.put_dynamic_repo(previous)
+        end
+      end)
+
+    assert {:error, %AshReplicant.Error{reason: :config_invalid, op: :callback}} =
+             Task.await(task)
+  end
+
+  test "stop waits for a mutating callback to leave the destination lease" do
+    :persistent_term.put({LeaseSink, :observer}, self())
+
+    capture_log(fn ->
+      assert {:ok, _pid} = AshReplicant.start_link(start_opts(sink: LeaseSink))
+    end)
+
+    transaction = %Replicant.Transaction{commit_lsn: 777, changes: []}
+
+    callback =
+      Task.async(fn ->
+        result = LeaseSink.handle_transaction(transaction)
+        {result, AshReplicant.TestRepo.get_dynamic_repo()}
+      end)
+
+    assert_receive {:inside_callback, callback_pid, AshReplicant.TestRepo}, 1_000
+
+    stopper = Task.async(fn -> AshReplicant.stop_supervised("lease_slot") end)
+    assert Task.yield(stopper, 50) == nil
+
+    send(callback_pid, :release_callback)
+    assert {{:ok, 777}, AshReplicant.TestRepo} = Task.await(callback)
+    assert :ok = Task.await(stopper)
+    assert :none == :persistent_term.get({AshReplicant, "lease_slot"}, :none)
+  end
+
+  test "a hot-loaded sink config is never merged into the admitted generation" do
+    module = AshReplicant.Test.RuntimeDriftSink
+    previous_ignore = Code.get_compiler_option(:ignore_module_conflict)
+    Code.put_compiler_option(:ignore_module_conflict, true)
+
+    try do
+      compile_runtime_sink(module, [AshReplicant.Test.Domain])
+
+      capture_log(fn ->
+        assert {:ok, _pid} = AshReplicant.start_link(start_opts(sink: module))
+      end)
+
+      compile_runtime_sink(module, [DestinationFixtures.NamedDefaultDomain])
+
+      assert {:error, %AshReplicant.Error{reason: :config_invalid}} =
+               apply(module, :handle_schema_change, [
+                 %Replicant.SchemaChange{
+                   kind: :additive,
+                   change: :column_added,
+                   schema: "public",
+                   table: "orders",
+                   detail: "structural"
+                 },
+                 %{}
+               ])
+
+      assert %Generation{sink_config: admitted_config} =
+               :persistent_term.get({AshReplicant, "runtime_drift_slot"})
+
+      assert admitted_config.domains == [AshReplicant.Test.Domain]
+
+      assert apply(module, :__ash_replicant_config__, []).domains == [
+               DestinationFixtures.NamedDefaultDomain
+             ]
+
+      assert :ok = AshReplicant.stop_supervised("runtime_drift_slot")
+    after
+      Code.put_compiler_option(:ignore_module_conflict, previous_ignore)
+      :persistent_term.erase({AshReplicant, "runtime_drift_slot"})
+      :code.purge(module)
+      :code.delete(module)
+    end
+  end
+
+  test "all generated public callbacks are final while the internal effect hook is overridable" do
+    [{sink, _bytecode}] =
+      Code.compile_string("""
+      defmodule AshReplicant.Test.FinalCallbacksSink do
+        use AshReplicant.Sink,
+          repo: AshReplicant.TestRepo,
+          domains: [AshReplicant.Test.Domain],
+          checkpoint_resource: AshReplicant.Test.Checkpoint,
+          slot_name: "final_callbacks_slot"
+
+        @callback_overrides for callback <- #{inspect(final_callbacks())},
+                               into: %{},
+                               do: {callback, Module.overridable?(__MODULE__, callback)}
+        @hook_overridable Module.overridable?(__MODULE__, {:__ash_replicant_effect__, 3})
+
+        def callback_overrides, do: @callback_overrides
+        def hook_overridable?, do: @hook_overridable
+      end
+      """)
+
+    assert Enum.all?(sink.callback_overrides(), fn {_callback, overridable?} ->
+             not overridable?
+           end)
+
+    assert sink.hook_overridable?()
+  end
+
+  test "attempting to redefine any generated callback fails compilation" do
+    for {{name, arity}, definition} <- callback_definitions() do
+      module = Module.concat(AshReplicant.Test, "Final#{name}#{arity}Sink")
+
+      assert_raise CompileError, ~r/AshReplicant sink callback #{name}\/#{arity} is final/, fn ->
+        Code.compile_string("""
+        defmodule #{inspect(module)} do
+          use AshReplicant.Sink,
+            repo: AshReplicant.TestRepo,
+            domains: [AshReplicant.Test.Domain],
+            checkpoint_resource: AshReplicant.Test.Checkpoint,
+            slot_name: "final_#{name}_#{arity}_slot"
+
+          #{definition}
+        end
+        """)
+      end
+    end
+  end
+
+  defp final_callbacks do
+    [
+      handle_session_identity: 2,
+      checkpoint: 0,
+      handle_transaction: 1,
+      sink_kind: 0,
+      handle_schema_change: 2,
+      handle_snapshot: 2,
+      handle_snapshot_complete: 1
+    ]
+  end
+
+  defp callback_definitions do
+    %{
+      {:handle_session_identity, 2} =>
+        "def handle_session_identity(_identity, _context), do: :ok",
+      {:checkpoint, 0} => "def checkpoint, do: {:ok, nil}",
+      {:handle_transaction, 1} => "def handle_transaction(_transaction), do: {:ok, 0}",
+      {:sink_kind, 0} => "def sink_kind, do: :append_log",
+      {:handle_schema_change, 2} => "def handle_schema_change(_change, _context), do: :ok",
+      {:handle_snapshot, 2} => "def handle_snapshot(_changes, _context), do: :ok",
+      {:handle_snapshot_complete, 1} => "def handle_snapshot_complete(lsn), do: {:ok, lsn}"
+    }
+  end
+
+  defp compile_runtime_sink(module, domains) do
+    Code.compile_string("""
+    defmodule #{inspect(module)} do
+      use AshReplicant.Sink,
+        repo: AshReplicant.TestRepo,
+        domains: #{inspect(domains)},
+        checkpoint_resource: AshReplicant.Test.Checkpoint,
+        slot_name: "runtime_drift_slot"
+    end
+    """)
   end
 end

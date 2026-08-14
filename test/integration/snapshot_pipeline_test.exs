@@ -30,8 +30,11 @@ defmodule AshReplicant.SnapshotPipelineTest do
       checkpoint_resource: AshReplicant.Test.Checkpoint,
       slot_name: "snapshot_retry_slot"
 
-    @impl Replicant.Sink
-    def handle_snapshot(changes, %{first_for_table?: false} = context) do
+    defp __ash_replicant_effect__(
+           :snapshot,
+           [changes, %{first_for_table?: false} = context],
+           config
+         ) do
       if :persistent_term.get(
            {AshReplicant.SnapshotPipelineTest, :fail_second_batch},
            false
@@ -45,11 +48,12 @@ defmodule AshReplicant.SnapshotPipelineTest do
 
         {:error, :injected_snapshot_failure}
       else
-        super(changes, context)
+        super(:snapshot, [changes, context], config)
       end
     end
 
-    def handle_snapshot(changes, context), do: super(changes, context)
+    defp __ash_replicant_effect__(operation, arguments, config),
+      do: super(operation, arguments, config)
   end
 
   setup do

@@ -11,6 +11,9 @@ defmodule AshReplicant do
 
   @version Mix.Project.config()[:version]
 
+  alias AshReplicant.Destination.Generation
+  alias AshReplicant.Error
+
   @doc "The library version string."
   @spec version() :: String.t()
   def version, do: @version
@@ -41,11 +44,13 @@ defmodule AshReplicant do
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
-    with {:ok, sink, domains, slot_name} <- validate_sink(opts),
+    with {:ok, sink, sink_config} <- validate_sink(opts),
          {:ok, source_identity} <- validate_source_identity(opts),
          {:ok, publication} <- normalize_publication(Keyword.get(opts, :publication)) do
+      slot_name = sink_config.slot_name
+
       activation_lock(slot_name, fn ->
-        activate(opts, sink, domains, slot_name, source_identity, publication)
+        activate(opts, sink, sink_config, source_identity, publication)
       end)
     end
   end
@@ -67,6 +72,37 @@ defmodule AshReplicant do
   def erase_generation(slot_name, generation),
     do: erase_generation_key({AshReplicant, slot_name}, generation)
 
+  @doc false
+  @spec run_callback(String.t(), module(), :read | :mutate, (map() -> term())) :: term()
+  def run_callback(slot_name, sink, mode, effect)
+      when is_binary(slot_name) and is_atom(sink) and mode in [:read, :mutate] and
+             is_function(effect, 1) do
+    runner = fn -> run_admitted_callback(slot_name, sink, effect) end
+
+    case mode do
+      :read -> runner.()
+      :mutate -> activation_lock(slot_name, runner)
+    end
+  end
+
+  @doc false
+  @spec guard_generation(map()) :: :ok | {:error, Error.t()}
+  def guard_generation(%{
+        slot_name: slot_name,
+        sink: sink,
+        generation: generation
+      }) do
+    with %Generation{reference: ^generation, sink: ^sink} = admitted <-
+           :persistent_term.get({AshReplicant, slot_name}, :none),
+         :ok <- validate_generation(admitted) do
+      :ok
+    else
+      _other -> generation_error(:generation_guard)
+    end
+  end
+
+  def guard_generation(_config), do: generation_error(:generation_guard)
+
   @replicant_option_keys [
     :connection,
     :publication,
@@ -78,7 +114,8 @@ defmodule AshReplicant do
     :failover
   ]
 
-  defp activate(opts, sink, domains, slot_name, source_identity, publication) do
+  defp activate(opts, sink, sink_config, source_identity, publication) do
+    slot_name = sink_config.slot_name
     key = {AshReplicant, slot_name}
 
     case :persistent_term.get(key, :none) do
@@ -87,8 +124,7 @@ defmodule AshReplicant do
           key,
           opts,
           sink,
-          domains,
-          slot_name,
+          sink_config,
           source_identity,
           publication
         )
@@ -102,35 +138,45 @@ defmodule AshReplicant do
          key,
          opts,
          sink,
-         domains,
-         slot_name,
+         sink_config,
          source_identity,
          publication
        ) do
-    with {:ok, manifest} <- AshReplicant.Destination.manifest(safe_sink_config(sink)),
-         {:ok, index} <- AshReplicant.Resolver.build_index(domains) do
-      generation = make_ref()
+    with {:ok, manifest} <- AshReplicant.Destination.manifest(sink_config),
+         {:ok, index} <- AshReplicant.Resolver.build_index(sink_config.domains),
+         {:ok, dynamic_repo} <-
+           AshReplicant.Destination.effective_dynamic_repo(sink_config.repo),
+         {:ok, code_modules} <- AshReplicant.Destination.code_modules(sink, manifest),
+         {:ok, code_fingerprint} <- AshReplicant.Destination.code_fingerprint(code_modules) do
+      reference = make_ref()
 
-      runtime = %{
-        generation: generation,
+      runtime = %Generation{
+        reference: reference,
+        sink: sink,
+        sink_config: sink_config,
+        sink_config_digest: AshReplicant.Destination.config_digest(sink_config),
         resolver_index: index,
-        destination_manifest: manifest,
+        manifest: manifest,
+        manifest_digest: manifest.digest,
+        code_modules: code_modules,
+        code_fingerprint: code_fingerprint,
         source_identity: source_identity,
-        publication: publication
+        publication: publication,
+        dynamic_repo: dynamic_repo
       }
 
       :persistent_term.put(key, runtime)
 
-      result = safe_start(opts, slot_name, sink)
+      result = safe_start(opts, sink_config.slot_name, sink)
 
-      if not match?({:ok, _pid}, result), do: erase_generation_key(key, generation)
+      if not match?({:ok, _pid}, result), do: erase_generation_key(key, reference)
       result
     end
   end
 
   defp erase_generation_key(key, generation) do
     case :persistent_term.get(key, :none) do
-      %{generation: ^generation} ->
+      %Generation{reference: ^generation} ->
         :persistent_term.erase(key)
         :ok
 
@@ -143,13 +189,97 @@ defmodule AshReplicant do
     with sink when is_atom(sink) <- Keyword.get(opts, :sink),
          true <- Code.ensure_loaded?(sink),
          true <- function_exported?(sink, :__ash_replicant_config__, 0),
-         %{domains: domains, slot_name: slot_name} <- safe_sink_config(sink),
+         %{domains: domains, slot_name: slot_name} = config <- safe_sink_config(sink),
          true <- is_list(domains) and is_binary(slot_name) and slot_name != "" do
-      {:ok, sink, domains, slot_name}
+      {:ok, sink, config}
     else
       _other -> {:error, :sink_required}
     end
   end
+
+  defp run_admitted_callback(slot_name, sink, effect) do
+    with %Generation{sink: ^sink} = generation <-
+           :persistent_term.get({AshReplicant, slot_name}, :none),
+         :ok <- validate_generation(generation),
+         {:ok, current_dynamic_repo} <- current_dynamic_repo(generation.sink_config.repo),
+         true <-
+           AshReplicant.Destination.dynamic_repo_owned_by?(
+             generation.sink_config.repo,
+             current_dynamic_repo
+           ) do
+      with_pinned_dynamic_repo(generation, fn ->
+        config = generation_config(generation)
+
+        with :ok <- guard_generation(config) do
+          result = effect.(config)
+
+          case guard_generation(config) do
+            :ok -> result
+            {:error, _error} = error -> error
+          end
+        end
+      end)
+    else
+      _other -> generation_error(:callback)
+    end
+  end
+
+  defp validate_generation(%Generation{} = generation) do
+    with %{repo: repo} = current_config <- safe_sink_config(generation.sink),
+         true <- current_config == generation.sink_config,
+         true <-
+           AshReplicant.Destination.config_digest(current_config) ==
+             generation.sink_config_digest,
+         {:ok, current_manifest} <- AshReplicant.Destination.manifest(current_config),
+         true <- current_manifest == generation.manifest,
+         true <- current_manifest.digest == generation.manifest_digest,
+         {:ok, current_code_fingerprint} <-
+           AshReplicant.Destination.code_fingerprint(generation.code_modules),
+         true <- current_code_fingerprint == generation.code_fingerprint,
+         true <-
+           AshReplicant.Destination.dynamic_repo_owned_by?(repo, generation.dynamic_repo) do
+      :ok
+    else
+      _other -> generation_error(:generation)
+    end
+  end
+
+  defp generation_config(%Generation{} = generation) do
+    generation.sink_config
+    |> Map.merge(%{
+      sink: generation.sink,
+      resolver_index: generation.resolver_index,
+      destination_manifest: generation.manifest,
+      source_identity: generation.source_identity,
+      publication: generation.publication,
+      generation: generation.reference,
+      dynamic_repo: generation.dynamic_repo,
+      data_layer_context: %{repo: generation.dynamic_repo},
+      authorize?: false
+    })
+  end
+
+  defp current_dynamic_repo(repo) do
+    {:ok, repo.get_dynamic_repo()}
+  rescue
+    _error -> :error
+  catch
+    _kind, _reason -> :error
+  end
+
+  defp with_pinned_dynamic_repo(%Generation{} = generation, effect) do
+    repo = generation.sink_config.repo
+    previous = repo.put_dynamic_repo(generation.dynamic_repo)
+
+    try do
+      effect.()
+    after
+      repo.put_dynamic_repo(previous)
+    end
+  end
+
+  defp generation_error(op),
+    do: {:error, Error.exception(reason: :config_invalid, resource: nil, op: op)}
 
   defp safe_sink_config(sink) do
     sink.__ash_replicant_config__()

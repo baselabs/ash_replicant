@@ -17,25 +17,26 @@ defmodule AshReplicant.SessionIdentityTest do
       checkpoint_resource: AshReplicant.Test.Checkpoint,
       slot_name: "identity_order_slot"
 
-    @impl Replicant.Sink
-    def checkpoint do
+    defp __ash_replicant_effect__(:checkpoint, [], config) do
       send(
         :persistent_term.get({AshReplicant.SessionIdentityTest, :observer}),
         :checkpoint_read
       )
 
-      super()
+      super(:checkpoint, [], config)
     end
 
-    @impl Replicant.Sink
-    def handle_transaction(transaction) do
+    defp __ash_replicant_effect__(:transaction, [transaction], config) do
       send(
         :persistent_term.get({AshReplicant.SessionIdentityTest, :observer}),
         {:transaction_delivered, transaction.commit_lsn}
       )
 
-      super(transaction)
+      super(:transaction, [transaction], config)
     end
+
+    defp __ash_replicant_effect__(operation, arguments, config),
+      do: super(operation, arguments, config)
   end
 
   setup do
