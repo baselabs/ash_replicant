@@ -129,8 +129,10 @@ defmodule AshReplicant.EffectOnceTest do
     Marquee.q!("INSERT INTO #{Marquee.src()} (id, note) VALUES ('1', 'a')")
     PG.wait_until(fn -> Marquee.mirror_rows() == [["1", "a"]] end)
 
-    PG.wait_until(fn -> length(DestinationObserver.rows(run_id)) == 6 end)
-    assert_effect_counts(run_id, 1, 1, 1)
+    # 6 stream-transaction effects + 1 bind-write checkpoint row (B2: the bind
+    # transaction creates the bound row at connect).
+    PG.wait_until(fn -> length(DestinationObserver.rows(run_id)) == 7 end)
+    assert_effect_counts(run_id, 1, 1, 2)
     assert_onetime_effect_counts(run_id, 1, 1, 1)
     assert_atomic_observer_groups(run_id)
   end
@@ -146,7 +148,7 @@ defmodule AshReplicant.EffectOnceTest do
       DestinationObserver.effect_count(run_id, "onetime_claim", "INSERT") == 2
     end)
 
-    assert_effect_counts(run_id, 2, 2, 1)
+    assert_effect_counts(run_id, 2, 2, 2)
     assert_onetime_effect_counts(run_id, 2, 2, 2)
     assert_atomic_observer_groups(run_id)
   end
@@ -164,8 +166,10 @@ defmodule AshReplicant.EffectOnceTest do
     PG.wait_until(fn -> length(Marquee.mirror_rows()) == 3 end)
     assert Marquee.mirror_rows() == [["1", "a"], ["2", "b"], ["3", "c"]]
 
-    PG.wait_until(fn -> DestinationObserver.effect_count(run_id, "checkpoint", "UPDATE") == 1 end)
-    assert_effect_counts(run_id, 3, 3, 2)
+    # Two checkpoint advances UPDATEs (txns 1 and 3; the crash window's replay
+    # coalesced) plus the bind INSERT — 3 checkpoint writes total.
+    PG.wait_until(fn -> DestinationObserver.effect_count(run_id, "checkpoint", "UPDATE") == 2 end)
+    assert_effect_counts(run_id, 3, 3, 3)
     assert_onetime_effect_counts(run_id, 3, 3, 3)
     assert_atomic_observer_groups(run_id)
   end
@@ -200,7 +204,7 @@ defmodule AshReplicant.EffectOnceTest do
     Marquee.q!("INSERT INTO #{Marquee.src()} (id, note) VALUES ('2', 'b')")
     assert_receive {:mapped_statement_executed, ^query_ref}, 15_000
     assert Marquee.mirror_rows() == [["1", "a"]]
-    assert_effect_counts(run_id, 1, 1, 1)
+    assert_effect_counts(run_id, 1, 1, 2)
     assert_onetime_effect_counts(run_id, 1, 1, 1)
 
     Marquee.q!("ALTER TABLE ash_replicant_checkpoints DROP CONSTRAINT tmp_block")
@@ -209,8 +213,8 @@ defmodule AshReplicant.EffectOnceTest do
     PG.wait_until(fn -> length(Marquee.mirror_rows()) == 2 end)
     assert Marquee.mirror_rows() == [["1", "a"], ["2", "b"]]
 
-    PG.wait_until(fn -> length(DestinationObserver.rows(run_id)) == 12 end)
-    assert_effect_counts(run_id, 2, 2, 2)
+    PG.wait_until(fn -> length(DestinationObserver.rows(run_id)) == 13 end)
+    assert_effect_counts(run_id, 2, 2, 3)
     assert_onetime_effect_counts(run_id, 2, 2, 2)
     assert_atomic_observer_groups(run_id)
 
@@ -243,7 +247,7 @@ defmodule AshReplicant.EffectOnceTest do
       )
 
     assert AshOnetime.replayed?(replayed) == true
-    assert_effect_counts(run_id, 2, 2, 2)
+    assert_effect_counts(run_id, 2, 2, 3)
     assert_onetime_effect_counts(run_id, 2, 2, 2)
   end
 
@@ -266,14 +270,18 @@ defmodule AshReplicant.EffectOnceTest do
     assert Marquee.mirror_rows() == []
     assert [[1]] = Marquee.q!("SELECT count(*) FROM #{Marquee.auxiliary()}").rows
 
-    assert [] ==
+    # B2: the bind created the row at connect; the watermark stays nil because
+    # the halted transaction never committed an advance.
+    assert [[nil]] ==
              Marquee.q!(
                "SELECT commit_lsn FROM ash_replicant_checkpoints WHERE slot_name = $1",
                [@slot]
              ).rows
 
+    # The escaped auxiliary write is the ONLY non-bind observer row: the B2
+    # bind's checkpoint INSERT is its own (legitimate) earlier transaction.
     assert [%{participant: "auxiliary", transaction_id: foreign_transaction_id}] =
-             DestinationObserver.rows(run_id)
+             Enum.filter(DestinationObserver.rows(run_id), &(&1.participant == "auxiliary"))
 
     refute foreign_transaction_id == sink_transaction_id
   end
@@ -322,6 +330,11 @@ defmodule AshReplicant.EffectOnceTest do
     run_id
     |> DestinationObserver.rows()
     |> Enum.group_by(& &1.transaction_id)
+    # Scoped to STREAM-transaction groups (those carrying a mapped effect): the
+    # B2 bind transaction legitimately observes as a checkpoint-only group.
+    |> Enum.filter(fn {_transaction_id, rows} ->
+      Enum.any?(rows, &(&1.participant == "mapped"))
+    end)
     |> Enum.each(fn {_transaction_id, rows} ->
       participants = MapSet.new(rows, & &1.participant)
 

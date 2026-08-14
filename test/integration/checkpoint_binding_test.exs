@@ -91,7 +91,7 @@ defmodule AshReplicant.CheckpointBindingTest do
   @moduletag :integration
 
   alias AshReplicant.Checkpoint.Identity
-  alias AshReplicant.Test.{Marquee, PG}
+  alias AshReplicant.Test.{AdmittedGeneration, Marquee, PG}
   alias Ecto.Adapters.SQL.Sandbox
 
   @slot "bind_slot"
@@ -347,6 +347,165 @@ defmodule AshReplicant.CheckpointBindingTest do
     assert after_start.commit_lsn == watermark
   end
 
+  describe "locked monotonic admission (task 4)" do
+    setup do
+      ref = attach_events()
+
+      # Bind on a live slot, stop, then pin the watermark at the slot's flush —
+      # the durable state a real deployment holds.
+      assert {:ok, _pid} = start(SinkA, @slot)
+      assert_receive {:telemetry, ^ref, [:replicant, :connection, :slot_active], %{}}, 15_000
+      assert :ok = AshReplicant.stop_supervised(@slot)
+
+      watermark = confirmed_flush(@slot)
+
+      Marquee.q!("UPDATE ash_replicant_checkpoints SET commit_lsn = $1 WHERE slot_name = $2", [
+        watermark,
+        @slot
+      ])
+
+      # The direct-drive marquees below call the sink outside a live pipeline:
+      # re-seed the admitted generation stop_supervised erased.
+      identity = Marquee.source_identity()
+
+      AdmittedGeneration.put!(SinkA,
+        source_identity: %{
+          system_identifier: identity[:system_identifier],
+          database: identity[:database]
+        },
+        publication: [Marquee.publication()]
+      )
+
+      on_exit(fn -> :persistent_term.erase({AshReplicant, "bind_slot"}) end)
+
+      %{ref: ref, watermark: watermark}
+    end
+
+    test "equal and lower LSN re-delivery skip; only strictly-greater advances", %{
+      ref: ref,
+      watermark: watermark
+    } do
+      # Equal LSN: skipped, watermark unchanged.
+      assert {:ok, ^watermark} = txn(SinkA, watermark)
+
+      assert_receive {:telemetry, ^ref, [:ash_replicant, :sink, :skipped],
+                      %{commit_lsn: ^watermark}},
+                     1_000
+
+      assert bound_row(@slot).commit_lsn == watermark
+
+      # Lower LSN: skipped (returns the delivered LSN), watermark unchanged
+      # (no regression, no reapply).
+      assert {:ok, lower} = txn(SinkA, watermark - 10_000)
+      assert lower == watermark - 10_000
+      assert_receive {:telemetry, ^ref, [:ash_replicant, :sink, :skipped], _}, 1_000
+      assert bound_row(@slot).commit_lsn == watermark
+
+      # Strictly greater: applied, watermark advances exactly once.
+      assert {:ok, advanced} = txn(SinkA, watermark + 10_000)
+      assert advanced == watermark + 10_000
+      assert bound_row(@slot).commit_lsn == watermark + 10_000
+    end
+
+    test "snapshot handoff below the watermark never regresses it", %{watermark: watermark} do
+      # The skip returns the REQUESTED consistent point (the framework acks its
+      # own point, never the sink's return) — and writes NOTHING.
+      assert {:ok, ^watermark} = SinkA.handle_snapshot_complete(watermark)
+      assert bound_row(@slot).commit_lsn == watermark
+
+      below = watermark - 5_000
+      assert {:ok, ^below} = SinkA.handle_snapshot_complete(below)
+      assert bound_row(@slot).commit_lsn == watermark
+
+      # Above advances.
+      assert {:ok, higher} = SinkA.handle_snapshot_complete(watermark + 5_000)
+      assert higher == watermark + 5_000
+      assert bound_row(@slot).commit_lsn == watermark + 5_000
+    end
+
+    test "an absent row is a permanent :checkpoint_unbound halt (never frontier-0)", %{
+      ref: ref,
+      watermark: watermark
+    } do
+      Marquee.q!("DELETE FROM ash_replicant_checkpoints WHERE slot_name = $1", [@slot])
+
+      assert {:error, %AshReplicant.Error{reason: :checkpoint_unbound}} =
+               txn(SinkA, watermark + 10)
+
+      assert_receive {:telemetry, ^ref, [:ash_replicant, :checkpoint, :conflict],
+                      %{reason: :checkpoint_unbound}},
+                     1_000
+
+      assert {:error, %AshReplicant.Error{reason: :checkpoint_unbound}} =
+               SinkA.handle_snapshot_complete(watermark + 10)
+
+      # No row was silently recreated at frontier-0.
+      assert bound_row(@slot) == :absent
+    end
+
+    test "concurrent admission serializes on the row lock (outside-sandbox two-connection shape)",
+         %{ref: ref, watermark: watermark} do
+      # The public two-process path cannot prove this (the per-slot activation
+      # lease and the shared sandbox serialize ahead of the row lock), so the
+      # marquee holds the lock on a SEPARATE real connection and proves the
+      # admission BLOCKS at the locked read until release — then dedups.
+      {:ok, conn} =
+        Postgrex.start_link(
+          hostname: "127.0.0.1",
+          port: 5599,
+          username: "postgres",
+          database: "ash_replicant_test",
+          sync_connect: true
+        )
+
+      identity = Marquee.source_identity()
+
+      {:ok, _} = Postgrex.query(conn, "BEGIN", [])
+
+      {:ok, _} =
+        Postgrex.query(
+          conn,
+          "SELECT commit_lsn FROM ash_replicant_checkpoints WHERE source_system_id = $1 AND source_database = $2 AND slot_name = $3 FOR UPDATE",
+          [identity[:system_identifier], identity[:database], @slot]
+        )
+
+      task =
+        Task.async(fn ->
+          txn(SinkA, watermark + 20_000)
+        end)
+
+      refute_receive {:telemetry, ^ref, [:ash_replicant, :sink, :applied], _}, 500
+      refute_receive {:telemetry, ^ref, [:ash_replicant, :sink, :skipped], _}, 500
+      assert bound_row(@slot).commit_lsn == watermark
+
+      {:ok, _} = Postgrex.query(conn, "COMMIT", [])
+
+      assert {:ok, advanced} = Task.await(task, 15_000)
+      assert advanced == watermark + 20_000
+
+      assert_receive {:telemetry, ^ref, [:ash_replicant, :sink, :applied],
+                      %{commit_lsn: ^advanced}},
+                     1_000
+
+      # A second admission at the same LSN dedups against the committed one.
+      assert {:ok, ^advanced} = txn(SinkA, advanced)
+
+      assert_receive {:telemetry, ^ref, [:ash_replicant, :sink, :skipped],
+                      %{commit_lsn: ^advanced}},
+                     1_000
+
+      assert bound_row(@slot).commit_lsn == advanced
+    end
+  end
+
+  defp txn(sink, lsn) do
+    sink.handle_transaction(%Replicant.Transaction{
+      commit_lsn: lsn,
+      commit_timestamp: DateTime.utc_now(),
+      changes: []
+    })
+  end
+
   # --- helpers ---
 
   defp start(sink, _slot) do
@@ -372,6 +531,7 @@ defmodule AshReplicant.CheckpointBindingTest do
       [
         [:ash_replicant, :checkpoint, :conflict],
         [:ash_replicant, :sink, :applied],
+        [:ash_replicant, :sink, :skipped],
         [:replicant, :connection, :session_identity_rejected],
         [:replicant, :connection, :slot_active]
       ],
@@ -406,6 +566,16 @@ defmodule AshReplicant.CheckpointBindingTest do
   end
 
   defp bound_row(slot) do
+    case Marquee.q!(
+           "SELECT count(*) FROM ash_replicant_checkpoints WHERE slot_name = $1",
+           [slot]
+         ).rows do
+      [[0]] -> :absent
+      [[1]] -> do_bound_row(slot)
+    end
+  end
+
+  defp do_bound_row(slot) do
     [[sys, db, slot, timeline, lsn, contract, fingerprint, _inserted, updated]] =
       Marquee.q!(
         "SELECT source_system_id, source_database, slot_name, source_timeline, commit_lsn, " <>

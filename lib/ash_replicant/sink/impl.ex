@@ -493,7 +493,18 @@ defmodule AshReplicant.Sink.Impl do
     else
       config.repo.transaction(fn ->
         guard_generation!(config)
-        upsert_checkpoint(config, snapshot_lsn)
+
+        case locked_checkpoint!(config) do
+          # Monotonic handoff: a re-delivered/older consistent point never
+          # regresses the durable watermark. No write; the framework acks its
+          # own consistent point, never the sink's return value.
+          cp when is_integer(cp) and snapshot_lsn <= cp ->
+            :ok
+
+          _ ->
+            upsert_checkpoint(config, snapshot_lsn)
+        end
+
         guard_generation!(config)
       end)
       |> case do
@@ -652,7 +663,7 @@ defmodule AshReplicant.Sink.Impl do
         fn ->
           guard_generation!(config)
 
-          case read_checkpoint(config) do
+          case locked_checkpoint!(config) do
             cp when is_integer(cp) and lsn <= cp ->
               guard_generation!(config)
               :skipped
@@ -721,10 +732,13 @@ defmodule AshReplicant.Sink.Impl do
 
   # Mechanical triple rekey (source-bound checkpoint, B2). The identity comes from the
   # config's source_identity — legal only AFTER handle_session_identity proved
-  # configured == actual session before any read (the TOCTOU gate). Task 4 adds the
-  # admission lock and the absent-row halt; checkpoint/0 keeps this UNLOCKED advisory
-  # read (the framework uses it only to seed recovery — the authoritative dedup is the
-  # in-transaction locked read).
+  # configured == actual session before any read (the TOCTOU gate).
+  #
+  # Split reads (roadmap B2): `read_checkpoint/1` is the UNLOCKED advisory read
+  # behind `checkpoint/0` (the framework uses it only to seed recovery); the
+  # authoritative dedup is `locked_checkpoint!/1` INSIDE the admission
+  # transaction — issuing FOR UPDATE outside a transaction would be a momentary
+  # pointless lock.
   defp read_checkpoint(config) do
     case Ash.get!(config.checkpoint_resource, checkpoint_filter(config),
            authorize?: false,
@@ -732,6 +746,25 @@ defmodule AshReplicant.Sink.Impl do
            error?: false
          ) do
       nil -> nil
+      %{commit_lsn: lsn} -> lsn
+    end
+  end
+
+  # The locked admission read. An ABSENT row is a permanent halt (never a
+  # silent frontier-0 reapply): the row is created at bind and destroyed only by
+  # the operator reset, so absence means binding never ran or a reset raced the
+  # pipeline. Replicant coerces the sink error to {:halt, :sink_failed} and the
+  # :temporary supervisor never restarts — an operator/host restart re-runs the
+  # identity gate and re-binds (the [:ash_replicant, :checkpoint, :conflict]
+  # event is the signal meanwhile).
+  defp locked_checkpoint!(config) do
+    case Ash.get!(config.checkpoint_resource, checkpoint_filter(config),
+           lock: :for_update,
+           authorize?: false,
+           context: action_context(config),
+           error?: false
+         ) do
+      nil -> rollback_conflict!(config, :checkpoint_unbound)
       %{commit_lsn: lsn} -> lsn
     end
   end

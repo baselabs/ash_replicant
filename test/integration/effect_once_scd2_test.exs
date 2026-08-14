@@ -134,8 +134,8 @@ defmodule AshReplicant.EffectOnceScd2Test do
     assert v1.amount == "1"
     assert v2.amount == "2"
 
-    PG.wait_until(fn -> observer_checkpoint_count(run_id) == 3 end)
-    assert_observer_counts(run_id, 2, 2, 2, 3)
+    PG.wait_until(fn -> observer_checkpoint_count(run_id) == 4 end)
+    assert_observer_counts(run_id, 2, 2, 2, 4)
     assert_atomic_observer_groups(run_id)
   end
 
@@ -166,8 +166,8 @@ defmodule AshReplicant.EffectOnceScd2Test do
     # ...and exactly one open, current version (the re-delivered UPDATE), value preserved.
     assert is_nil(v2.to) and v2.current and v2.amount == "2"
 
-    PG.wait_until(fn -> observer_checkpoint_count(run_id) == 2 end)
-    assert_observer_counts(run_id, 2, 1, 2, 2)
+    PG.wait_until(fn -> observer_checkpoint_count(run_id) == 3 end)
+    assert_observer_counts(run_id, 2, 1, 2, 3)
     assert_atomic_observer_groups(run_id)
   end
 
@@ -218,8 +218,8 @@ defmodule AshReplicant.EffectOnceScd2Test do
     assert not is_nil(v1.to) and not is_nil(v2.to) and is_nil(v3.to)
     assert v3.current and v3.amount == "3"
 
-    PG.wait_until(fn -> observer_checkpoint_count(run_id) == 3 end)
-    assert_observer_counts(run_id, 3, 2, 3, 3)
+    PG.wait_until(fn -> observer_checkpoint_count(run_id) == 4 end)
+    assert_observer_counts(run_id, 3, 2, 3, 4)
     assert_atomic_observer_groups(run_id)
   end
 
@@ -250,8 +250,8 @@ defmodule AshReplicant.EffectOnceScd2Test do
     assert not closed.current
     assert open.current and is_nil(open.to)
 
-    PG.wait_until(fn -> observer_checkpoint_count(run_id) == 2 end)
-    assert_observer_counts(run_id, 2, 1, 2, 2)
+    PG.wait_until(fn -> observer_checkpoint_count(run_id) == 3 end)
+    assert_observer_counts(run_id, 2, 1, 2, 3)
     assert_atomic_observer_groups(run_id)
   end
 
@@ -277,7 +277,9 @@ defmodule AshReplicant.EffectOnceScd2Test do
              Marquee.Scd2Sink.handle_snapshot(changes, context)
 
     assert Marquee.scd2_versions_snapshot() == []
-    assert DestinationObserver.rows(run_id) == []
+    # The B2 bind's checkpoint INSERT (its own transaction) is the only
+    # observer residue; the faulted snapshot batch wrote nothing.
+    assert [%{participant: "checkpoint", operation: "INSERT"}] = DestinationObserver.rows(run_id)
     assert [[0]] = Marquee.q!("SELECT count(*) FROM #{Marquee.scd2_auxiliary()}").rows
 
     assert :ok = Marquee.Scd2Sink.handle_snapshot(changes, context)
@@ -286,13 +288,15 @@ defmodule AshReplicant.EffectOnceScd2Test do
     assert DestinationObserver.effect_count(run_id, "mapped", "INSERT") == 2
     assert DestinationObserver.effect_count(run_id, "auxiliary", "INSERT") == 2
 
-    [transaction_id] =
+    # Two transactions: the B2 bind (checkpoint-only) and this snapshot batch.
+    transaction_ids =
       run_id
       |> DestinationObserver.rows()
       |> Enum.map(& &1.transaction_id)
       |> Enum.uniq()
 
-    assert is_integer(transaction_id)
+    assert length(transaction_ids) == 2
+    assert Enum.all?(transaction_ids, &is_integer/1)
   end
 
   describe "cloaked SCD2 close (adversarial Challenge 9)" do
@@ -414,6 +418,11 @@ defmodule AshReplicant.EffectOnceScd2Test do
     run_id
     |> DestinationObserver.rows()
     |> Enum.group_by(& &1.transaction_id)
+    # Scoped to apply-transaction groups (those carrying a mapped effect): the
+    # B2 bind transaction legitimately observes as a checkpoint-only group.
+    |> Enum.filter(fn {_transaction_id, rows} ->
+      Enum.any?(rows, &(&1.participant == "mapped"))
+    end)
     |> Enum.each(fn {_transaction_id, rows} ->
       participants = MapSet.new(rows, & &1.participant)
       assert "mapped" in participants
