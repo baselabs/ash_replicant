@@ -12,11 +12,10 @@ defmodule AshReplicant.Apply do
   """
 
   alias AshPostgres.DataLayer.Info, as: PGInfo
+  alias AshReplicant.Apply.Context
   alias AshReplicant.Apply.Scd2
   alias AshReplicant.{Error, Resolver}
   alias AshReplicant.Resource.Info
-  alias Ecto.Adapters.SQL
-  alias AshReplicant.Apply.Context
 
   @doc """
   Apply a change under `config` (`%{resolver_index:, repo:, authorize?:}`).
