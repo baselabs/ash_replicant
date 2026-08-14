@@ -192,39 +192,73 @@ defmodule AshReplicant.Sink.Impl do
   end
 
   defp run_snapshot(config, resource, changes, first?, snapshot_lsn, source_key) do
-    with {:ok, ordinal_base} <- snapshot_ordinal_base(config, source_key, first?) do
-      result =
-        config.repo.transaction(
-          fn ->
-            guard_generation!(config)
-            config = preflight_snapshot_onetime!(config, resource, changes)
-
-            if first? do
-              clear_mirror(resource, config)
-              guard_generation!(config)
-            end
-
-            apply_snapshot_batch(config, resource, changes, snapshot_lsn, ordinal_base)
-            guard_generation!(config)
-          end,
-          timeout: @snapshot_transaction_timeout
+    case snapshot_ordinal_base(config, source_key, first?) do
+      {:ok, ordinal_base} ->
+        run_snapshot_transaction(
+          config,
+          resource,
+          changes,
+          first?,
+          snapshot_lsn,
+          source_key,
+          ordinal_base
         )
 
-      case result do
-        {:ok, _} ->
-          put_snapshot_ordinal(config, source_key, ordinal_base + length(changes))
-          :ok
-
-        {:error, %Error{} = e} ->
-          {:error, e}
-
-        {:error, other} ->
-          {:error, Error.scrub(other, resource, :snapshot)}
-      end
-    else
       :error ->
         {:error, Error.exception(reason: :config_invalid, resource: resource, op: :snapshot)}
     end
+  end
+
+  defp run_snapshot_transaction(
+         config,
+         resource,
+         changes,
+         first?,
+         snapshot_lsn,
+         source_key,
+         ordinal_base
+       ) do
+    result =
+      config.repo.transaction(
+        fn ->
+          apply_snapshot_transaction!(
+            config,
+            resource,
+            changes,
+            first?,
+            snapshot_lsn,
+            ordinal_base
+          )
+        end,
+        timeout: @snapshot_transaction_timeout
+      )
+
+    case result do
+      {:ok, _} ->
+        put_snapshot_ordinal(config, source_key, ordinal_base + length(changes))
+        :ok
+
+      {:error, %Error{} = e} ->
+        {:error, e}
+
+      {:error, other} ->
+        {:error, Error.scrub(other, resource, :snapshot)}
+    end
+  end
+
+  defp apply_snapshot_transaction!(config, resource, changes, first?, snapshot_lsn, ordinal_base) do
+    guard_generation!(config)
+    config = preflight_snapshot_onetime!(config, resource, changes)
+    maybe_clear_snapshot(resource, config, first?)
+    apply_snapshot_batch(config, resource, changes, snapshot_lsn, ordinal_base)
+    guard_generation!(config)
+  end
+
+  defp maybe_clear_snapshot(_resource, _config, false), do: :ok
+
+  defp maybe_clear_snapshot(resource, config, true) do
+    clear_mirror(resource, config)
+    guard_generation!(config)
   end
 
   defp snapshot_ordinal_base(config, source_key, true) do

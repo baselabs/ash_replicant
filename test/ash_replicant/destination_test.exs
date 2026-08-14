@@ -2,7 +2,10 @@ defmodule AshReplicant.DestinationTest do
   use ExUnit.Case, async: false
 
   alias AshReplicant.Destination
+  alias AshReplicant.DestinationParticipant
   alias AshReplicant.Test.DestinationFixtures
+  alias Ecto.Adapters.SQL
+  alias Ecto.Adapters.SQL.Sandbox
 
   test "builds one deterministic closed manifest for mapped, auxiliary, and checkpoint actions" do
     config = DestinationFixtures.Sink.__ash_replicant_config__()
@@ -471,7 +474,7 @@ defmodule AshReplicant.DestinationTest do
 
   @tag :integration
   test "context-tenant store preflight is root-scoped and runs inside the transaction" do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(AshReplicant.TestRepo)
+    :ok = Sandbox.checkout(AshReplicant.TestRepo)
 
     assert {:ok, dynamic_repo} =
              Destination.effective_dynamic_repo(AshReplicant.TestRepo)
@@ -515,7 +518,7 @@ defmodule AshReplicant.DestinationTest do
              |> elem(1)
 
     assert %{rows: [[nil]]} =
-             Ecto.Adapters.SQL.query!(
+             SQL.query!(
                AshReplicant.TestRepo,
                "SELECT to_regclass('public.destination_context_onetime_roots')",
                []
@@ -576,30 +579,30 @@ defmodule AshReplicant.DestinationTest do
     }
 
     assert {:ok, first} =
-             AshReplicant.DestinationParticipant.operation_key(context, :auxiliary)
+             DestinationParticipant.operation_key(context, :auxiliary)
 
     assert {:ok, ^first} =
-             AshReplicant.DestinationParticipant.operation_key(context, :auxiliary)
+             DestinationParticipant.operation_key(context, :auxiliary)
 
     assert {:ok, second} =
              context
              |> Map.put(:ordinal, 1)
-             |> AshReplicant.DestinationParticipant.operation_key(:auxiliary)
+             |> DestinationParticipant.operation_key(:auxiliary)
 
     refute first == second
 
     assert {:error, :invalid_declaration} =
              context
              |> Map.delete(:ordinal)
-             |> AshReplicant.DestinationParticipant.operation_key(:auxiliary)
+             |> DestinationParticipant.operation_key(:auxiliary)
 
     assert {:error, :invalid_declaration} =
              context
              |> Map.put(:unexpected, true)
-             |> AshReplicant.DestinationParticipant.operation_key(:auxiliary)
+             |> DestinationParticipant.operation_key(:auxiliary)
 
     assert {:error, :invalid_declaration} =
-             AshReplicant.DestinationParticipant.operation_key(context, nil)
+             DestinationParticipant.operation_key(context, nil)
   end
 
   test "AshOnetime verifier callback must declare destination participation" do

@@ -2,6 +2,7 @@ defmodule AshReplicant.SchemaChangeTest do
   use ExUnit.Case, async: false
 
   alias AshReplicant.Sink.Impl
+  alias AshReplicant.Test.AdmittedGeneration
 
   defmodule Sink do
     use AshReplicant.Sink,
@@ -41,7 +42,7 @@ defmodule AshReplicant.SchemaChangeTest do
   end
 
   setup do
-    AshReplicant.Test.AdmittedGeneration.put!(Sink)
+    AdmittedGeneration.put!(Sink)
     on_exit(fn -> :persistent_term.erase({AshReplicant, "sc_slot"}) end)
     :ok
   end

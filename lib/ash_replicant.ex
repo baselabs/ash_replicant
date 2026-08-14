@@ -17,6 +17,7 @@ defmodule AshReplicant do
 
   alias AshReplicant.Destination.Generation
   alias AshReplicant.Error
+  alias AshReplicant.Sink.Impl
 
   @doc "The library version string."
   @spec version() :: String.t()
@@ -68,7 +69,7 @@ defmodule AshReplicant do
     activation_lock(slot_name, fn ->
       result = safe_stop(slot_name)
       :persistent_term.erase({AshReplicant, slot_name})
-      AshReplicant.Sink.Impl.clear_snapshot_ordinals(slot_name)
+      Impl.clear_snapshot_ordinals(slot_name)
       result
     end)
   end
@@ -216,20 +217,28 @@ defmodule AshReplicant do
              generation.sink_config.repo,
              current_dynamic_repo
            ) do
-      with_pinned_dynamic_repo(generation, fn ->
-        config = generation_config(generation)
-
-        with :ok <- guard_generation(config) do
-          result = effect.(config)
-
-          case guard_generation(config) do
-            :ok -> result
-            {:error, _error} = error -> error
-          end
-        end
-      end)
+      run_guarded_effect(generation, effect)
     else
       _other -> generation_error(:callback)
+    end
+  end
+
+  defp run_guarded_effect(generation, effect) do
+    with_pinned_dynamic_repo(generation, fn ->
+      config = generation_config(generation)
+
+      with :ok <- guard_generation(config) do
+        run_effect_and_guard(config, effect)
+      end
+    end)
+  end
+
+  defp run_effect_and_guard(config, effect) do
+    result = effect.(config)
+
+    case guard_generation(config) do
+      :ok -> result
+      {:error, _error} = error -> error
     end
   end
 

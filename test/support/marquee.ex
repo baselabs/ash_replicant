@@ -221,6 +221,8 @@ defmodule AshReplicant.Test.Marquee do
     use Ash.Resource.Change
     @behaviour AshReplicant.DestinationParticipant
 
+    alias AshOnetime.Resource.Info, as: OnetimeInfo
+    alias AshReplicant.DestinationParticipant
     alias AshReplicant.DestinationParticipant.{ActionRef, Context, ReplayIdentity}
     alias Ecto.Adapters.SQL
 
@@ -252,11 +254,11 @@ defmodule AshReplicant.Test.Marquee do
     end
 
     defp private_arguments(auxiliary, changeset, opts) do
-      if AshOnetime.Resource.Info.protected?(auxiliary, :record) do
+      if OnetimeInfo.protected?(auxiliary, :record) do
         participant = Keyword.fetch!(opts, :participant)
 
         {:ok, operation_key} =
-          AshReplicant.DestinationParticipant.operation_key(changeset, participant)
+          DestinationParticipant.operation_key(changeset, participant)
 
         %{operation_key: operation_key}
       else
@@ -317,28 +319,32 @@ defmodule AshReplicant.Test.Marquee do
           :ok
 
         key ->
-          if :persistent_term.get(key, false) do
-            :persistent_term.put(key, false)
-
-            [[sink_transaction_id]] =
-              SQL.query!(AshReplicant.TestRepo, "SELECT txid_current()", []).rows
-
-            observer = :persistent_term.get(Keyword.fetch!(opts, :observer_key))
-            send(observer, {:sink_transaction_id, sink_transaction_id})
-
-            result =
-              Task.async(fn ->
-                SQL.query!(
-                  AshReplicant.Test.Marquee.EscapeRepo,
-                  "INSERT INTO \"#{escape_table}\" (id) VALUES ($1)",
-                  [Ash.UUID.generate() |> Ecto.UUID.dump!()]
-                )
-              end)
-              |> Task.await(15_000)
-
-            send(observer, {:escape_inserted, result.num_rows})
-          end
+          escape_transaction!(escape_table, opts, key, :persistent_term.get(key, false))
       end
+    end
+
+    defp escape_transaction!(_escape_table, _opts, _key, false), do: :ok
+
+    defp escape_transaction!(escape_table, opts, key, true) do
+      :persistent_term.put(key, false)
+
+      [[sink_transaction_id]] =
+        SQL.query!(AshReplicant.TestRepo, "SELECT txid_current()", []).rows
+
+      observer = :persistent_term.get(Keyword.fetch!(opts, :observer_key))
+      send(observer, {:sink_transaction_id, sink_transaction_id})
+
+      result =
+        Task.async(fn ->
+          SQL.query!(
+            AshReplicant.Test.Marquee.EscapeRepo,
+            "INSERT INTO \"#{escape_table}\" (id) VALUES ($1)",
+            [Ash.UUID.generate() |> Ecto.UUID.dump!()]
+          )
+        end)
+        |> Task.await(15_000)
+
+      send(observer, {:escape_inserted, result.num_rows})
     end
   end
 

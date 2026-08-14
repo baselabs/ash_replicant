@@ -432,8 +432,10 @@ defmodule AshReplicant.StartLinkTest do
 
       compile_runtime_sink(module, [DestinationFixtures.NamedDefaultDomain])
 
+      handle_schema_change = Function.capture(module, :handle_schema_change, 2)
+
       assert {:error, %AshReplicant.Error{reason: :config_invalid}} =
-               apply(module, :handle_schema_change, [
+               handle_schema_change.(
                  %Replicant.SchemaChange{
                    kind: :additive,
                    change: :column_added,
@@ -442,14 +444,16 @@ defmodule AshReplicant.StartLinkTest do
                    detail: "structural"
                  },
                  %{}
-               ])
+               )
 
       assert %Generation{sink_config: admitted_config} =
                :persistent_term.get({AshReplicant, "runtime_drift_slot"})
 
       assert admitted_config.domains == [AshReplicant.Test.Domain]
 
-      assert apply(module, :__ash_replicant_config__, []).domains == [
+      sink_config = Function.capture(module, :__ash_replicant_config__, 0)
+
+      assert sink_config.().domains == [
                DestinationFixtures.NamedDefaultDomain
              ]
 

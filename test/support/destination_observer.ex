@@ -87,8 +87,7 @@ defmodule AshReplicant.Test.DestinationObserver do
     operations =
       trigger
       |> Map.fetch!(:operations)
-      |> Enum.map(&normalize_operation!/1)
-      |> Enum.join(" OR ")
+      |> Enum.map_join(" OR ", &normalize_operation!/1)
 
     commit_lsn =
       case Map.get(trigger, :commit_lsn_column) do

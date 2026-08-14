@@ -4,6 +4,7 @@ defmodule AshReplicant.Destination do
   alias AshReplicant.DestinationParticipant
   alias AshReplicant.DestinationParticipant.{ActionRef, Context, ReplayIdentity}
   alias AshReplicant.Resource.Info
+  alias Ecto.Adapters.SQL
   alias Spark.Dsl.Extension, as: DslExtension
 
   defmodule Entry do
@@ -376,12 +377,12 @@ defmodule AshReplicant.Destination do
             |> Enum.sort_by(&prefix_sort_key/1)
 
           prefixes_by_action =
-            Map.update(prefixes_by_action, {resource, action}, prefixes, fn existing ->
-              existing
-              |> Kernel.++(prefixes)
-              |> Enum.uniq()
-              |> Enum.sort_by(&prefix_sort_key/1)
-            end)
+            Map.update(
+              prefixes_by_action,
+              {resource, action},
+              prefixes,
+              &merge_prefixes(&1, prefixes)
+            )
 
           {:cont, {:ok, entries ++ all_entries, prefixes_by_action}}
 
@@ -394,6 +395,13 @@ defmodule AshReplicant.Destination do
   defp prefix_sort_key(nil), do: {0, ""}
   defp prefix_sort_key(:context_tenant), do: {1, ""}
   defp prefix_sort_key(prefix) when is_binary(prefix), do: {2, prefix}
+
+  defp merge_prefixes(existing, additional) do
+    existing
+    |> Kernel.++(additional)
+    |> Enum.uniq()
+    |> Enum.sort_by(&prefix_sort_key/1)
+  end
 
   defp mapped_root_actions(domains) do
     domains
@@ -1002,7 +1010,7 @@ defmodule AshReplicant.Destination do
       )
     """
 
-    case Ecto.Adapters.SQL.query(dynamic_repo, sql, [claims, responses]) do
+    case SQL.query(dynamic_repo, sql, [claims, responses]) do
       {:ok, %{rows: [[true, true, true]]}} -> :ok
       _other -> :error
     end
