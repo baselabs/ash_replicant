@@ -82,6 +82,26 @@ defmodule AshReplicant.DestinationTest do
     assert {:ok, second} = AshReplicant.Resolver.build_index(domains)
     assert first == second
     assert Map.values(first) == [DestinationFixtures.Root]
+
+    # The manifest roots and the resolver index enumerate the SAME mapped
+    # resources: both traverse Resolver.domain_resources/1, and a filter drift
+    # between the two surfaces (one skipping a reflection-failing module the
+    # other admits, or vice versa) breaks this pin.
+    assert {:ok, manifest} =
+             Destination.manifest(%{
+               repo: AshReplicant.TestRepo,
+               domains: domains,
+               checkpoint_resource: AshReplicant.Test.Checkpoint
+             })
+
+    manifest_root_resources =
+      manifest.entries
+      |> Enum.filter(&(&1.role == :mapped))
+      |> Enum.map(& &1.resource)
+      |> Enum.uniq()
+      |> Enum.sort()
+
+    assert manifest_root_resources == Enum.sort(Map.values(first))
   end
 
   test "unknown custom action code fails closed" do

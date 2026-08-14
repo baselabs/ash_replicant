@@ -47,12 +47,19 @@ defmodule AshReplicant.Resolver do
     end)
   end
 
-  defp resources(domains) when is_list(domains) do
+  @doc false
+  @spec domain_resources([module()]) :: [module()]
+  def domain_resources(domains) when is_list(domains) do
     domains
     |> Enum.flat_map(&Ash.Domain.Info.resources/1)
-    |> Enum.filter(&replicant_resource?/1)
     |> Enum.uniq()
     |> Enum.sort()
+  end
+
+  defp resources(domains) when is_list(domains) do
+    domains
+    |> domain_resources()
+    |> Enum.filter(&replicant_resource?/1)
   end
 
   @doc """
@@ -286,6 +293,11 @@ defmodule AshReplicant.Resolver do
   # --- private ---
 
   defp replicant_resource?(resource) do
+    # SKIPS a module whose reflection raises (e.g. a non-Spark module listed in a
+    # domain): the index tolerates it. The destination manifest intentionally
+    # FAILS on the same module (`:reflection_failed`) — activation must never
+    # silently drop a declared resource. The two stances are pinned together by
+    # the manifest-roots/index cross-consistency test.
     AshReplicant.Resource in Spark.extensions(resource)
   rescue
     _ -> false

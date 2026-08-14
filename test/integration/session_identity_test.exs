@@ -12,11 +12,6 @@ defmodule AshReplicant.SessionIdentityTest do
   alias Ecto.Adapters.SQL.Sandbox
 
   @slot "identity_order_slot"
-  # Opens only when the pipeline has REPORTED its identity verdict — every
-  # checkpoint-table access BEFORE the verdict (the fail-open bug class) is
-  # therefore invisible-by-design only in the sense that it cannot open the gate;
-  # the first-message assert below fails if the verdict is not first.
-  @identity_verdict_key {__MODULE__, :identity_verdict}
 
   defmodule IdentitySink do
     @moduledoc false
@@ -34,22 +29,20 @@ defmodule AshReplicant.SessionIdentityTest do
     Marquee.setup_schema!()
     Marquee.drop_slot!(@slot)
     Marquee.q!("DELETE FROM ash_replicant_checkpoints WHERE slot_name = $1", [@slot])
-    :persistent_term.erase(@identity_verdict_key)
 
     on_exit(fn ->
       AshReplicant.stop_supervised(@slot)
       Marquee.drop_slot!(@slot)
       Marquee.q!("DELETE FROM ash_replicant_checkpoints WHERE slot_name = $1", [@slot])
       Marquee.teardown_schema!()
-      :persistent_term.erase(@identity_verdict_key)
     end)
 
     :ok
   end
 
   test "the locked Hex package reports actual replication-session identity before checkpoint lookup" do
-    identity_ref = attach_identity_events(@identity_verdict_key)
-    access_ref = attach_checkpoint_access(@identity_verdict_key)
+    identity_ref = attach_identity_events()
+    access_ref = attach_checkpoint_access()
     applied_ref = attach_applied()
 
     expected_identity = Marquee.source_identity()
@@ -63,9 +56,10 @@ defmodule AshReplicant.SessionIdentityTest do
                go_forward_only: true
              )
 
-    # The identity verdict must be the FIRST reported event: any earlier
-    # checkpoint-table access would have opened the gate and put its message
-    # in the mailbox ahead of this one.
+    # The identity verdict must be the FIRST reported event: the checkpoint
+    # observer is UNGATED, so any checkpoint-table access before the verdict
+    # (the fail-open bug class) would land in this mailbox ahead of the verdict
+    # and fail this assert.
     receive do
       message ->
         assert message ==
@@ -89,8 +83,8 @@ defmodule AshReplicant.SessionIdentityTest do
   end
 
   test "a wrong actual-session expectation halts before checkpoint lookup and stays value-free" do
-    identity_ref = attach_identity_events(@identity_verdict_key)
-    access_ref = attach_checkpoint_access(@identity_verdict_key)
+    identity_ref = attach_identity_events()
+    access_ref = attach_checkpoint_access()
 
     sentinel_system = "sentinel-wrong-system"
     sentinel_database = "sentinel-wrong-database"
@@ -114,9 +108,10 @@ defmodule AshReplicant.SessionIdentityTest do
                         %{reason: :session_identity_rejected}},
                        15_000
 
-        # The gate opened at the rejection verdict, so this refute is live: any
-        # checkpoint read or write from here on (read OR upsert) is the fail-open
-        # bug class. A clean halt touches the checkpoint table zero times.
+        # UNGATED observer: any checkpoint read or write at ANY time — before
+        # the verdict (the fail-open bug class) or after the halt — fails this
+        # refute. A clean mismatched-identity activation touches the checkpoint
+        # table zero times.
         refute_receive {:checkpoint_accessed, ^access_ref}, 500
       end)
 
@@ -125,8 +120,8 @@ defmodule AshReplicant.SessionIdentityTest do
   end
 
   # The pipeline's identity verdict, both polarities, plus the streaming-ready
-  # signal. The verdict opens the checkpoint-access gate.
-  defp attach_identity_events(verdict_key) do
+  # signal.
+  defp attach_identity_events do
     ref = make_ref()
     test_pid = self()
 
@@ -137,17 +132,8 @@ defmodule AshReplicant.SessionIdentityTest do
         [:replicant, :connection, :session_identity_rejected],
         [:replicant, :connection, :slot_active]
       ],
-      fn
-        [:ash_replicant, :sink, :session_identity_accepted] = event, _m, meta, _c ->
-          verdict(verdict_key)
-          send(test_pid, {:telemetry, ref, event, meta})
-
-        [:replicant, :connection, :session_identity_rejected] = event, _m, meta, _c ->
-          verdict(verdict_key)
-          send(test_pid, {:telemetry, ref, event, meta})
-
-        event, _m, meta, _c ->
-          send(test_pid, {:telemetry, ref, event, meta})
+      fn event, _m, meta, _c ->
+        send(test_pid, {:telemetry, ref, event, meta})
       end,
       nil
     )
@@ -156,12 +142,14 @@ defmodule AshReplicant.SessionIdentityTest do
     ref
   end
 
-  defp verdict(verdict_key), do: :persistent_term.put(verdict_key, true)
-
   # Checkpoint-table access (read OR write) through Ecto query telemetry — the
-  # metadata carries only the table source, never a row value. Gated on the
-  # identity verdict so pre-verdict activation noise cannot satisfy the assert.
-  defp attach_checkpoint_access(verdict_key) do
+  # metadata carries only the table source, never a row value. Deliberately
+  # UNGATED: pre-verdict access is exactly the fail-open ordering bug this file
+  # guards, so it must be observable, not filtered. No legitimate pre-verdict
+  # checkpoint access exists in the covered configuration (go_forward_only:
+  # true short-circuits Replicant's guard read; the connection reads the
+  # checkpoint only after the identity check).
+  defp attach_checkpoint_access do
     ref = make_ref()
     test_pid = self()
 
@@ -169,8 +157,7 @@ defmodule AshReplicant.SessionIdentityTest do
       {__MODULE__, ref},
       [:ash_replicant, :test_repo, :query],
       fn _event, _measurements, metadata, _config ->
-        if metadata[:source] == "ash_replicant_checkpoints" and
-             :persistent_term.get(verdict_key, false) do
+        if metadata[:source] == "ash_replicant_checkpoints" do
           send(test_pid, {:checkpoint_accessed, ref})
         end
       end,

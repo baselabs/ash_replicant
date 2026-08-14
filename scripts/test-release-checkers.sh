@@ -207,6 +207,7 @@ if [[ "$replicant_floor_requirement" != "== 1.0.0" ]]; then
 fi
 
 scripts/test-ash-onetime-migration-checker.sh >/dev/null
+scripts/test-release-package-inspection.sh >/dev/null
 
 printf '%s\n' \
   'defmodule AshReplicant.ReleaseCheckerFixtureTest do' \

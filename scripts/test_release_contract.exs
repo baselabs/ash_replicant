@@ -217,6 +217,16 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     )
 
     assert_invalid!()
+
+    prepare_fixture()
+
+    replace_once!(
+      "scripts/test-release-checkers.sh",
+      "scripts/test-release-package-inspection.sh >/dev/null",
+      "true"
+    )
+
+    assert_invalid!()
   end
 
   defp replicant_selector_probes do

@@ -429,11 +429,16 @@ defmodule AshReplicant.Destination do
 
   defp destination_resources(domains) do
     domains
-    |> Enum.flat_map(&Ash.Domain.Info.resources/1)
-    |> Enum.filter(&(AshReplicant.Resource in Spark.extensions(&1)))
-    |> Enum.uniq()
-    |> Enum.sort()
+    |> AshReplicant.Resolver.domain_resources()
+    |> Enum.filter(&replicant_destination_resource?/1)
   end
+
+  # UNRESCUED twin of the resolver index's filter: a module whose reflection
+  # raises fails the manifest (`:reflection_failed`) here, while the index skips
+  # it — activation must never silently drop a declared resource. The two
+  # stances are pinned together by the manifest-roots/index test.
+  defp replicant_destination_resource?(resource),
+    do: AshReplicant.Resource in Spark.extensions(resource)
 
   defp mapped_resource_roots(resource) do
     with {:ok, read} <- required_primary_action(resource, :read),

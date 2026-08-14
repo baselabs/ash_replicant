@@ -273,6 +273,13 @@ defmodule AshReplicant.ReleaseContract do
     "DestinationParticipant proves arbitrary callback bodies contain no undeclared effects."
   ]
 
+  # The exact package-inspection bytes the contract enforces on the workflow.
+  # The package-inspection self-test executes these bytes against staged
+  # fixtures (leak + clean), so the shipped predicate is proven to REJECT, not
+  # merely to exist as text.
+  @doc false
+  def package_inspection, do: @package_inspection
+
   def run(root) do
     workflow = YamlElixir.read_from_file!(Path.join(root, ".github/workflows/ci.yml"))
 
@@ -304,6 +311,13 @@ defmodule AshReplicant.ReleaseContract do
       )
 
     assert(count == 1, "AshOnetime migration checker wiring is incomplete")
+
+    inspection_count =
+      source
+      |> String.split("\n")
+      |> Enum.count(&(String.trim(&1) == "scripts/test-release-package-inspection.sh >/dev/null"))
+
+    assert(inspection_count == 1, "package inspection checker wiring is incomplete")
   rescue
     _error in [File.Error] -> fail("AshOnetime migration checker wiring input is invalid")
   end
