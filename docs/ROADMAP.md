@@ -33,6 +33,20 @@ from it:
 - Commits remain local during task implementation. Pushes are reserved for a planned
   row closeout or an explicit user instruction, preventing per-task GitHub Actions.
 
+Every implementation plan must label every task with exactly one verification class
+and list the exact commands permitted for that task. A task without this label is not
+ready to execute:
+
+| Verification class | When used | Permitted | Prohibited |
+|---|---|---|---|
+| `FOCUSED` | Every implementation task before its row's final task | Named tests that directly exercise the changed behavior, one red-capable mutation where required, touched-file format, compile-WAE | Row-wide or repository-wide suites; Credo; Dialyzer; docs; dependency/security audits; package builds; complete integration matrices; push; GitHub Actions |
+| `ROW CLOSEOUT` | Exactly one final task per roadmap row | One row-complete affected test selection and the quality/package/document checks named by that row | Repository-wide release battery; repeated full reruns after each correction; push or GitHub Actions unless the plan or user explicitly authorizes them |
+| `RELEASE CLOSEOUT` | E2 only | The complete repository release battery, release-byte checks, and one exact-head GitHub CI run | Per-task or per-row repetition of the release battery |
+
+When a focused or row-closeout check finds a defect, fix it and rerun the directly
+affected check. Do not promote that correction into a broader suite. The next broader
+gate runs only at its already-declared closeout boundary.
+
 <!-- forge-roadmap-schema: 1 -->
 
 | ID | What | Acceptance | Depends | Why |
