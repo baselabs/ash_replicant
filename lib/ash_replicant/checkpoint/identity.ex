@@ -238,7 +238,7 @@ defmodule AshReplicant.Checkpoint.Identity do
   @spec legacy_checkpoint_row_count(module(), String.t()) :: {:ok, non_neg_integer()}
   def legacy_checkpoint_row_count(repo, table \\ @checkpoint_table) when is_atom(repo) do
     case repo.query(
-           "SELECT count(*) FROM information_schema.columns WHERE table_name = $1 AND column_name = 'source_system_id'",
+           "SELECT count(*) FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1 AND column_name = 'source_system_id'",
            [table]
          ) do
       # Migrated shape: nothing ambiguous can remain.
@@ -249,11 +249,12 @@ defmodule AshReplicant.Checkpoint.Identity do
       {:ok, %{rows: [[0]]}} ->
         case repo.query("SELECT count(*) FROM #{table}", []) do
           {:ok, %{rows: [[count]]}} -> {:ok, count}
-          _ -> {:ok, 0}
+          # A count failure must not read as "nothing ambiguous" — surface it.
+          _ -> {:error, :checkpoint_probe_failed}
         end
 
       _ ->
-        {:ok, 0}
+        {:error, :checkpoint_probe_failed}
     end
   end
 
@@ -269,6 +270,14 @@ defmodule AshReplicant.Checkpoint.Identity do
     case legacy_checkpoint_row_count(repo, table) do
       {:ok, 0} ->
         :ok
+
+      {:error, reason} ->
+        raise Error.exception(
+                reason: :config_invalid,
+                resource: nil,
+                op: :migrate,
+                shape: "probe=#{inspect(reason)}"
+              )
 
       {:ok, count} ->
         raise Error.exception(
@@ -288,7 +297,13 @@ defmodule AshReplicant.Checkpoint.Identity do
     # AshCloak replaces the plaintext attribute with `encrypted_<name>`; the
     # SOURCE column keeps the plaintext name. Map back so the contract records
     # the real source column ("pan"), not the generated attribute name.
-    cloak_targets = Map.new(cloak, &{String.to_atom("encrypted_#{&1}"), &1})
+    # The encrypted_<name> attribute exists by AshCloak's compile-time
+    # transformer; to_existing_atom never mints host-controlled atoms.
+    cloak_targets =
+      cloak
+      |> Enum.map(&{encrypted_atom("encrypted_#{&1}"), &1})
+      |> Enum.reject(&is_nil(elem(&1, 0)))
+      |> Map.new()
 
     columns =
       attrs
@@ -337,6 +352,12 @@ defmodule AshReplicant.Checkpoint.Identity do
           _ -> nil
         end
     end
+  end
+
+  defp encrypted_atom(name) do
+    String.to_existing_atom(name)
+  rescue
+    ArgumentError -> nil
   end
 
   defp index_relations(relations), do: Map.new(relations, &{{&1.schema, &1.table}, &1})

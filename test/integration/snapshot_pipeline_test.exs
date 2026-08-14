@@ -120,7 +120,7 @@ defmodule AshReplicant.SnapshotPipelineTest do
     PG.wait_until(fn -> ["26", "after-restart"] in Marquee.mirror_rows() end)
 
     assert length(Marquee.mirror_rows()) == 26
-    PG.wait_until(fn -> observer_checkpoint_count(run_id) >= 3 end)
+    PG.wait_until(fn -> observer_checkpoint_count(run_id) == 4 end)
     assert DestinationObserver.effect_count(run_id, "mapped", "INSERT") == 26
     assert DestinationObserver.effect_count(run_id, "mapped", "UPDATE") == 1
     assert DestinationObserver.effect_count(run_id, "auxiliary", "INSERT") == 27
@@ -174,7 +174,7 @@ defmodule AshReplicant.SnapshotPipelineTest do
       start_snapshot!(@retry_slot, RetrySnapshotSink)
       PG.wait_until(fn -> length(Marquee.mirror_rows()) == 1100 end, 800)
 
-      PG.wait_until(fn -> observer_checkpoint_count(run_id) >= 1 end)
+      PG.wait_until(fn -> observer_checkpoint_count(run_id) == 2 end)
       assert DestinationObserver.effect_count(run_id, "mapped", "INSERT") == 2100
       assert DestinationObserver.effect_count(run_id, "mapped", "DELETE") == 1000
       assert DestinationObserver.effect_count(run_id, "auxiliary", "INSERT") == 2100
@@ -223,7 +223,7 @@ defmodule AshReplicant.SnapshotPipelineTest do
     PG.wait_until(fn -> length(Marquee.mirror_rows()) == 26 end)
     assert ["26", "after-export"] in Marquee.mirror_rows()
 
-    PG.wait_until(fn -> observer_checkpoint_count(run_id) >= 2 end)
+    PG.wait_until(fn -> observer_checkpoint_count(run_id) == 3 end)
     assert DestinationObserver.effect_count(run_id, "mapped", "INSERT") == 26
     assert DestinationObserver.effect_count(run_id, "auxiliary", "INSERT") == 26
   end

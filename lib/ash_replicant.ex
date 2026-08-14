@@ -81,6 +81,12 @@ defmodule AshReplicant do
   @doc """
   Adopt a legacy slot-only watermark into a source-bound checkpoint row (the
   explicit operator choice of roadmap B2's legacy policy). Offline: refuses
+
+  > Repo binding: the operator functions write through the CALLER'S current
+  > dynamic-repo binding. On a host multiplexing databases through
+  > `put_dynamic_repo/1`, call them from a process bound to the destination
+  > repo (the same identity the pipeline's admitted generation pins).
+  > Offline: refuses
   while the slot has a live pipeline generation, stamps the operator-declared
   ACTUAL source identity and the preserved `commit_lsn`, and leaves the
   contract NULL — the first connect classifies the NULL contract as
@@ -202,19 +208,36 @@ defmodule AshReplicant do
             :ok
 
           [row] ->
-            if row.source_system_id == filter.source_system_id and
-                 row.source_database == filter.source_database and
-                 row.slot_name == filter.slot_name do
-              # Idempotent: the identical bound row already exists.
-              :ok
-            else
-              config.repo.rollback(
-                Error.exception(
-                  reason: :checkpoint_adopt_conflict,
-                  resource: config.checkpoint_resource,
-                  op: :adopt
+            same_triple =
+              row.source_system_id == filter.source_system_id and
+                row.source_database == filter.source_database and
+                row.slot_name == filter.slot_name
+
+            cond do
+              not same_triple ->
+                config.repo.rollback(
+                  Error.exception(
+                    reason: :checkpoint_adopt_conflict,
+                    resource: config.checkpoint_resource,
+                    op: :adopt
+                  )
                 )
-              )
+
+              # Idempotence requires the IDENTICAL row: a different watermark is
+              # a mismatched adoption — refuse rather than silently keep the
+              # first (or overwrite the durable one).
+              not is_nil(commit_lsn) and row.commit_lsn != commit_lsn ->
+                config.repo.rollback(
+                  Error.exception(
+                    reason: :checkpoint_adopt_conflict,
+                    resource: config.checkpoint_resource,
+                    op: :adopt,
+                    shape: "watermark_mismatch"
+                  )
+                )
+
+              true ->
+                :ok
             end
 
           _many ->
@@ -285,11 +308,15 @@ defmodule AshReplicant do
             end
 
           [_row] ->
+            # The row exists but has NO recorded timeline yet (adopted, never
+            # bound): there is nothing to acknowledge — start the pipeline and
+            # the first bind records the session timeline.
             config.repo.rollback(
               Error.exception(
-                reason: :checkpoint_unbound,
+                reason: :checkpoint_adopt_invalid,
                 resource: config.checkpoint_resource,
-                op: :acknowledge_timeline
+                op: :acknowledge_timeline,
+                shape: "source_timeline_nil"
               )
             )
 

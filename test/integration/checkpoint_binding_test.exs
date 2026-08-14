@@ -496,6 +496,69 @@ defmodule AshReplicant.CheckpointBindingTest do
 
       assert bound_row(@slot).commit_lsn == advanced
     end
+
+    test "two racing same-LSN admissions produce exactly one applied and one skipped",
+         %{ref: ref, watermark: watermark} do
+      # The lock-only discriminator. The PUBLIC callback path cannot prove the
+      # row lock on one node (the per-slot activation lease serializes ahead
+      # of it — by design), so this races two DIRECT Impl admissions with the
+      # seeded runtime config: lease-escaping writers are exactly the class
+      # the row lock is the durable serializer for. With the lock, the loser
+      # re-reads the advanced watermark under the lock and skips; WITHOUT the
+      # lock both read the stale watermark and both report :applied (the
+      # skipped-assert goes red).
+      race_lsn = watermark + 30_000
+      config = seeded_runtime_config(SinkA)
+
+      change = %Replicant.Transaction{
+        commit_lsn: race_lsn,
+        commit_timestamp: DateTime.utc_now(),
+        changes: []
+      }
+
+      tasks =
+        for _i <- 1..2,
+            do: Task.async(fn -> AshReplicant.Sink.Impl.handle_transaction(config, change) end)
+
+      results = Enum.map(tasks, &Task.await(&1, 15_000))
+
+      assert Enum.all?(results, &match?({:ok, ^race_lsn}, &1))
+
+      assert_receive {:telemetry, ^ref, [:ash_replicant, :sink, :applied],
+                      %{commit_lsn: ^race_lsn}},
+                     1_000
+
+      assert_receive {:telemetry, ^ref, [:ash_replicant, :sink, :skipped],
+                      %{commit_lsn: ^race_lsn}},
+                     1_000
+
+      assert bound_row(@slot).commit_lsn == race_lsn
+    end
+  end
+
+  # The runtime config the seeded generation would thread through run_callback,
+  # WITHOUT the activation lease — the lease-escaping writer shape.
+  defp seeded_runtime_config(sink) do
+    config = sink.__ash_replicant_config__()
+
+    generation =
+      :persistent_term.get({AshReplicant, config.slot_name})
+      |> case do
+        %AshReplicant.Destination.Generation{} = gen -> gen
+      end
+
+    Map.merge(config, %{
+      sink: sink,
+      resolver_index: generation.resolver_index,
+      destination_manifest: generation.manifest,
+      source_contract: generation.source_contract,
+      source_identity: generation.source_identity,
+      publication: generation.publication,
+      generation: generation.reference,
+      dynamic_repo: generation.dynamic_repo,
+      data_layer_context: %{repo: generation.dynamic_repo},
+      authorize?: false
+    })
   end
 
   defp txn(sink, lsn) do
