@@ -4,7 +4,7 @@ defmodule AshReplicant.SnapshotTest do
   @moduletag :integration
 
   alias AshReplicant.Sink.Impl
-  alias AshReplicant.Test.{Order, Secret, Vault}
+  alias AshReplicant.Test.{AdmittedGeneration, Order, Secret, Vault}
 
   defmodule Sink do
     use AshReplicant.Sink,
@@ -14,10 +14,32 @@ defmodule AshReplicant.SnapshotTest do
       slot_name: "snap_slot"
   end
 
+  defmodule Scd2Domain do
+    use Ash.Domain, validate_config_inclusion?: false
+
+    resources do
+      resource AshReplicant.Test.OrderVersion
+      resource AshReplicant.Test.Checkpoint
+    end
+  end
+
+  defmodule Scd2Sink do
+    use AshReplicant.Sink,
+      repo: AshReplicant.TestRepo,
+      domains: [AshReplicant.SnapshotTest.Scd2Domain],
+      checkpoint_resource: AshReplicant.Test.Checkpoint,
+      slot_name: "scd2_snap"
+  end
+
   setup do
-    {:ok, index} = AshReplicant.Resolver.build_index([AshReplicant.Test.Domain])
-    :persistent_term.put({AshReplicant, "snap_slot"}, index)
-    on_exit(fn -> :persistent_term.erase({AshReplicant, "snap_slot"}) end)
+    AdmittedGeneration.put!(Sink)
+    AdmittedGeneration.put!(Scd2Sink)
+
+    on_exit(fn ->
+      :persistent_term.erase({AshReplicant, "snap_slot"})
+      :persistent_term.erase({AshReplicant, "scd2_snap"})
+    end)
+
     :ok
   end
 
@@ -165,14 +187,6 @@ defmodule AshReplicant.SnapshotTest do
 
   @tag :integration
   test "snapshot seeds one open version per row for an SCD2 resource" do
-    config = %{
-      resolver_index: %{{"public", "orders"} => AshReplicant.Test.OrderVersion},
-      repo: AshReplicant.TestRepo,
-      authorize?: false,
-      slot_name: "scd2_snap",
-      checkpoint_resource: AshReplicant.Test.Checkpoint
-    }
-
     # Real snapshot changes carry commit_lsn: nil — the LSN lives in ctx.snapshot_lsn.
     # Building them with nil (the PRODUCTION shape) is what makes this test observe the
     # threading, instead of fabricating a commit_lsn that masks the bug.
@@ -194,7 +208,7 @@ defmodule AshReplicant.SnapshotTest do
     ]
 
     assert :ok =
-             Impl.handle_snapshot(config, changes, %{
+             Scd2Sink.handle_snapshot(changes, %{
                table: "public.orders",
                first_for_table?: true,
                snapshot_lsn: 10

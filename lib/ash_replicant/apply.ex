@@ -110,6 +110,7 @@ defmodule AshReplicant.Apply do
       upsert_fields: upsert_fields,
       tenant: tenant,
       authorize?: config.authorize?,
+      context: action_context(config),
       # The sink owns the single outer Repo.transaction these actions join (spec
       # decision 7); `transaction?: false` skips a redundant per-row savepoint on
       # the upsert. (`Ash.destroy!` has no `transaction?` option — its per-action
@@ -135,7 +136,11 @@ defmodule AshReplicant.Apply do
     end
 
     tenant = Resolver.resolve_tenant!(resource, old_record, :destroy)
-    query = Ash.Query.do_filter(resource, pk_values)
+
+    query =
+      resource
+      |> Ash.Query.do_filter(pk_values)
+      |> Ash.Query.set_context(action_context(config))
 
     # One atomic `DELETE ... WHERE pk` (single round-trip) instead of read-then-destroy.
     # `strategy: [:atomic, :stream]` takes the data-layer atomic path for the mirror's
@@ -156,6 +161,7 @@ defmodule AshReplicant.Apply do
       transaction: false,
       tenant: tenant,
       authorize?: config.authorize?,
+      context: action_context(config),
       return_errors?: true
     )
 
@@ -169,4 +175,7 @@ defmodule AshReplicant.Apply do
   end
 
   defp pk_changed?(_resource, _change), do: false
+
+  defp action_context(config),
+    do: %{data_layer: Map.get(config, :data_layer_context, %{repo: config.repo})}
 end

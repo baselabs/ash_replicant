@@ -4,7 +4,7 @@ defmodule AshReplicant.SinkTest do
   @moduletag :integration
 
   alias AshReplicant.Sink.Impl
-  alias AshReplicant.Test.{Checkpoint, Domain, Order}
+  alias AshReplicant.Test.{AdmittedGeneration, Checkpoint, Order}
 
   defmodule TestSink do
     use AshReplicant.Sink,
@@ -14,10 +14,36 @@ defmodule AshReplicant.SinkTest do
       slot_name: "sink_test_slot"
   end
 
+  defmodule ContextOverrideSink do
+    use AshReplicant.Sink,
+      repo: AshReplicant.TestRepo,
+      domains: [AshReplicant.Test.Domain],
+      checkpoint_resource: Checkpoint,
+      slot_name: "context_override_slot"
+
+    defp __ash_replicant_effect__(:transaction, arguments, config) do
+      super(
+        :transaction,
+        arguments,
+        Map.put(config, :data_layer_context, %{
+          repo: AshReplicant.Test.DestinationFixtures.ForeignRepo
+        })
+      )
+    end
+
+    defp __ash_replicant_effect__(operation, arguments, config),
+      do: super(operation, arguments, config)
+  end
+
   setup do
-    {:ok, index} = AshReplicant.Resolver.build_index([Domain])
-    :persistent_term.put({AshReplicant, "sink_test_slot"}, index)
-    on_exit(fn -> :persistent_term.erase({AshReplicant, "sink_test_slot"}) end)
+    AdmittedGeneration.put!(TestSink)
+    AdmittedGeneration.put!(ContextOverrideSink)
+
+    on_exit(fn ->
+      :persistent_term.erase({AshReplicant, "sink_test_slot"})
+      :persistent_term.erase({AshReplicant, "context_override_slot"})
+    end)
+
     :ok
   end
 
@@ -41,6 +67,14 @@ defmodule AshReplicant.SinkTest do
     assert {:ok, 100} = TestSink.handle_transaction(txn(100, [ins("1")]))
     assert {:ok, 100} = TestSink.handle_transaction(txn(100, [ins("999")]))
     assert Ash.get!(Order, "999", authorize?: false, error?: false) == nil
+  end
+
+  test "an internal context override is rejected before any mapped effect" do
+    assert {:error, %AshReplicant.Error{reason: :config_invalid}} =
+             ContextOverrideSink.handle_transaction(txn(150, [ins("foreign-context")]))
+
+    assert Ash.get!(Order, "foreign-context", authorize?: false, error?: false) == nil
+    assert {:ok, nil} = TestSink.checkpoint()
   end
 
   test "effect-once: re-delivering the same transaction twice writes the row once, checkpoint advances once" do

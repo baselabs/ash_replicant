@@ -13,7 +13,7 @@ defmodule AshReplicant.EffectOnceScd2Test do
   use ExUnit.Case, async: false
   @moduletag :integration
 
-  alias AshReplicant.Test.Marquee
+  alias AshReplicant.Test.{DestinationObserver, Marquee}
   alias AshReplicant.Test.PG
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -29,6 +29,11 @@ defmodule AshReplicant.EffectOnceScd2Test do
     on_exit(fn -> Sandbox.mode(AshReplicant.TestRepo, :manual) end)
 
     Marquee.setup_scd2_schema!()
+    run_id = "scd2-#{System.unique_integer([:positive])}"
+    DestinationObserver.setup!(run_id, observer_triggers())
+    assert DestinationObserver.unconstrained?()
+    :persistent_term.put(Marquee.scd2_fault_key(), false)
+    :persistent_term.put(Marquee.observer_key(), self())
 
     # Async slot release after socket close can raise 55006 — `drop_slot!` retries.
     Marquee.drop_slot!(@slot)
@@ -49,9 +54,12 @@ defmodule AshReplicant.EffectOnceScd2Test do
       Marquee.drop_slot!(@slot)
       Marquee.q!("DELETE FROM ash_replicant_checkpoints WHERE slot_name = $1", [@slot])
       Marquee.q!("ALTER TABLE ash_replicant_checkpoints DROP CONSTRAINT IF EXISTS tmp_block")
+      DestinationObserver.teardown!(observer_triggers())
+      :persistent_term.erase(Marquee.scd2_fault_key())
+      :persistent_term.erase(Marquee.observer_key())
     end)
 
-    :ok
+    {:ok, run_id: run_id}
   end
 
   # Block on `:slot_active` (fires on fresh `:create_slot` AND stream-resume) so a source write
@@ -87,7 +95,9 @@ defmodule AshReplicant.EffectOnceScd2Test do
     :telemetry.detach({__MODULE__, ref})
   end
 
-  test "version chain (loss=0): INSERT/UPDATE/DELETE yield contiguous, strictly-increasing boundaries" do
+  test "version chain: close, open, auxiliary, and checkpoint effects are atomic", %{
+    run_id: run_id
+  } do
     start!()
 
     # o1 lifecycle across three source commits — each gets its own commit_lsn (L1 < L2 < L3).
@@ -124,13 +134,14 @@ defmodule AshReplicant.EffectOnceScd2Test do
     assert v1.amount == "1"
     assert v2.amount == "2"
 
-    # dup=0: exactly one ledger row per commit_lsn (INSERT, UPDATE, DELETE = 3 distinct LSNs).
-    counts = Marquee.scd2_applied_counts()
-    assert map_size(counts) == 3
-    assert Enum.all?(Map.values(counts), &(&1 == 1))
+    PG.wait_until(fn -> observer_checkpoint_count(run_id) == 3 end)
+    assert_observer_counts(run_id, 2, 2, 2, 3)
+    assert_atomic_observer_groups(run_id)
   end
 
-  test "crash-and-resume (exactly once): an interrupted UPDATE re-delivers as one boundary, no dup" do
+  test "crash-and-resume: an interrupted UPDATE re-delivers as one boundary", %{
+    run_id: run_id
+  } do
     start!()
     Marquee.q!("INSERT INTO #{Marquee.scd2_src()} (order_id, amount) VALUES ('o1', '1')")
     PG.wait_until(fn -> length(Marquee.scd2_versions("o1")) == 1 end)
@@ -155,14 +166,13 @@ defmodule AshReplicant.EffectOnceScd2Test do
     # ...and exactly one open, current version (the re-delivered UPDATE), value preserved.
     assert is_nil(v2.to) and v2.current and v2.amount == "2"
 
-    # dup=0: the append-only ledger has one row per commit_lsn — no LSN applied twice across
-    # the kill boundary (a re-applied already-checkpointed txn would show count 2).
-    counts = Marquee.scd2_applied_counts()
-    assert map_size(counts) > 0
-    assert Enum.all?(Map.values(counts), &(&1 == 1))
+    PG.wait_until(fn -> observer_checkpoint_count(run_id) == 2 end)
+    assert_observer_counts(run_id, 2, 1, 2, 2)
+    assert_atomic_observer_groups(run_id)
   end
 
-  test "replay-dedup (dup=0): a checkpoint-fault rolls the SCD2 txn back byte-identical, then re-delivers exactly once" do
+  test "checkpoint fault rolls the SCD2 transaction back byte-identical, then replays once",
+       %{run_id: run_id} do
     start!()
 
     # Apply up to a durable checkpoint C: INSERT o1@L1, UPDATE o1@L2 (cp advances to L2).
@@ -173,6 +183,7 @@ defmodule AshReplicant.EffectOnceScd2Test do
 
     before = Marquee.scd2_versions_snapshot()
     assert length(before) == 2
+    before_observer = DestinationObserver.rows(run_id)
 
     # Block the checkpoint upsert so the NEXT SCD2 txn (close v(L2) + open v(L3)) fails at its
     # atomic checkpoint write and the WHOLE transaction rolls back — the close AND the open
@@ -187,6 +198,8 @@ defmodule AshReplicant.EffectOnceScd2Test do
 
     assert Marquee.scd2_versions_snapshot() == before,
            "a rolled-back SCD2 txn must leave the version table byte-identical (no dup, no re-open)"
+
+    assert DestinationObserver.rows(run_id) == before_observer
 
     # Release the fault and resume: the un-acked L3 re-delivers (its checkpoint never advanced)
     # and applies EXACTLY ONCE — loss=0 (the change is not lost) and dup=0 (not double-applied).
@@ -205,11 +218,81 @@ defmodule AshReplicant.EffectOnceScd2Test do
     assert not is_nil(v1.to) and not is_nil(v2.to) and is_nil(v3.to)
     assert v3.current and v3.amount == "3"
 
-    # dup=0: exactly one ledger row per commit_lsn. L3's first (rolled-back) attempt appended
-    # NOTHING; its re-apply appended once. A double-applied re-delivery would show count 2.
-    counts = Marquee.scd2_applied_counts()
-    assert map_size(counts) == 3
-    assert Enum.all?(Map.values(counts), &(&1 == 1))
+    PG.wait_until(fn -> observer_checkpoint_count(run_id) == 3 end)
+    assert_observer_counts(run_id, 3, 2, 3, 3)
+    assert_atomic_observer_groups(run_id)
+  end
+
+  test "a fault between close and open restores the chain and every observer entry", %{
+    run_id: run_id
+  } do
+    start!()
+    Marquee.q!("INSERT INTO #{Marquee.scd2_src()} (order_id, amount) VALUES ('o1', '1')")
+    PG.wait_until(fn -> length(Marquee.scd2_versions("o1")) == 1 end)
+
+    before_versions = Marquee.scd2_versions_snapshot()
+    before_observer = DestinationObserver.rows(run_id)
+
+    :persistent_term.put(Marquee.scd2_fault_key(), true)
+    Marquee.q!("UPDATE #{Marquee.scd2_src()} SET amount = '2' WHERE order_id = 'o1'")
+    Process.sleep(500)
+
+    assert Marquee.scd2_versions_snapshot() == before_versions
+    assert DestinationObserver.rows(run_id) == before_observer
+    assert [[1]] = Marquee.q!("SELECT count(*) FROM #{Marquee.scd2_auxiliary()}").rows
+
+    :ok = AshReplicant.stop_supervised(@slot)
+    start!()
+    PG.wait_until(fn -> length(Marquee.scd2_versions("o1")) == 2 end)
+
+    [closed, open] = Marquee.scd2_versions("o1")
+    assert closed.to == open.from
+    assert not closed.current
+    assert open.current and is_nil(open.to)
+
+    PG.wait_until(fn -> observer_checkpoint_count(run_id) == 2 end)
+    assert_observer_counts(run_id, 2, 1, 2, 2)
+    assert_atomic_observer_groups(run_id)
+  end
+
+  test "an SCD2 snapshot batch fault rolls back earlier rows and observer entries", %{
+    run_id: run_id
+  } do
+    start!()
+
+    changes = [
+      snapshot_change("s1", "1"),
+      snapshot_change("s2", "2")
+    ]
+
+    context = %{
+      table: "public.#{Marquee.scd2_src()}",
+      first_for_table?: true,
+      snapshot_lsn: 900
+    }
+
+    :persistent_term.put(Marquee.scd2_fault_key(), {:after, 1})
+
+    assert {:error, %AshReplicant.Error{}} =
+             Marquee.Scd2Sink.handle_snapshot(changes, context)
+
+    assert Marquee.scd2_versions_snapshot() == []
+    assert DestinationObserver.rows(run_id) == []
+    assert [[0]] = Marquee.q!("SELECT count(*) FROM #{Marquee.scd2_auxiliary()}").rows
+
+    assert :ok = Marquee.Scd2Sink.handle_snapshot(changes, context)
+    assert length(Marquee.scd2_versions_snapshot()) == 2
+    assert [[2]] = Marquee.q!("SELECT count(*) FROM #{Marquee.scd2_auxiliary()}").rows
+    assert DestinationObserver.effect_count(run_id, "mapped", "INSERT") == 2
+    assert DestinationObserver.effect_count(run_id, "auxiliary", "INSERT") == 2
+
+    [transaction_id] =
+      run_id
+      |> DestinationObserver.rows()
+      |> Enum.map(& &1.transaction_id)
+      |> Enum.uniq()
+
+    assert is_integer(transaction_id)
   end
 
   describe "cloaked SCD2 close (adversarial Challenge 9)" do
@@ -225,6 +308,7 @@ defmodule AshReplicant.EffectOnceScd2Test do
           {"public", "repl_scd2_cloak_src"} => AshReplicant.Test.Marquee.CloakVersionOrder
         },
         repo: AshReplicant.TestRepo,
+        data_layer_context: %{repo: AshReplicant.TestRepo},
         authorize?: false
       }
 
@@ -285,5 +369,56 @@ defmodule AshReplicant.EffectOnceScd2Test do
 
       assert [%{pan: "5222-2222"}] = loaded
     end
+  end
+
+  defp observer_triggers do
+    [
+      %{
+        table: Marquee.scd2_version(),
+        participant: "mapped",
+        operations: [:insert, :update, :delete]
+      },
+      %{table: Marquee.scd2_auxiliary(), participant: "auxiliary", operations: [:insert]},
+      %{
+        table: "ash_replicant_checkpoints",
+        participant: "checkpoint",
+        operations: [:insert, :update],
+        commit_lsn_column: "commit_lsn"
+      }
+    ]
+  end
+
+  defp snapshot_change(order_id, amount) do
+    %Replicant.Change{
+      op: :insert,
+      schema: "public",
+      table: Marquee.scd2_src(),
+      record: %{"order_id" => order_id, "amount" => amount},
+      commit_lsn: nil
+    }
+  end
+
+  defp assert_observer_counts(run_id, mapped_inserts, mapped_updates, auxiliary, checkpoint) do
+    assert DestinationObserver.effect_count(run_id, "mapped", "INSERT") == mapped_inserts
+    assert DestinationObserver.effect_count(run_id, "mapped", "UPDATE") == mapped_updates
+    assert DestinationObserver.effect_count(run_id, "auxiliary", "INSERT") == auxiliary
+    assert observer_checkpoint_count(run_id) == checkpoint
+  end
+
+  defp observer_checkpoint_count(run_id) do
+    DestinationObserver.effect_count(run_id, "checkpoint", "INSERT") +
+      DestinationObserver.effect_count(run_id, "checkpoint", "UPDATE")
+  end
+
+  defp assert_atomic_observer_groups(run_id) do
+    run_id
+    |> DestinationObserver.rows()
+    |> Enum.group_by(& &1.transaction_id)
+    |> Enum.each(fn {_transaction_id, rows} ->
+      participants = MapSet.new(rows, & &1.participant)
+      assert "mapped" in participants
+      assert "checkpoint" in participants
+      assert Enum.count(rows, &(&1.participant == "checkpoint")) == 1
+    end)
   end
 end

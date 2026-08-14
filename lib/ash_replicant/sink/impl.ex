@@ -291,6 +291,7 @@ defmodule AshReplicant.Sink.Impl do
           return_records?: false,
           return_notifications?: true,
           authorize?: config.authorize?,
+          context: action_context(config),
           transaction: false
         )
 
@@ -333,8 +334,6 @@ defmodule AshReplicant.Sink.Impl do
             count = apply_all(config, changes, ts)
             guard_generation!(config)
             upsert_checkpoint(config, lsn)
-            guard_generation!(config)
-            maybe_append_ledger(config, lsn)
             guard_generation!(config)
             {:applied, count}
         end
@@ -394,6 +393,7 @@ defmodule AshReplicant.Sink.Impl do
   defp read_checkpoint(config) do
     case Ash.get!(config.checkpoint_resource, config.slot_name,
            authorize?: false,
+           context: action_context(config),
            error?: false
          ) do
       nil -> nil
@@ -408,16 +408,11 @@ defmodule AshReplicant.Sink.Impl do
       upsert_identity: :unique_slot,
       upsert_fields: [:commit_lsn],
       authorize?: false,
+      context: action_context(config),
       return_notifications?: true
     )
   end
 
-  # Test-only append-only ledger (config[:apply_ledger] = table name) for the dup=0
-  # proof (Task 15). Appends inside the sink transaction, so it rolls back with a
-  # failed txn and appends exactly once per applied txn. Dormant unless configured.
-  defp maybe_append_ledger(%{apply_ledger: table} = config, lsn) when is_binary(table) do
-    SQL.query!(config.repo, "INSERT INTO \"#{table}\" (commit_lsn) VALUES ($1)", [lsn])
-  end
-
-  defp maybe_append_ledger(_config, _lsn), do: :ok
+  defp action_context(config),
+    do: %{data_layer: Map.get(config, :data_layer_context, %{repo: config.repo})}
 end

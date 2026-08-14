@@ -2,7 +2,7 @@ defmodule AshReplicant.EffectOnceTest do
   use ExUnit.Case, async: false
   @moduletag :integration
 
-  alias AshReplicant.Test.Marquee
+  alias AshReplicant.Test.{DestinationObserver, Marquee}
   alias AshReplicant.Test.PG
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -20,6 +20,12 @@ defmodule AshReplicant.EffectOnceTest do
     on_exit(fn -> Sandbox.mode(AshReplicant.TestRepo, :manual) end)
 
     Marquee.setup_schema!()
+    run_id = "scd1-#{System.unique_integer([:positive])}"
+    DestinationObserver.setup!(run_id, observer_triggers())
+    assert DestinationObserver.unconstrained?()
+    start_supervised!({Marquee.EscapeRepo, Marquee.escape_repo_config()})
+    :persistent_term.put(Marquee.escape_key(), false)
+    :persistent_term.put(Marquee.observer_key(), self())
 
     # `drop_slot!` retries while the walsender still holds the slot: Postgres
     # releases a replication slot ASYNCHRONOUSLY after the client socket closes, so
@@ -50,9 +56,12 @@ defmodule AshReplicant.EffectOnceTest do
       # ash_replicant_checkpoints table. Drop it defensively here so a mid-test
       # crash can never poison every subsequent checkpoint upsert (idempotent).
       Marquee.q!("ALTER TABLE ash_replicant_checkpoints DROP CONSTRAINT IF EXISTS tmp_block")
+      DestinationObserver.teardown!(observer_triggers())
+      :persistent_term.erase(Marquee.escape_key())
+      :persistent_term.erase(Marquee.observer_key())
     end)
 
-    :ok
+    {:ok, run_id: run_id}
   end
 
   # `Replicant.start_link` returns once the pipeline is supervised, but the
@@ -92,17 +101,20 @@ defmodule AshReplicant.EffectOnceTest do
     :telemetry.detach({__MODULE__, ref})
   end
 
-  test "end-to-end: a source INSERT lands in the Ash mirror exactly once" do
+  test "end-to-end: mapped, auxiliary, and checkpoint effects share one transaction", %{
+    run_id: run_id
+  } do
     start!()
     Marquee.q!("INSERT INTO #{Marquee.src()} (id, note) VALUES ('1', 'a')")
     PG.wait_until(fn -> Marquee.mirror_rows() == [["1", "a"]] end)
 
-    counts = Marquee.applied_counts()
-    assert map_size(counts) > 0
-    assert Enum.all?(Map.values(counts), &(&1 == 1))
+    PG.wait_until(fn -> length(DestinationObserver.rows(run_id)) == 3 end)
+    assert_effect_counts(run_id, 1, 1, 1)
+    assert_atomic_observer_groups(run_id)
   end
 
-  test "crash-and-resume: killing the pipeline mid-stream loses nothing and duplicates nothing" do
+  test "crash-and-resume: killing the pipeline mid-stream loses nothing and duplicates nothing",
+       %{run_id: run_id} do
     start!()
     Marquee.q!("INSERT INTO #{Marquee.src()} (id, note) VALUES ('1', 'a')")
     PG.wait_until(fn -> Marquee.mirror_rows() == [["1", "a"]] end)
@@ -114,12 +126,13 @@ defmodule AshReplicant.EffectOnceTest do
     PG.wait_until(fn -> length(Marquee.mirror_rows()) == 3 end)
     assert Marquee.mirror_rows() == [["1", "a"], ["2", "b"], ["3", "c"]]
 
-    counts = Marquee.applied_counts()
-    assert map_size(counts) > 0
-    assert Enum.all?(Map.values(counts), &(&1 == 1))
+    PG.wait_until(fn -> DestinationObserver.effect_count(run_id, "checkpoint", "UPDATE") == 1 end)
+    assert_effect_counts(run_id, 3, 3, 2)
+    assert_atomic_observer_groups(run_id)
   end
 
-  test "atomic rollback: a checkpoint-write fault rolls back the whole transaction, then dedups on resume" do
+  test "atomic rollback: a checkpoint-write fault rolls back every participant, then replays once",
+       %{run_id: run_id} do
     start!()
     Marquee.q!("INSERT INTO #{Marquee.src()} (id, note) VALUES ('1', 'a')")
     PG.wait_until(fn -> Marquee.mirror_rows() == [["1", "a"]] end)
@@ -131,6 +144,7 @@ defmodule AshReplicant.EffectOnceTest do
     Marquee.q!("INSERT INTO #{Marquee.src()} (id, note) VALUES ('2', 'b')")
     Process.sleep(500)
     assert Marquee.mirror_rows() == [["1", "a"]]
+    assert_effect_counts(run_id, 1, 1, 1)
 
     Marquee.q!("ALTER TABLE ash_replicant_checkpoints DROP CONSTRAINT tmp_block")
     AshReplicant.stop_supervised(@slot)
@@ -138,8 +152,74 @@ defmodule AshReplicant.EffectOnceTest do
     PG.wait_until(fn -> length(Marquee.mirror_rows()) == 2 end)
     assert Marquee.mirror_rows() == [["1", "a"], ["2", "b"]]
 
-    counts = Marquee.applied_counts()
-    assert map_size(counts) > 0
-    assert Enum.all?(Map.values(counts), &(&1 == 1))
+    PG.wait_until(fn -> length(DestinationObserver.rows(run_id)) == 6 end)
+    assert_effect_counts(run_id, 2, 2, 2)
+    assert_atomic_observer_groups(run_id)
+  end
+
+  test "observer positive control exposes an auxiliary write that escapes through a second Repo",
+       %{run_id: run_id} do
+    start!()
+
+    Marquee.q!(
+      "ALTER TABLE ash_replicant_checkpoints ADD CONSTRAINT tmp_block CHECK (commit_lsn < 0) NOT VALID"
+    )
+
+    :persistent_term.put(Marquee.escape_key(), true)
+    Marquee.q!("INSERT INTO #{Marquee.src()} (id, note) VALUES ('escape', 'structural')")
+
+    assert_receive {:sink_transaction_id, sink_transaction_id}, 15_000
+    assert_receive {:escape_inserted, 1}, 15_000
+
+    PG.wait_until(fn -> DestinationObserver.effect_count(run_id, "auxiliary", "INSERT") == 1 end)
+
+    assert Marquee.mirror_rows() == []
+    assert [[1]] = Marquee.q!("SELECT count(*) FROM #{Marquee.auxiliary()}").rows
+
+    assert [] ==
+             Marquee.q!(
+               "SELECT commit_lsn FROM ash_replicant_checkpoints WHERE slot_name = $1",
+               [@slot]
+             ).rows
+
+    assert [%{participant: "auxiliary", transaction_id: foreign_transaction_id}] =
+             DestinationObserver.rows(run_id)
+
+    refute foreign_transaction_id == sink_transaction_id
+  end
+
+  defp observer_triggers do
+    [
+      %{table: Marquee.mirror(), participant: "mapped", operations: [:insert, :update, :delete]},
+      %{table: Marquee.auxiliary(), participant: "auxiliary", operations: [:insert]},
+      %{
+        table: "ash_replicant_checkpoints",
+        participant: "checkpoint",
+        operations: [:insert, :update],
+        commit_lsn_column: "commit_lsn"
+      }
+    ]
+  end
+
+  defp assert_effect_counts(run_id, mapped, auxiliary, checkpoint) do
+    assert DestinationObserver.effect_count(run_id, "mapped", "INSERT") == mapped
+    assert DestinationObserver.effect_count(run_id, "auxiliary", "INSERT") == auxiliary
+
+    checkpoint_count =
+      DestinationObserver.effect_count(run_id, "checkpoint", "INSERT") +
+        DestinationObserver.effect_count(run_id, "checkpoint", "UPDATE")
+
+    assert checkpoint_count == checkpoint
+  end
+
+  defp assert_atomic_observer_groups(run_id) do
+    run_id
+    |> DestinationObserver.rows()
+    |> Enum.group_by(& &1.transaction_id)
+    |> Enum.each(fn {_transaction_id, rows} ->
+      participants = MapSet.new(rows, & &1.participant)
+      assert participants == MapSet.new(["mapped", "auxiliary", "checkpoint"])
+      assert Enum.count(rows, &(&1.participant == "checkpoint")) == 1
+    end)
   end
 end

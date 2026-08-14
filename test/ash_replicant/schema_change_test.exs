@@ -41,8 +41,7 @@ defmodule AshReplicant.SchemaChangeTest do
   end
 
   setup do
-    {:ok, index} = AshReplicant.Resolver.build_index([AshReplicant.Test.Domain])
-    :persistent_term.put({AshReplicant, "sc_slot"}, index)
+    AshReplicant.Test.AdmittedGeneration.put!(Sink)
     on_exit(fn -> :persistent_term.erase({AshReplicant, "sc_slot"}) end)
     :ok
   end

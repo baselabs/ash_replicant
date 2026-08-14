@@ -6,16 +6,16 @@ defmodule AshReplicant.Test.Marquee do
 
   @src "repl_src_orders"
   @mirror "repl_mirror_orders"
-  @ledger "repl_apply_ledger"
+  @auxiliary "repl_mirror_auxiliary"
   @pub "repl_marquee_pub"
 
-  # SCD2 marquee: its OWN source table + publication + version table + ledger, so its
+  # SCD2 marquee: its OWN source, publication, version, and auxiliary tables, so its
   # pipeline (own slot `marquee_scd2_slot`, own `Scd2Sink`) never collides with the SCD1
   # marquee's `repl_src_orders`/`Marquee.Order` under `Resolver.build_index`'s fail-closed
   # duplicate-source guard, and its WAL never cross-feeds the SCD1 slot.
   @scd2_src "repl_scd2_src_orders"
   @scd2_version "repl_version_orders"
-  @scd2_ledger "repl_scd2_apply_ledger"
+  @scd2_auxiliary "repl_version_auxiliary"
   @scd2_pub "repl_scd2_pub"
 
   # Cloaked-SCD2 version table (Challenge 9). Its `pan` source column encrypts into
@@ -25,15 +25,18 @@ defmodule AshReplicant.Test.Marquee do
 
   def src, do: @src
   def mirror, do: @mirror
-  def ledger, do: @ledger
+  def auxiliary, do: @auxiliary
   def publication, do: @pub
   def scd2_src, do: @scd2_src
   def scd2_version, do: @scd2_version
-  def scd2_ledger, do: @scd2_ledger
+  def scd2_auxiliary, do: @scd2_auxiliary
   def scd2_publication, do: @scd2_pub
   def scd2_cloak_version, do: @scd2_cloak_version
+  def escape_key, do: {__MODULE__, :escape_transaction}
+  def observer_key, do: {__MODULE__, :observer}
+  def scd2_fault_key, do: {__MODULE__, :scd2_between_effects_fault}
 
-  @doc "Create the source table (REPLICA IDENTITY FULL), mirror table, apply-ledger, publication."
+  @doc "Create the source table, mirror and auxiliary tables, and publication."
   def setup_schema! do
     q!("DROP PUBLICATION IF EXISTS #{@pub}")
     q!("DROP TABLE IF EXISTS #{@src}")
@@ -42,8 +45,8 @@ defmodule AshReplicant.Test.Marquee do
     q!("CREATE PUBLICATION #{@pub} FOR TABLE #{@src}")
     q!("DROP TABLE IF EXISTS #{@mirror}")
     q!("CREATE TABLE #{@mirror} (id text primary key, note text, body text)")
-    q!("DROP TABLE IF EXISTS #{@ledger}")
-    q!("CREATE TABLE #{@ledger} (commit_lsn bigint not null)")
+    q!("DROP TABLE IF EXISTS #{@auxiliary}")
+    q!("CREATE TABLE #{@auxiliary} (id uuid primary key)")
     :ok
   end
 
@@ -52,7 +55,7 @@ defmodule AshReplicant.Test.Marquee do
     q!("DROP PUBLICATION IF EXISTS #{@pub}")
     q!("DROP TABLE IF EXISTS #{@src}")
     q!("DROP TABLE IF EXISTS #{@mirror}")
-    q!("DROP TABLE IF EXISTS #{@ledger}")
+    q!("DROP TABLE IF EXISTS #{@auxiliary}")
     :ok
   end
 
@@ -98,18 +101,12 @@ defmodule AshReplicant.Test.Marquee do
   @doc "Rows currently in the mirror, ordered by id."
   def mirror_rows, do: q!("SELECT id, note FROM #{@mirror} ORDER BY id").rows
 
-  @doc "Per-commit_lsn applied count from the no-PK ledger — the dup=0 signal."
-  def applied_counts do
-    q!("SELECT commit_lsn, count(*) FROM #{@ledger} GROUP BY commit_lsn").rows
-    |> Map.new(fn [lsn, n] -> {lsn, n} end)
-  end
-
   @doc """
   Create the SCD2 marquee schema: source table (REPLICA IDENTITY FULL) + publication, the
   version table with BOTH unique indexes the mirror needs — the partial open-version index
   (`WHERE valid_to_lsn IS NULL`, one open version per business key) AND the
   `(order_id, valid_from_lsn)` index that backs the `:order_version` upsert identity
-  (ON CONFLICT needs a matching constraint) — and the append-only apply ledger.
+  (ON CONFLICT needs a matching constraint) — plus its auxiliary table.
   """
   def setup_scd2_schema! do
     q!("DROP PUBLICATION IF EXISTS #{@scd2_pub}")
@@ -141,8 +138,8 @@ defmodule AshReplicant.Test.Marquee do
       "CREATE UNIQUE INDEX #{@scd2_version}_bk_from ON #{@scd2_version} (order_id, valid_from_lsn)"
     )
 
-    q!("DROP TABLE IF EXISTS #{@scd2_ledger}")
-    q!("CREATE TABLE #{@scd2_ledger} (commit_lsn bigint not null)")
+    q!("DROP TABLE IF EXISTS #{@scd2_auxiliary}")
+    q!("CREATE TABLE #{@scd2_auxiliary} (id uuid primary key)")
     :ok
   end
 
@@ -197,12 +194,6 @@ defmodule AshReplicant.Test.Marquee do
     ).rows
   end
 
-  @doc "Per-commit_lsn applied count from the SCD2 ledger — the SCD2 dup=0 signal."
-  def scd2_applied_counts do
-    q!("SELECT commit_lsn, count(*) FROM #{@scd2_ledger} GROUP BY commit_lsn").rows
-    |> Map.new(fn [lsn, n] -> {lsn, n} end)
-  end
-
   @doc "A business key's cloaked version rows (raw `encrypted_pan` ciphertext included)."
   def scd2_cloak_versions(order_id) do
     q!(
@@ -212,6 +203,175 @@ defmodule AshReplicant.Test.Marquee do
     |> Enum.map(fn [from, to, current, enc] ->
       %{from: from, to: to, current: current, encrypted_pan: enc}
     end)
+  end
+
+  defmodule EscapeRepo do
+    @moduledoc false
+    use Ecto.Repo, otp_app: :ash_replicant, adapter: Ecto.Adapters.Postgres
+  end
+
+  def escape_repo_config do
+    TestRepo.config()
+    |> Keyword.put(:pool, DBConnection.ConnectionPool)
+    |> Keyword.put(:pool_size, 1)
+  end
+
+  defmodule RecordAuxiliary do
+    @moduledoc false
+    use Ash.Resource.Change
+    @behaviour AshReplicant.DestinationParticipant
+
+    alias AshReplicant.DestinationParticipant.{ActionRef, Context, ReplayIdentity}
+    alias Ecto.Adapters.SQL
+
+    @impl Ash.Resource.Change
+    def change(changeset, opts, _context) do
+      auxiliary = Keyword.fetch!(opts, :resource)
+      escape_table = Keyword.fetch!(opts, :escape_table)
+
+      changeset
+      |> Ash.Changeset.before_action(fn changeset ->
+        maybe_fault_between_effects!(opts)
+        maybe_escape_transaction!(escape_table, opts)
+        changeset
+      end)
+      |> Ash.Changeset.after_action(fn changeset, result ->
+        Ash.create!(auxiliary, %{},
+          action: :record,
+          authorize?: false,
+          transaction?: false,
+          return_notifications?: true,
+          context: %{data_layer: changeset.context[:data_layer] || %{}}
+        )
+
+        {:ok, result}
+      end)
+    end
+
+    @impl AshReplicant.DestinationParticipant
+    def destination_participants(opts, %Context{}) do
+      {:ok,
+       {:actions,
+        [
+          %ActionRef{
+            resource: Keyword.fetch!(opts, :resource),
+            action: :record,
+            replay_identity: %ReplayIdentity{
+              participant: Keyword.fetch!(opts, :participant),
+              components: [
+                :source_system_identifier,
+                :source_database,
+                :slot_name,
+                :commit_lsn,
+                :ordinal,
+                :participant
+              ]
+            }
+          }
+        ]}}
+    end
+
+    defp maybe_fault_between_effects!(opts) do
+      case Keyword.get(opts, :fault_key) do
+        nil ->
+          :ok
+
+        key ->
+          case :persistent_term.get(key, false) do
+            true ->
+              :persistent_term.put(key, false)
+              raise "injected structural participant fault"
+
+            {:after, 0} ->
+              :persistent_term.put(key, false)
+              raise "injected structural participant fault"
+
+            {:after, remaining} when is_integer(remaining) and remaining > 0 ->
+              :persistent_term.put(key, {:after, remaining - 1})
+
+            _other ->
+              :ok
+          end
+      end
+    end
+
+    defp maybe_escape_transaction!(escape_table, opts) do
+      case Keyword.get(opts, :escape_key) do
+        nil ->
+          :ok
+
+        key ->
+          if :persistent_term.get(key, false) do
+            :persistent_term.put(key, false)
+
+            [[sink_transaction_id]] =
+              SQL.query!(AshReplicant.TestRepo, "SELECT txid_current()", []).rows
+
+            observer = :persistent_term.get(Keyword.fetch!(opts, :observer_key))
+            send(observer, {:sink_transaction_id, sink_transaction_id})
+
+            result =
+              Task.async(fn ->
+                SQL.query!(
+                  AshReplicant.Test.Marquee.EscapeRepo,
+                  "INSERT INTO \"#{escape_table}\" (id) VALUES ($1)",
+                  [Ash.UUID.generate() |> Ecto.UUID.dump!()]
+                )
+              end)
+              |> Task.await(15_000)
+
+            send(observer, {:escape_inserted, result.num_rows})
+          end
+      end
+    end
+  end
+
+  defmodule Auxiliary do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.Test.Marquee.Domain,
+      data_layer: AshPostgres.DataLayer
+
+    postgres do
+      table "repl_mirror_auxiliary"
+      repo AshReplicant.TestRepo
+    end
+
+    attributes do
+      uuid_primary_key :id
+    end
+
+    actions do
+      defaults [:read]
+
+      create :record do
+        accept []
+      end
+    end
+  end
+
+  defmodule Scd2Auxiliary do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.Test.Marquee.Scd2Domain,
+      data_layer: AshPostgres.DataLayer
+
+    postgres do
+      table "repl_version_auxiliary"
+      repo AshReplicant.TestRepo
+    end
+
+    attributes do
+      uuid_primary_key :id
+    end
+
+    actions do
+      defaults [:read]
+
+      create :record do
+        accept []
+      end
+    end
   end
 
   defmodule Order do
@@ -237,7 +397,20 @@ defmodule AshReplicant.Test.Marquee do
     end
 
     actions do
-      defaults [:read, :destroy, create: :*, update: :*]
+      defaults [:read, :destroy, update: :*]
+
+      create :create do
+        primary? true
+        accept [:id, :note, :body]
+        touches_resources [AshReplicant.Test.Marquee.Auxiliary]
+
+        change {AshReplicant.Test.Marquee.RecordAuxiliary,
+                resource: AshReplicant.Test.Marquee.Auxiliary,
+                participant: :scd1_auxiliary,
+                escape_table: "repl_mirror_auxiliary",
+                escape_key: {AshReplicant.Test.Marquee, :escape_transaction},
+                observer_key: {AshReplicant.Test.Marquee, :observer}}
+      end
     end
   end
 
@@ -247,6 +420,7 @@ defmodule AshReplicant.Test.Marquee do
 
     resources do
       resource AshReplicant.Test.Marquee.Order
+      resource AshReplicant.Test.Marquee.Auxiliary
       resource AshReplicant.Test.Checkpoint
     end
   end
@@ -257,8 +431,7 @@ defmodule AshReplicant.Test.Marquee do
       repo: AshReplicant.TestRepo,
       domains: [AshReplicant.Test.Marquee.Domain],
       checkpoint_resource: AshReplicant.Test.Checkpoint,
-      slot_name: "marquee_slot",
-      apply_ledger: "repl_apply_ledger"
+      slot_name: "marquee_slot"
   end
 
   defmodule VersionOrder do
@@ -304,7 +477,30 @@ defmodule AshReplicant.Test.Marquee do
     end
 
     actions do
-      defaults [:read, :destroy, create: :*, update: :*]
+      defaults [:read, :destroy, update: :*]
+
+      create :create do
+        primary? true
+
+        accept [
+          :order_id,
+          :amount,
+          :valid_from_lsn,
+          :valid_to_lsn,
+          :valid_from_ts,
+          :valid_to_ts,
+          :is_current
+        ]
+
+        touches_resources [AshReplicant.Test.Marquee.Scd2Auxiliary]
+
+        change {AshReplicant.Test.Marquee.RecordAuxiliary,
+                resource: AshReplicant.Test.Marquee.Scd2Auxiliary,
+                participant: :scd2_auxiliary,
+                escape_table: "repl_version_auxiliary",
+                fault_key: {AshReplicant.Test.Marquee, :scd2_between_effects_fault},
+                observer_key: {AshReplicant.Test.Marquee, :observer}}
+      end
 
       update :close_version do
         accept [:valid_to_lsn, :valid_to_ts, :is_current]
@@ -318,6 +514,7 @@ defmodule AshReplicant.Test.Marquee do
 
     resources do
       resource AshReplicant.Test.Marquee.VersionOrder
+      resource AshReplicant.Test.Marquee.Scd2Auxiliary
       resource AshReplicant.Test.Checkpoint
     end
   end
@@ -328,8 +525,7 @@ defmodule AshReplicant.Test.Marquee do
       repo: AshReplicant.TestRepo,
       domains: [AshReplicant.Test.Marquee.Scd2Domain],
       checkpoint_resource: AshReplicant.Test.Checkpoint,
-      slot_name: "marquee_scd2_slot",
-      apply_ledger: "repl_scd2_apply_ledger"
+      slot_name: "marquee_scd2_slot"
   end
 
   defmodule CloakVersionOrder do

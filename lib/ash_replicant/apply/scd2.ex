@@ -136,7 +136,10 @@ defmodule AshReplicant.Apply.Scd2 do
       raise Error.exception(reason: :sink_failed, resource: resource, op: :sink)
     end
 
-    query = Resolver.open_version_query(resource, record, lsn, opts)
+    query =
+      resource
+      |> Resolver.open_version_query(record, lsn, opts)
+      |> Ash.Query.set_context(action_context(config))
 
     Ash.bulk_update!(
       query,
@@ -146,6 +149,7 @@ defmodule AshReplicant.Apply.Scd2 do
       transaction: false,
       tenant: tenant,
       authorize?: config.authorize?,
+      context: action_context(config),
       return_notifications?: true,
       return_errors?: true
     )
@@ -163,6 +167,7 @@ defmodule AshReplicant.Apply.Scd2 do
       upsert_fields: upsert_fields,
       tenant: tenant,
       authorize?: config.authorize?,
+      context: action_context(config),
       transaction?: false,
       return_notifications?: true
     )
@@ -189,4 +194,7 @@ defmodule AshReplicant.Apply.Scd2 do
   defp opt(_), do: nil
   defp maybe_put(map, nil, _v), do: map
   defp maybe_put(map, k, v), do: Map.put(map, k, v)
+
+  defp action_context(config),
+    do: %{data_layer: Map.get(config, :data_layer_context, %{repo: config.repo})}
 end

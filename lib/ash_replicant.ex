@@ -87,13 +87,16 @@ defmodule AshReplicant do
 
   @doc false
   @spec guard_generation(map()) :: :ok | {:error, Error.t()}
-  def guard_generation(%{
-        slot_name: slot_name,
-        sink: sink,
-        generation: generation
-      }) do
+  def guard_generation(
+        %{
+          slot_name: slot_name,
+          sink: sink,
+          generation: generation
+        } = config
+      ) do
     with %Generation{reference: ^generation, sink: ^sink} = admitted <-
            :persistent_term.get({AshReplicant, slot_name}, :none),
+         :ok <- validate_runtime_config(config, admitted),
          :ok <- validate_generation(admitted) do
       :ok
     else
@@ -241,6 +244,22 @@ defmodule AshReplicant do
       :ok
     else
       _other -> generation_error(:generation)
+    end
+  end
+
+  defp validate_runtime_config(config, %Generation{} = generation) do
+    with true <-
+           Enum.all?(generation.sink_config, fn {key, value} -> Map.get(config, key) == value end),
+         true <- config.resolver_index == generation.resolver_index,
+         true <- config.destination_manifest == generation.manifest,
+         true <- config.source_identity == generation.source_identity,
+         true <- config.publication == generation.publication,
+         true <- config.dynamic_repo == generation.dynamic_repo,
+         true <- config.data_layer_context == %{repo: generation.dynamic_repo},
+         true <- config.authorize? == false do
+      :ok
+    else
+      _other -> generation_error(:runtime_config)
     end
   end
 
