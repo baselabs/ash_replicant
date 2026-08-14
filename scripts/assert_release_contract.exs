@@ -403,13 +403,7 @@ defmodule AshReplicant.ReleaseContract do
   defp assert_replicant_contract(root) do
     lock = root |> Path.join("mix.lock") |> File.read!()
 
-    replicant_version = hex_lock_version(lock, "replicant")
-
-    assert(
-      Version.match?(replicant_version, ">= 1.0.0 and < 2.0.0-0"),
-      "Replicant dependency lock contract is incomplete"
-    )
-
+    assert_hex_lock(lock, "replicant", expected_replicant_lock_version())
     assert_hex_lock(lock, "postgrex", "0.22.4")
 
     session_source = read_dependency_source!(root, "lib/replicant/session_identity.ex")
@@ -433,6 +427,21 @@ defmodule AshReplicant.ReleaseContract do
   rescue
     _error in [File.Error, SyntaxError, TokenMissingError] ->
       fail("Replicant package contract input is invalid")
+  end
+
+  defp expected_replicant_lock_version do
+    case System.get_env("ASH_REPLICANT_REPLICANT_VERSION") do
+      value when value in [nil, "", "latest"] ->
+        "1.1.0"
+
+      value ->
+        with {:ok, _version} <- Version.parse(value),
+             true <- Version.match?(value, @replicant_requirement) do
+          value
+        else
+          _other -> fail("Replicant dependency lock contract is incomplete")
+        end
+    end
   end
 
   defp assert_hex_lock(lock, dependency, expected_version) do

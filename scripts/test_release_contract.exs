@@ -843,6 +843,16 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       "mix.lock",
+      ~s("replicant": {:hex, :replicant, "1.1.0"),
+      ~s("replicant": {:hex, :replicant, "1.0.0")
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
+    replace_once!(
+      "mix.lock",
       ~s("postgrex": {:hex, :postgrex, "0.22.4"),
       ~s("postgrex": {:hex, :postgrex, "0.22.3")
     )
