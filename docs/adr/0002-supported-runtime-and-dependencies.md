@@ -32,9 +32,9 @@ bound does not mean “Ash 3 only.”
   known-vulnerable patches; the `-0` upper bound excludes every Ash 4
   prerelease.
 - The release lock resolves Ash 3.31.3, AshPostgres 2.11.0, AshOnetime 0.6.0,
-  EctoSQL 3.14.0, Postgrex 0.22.4, ymlr 5.1.6, and Replicant 0.3.1.
+  EctoSQL 3.14.0, Postgrex 0.22.4, ymlr 5.1.6, and Replicant 1.1.0.
 - Public dependency families are bounded with patch-qualified requirements for
-  AshPostgres 2.11, AshOnetime 0.6, Replicant 0.3, Spark 2.7, Telemetry 1.4,
+  AshPostgres 2.11, AshOnetime 0.6, Replicant 1.x, Spark 2.7, Telemetry 1.4,
   Postgrex 0.22.4, and ymlr 5.1.6.
 - `ASH_REPLICANT_ASH_VERSION` is a repository CI selector. Unset, empty, or
   `latest` publishes the public Ash range; an exact selector must be a semantic
@@ -59,6 +59,11 @@ transaction with the mirrored Ash actions.
   AshReplicant release, but the floating CI cell detects behavior drift.
 - Ash 4 requires a deliberate compatibility decision and a new package range;
   prereleases cannot enter through the current constraint.
+
+The Replicant portion of this decision was amended by
+[ADR-0005](0005-replicant-coordination.md): the public requirement is now
+`>= 1.0.0 and < 2.0.0-0`, the release lock is 1.1.0, and CI exercises both the
+exact 1.0.0 floor and the selector-free current lock.
 
 ## Evidence
 

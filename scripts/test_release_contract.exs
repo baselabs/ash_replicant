@@ -842,6 +842,16 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     prepare_fixture()
 
     replace_once!(
+      "mix.lock",
+      ~s("postgrex": {:hex, :postgrex, "0.22.4"),
+      ~s("postgrex": {:hex, :postgrex, "0.22.3")
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
+    replace_once!(
       "deps/replicant/lib/replicant/sink.ex",
       "@callback handle_session_identity",
       "@callback removed_session_identity"
@@ -855,6 +865,25 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       "deps/replicant/lib/replicant/connection.ex",
       "Replicant.Sink.accept_session_identity",
       "Replicant.Sink.removed_session_identity"
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
+    replace_once!(
+      "deps/replicant/lib/replicant/connection.ex",
+      "Replicant.Sink.accept_session_identity(state.sink, identity, %{",
+      "# Replicant.Sink.accept_session_identity(state.sink, identity, %{\n         Replicant.Sink.removed_session_identity(state.sink, identity, %{"
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
+    File.write!(
+      fixture_path("README.md"),
+      File.read!(fixture_path("README.md")) <> "\nThis project does not support Replicant 1.x.\n"
     )
 
     assert_invalid!()

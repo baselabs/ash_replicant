@@ -403,7 +403,13 @@ defmodule AshReplicant.ReleaseContract do
   defp assert_replicant_contract(root) do
     lock = root |> Path.join("mix.lock") |> File.read!()
 
-    assert_hex_lock(lock, "replicant", "1.1.0")
+    replicant_version = hex_lock_version(lock, "replicant")
+
+    assert(
+      Version.match?(replicant_version, ">= 1.0.0 and < 2.0.0-0"),
+      "Replicant dependency lock contract is incomplete"
+    )
+
     assert_hex_lock(lock, "postgrex", "0.22.4")
 
     session_source = read_dependency_source!(root, "lib/replicant/session_identity.ex")
@@ -420,22 +426,8 @@ defmodule AshReplicant.ReleaseContract do
       "Replicant package contract is incomplete"
     )
 
-    identity_parse =
-      text_position(connection_source, "Replicant.SessionIdentity.from_result(result)")
-
-    identity_accept = text_position(connection_source, "Replicant.Sink.accept_session_identity")
-    recovery_call = text_position(connection_source, "      begin_recovery(state)\n    else")
-    recovery_definition = text_position(connection_source, "  defp begin_recovery(state) do")
-
-    checkpoint =
-      text_position(
-        connection_source,
-        "{checkpoint_state, checkpoint_lsn} = read_checkpoint(state)"
-      )
-
     assert(
-      identity_parse < identity_accept and identity_accept < recovery_call and
-        recovery_definition < checkpoint,
+      semantic_identity_gate?(connection_source),
       "Replicant actual-session ordering contract is incomplete"
     )
   rescue
@@ -444,28 +436,64 @@ defmodule AshReplicant.ReleaseContract do
   end
 
   defp assert_hex_lock(lock, dependency, expected_version) do
+    assert(
+      hex_lock_version(lock, dependency) == expected_version,
+      "Replicant dependency lock contract is incomplete"
+    )
+  end
+
+  defp hex_lock_version(lock, dependency) do
     escaped_dependency = Regex.escape(dependency)
-    escaped_version = Regex.escape(expected_version)
 
     pattern =
       Regex.compile!(
-        "^\\s*\"#{escaped_dependency}\": \\{:hex, :#{escaped_dependency}, \"#{escaped_version}\", " <>
+        "^\\s*\"#{escaped_dependency}\": \\{:hex, :#{escaped_dependency}, \"([^\"]+)\", " <>
           "\"[0-9a-f]{64}\", \\[[^\\n]*\\], \\[[^\\n]*\\], \"hexpm\", \"[0-9a-f]{64}\"\\},$",
         "m"
       )
 
-    assert(Regex.match?(pattern, lock), "Replicant dependency lock contract is incomplete")
+    case Regex.run(pattern, lock) do
+      [_entry, version] -> version
+      _other -> fail("Replicant dependency lock contract is incomplete")
+    end
   end
 
   defp read_dependency_source!(root, path),
     do: root |> Path.join("deps/replicant") |> Path.join(path) |> File.read!()
 
-  defp text_position(content, needle) do
-    case :binary.match(content, needle) do
-      {position, _length} -> position
-      :nomatch -> fail("Replicant package contract is incomplete")
-    end
+  defp semantic_identity_gate?(source) do
+    ast = Code.string_to_quoted!(source)
+
+    {_ast, clauses} =
+      Macro.prewalk(ast, [], fn
+        {:def, _, [{:handle_result, _, _} = head, [do: body]]} = node, clauses ->
+          {node, [{head, body} | clauses]}
+
+        node, clauses ->
+          {node, clauses}
+      end)
+
+    Enum.any?(clauses, fn {head, body} ->
+      String.contains?(Macro.to_string(head), "step: :identity_check") and
+        exact_identity_gate_body?(body)
+    end)
   end
+
+  defp exact_identity_gate_body?({:with, _, [first, second, [do: success, else: _failure]]}) do
+    match?({:<-, _, [_, _]}, first) and
+      match?({:<-, _, [_, _]}, second) and
+      first |> generator_rhs() |> Macro.to_string() ==
+        "Replicant.SessionIdentity.from_result(result)" and
+      second
+      |> generator_rhs()
+      |> Macro.to_string()
+      |> String.starts_with?("Replicant.Sink.accept_session_identity(state.sink, identity,") and
+      Macro.to_string(success) == "begin_recovery(state)"
+  end
+
+  defp exact_identity_gate_body?(_body), do: false
+
+  defp generator_rhs({:<-, _, [_pattern, rhs]}), do: rhs
 
   defp find_definitions(expressions, kind, name) do
     Enum.flat_map(expressions, fn
@@ -499,8 +527,8 @@ defmodule AshReplicant.ReleaseContract do
 
       assert(
         not Regex.match?(
-          ~r/(?:unsupported release foundation|does(?:\s+not|n't)\s+support[^\n]*(?:Elixir 1\.20\.3|Erlang\/OTP 29|Ash 3\.31\.3)|(?:Elixir 1\.20\.3|Erlang\/OTP 29|Ash 3\.31\.3)[^\n]*\bnot supported\b)/i,
-          normalize_markdown(visible)
+          ~r/(?:unsupported release foundation|does(?:[\s\p{Cf}]+not|n't)[\s\p{Cf}]+support[\s\p{Cf}]*(?:Elixir 1\.20\.3|Erlang\/OTP 29|Ash 3\.31\.3|Replicant 1(?:\.x|\.0\.0|\.1\.0))|(?:Elixir 1\.20\.3|Erlang\/OTP 29|Ash 3\.31\.3|Replicant 1(?:\.x|\.0\.0|\.1\.0))[\s\p{Cf}]*(?:is[\s\p{Cf}]+)?not[\s\p{Cf}]+supported)/iu,
+          visible
         ),
         "published runtime or dependency contract is contradictory"
       )

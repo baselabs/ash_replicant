@@ -164,6 +164,16 @@ if [[ "$replicant_major_exit" -eq 0 ]] || [[ "$replicant_major_output" != *"must
   exit 1
 fi
 
+set +e
+replicant_old_output="$(ASH_REPLICANT_REPLICANT_VERSION='0.3.1' mix run --no-start --no-compile --no-deps-check -e ':ok' 2>&1)"
+replicant_old_exit=$?
+set -e
+
+if [[ "$replicant_old_exit" -eq 0 ]] || [[ "$replicant_old_output" != *"must be a semantic version matching"* ]] || [[ "$replicant_old_output" == *"because mix.lock"* ]]; then
+  echo "Replicant legacy guard did not reject before dependency resolution" >&2
+  exit 1
+fi
+
 replicant_public_requirement=">= 1.0.0 and < 2.0.0-0"
 
 for selector in unset empty latest; do

@@ -47,6 +47,15 @@ defmodule AshReplicant.Test.Marquee do
     :ok
   end
 
+  @doc "Remove the SCD1 integration fixture's publication and tables."
+  def teardown_schema! do
+    q!("DROP PUBLICATION IF EXISTS #{@pub}")
+    q!("DROP TABLE IF EXISTS #{@src}")
+    q!("DROP TABLE IF EXISTS #{@mirror}")
+    q!("DROP TABLE IF EXISTS #{@ledger}")
+    :ok
+  end
+
   def q!(sql, params \\ []), do: SQL.query!(TestRepo, sql, params)
 
   @doc """

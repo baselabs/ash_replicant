@@ -77,8 +77,7 @@ defmodule AshReplicant.Sink do
       @impl Replicant.Sink
       def handle_snapshot_complete(lsn), do: Impl.handle_snapshot_complete(__config__(), lsn)
 
-      defoverridable handle_session_identity: 2,
-                     checkpoint: 0,
+      defoverridable checkpoint: 0,
                      handle_transaction: 1,
                      sink_kind: 0,
                      handle_schema_change: 2,

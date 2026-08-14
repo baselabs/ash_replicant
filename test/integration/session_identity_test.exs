@@ -3,6 +3,7 @@ defmodule AshReplicant.SessionIdentityTest do
   @moduletag :integration
 
   alias AshReplicant.Test.Marquee
+  alias AshReplicant.Test.PG
   alias Ecto.Adapters.SQL.Sandbox
 
   @slot "identity_order_slot"
@@ -17,17 +18,6 @@ defmodule AshReplicant.SessionIdentityTest do
       slot_name: "identity_order_slot"
 
     @impl Replicant.Sink
-    def handle_session_identity(identity, context) do
-      send(:persistent_term.get({AshReplicant.SessionIdentityTest, :observer}), {
-        :session_identity,
-        identity,
-        context
-      })
-
-      super(identity, context)
-    end
-
-    @impl Replicant.Sink
     def checkpoint do
       send(
         :persistent_term.get({AshReplicant.SessionIdentityTest, :observer}),
@@ -35,6 +25,16 @@ defmodule AshReplicant.SessionIdentityTest do
       )
 
       super()
+    end
+
+    @impl Replicant.Sink
+    def handle_transaction(transaction) do
+      send(
+        :persistent_term.get({AshReplicant.SessionIdentityTest, :observer}),
+        {:transaction_delivered, transaction.commit_lsn}
+      )
+
+      super(transaction)
     end
   end
 
@@ -51,6 +51,7 @@ defmodule AshReplicant.SessionIdentityTest do
       AshReplicant.stop_supervised(@slot)
       Marquee.drop_slot!(@slot)
       Marquee.q!("DELETE FROM ash_replicant_checkpoints WHERE slot_name = $1", [@slot])
+      Marquee.teardown_schema!()
       :persistent_term.erase(@observer_key)
     end)
 
@@ -61,10 +62,15 @@ defmodule AshReplicant.SessionIdentityTest do
     ref = make_ref()
     test_pid = self()
 
-    :telemetry.attach(
+    :telemetry.attach_many(
       {__MODULE__, ref},
-      [:replicant, :connection, :slot_active],
-      fn _event, _measurements, _metadata, _config -> send(test_pid, {:slot_active, ref}) end,
+      [
+        [:ash_replicant, :sink, :session_identity_accepted],
+        [:replicant, :connection, :slot_active]
+      ],
+      fn event, _measurements, metadata, _config ->
+        send(test_pid, {:telemetry, ref, event, metadata})
+      end,
       nil
     )
 
@@ -81,22 +87,68 @@ defmodule AshReplicant.SessionIdentityTest do
                go_forward_only: true
              )
 
-    assert_receive {:session_identity, identity, context}, 15_000
+    receive do
+      message ->
+        assert message ==
+                 {:telemetry, ref, [:ash_replicant, :sink, :session_identity_accepted], %{}}
+    after
+      15_000 -> flunk("session identity was not accepted")
+    end
 
-    assert %Replicant.SessionIdentity{
-             system_identifier: system_identifier,
-             timeline_id: timeline_id,
-             current_lsn: current_lsn,
-             database: database
-           } = identity
+    receive do
+      message -> assert message == :checkpoint_read
+    after
+      1_000 -> flunk("checkpoint was not read after identity acceptance")
+    end
 
-    assert system_identifier == expected_identity[:system_identifier]
-    assert database == expected_identity[:database]
-    assert is_integer(timeline_id) and timeline_id >= 0
-    assert is_integer(current_lsn) and current_lsn >= 0
-    assert context == %{slot_name: @slot, publication: [Marquee.publication()]}
+    assert_receive {:telemetry, ^ref, [:replicant, :connection, :slot_active], %{}}, 15_000
 
-    assert_receive :checkpoint_read, 1_000
-    assert_receive {:slot_active, ^ref}, 15_000
+    Marquee.q!("INSERT INTO #{Marquee.src()} (id, note) VALUES ('identity-1', 'accepted')")
+    assert_receive {:transaction_delivered, commit_lsn}, 15_000
+    assert is_integer(commit_lsn) and commit_lsn > 0
+    PG.wait_until(fn -> Marquee.mirror_rows() == [["identity-1", "accepted"]] end)
+  end
+
+  test "a wrong actual-session expectation halts before checkpoint lookup and stays value-free" do
+    ref = make_ref()
+    test_pid = self()
+
+    :telemetry.attach(
+      {__MODULE__, ref},
+      [:replicant, :connection, :session_identity_rejected],
+      fn event, _measurements, metadata, _config ->
+        send(test_pid, {:telemetry, ref, event, metadata})
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach({__MODULE__, ref}) end)
+
+    sentinel_system = "sentinel-wrong-system"
+    sentinel_database = "sentinel-wrong-database"
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:ok, _pid} =
+                 AshReplicant.start_link(
+                   sink: IdentitySink,
+                   connection: Marquee.conn(),
+                   publication: Marquee.publication(),
+                   source_identity: [
+                     system_identifier: sentinel_system,
+                     database: sentinel_database
+                   ],
+                   go_forward_only: true
+                 )
+
+        assert_receive {:telemetry, ^ref, [:replicant, :connection, :session_identity_rejected],
+                        %{reason: :session_identity_rejected}},
+                       15_000
+
+        refute_receive :checkpoint_read, 500
+      end)
+
+    refute log =~ sentinel_system
+    refute log =~ sentinel_database
   end
 end

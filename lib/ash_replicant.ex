@@ -41,10 +41,8 @@ defmodule AshReplicant do
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
-    sink = Keyword.fetch!(opts, :sink)
-    %{domains: domains, slot_name: slot_name} = sink.__ash_replicant_config__()
-
-    with {:ok, source_identity} <- validate_source_identity(opts),
+    with {:ok, sink, domains, slot_name} <- validate_sink(opts),
+         {:ok, source_identity} <- validate_source_identity(opts),
          {:ok, publication} <- normalize_publication(Keyword.get(opts, :publication)) do
       activation_lock(slot_name, fn ->
         activate(opts, sink, domains, slot_name, source_identity, publication)
@@ -56,14 +54,18 @@ defmodule AshReplicant do
   Stop a running pipeline by slot name (idempotent). Clears the cached resolver
   index from `:persistent_term` so a subsequent `start_link/1` rebuilds it fresh.
   """
-  @spec stop_supervised(String.t()) :: :ok
+  @spec stop_supervised(String.t()) :: :ok | {:error, :pipeline_stop_failed}
   def stop_supervised(slot_name) do
     activation_lock(slot_name, fn ->
-      :ok = Replicant.stop(slot_name)
+      result = safe_stop(slot_name)
       :persistent_term.erase({AshReplicant, slot_name})
-      :ok
+      result
     end)
   end
+
+  @doc false
+  def erase_generation(slot_name, generation),
+    do: erase_generation_key({AshReplicant, slot_name}, generation)
 
   @replicant_option_keys [
     :connection,
@@ -117,22 +119,61 @@ defmodule AshReplicant do
 
       :persistent_term.put(key, runtime)
 
-      result =
-        opts
-        |> Keyword.take(@replicant_option_keys)
-        |> Keyword.merge(slot_name: slot_name, sink: sink)
-        |> Replicant.start_link()
+      result = safe_start(opts, slot_name, sink)
 
-      if not match?({:ok, _pid}, result), do: erase_generation(key, generation)
+      if not match?({:ok, _pid}, result), do: erase_generation_key(key, generation)
       result
     end
   end
 
-  defp erase_generation(key, generation) do
+  defp erase_generation_key(key, generation) do
     case :persistent_term.get(key, :none) do
-      %{generation: ^generation} -> :persistent_term.erase(key)
-      _other -> :ok
+      %{generation: ^generation} ->
+        :persistent_term.erase(key)
+        :ok
+
+      _other ->
+        :ok
     end
+  end
+
+  defp validate_sink(opts) do
+    with sink when is_atom(sink) <- Keyword.get(opts, :sink),
+         true <- Code.ensure_loaded?(sink),
+         true <- function_exported?(sink, :__ash_replicant_config__, 0),
+         %{domains: domains, slot_name: slot_name} <- safe_sink_config(sink),
+         true <- is_list(domains) and is_binary(slot_name) and slot_name != "" do
+      {:ok, sink, domains, slot_name}
+    else
+      _other -> {:error, :sink_required}
+    end
+  end
+
+  defp safe_sink_config(sink) do
+    sink.__ash_replicant_config__()
+  rescue
+    _error -> :invalid
+  catch
+    _kind, _reason -> :invalid
+  end
+
+  defp safe_start(opts, slot_name, sink) do
+    opts
+    |> Keyword.take(@replicant_option_keys)
+    |> Keyword.merge(slot_name: slot_name, sink: sink)
+    |> Replicant.start_link()
+  rescue
+    _error -> {:error, :pipeline_start_failed}
+  catch
+    _kind, _reason -> {:error, :pipeline_start_failed}
+  end
+
+  defp safe_stop(slot_name) do
+    Replicant.stop(slot_name)
+  rescue
+    _error -> {:error, :pipeline_stop_failed}
+  catch
+    _kind, _reason -> {:error, :pipeline_stop_failed}
   end
 
   defp validate_source_identity(opts) do
@@ -155,10 +196,6 @@ defmodule AshReplicant do
 
   defp normalize_publication(_publication), do: {:error, :config_invalid}
 
-  defp activation_lock(slot_name, fun) do
-    case :global.trans({{__MODULE__, node(), slot_name}, self()}, fun) do
-      {:aborted, _reason} -> {:error, :activation_lock_unavailable}
-      result -> result
-    end
-  end
+  defp activation_lock(slot_name, fun),
+    do: :global.trans({{__MODULE__, node(), slot_name}, self()}, fun)
 end

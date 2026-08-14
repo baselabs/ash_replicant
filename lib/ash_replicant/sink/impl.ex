@@ -32,8 +32,10 @@ defmodule AshReplicant.Sink.Impl do
           database: expected_database
         },
         %{slot_name: expected_slot, publication: expected_publication}
-      ),
-      do: :ok
+      ) do
+    Telemetry.event([:ash_replicant, :sink, :session_identity_accepted], %{}, %{})
+    :ok
+  end
 
   def handle_session_identity(_config, _identity, _context),
     do: {:error, :source_identity_mismatch}

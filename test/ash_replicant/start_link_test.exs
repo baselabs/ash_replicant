@@ -116,36 +116,144 @@ defmodule AshReplicant.StartLinkTest do
     assert {:error, :source_identity_required} =
              AshReplicant.start_link(Keyword.delete(start_opts(), :source_identity))
 
-    capture_log(fn ->
-      assert {:ok, _pid} = AshReplicant.start_link(start_opts())
-      assert function_exported?(ValidSink, :handle_session_identity, 2)
+    for identity <- [
+          nil,
+          [],
+          [system_identifier: "", database: "postgres"],
+          [system_identifier: "1"]
+        ] do
+      assert {:error, :source_identity_required} =
+               AshReplicant.start_link(start_opts(source_identity: identity))
+    end
 
-      context = %{slot_name: "valid_slot", publication: ["valid_pub"]}
+    log =
+      capture_log(fn ->
+        assert {:ok, _pid} = AshReplicant.start_link(start_opts())
+        assert function_exported?(ValidSink, :handle_session_identity, 2)
 
-      assert :ok =
-               ValidSink.handle_session_identity(
-                 %Replicant.SessionIdentity{
-                   system_identifier: "741852963",
-                   timeline_id: 1,
-                   current_lsn: 0,
-                   database: "postgres"
-                 },
-                 context
-               )
+        context = %{slot_name: "valid_slot", publication: ["valid_pub"]}
 
-      assert {:error, :source_identity_mismatch} =
-               ValidSink.handle_session_identity(
-                 %Replicant.SessionIdentity{
-                   system_identifier: "sentinel-system-value",
-                   timeline_id: 1,
-                   current_lsn: 0,
-                   database: "sentinel-database-value"
-                 },
-                 context
-               )
+        assert :ok =
+                 ValidSink.handle_session_identity(
+                   %Replicant.SessionIdentity{
+                     system_identifier: "741852963",
+                     timeline_id: 1,
+                     current_lsn: 0,
+                     database: "postgres"
+                   },
+                   context
+                 )
 
-      assert :ok = AshReplicant.stop_supervised("valid_slot")
-    end)
+        assert {:error, :source_identity_mismatch} =
+                 ValidSink.handle_session_identity(
+                   %Replicant.SessionIdentity{
+                     system_identifier: "sentinel-system-value",
+                     timeline_id: 1,
+                     current_lsn: 0,
+                     database: "sentinel-database-value"
+                   },
+                   context
+                 )
+
+        for {identity, mismatched_context} <- [
+              {%Replicant.SessionIdentity{
+                 system_identifier: "sentinel-system-value",
+                 timeline_id: 1,
+                 current_lsn: 0,
+                 database: "postgres"
+               }, context},
+              {%Replicant.SessionIdentity{
+                 system_identifier: "741852963",
+                 timeline_id: 1,
+                 current_lsn: 0,
+                 database: "sentinel-database-value"
+               }, context},
+              {%Replicant.SessionIdentity{
+                 system_identifier: "741852963",
+                 timeline_id: 1,
+                 current_lsn: 0,
+                 database: "postgres"
+               }, %{context | slot_name: "wrong-slot"}},
+              {%Replicant.SessionIdentity{
+                 system_identifier: "741852963",
+                 timeline_id: 1,
+                 current_lsn: 0,
+                 database: "postgres"
+               }, %{context | publication: ["wrong-publication"]}}
+            ] do
+          assert {:error, :source_identity_mismatch} =
+                   ValidSink.handle_session_identity(identity, mismatched_context)
+        end
+
+        assert :ok = AshReplicant.stop_supervised("valid_slot")
+        assert :none == :persistent_term.get({AshReplicant, "valid_slot"}, :none)
+      end)
+
+    refute log =~ "sentinel-system-value"
+    refute log =~ "sentinel-database-value"
+  end
+
+  test "the generated identity guard cannot be overridden by a host sink" do
+    log =
+      capture_log(fn ->
+        [{sink, _bytecode}] =
+          Code.compile_string("""
+          defmodule AshReplicant.Test.OverrideIdentitySink do
+            use AshReplicant.Sink,
+              repo: AshReplicant.TestRepo,
+              domains: [AshReplicant.Test.Domain],
+              checkpoint_resource: AshReplicant.Test.Checkpoint,
+              slot_name: "override_identity_slot"
+
+            @identity_overridable Module.overridable?(__MODULE__, {:handle_session_identity, 2})
+            def identity_overridable?, do: @identity_overridable
+          end
+          """)
+
+        refute sink.identity_overridable?()
+
+        assert {:error, :source_identity_mismatch} =
+                 sink.handle_session_identity(
+                   %Replicant.SessionIdentity{
+                     system_identifier: "wrong",
+                     database: "wrong",
+                     timeline_id: 1,
+                     current_lsn: 0
+                   },
+                   %{slot_name: "override_identity_slot", publication: ["valid_pub"]}
+                 )
+      end)
+
+    refute log =~ "wrong"
+  end
+
+  test "missing sink fails structurally without exposing connection options" do
+    sentinel = "sentinel-connection-password"
+
+    log =
+      capture_log(fn ->
+        assert {:error, :sink_required} =
+                 AshReplicant.start_link(
+                   connection: [password: sentinel],
+                   publication: "valid_pub",
+                   source_identity: @source_identity
+                 )
+      end)
+
+    refute log =~ sentinel
+  end
+
+  test "generation cleanup only erases the generation that lost activation" do
+    key = {AshReplicant, "valid_slot"}
+    winner = make_ref()
+    loser = make_ref()
+    runtime = %{generation: winner, resolver_index: %{winner: true}}
+    :persistent_term.put(key, runtime)
+
+    assert :ok = AshReplicant.erase_generation("valid_slot", loser)
+    assert runtime == :persistent_term.get(key)
+    assert :ok = AshReplicant.erase_generation("valid_slot", winner)
+    assert :none == :persistent_term.get(key, :none)
   end
 
   test "transport-only Replicant options are forwarded instead of silently discarded" do
@@ -158,6 +266,28 @@ defmodule AshReplicant.StartLinkTest do
       assert {:error, :config_invalid} = AshReplicant.start_link(start_opts([{key, bad_value}]))
       assert :persistent_term.get({AshReplicant, "valid_slot"}, :none) == :none
     end
+
+    capture_log(fn ->
+      assert {:ok, _pid} =
+               AshReplicant.start_link(
+                 start_opts(
+                   streaming: [max_concurrent_txns: 2],
+                   max_inflight_lag: 1_024,
+                   max_command_retries: 2,
+                   failover: false
+                 )
+               )
+
+      assert :ok = AshReplicant.stop_supervised("valid_slot")
+
+      # These modes are owned by Replicant but unsupported by AshReplicant. Bad
+      # values would be rejected if forwarded, so a successful start proves the
+      # adapter withheld them.
+      assert {:ok, _pid} =
+               AshReplicant.start_link(start_opts(messages: :invalid, batch_delivery: :invalid))
+
+      assert :ok = AshReplicant.stop_supervised("valid_slot")
+    end)
   end
 
   test "incremental snapshot remains guarded and rejected starts leave no cache" do

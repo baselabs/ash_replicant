@@ -20,6 +20,10 @@ A `Spark.Dsl.Extension` implementing the `Replicant.Sink` behaviour, exposing a
 `replicant do ... end` resource section. The sink carries config (repo/domains/checkpoint);
 the resolver index maps `{schema,table}` → resource; effect-once is guaranteed by
 a durable `commit_lsn` watermark checkpointed atomically with the mirrored changes.
+Activation requires the expected PostgreSQL system identifier and database;
+Replicant 1.x verifies that identity from the actual replication session before
+the first checkpoint read. Each slot has one serialized runtime generation, so
+duplicate starts cannot replace or erase the active resolver and identity state.
 
 ## Critical rules
 

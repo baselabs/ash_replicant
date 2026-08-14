@@ -79,6 +79,7 @@ defmodule AshReplicant.SnapshotPipelineTest do
       Marquee.q!("DROP TRIGGER IF EXISTS repl_snapshot_audit_trigger ON #{Marquee.mirror()}")
       Marquee.q!("DROP TABLE IF EXISTS repl_snapshot_audit")
       Marquee.q!("DROP FUNCTION IF EXISTS repl_snapshot_audit_write()")
+      Marquee.teardown_schema!()
     end)
 
     :ok

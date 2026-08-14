@@ -152,7 +152,6 @@ AshReplicant.start_link(
   source_identity: [system_identifier: "7378697629483820647", database: "source_db"],
   go_forward_only: true,
   snapshot: false,
-  streaming: :transaction,
   max_inflight_lag: 64 * 1024 * 1024,
   max_command_retries: 5,
   failover: false
