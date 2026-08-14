@@ -86,9 +86,11 @@ defmodule AshReplicant.DestinationTest do
     # The manifest roots and the resolver index enumerate the SAME mapped
     # resources: both traverse Resolver.domain_resources/1, and an enumeration
     # or filter drift between the two surfaces breaks this pin. (A
-    # reflection-failing module CANNOT ride in a domain — Ash.Domain's
-    # compile-time Spark verification rejects it loudly — so the index-skip /
-    # manifest-fail stances are defensive depth, not a reachable drift class.)
+    # reflection-failing module cannot ride in a WELL-FORMED domain — Ash.Domain's
+    # compile-time Spark verification rejects it loudly; only a build that
+    # tolerates the warning can list one, landing on the defensive-depth path —
+    # so the index-skip / manifest-fail stances are defensive depth, not a
+    # reachable drift class for this pin.)
     assert {:ok, manifest} =
              Destination.manifest(%{
                repo: AshReplicant.TestRepo,
