@@ -296,8 +296,8 @@ defmodule AshReplicant.Resolver do
     # SKIPS a module whose reflection raises (e.g. a non-Spark module listed in a
     # domain): the index tolerates it. The destination manifest intentionally
     # FAILS on the same module (`:reflection_failed`) — activation must never
-    # silently drop a declared resource. The two stances are pinned together by
-    # the manifest-roots/index cross-consistency test.
+    # silently drop a declared resource. Both stances are pinned by the
+    # destination manifest tests.
     AshReplicant.Resource in Spark.extensions(resource)
   rescue
     _ -> false

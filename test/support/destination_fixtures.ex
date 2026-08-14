@@ -2453,6 +2453,26 @@ defmodule AshReplicant.Test.DestinationFixtures do
     end
   end
 
+  # A plain (non-Spark) module listed in a domain: `Spark.extensions/1` raises
+  # on it, exercising the intentional index/manifest stance asymmetry — the
+  # resolver index SKIPS it, the destination manifest fails
+  # `:reflection_failed` (activation must never silently drop a declared
+  # resource). Root rides along so the index still yields a mapped resource.
+  defmodule ReflectionFailure do
+    @moduledoc false
+  end
+
+  defmodule ReflectionFailureDomain do
+    @moduledoc false
+    use Ash.Domain, validate_config_inclusion?: false
+
+    resources do
+      resource AshReplicant.Test.DestinationFixtures.Root
+      resource AshReplicant.Test.DestinationFixtures.ReflectionFailure
+      resource AshReplicant.Test.Checkpoint
+    end
+  end
+
   defmodule ContextRedirectCreateDomain do
     @moduledoc false
     use Ash.Domain, validate_config_inclusion?: false

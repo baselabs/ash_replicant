@@ -84,9 +84,10 @@ defmodule AshReplicant.DestinationTest do
     assert Map.values(first) == [DestinationFixtures.Root]
 
     # The manifest roots and the resolver index enumerate the SAME mapped
-    # resources: both traverse Resolver.domain_resources/1, and a filter drift
-    # between the two surfaces (one skipping a reflection-failing module the
-    # other admits, or vice versa) breaks this pin.
+    # resources: both traverse Resolver.domain_resources/1, and an enumeration
+    # or filter drift between the two surfaces breaks this pin. (The
+    # reflection-failure stance asymmetry — index skips, manifest fails — is
+    # pinned by its own test below.)
     assert {:ok, manifest} =
              Destination.manifest(%{
                repo: AshReplicant.TestRepo,
@@ -102,6 +103,25 @@ defmodule AshReplicant.DestinationTest do
       |> Enum.sort()
 
     assert manifest_root_resources == Enum.sort(Map.values(first))
+  end
+
+  test "index skips a reflection-failing module while the manifest fails closed" do
+    domains = [DestinationFixtures.ReflectionFailureDomain]
+
+    # The resolver index TOLERATES a domain-listed module whose reflection
+    # raises (rescued, skipped) — the mapped resource still indexes.
+    assert {:ok, index} = AshReplicant.Resolver.build_index(domains)
+    assert Map.values(index) == [DestinationFixtures.Root]
+
+    # The destination manifest FAILS on the same module (:reflection_failed):
+    # activation must never silently drop a declared resource. Together these
+    # pin the intentional stance asymmetry between the two enumerations.
+    assert {:error, {:invalid_destination_config, :reflection_failed}} =
+             Destination.manifest(%{
+               repo: AshReplicant.TestRepo,
+               domains: domains,
+               checkpoint_resource: AshReplicant.Test.Checkpoint
+             })
   end
 
   test "unknown custom action code fails closed" do

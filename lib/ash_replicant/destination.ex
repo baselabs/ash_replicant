@@ -435,8 +435,8 @@ defmodule AshReplicant.Destination do
 
   # UNRESCUED twin of the resolver index's filter: a module whose reflection
   # raises fails the manifest (`:reflection_failed`) here, while the index skips
-  # it — activation must never silently drop a declared resource. The two
-  # stances are pinned together by the manifest-roots/index test.
+  # it — activation must never silently drop a declared resource. Both stances
+  # are pinned by the destination manifest tests.
   defp replicant_destination_resource?(resource),
     do: AshReplicant.Resource in Spark.extensions(resource)
 
