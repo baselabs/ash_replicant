@@ -434,9 +434,11 @@ defmodule AshReplicant.Destination do
   end
 
   # UNRESCUED twin of the resolver index's filter: a module whose reflection
-  # raises fails the manifest (`:reflection_failed`) here, while the index skips
-  # it — activation must never silently drop a declared resource. Both stances
-  # are pinned by the destination manifest tests.
+  # raises fails the manifest (`:reflection_failed`) here, while the index
+  # skips it — activation must never silently drop a declared resource.
+  # Defensive depth: Ash.Domain's compile-time Spark verification makes the
+  # stance unreachable through a well-formed domain; the enumeration-set pin
+  # in destination_test.exs covers the reachable drift class.
   defp replicant_destination_resource?(resource),
     do: AshReplicant.Resource in Spark.extensions(resource)
 

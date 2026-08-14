@@ -293,11 +293,13 @@ defmodule AshReplicant.Resolver do
   # --- private ---
 
   defp replicant_resource?(resource) do
-    # SKIPS a module whose reflection raises (e.g. a non-Spark module listed in a
-    # domain): the index tolerates it. The destination manifest intentionally
-    # FAILS on the same module (`:reflection_failed`) — activation must never
-    # silently drop a declared resource. Both stances are pinned by the
-    # destination manifest tests.
+    # SKIPS a module whose reflection raises: the index tolerates it. The
+    # destination manifest intentionally FAILS on the same module
+    # (`:reflection_failed`) — activation must never silently drop a declared
+    # resource. Defensive depth both ways: Ash.Domain's compile-time Spark
+    # verification rejects a non-DSL module loudly, so neither stance is
+    # reachable through a well-formed domain — the enumeration-set pin in
+    # destination_test.exs covers the reachable drift class.
     AshReplicant.Resource in Spark.extensions(resource)
   rescue
     _ -> false
