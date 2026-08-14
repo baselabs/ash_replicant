@@ -16,6 +16,7 @@ defmodule AshReplicant.Apply do
   alias AshReplicant.Apply.Scd2
   alias AshReplicant.{Error, Resolver}
   alias AshReplicant.Resource.Info
+  alias Ecto.Adapters.SQL
 
   @doc """
   Apply a change under `config` (`%{resolver_index:, repo:, authorize?:}`).

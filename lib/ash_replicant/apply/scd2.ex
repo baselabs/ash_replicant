@@ -16,6 +16,7 @@ defmodule AshReplicant.Apply.Scd2 do
   alias AshReplicant.Apply.Context
   alias AshReplicant.{Error, Resolver}
   alias AshReplicant.Resource.Info
+  alias Ecto.Adapters.SQL
 
   @spec apply(map(), module(), Replicant.Change.t(), DateTime.t() | nil) :: :ok
   def apply(config, resource, %{op: op} = change, ts) when op in [:insert, :update] do
