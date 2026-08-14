@@ -465,4 +465,214 @@ defmodule AshReplicant.Coverage do
       "JOIN pg_class c ON c.relname = p.tablename " <>
       "JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = p.schemaname"
   end
+
+  # --- the activation preflight ---
+
+  @doc """
+  Run the full source-catalog preflight on ONE short-lived, identity-verified
+  Postgrex connection (the snapshotter's `pool_size: 1` precedent). The
+  identity probe must match the CONFIGURED source identity (the B2 session
+  gate separately proves configured == actual replication session on the
+  stream); catalog faults are scrubbed value-free. Any rule violation fails
+  the pipeline start BEFORE the generation installs.
+  """
+  @spec preflight(
+          keyword(),
+          map(),
+          [String.t()],
+          map(),
+          map(),
+          AshReplicant.Checkpoint.Identity.manifest()
+        ) ::
+          {:ok, %{facts: relation_facts(), ignored: MapSet.t()}} | {:error, Error.t()}
+  def preflight(connection_opts, source_identity, publication, _sink_config, index, contract) do
+    opts = Keyword.merge(connection_opts, pool_size: 1, sync_connect: true)
+
+    conn = start_preflight_connection(opts)
+
+    result =
+      with {:ok, conn} <- conn,
+           {:ok, census} <- collect_census(conn, publication),
+           :ok <- verify_probe_identity(census.identity, source_identity) do
+        coverage = __MODULE__.from_manifest(index, contract)
+
+        case __MODULE__.evaluate(census.tables, coverage.facts, contract.ignores) do
+          :ok -> {:ok, coverage}
+          {:error, _} = error -> error
+        end
+      else
+        {:error, %Error{} = error} ->
+          {:error, error}
+
+        _census_connection_fault ->
+          # A fault while READING the catalog (unreachable server, dropped
+          # mid-probe) is the unreachable class — deferred verdict, not a
+          # rule violation. Rule verdicts carry their own %Error{} above.
+          :deferred
+      end
+
+    with {:ok, db_conn} <- conn do
+      GenServer.stop(db_conn)
+    end
+
+    case result do
+      # The deferred verdict (unreachable-at-boot OR faulted mid-probe): the
+      # bind re-check completes the FULL preflight before any checkpoint read
+      # (an unreachable source cannot advance a checkpoint, so nothing is
+      # skipped). Reachable-and-violating still halts fail-closed.
+      :deferred ->
+        {:ok, :deferred}
+
+      {:ok, _} = ok ->
+        ok
+
+      {:error, %Error{} = error} ->
+        emit_preflight_failed(error)
+        {:error, error}
+
+      other ->
+        error = Error.scrub(other, nil, :preflight)
+        emit_preflight_failed(error)
+        {:error, error}
+    end
+  end
+
+  # Boot-resilience rule (design amendment, task-2 RED finding): an
+  # UNREACHABLE source at activation defers the coverage verdict rather than
+  # crashing the host. This cannot skip data — an unreachable source delivers
+  # nothing, so no checkpoint can advance — and the bind re-check completes
+  # the FULL preflight on the first connection that can actually stream
+  # (before any checkpoint read). A REACHABLE source that violates a rule
+  # still halts activation fail-closed.
+  defp start_preflight_connection(opts) do
+    case Postgrex.start_link(opts) do
+      {:ok, conn} ->
+        {:ok, conn}
+
+      {:error, _reason} ->
+        {:ok, :unreachable}
+    end
+  rescue
+    _ -> {:ok, :unreachable}
+  end
+
+  # The census: identity probe + the three framework statements + the
+  # relreplident query, all read-only, publication bound $1.
+  defp collect_census(conn, publication) do
+    with {:ok, %{rows: [[version, system_identifier, database]]}} <-
+           query(conn, sql_identity_probe()),
+         {:ok, %Postgrex.Result{} = pub_rows} <-
+           query_framework(
+             conn,
+             fn -> Replicant.QueryBuilder.publication_tables(publication) end,
+             publication
+           ),
+         {:ok, %Postgrex.Result{} = column_rows} <-
+           query_framework(conn, fn -> Replicant.QueryBuilder.table_columns() end, publication),
+         {:ok, %Postgrex.Result{} = pk_rows} <-
+           query_framework(conn, fn -> Replicant.QueryBuilder.pk_columns() end, publication),
+         {:ok, %Postgrex.Result{} = ident_rows} <- query(conn, sql_relreplident(), [publication]) do
+      columns_by_table = group_columns(column_rows)
+      pk_by_table = group_pk(pk_rows)
+
+      ident_by_table =
+        Map.new(ident_rows.rows, fn [schema, table, ident] -> {{schema, table}, ident} end)
+
+      tables =
+        pub_rows.rows
+        |> Map.new(fn [schema, table, _qualified] ->
+          {{schema, table},
+           %{
+             columns: columns_by_table[{schema, table}] || [],
+             relreplident: ident_by_table[{schema, table}] || "d",
+             pk: pk_by_table[{schema, table}] || []
+           }}
+        end)
+
+      {:ok,
+       %{
+         identity: %{version: version, system_identifier: system_identifier, database: database},
+         tables: tables
+       }}
+    end
+  end
+
+  defp group_columns(%{rows: rows}) do
+    Map.new(rows, fn [schema, table, _qualified, col_raw, _col_quoted, col_type_oids] ->
+      columns =
+        col_raw
+        |> Enum.zip(col_type_oids)
+        |> Enum.map(fn {name, oid} ->
+          %{name: name, type: Replicant.Decoder.OidDatabase.name_for_type_id(oid)}
+        end)
+
+      {{schema, table}, columns}
+    end)
+  end
+
+  defp group_pk(%{rows: rows}) do
+    Map.new(rows, fn [schema, table, _qualified, pk_raw, _pk_quoted] ->
+      {{schema, table}, Enum.map(pk_raw, &to_string/1)}
+    end)
+  end
+
+  defp query_framework(conn, sql_fun, publication) do
+    case sql_fun.() do
+      {:ok, sql} -> query(conn, sql, [publication])
+      # table_columns/0 and pk_columns/0 return bare SQL strings (only the
+      # list-taking builders tag); both bind $1 the same way.
+      sql when is_binary(sql) -> query(conn, sql, [publication])
+      {:error, :invalid_identifier} -> {:error, :invalid_identifier}
+    end
+  end
+
+  defp query(conn, sql, params \\ []) do
+    case Postgrex.query(conn, sql, params) do
+      {:ok, %Postgrex.Result{} = result} -> {:ok, result}
+      {:error, _} = error -> error
+    end
+  end
+
+  # The identity the preflight connection reports must equal the CONFIGURED
+  # identity (the same triple the replication session separately proves).
+  defp verify_probe_identity(%{system_identifier: system_id, database: db}, %{
+         system_identifier: expected_system,
+         database: expected_db
+       }) do
+    # Below PG17 the system identifier is NULL (pg_control_system is PG17+) —
+    # the database-only leg, bounded by the B2 session gate + per-change guard.
+    identity_ok? =
+      db == expected_db and
+        (is_nil(system_id) or version_compares_nil(system_id, expected_system))
+
+    if identity_ok? do
+      :ok
+    else
+      {:error,
+       Error.exception(
+         reason: :source_identity_mismatch,
+         resource: nil,
+         op: :preflight,
+         shape: "probe_database=#{db}"
+       )}
+    end
+  end
+
+  defp version_compares_nil(system_id, expected_system),
+    do: to_string(system_id) == expected_system
+
+  defp emit_preflight_failed(%Error{reason: reason}) do
+    kind =
+      case reason do
+        :source_identity_mismatch -> :identity
+        :source_replica_identity -> :replica_identity
+        _coverage_class -> :coverage
+      end
+
+    AshReplicant.Telemetry.event(
+      [:ash_replicant, :preflight, :failed],
+      %{count: 1},
+      %{reason: reason, kind: kind, slot_name: nil}
+    )
+  end
 end

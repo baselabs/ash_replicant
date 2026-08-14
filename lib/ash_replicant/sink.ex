@@ -43,6 +43,15 @@ defmodule AshReplicant.Sink do
 
   def __on_definition__(_env, _kind, _name, _args, _guards, _body), do: :ok
 
+  defp ignore_source_shape?(value) when is_binary(value) do
+    case String.split(value, ".", parts: 2) do
+      [schema, table] -> schema != "" and table != "" and !String.contains?(table, ".")
+      _other -> false
+    end
+  end
+
+  defp ignore_source_shape?(_), do: false
+
   @doc false
   defmacro __using__(opts) do
     repo = Keyword.fetch!(opts, :repo)
@@ -53,7 +62,7 @@ defmodule AshReplicant.Sink do
     # Fail closed on removed or unknown options: a previously-valid key (e.g. the
     # removed `apply_ledger`) must surface as a compile-time failure on the host,
     # never silently no-op with its effect gone.
-    case Keyword.drop(opts, [:repo, :domains, :checkpoint_resource, :slot_name]) do
+    case Keyword.drop(opts, [:repo, :domains, :checkpoint_resource, :slot_name, :ignored_sources]) do
       [] ->
         :ok
 
@@ -62,6 +71,23 @@ defmodule AshReplicant.Sink do
               "unknown AshReplicant.Sink option(s) #{inspect(Keyword.keys(extra))} — " <>
                 "the sink admits only :repo, :domains, :checkpoint_resource, :slot_name " <>
                 "(apply_ledger was removed; a removed option must not silently no-op)"
+    end
+
+    # Compile-time validation of the explicit table ignores: strictly qualified
+    # `schema.table` strings; bare names and duplicates are compile errors
+    # (roadmap B3: "explicit qualified table/column ignores are compile/start
+    # validated"). Existence is start-validated against the live catalog.
+    ignored_sources = Keyword.get(opts, :ignored_sources, [])
+
+    unless is_list(ignored_sources) and Enum.all?(ignored_sources, &ignore_source_shape?/1) do
+      raise ArgumentError,
+            "AshReplicant.Sink :ignored_sources must be a list of strictly qualified " <>
+              ~s("schema.table" binary strings) <>
+              " (got #{inspect(ignored_sources)})"
+    end
+
+    unless length(Enum.uniq(ignored_sources)) == length(ignored_sources) do
+      raise ArgumentError, "AshReplicant.Sink :ignored_sources contains duplicates"
     end
 
     quote do
@@ -94,7 +120,8 @@ defmodule AshReplicant.Sink do
           repo: unquote(repo),
           domains: unquote(domains),
           checkpoint_resource: unquote(checkpoint_resource),
-          slot_name: unquote(slot_name)
+          slot_name: unquote(slot_name),
+          ignored_sources: unquote(Macro.escape(ignored_sources))
         }
       end
 

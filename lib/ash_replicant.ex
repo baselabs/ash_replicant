@@ -458,6 +458,15 @@ defmodule AshReplicant do
          {:ok, source_contract} <-
            AshReplicant.Checkpoint.Identity.build_contract(sink_config, publication),
          {:ok, index} <- AshReplicant.Resolver.build_index(sink_config.domains),
+         {:ok, coverage} <-
+           AshReplicant.Coverage.preflight(
+             Keyword.get(opts, :connection),
+             source_identity,
+             publication,
+             sink_config,
+             index,
+             source_contract.manifest
+           ),
          {:ok, dynamic_repo} <-
            AshReplicant.Destination.effective_dynamic_repo(sink_config.repo),
          :ok <- AshReplicant.Destination.preflight_onetime(manifest, dynamic_repo),
@@ -474,6 +483,8 @@ defmodule AshReplicant do
         manifest: manifest,
         manifest_digest: manifest.digest,
         source_contract: source_contract,
+        source_connection: Keyword.get(opts, :connection),
+        coverage: coverage,
         code_modules: code_modules,
         code_fingerprint: code_fingerprint,
         source_identity: source_identity,
@@ -576,6 +587,7 @@ defmodule AshReplicant do
          true <- config.source_identity == generation.source_identity,
          true <- config.publication == generation.publication,
          true <- config.source_contract == generation.source_contract,
+         true <- config.coverage == generation.coverage,
          true <- config.dynamic_repo == generation.dynamic_repo,
          true <- config.data_layer_context == %{repo: generation.dynamic_repo},
          true <- config.authorize? == false do
@@ -592,6 +604,7 @@ defmodule AshReplicant do
       resolver_index: generation.resolver_index,
       destination_manifest: generation.manifest,
       source_contract: generation.source_contract,
+      coverage: generation.coverage,
       source_identity: generation.source_identity,
       publication: generation.publication,
       generation: generation.reference,

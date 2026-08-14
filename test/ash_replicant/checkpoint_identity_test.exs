@@ -145,8 +145,8 @@ defmodule AshReplicant.CheckpointIdentityTest do
       assert Identity.classify(base, moved) == {:compatible, :relations_added}
     end
 
-    test "a skip REACTIVATED (skips -> columns) is incompatible", %{base: base} do
-      reactivated =
+    test "a skip PROMOTED to a mapped column is compatible (coverage growth)", %{base: base} do
+      promoted =
         mutate(base, fn rel ->
           %{
             rel
@@ -156,7 +156,13 @@ defmodule AshReplicant.CheckpointIdentityTest do
           }
         end)
 
-      assert Identity.classify(base, reactivated) == {:incompatible, :skip_reactivated}
+      assert Identity.classify(base, promoted) == {:compatible, :relations_added}
+    end
+
+    test "a skip REMOVED without the column becoming mapped is incompatible", %{base: base} do
+      orphaned = mutate(base, fn rel -> %{rel | skips: List.delete(rel.skips, "audit_note")} end)
+
+      assert Identity.classify(base, orphaned) == {:incompatible, :skip_reactivated}
     end
 
     test "a relation ADDED is compatible", %{base: base} do
@@ -223,8 +229,34 @@ defmodule AshReplicant.CheckpointIdentityTest do
     test "an ignores ADDITION is compatible (B3's explicit ignores land additively)", %{
       base: base
     } do
-      grown = %{base | ignores: ["other_schema.other_table"]}
+      grown = %{base | ignores: [%{schema: "other_schema", table: "other_table"}]}
       assert Identity.classify(base, grown) == {:compatible, :relations_added}
+    end
+
+    test "an ignore PROMOTED to a mapped relation is compatible (coverage growth)", %{
+      base: base
+    } do
+      relation = find_relation(base, "public", "skip_orders")
+      new_relation = %{relation | schema: "other", table: "other_orders"}
+
+      promoted = %{
+        base
+        | relations: Enum.sort_by([new_relation | base.relations], &{&1.schema, &1.table})
+      }
+
+      assert Identity.classify(
+               %{base | ignores: [%{schema: "other", table: "other_orders"}]},
+               promoted
+             ) == {:compatible, :relations_added}
+    end
+
+    test "an ignore REMOVED without the table becoming a relation is incompatible", %{
+      base: base
+    } do
+      assert Identity.classify(
+               %{base | ignores: [%{schema: "other_schema", table: "other_table"}]},
+               %{base | ignores: []}
+             ) == {:incompatible, :ignores}
     end
   end
 

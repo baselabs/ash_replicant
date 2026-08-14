@@ -91,7 +91,13 @@ defmodule AshReplicant.SessionIdentityTest do
 
     log =
       ExUnit.CaptureLog.capture_log(fn ->
-        assert {:ok, _pid} =
+        # B3 strengthened the gate: a wrong pinned identity is caught by the
+        # activation preflight's own identity probe BEFORE the pipeline starts
+        # (the probe connection reports the live identity; the configured
+        # sentinel mismatches) — {:error, :source_identity_mismatch}, fail
+        # closed, value-free. The pre-B2 connect-time rejection path remains
+        # for sources unreachable at activation (deferred verdict).
+        assert {:error, %AshReplicant.Error{reason: reason}} =
                  AshReplicant.start_link(
                    sink: IdentitySink,
                    connection: Marquee.conn(),
@@ -103,10 +109,7 @@ defmodule AshReplicant.SessionIdentityTest do
                    go_forward_only: true
                  )
 
-        assert_receive {:telemetry, ^identity_ref,
-                        [:replicant, :connection, :session_identity_rejected],
-                        %{reason: :session_identity_rejected}},
-                       15_000
+        assert reason in [:source_identity_mismatch, :preflight_failed]
 
         # UNGATED observer: any checkpoint read or write at ANY time — before
         # the verdict (the fail-open bug class) or after the halt — fails this

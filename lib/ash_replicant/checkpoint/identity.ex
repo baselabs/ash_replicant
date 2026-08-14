@@ -63,7 +63,7 @@ defmodule AshReplicant.Checkpoint.Identity do
   by construction (schema/table/column names, module atoms, type terms).
   """
   @spec canonical_contract(map(), [String.t()]) :: {:ok, manifest()} | {:error, term()}
-  def canonical_contract(%{domains: domains} = _sink_config, publication)
+  def canonical_contract(%{domains: domains} = sink_config, publication)
       when is_list(domains) and is_list(publication) do
     with {:ok, index} <- Resolver.build_index(domains) do
       relations =
@@ -71,12 +71,23 @@ defmodule AshReplicant.Checkpoint.Identity do
         |> Enum.map(fn {{schema, table}, resource} -> relation(schema, table, resource) end)
         |> Enum.sort_by(&{&1.schema, &1.table})
 
+      # B3: the explicit table ignores land in the reserved field — compatible
+      # growth through the unchanged set-monotone classifier.
+      ignores =
+        sink_config
+        |> Map.get(:ignored_sources, [])
+        |> Enum.map(fn qualified ->
+          [schema, table] = String.split(qualified, ".", parts: 2)
+          %{schema: schema, table: table}
+        end)
+        |> Enum.sort_by(&{&1.schema, &1.table})
+
       {:ok,
        %{
          contract_version: @contract_version,
          publication: Enum.sort(publication),
          relations: relations,
-         ignores: []
+         ignores: ignores
        }}
     end
   end
@@ -122,6 +133,16 @@ defmodule AshReplicant.Checkpoint.Identity do
   def classify(nil, _current), do: {:compatible, :initialized}
 
   def classify(stored, current) do
+    current_relation_keys = MapSet.new(current.relations, &{&1.schema, &1.table})
+
+    # An ignore removed WITHOUT the table becoming a mapped relation is a
+    # reversal; an ignore promoted to a mapped relation is coverage growth.
+    orphaned_ignores =
+      stored.ignores
+      |> MapSet.new(&{&1.schema, &1.table})
+      |> MapSet.difference(MapSet.new(current.ignores, &{&1.schema, &1.table}))
+      |> MapSet.difference(current_relation_keys)
+
     cond do
       stored == current ->
         :equal
@@ -132,7 +153,7 @@ defmodule AshReplicant.Checkpoint.Identity do
       stored.publication != current.publication ->
         {:incompatible, :publication}
 
-      not set_growth?(stored.ignores, current.ignores) ->
+      MapSet.size(orphaned_ignores) > 0 ->
         {:incompatible, :ignores}
 
       true ->
@@ -178,6 +199,7 @@ defmodule AshReplicant.Checkpoint.Identity do
     current_cols = index_columns(current.columns)
     stored_skips = MapSet.new(stored.skips)
     current_skips = MapSet.new(current.skips)
+    current_mapped_names = current_cols |> Map.keys() |> MapSet.new()
 
     stored_sources = stored_cols |> Map.keys() |> MapSet.new()
     current_sources = current_cols |> Map.keys() |> MapSet.new()
@@ -186,15 +208,19 @@ defmodule AshReplicant.Checkpoint.Identity do
       MapSet.difference(stored_sources, current_sources)
       |> MapSet.difference(current_skips)
 
+    # A skip removed WITHOUT the column becoming mapped is a reversal of a
+    # recorded decision; a skip promoted to a mapped column is coverage growth.
+    orphaned_skips =
+      MapSet.difference(stored_skips, current_skips)
+      |> MapSet.difference(current_mapped_names)
+
     cond do
       # A recorded column vanished outright (not moved to skips) — the mirror
       # silently stops carrying it while the watermark advances.
       MapSet.size(removed) > 0 ->
         {:incompatible, :column_removed}
 
-      # A recorded skip was reversed — data starts flowing for a column the
-      # stored contract records as an explicit prior decision NOT to mirror.
-      MapSet.size(MapSet.difference(stored_skips, current_skips)) > 0 ->
+      MapSet.size(orphaned_skips) > 0 ->
         {:incompatible, :skip_reactivated}
 
       true ->
@@ -365,9 +391,4 @@ defmodule AshReplicant.Checkpoint.Identity do
   defp index_relations(relations), do: Map.new(relations, &{{&1.schema, &1.table}, &1})
 
   defp index_columns(columns), do: Map.new(columns, &{&1.source, &1})
-
-  # Pure set growth: every stored element survives; new elements may appear.
-  defp set_growth?(stored, current) do
-    MapSet.subset?(MapSet.new(stored), MapSet.new(current))
-  end
 end

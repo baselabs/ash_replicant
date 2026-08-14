@@ -12,6 +12,7 @@ defmodule AshReplicant.Test.CheckpointBinding.ContractOrder do
 
   replicant do
     source_table("contract_orders")
+    skip([:audit_note, :external_code])
   end
 
   attributes do
@@ -53,6 +54,7 @@ defmodule AshReplicant.Test.CheckpointBinding.ContractExtra do
     end
 
     attribute :note, :string, public?: true
+    attribute :extra_col, :string, public?: true
   end
 
   actions do
@@ -96,6 +98,7 @@ defmodule AshReplicant.CheckpointBindingTest do
 
   @slot "bind_slot"
   @fresh_slot "bind_fresh_slot"
+  @bind_publication "repl_bind_pub"
 
   defmodule SinkA do
     @moduledoc false
@@ -103,7 +106,8 @@ defmodule AshReplicant.CheckpointBindingTest do
       repo: AshReplicant.TestRepo,
       domains: [AshReplicant.Test.CheckpointBinding.ContractADomain],
       checkpoint_resource: AshReplicant.Test.Checkpoint,
-      slot_name: "bind_slot"
+      slot_name: "bind_slot",
+      ignored_sources: ["public.contract_extras"]
   end
 
   defmodule SinkB do
@@ -129,6 +133,30 @@ defmodule AshReplicant.CheckpointBindingTest do
     on_exit(fn -> Sandbox.mode(AshReplicant.TestRepo, :manual) end)
 
     Marquee.setup_schema!()
+
+    # The binding sinks map contract_orders/contract_extras — create them and
+    # a DEDICATED publication so the B3 activation preflight's rule 2 passes
+    # (plan-review F2). FreshSink keeps the marquee publication, whose only
+    # table it maps.
+    Marquee.q!("DROP PUBLICATION IF EXISTS #{@bind_publication}")
+    Marquee.q!("DROP TABLE IF EXISTS contract_orders")
+    Marquee.q!("DROP TABLE IF EXISTS contract_extras")
+
+    Marquee.q!(
+      "CREATE TABLE contract_orders (id text primary key, note text, external_code text, audit_note text)"
+    )
+
+    Marquee.q!("CREATE TABLE contract_extras (id text primary key, note text, extra_col text)")
+
+    Marquee.q!(
+      "CREATE PUBLICATION #{@bind_publication} FOR TABLE contract_orders, contract_extras"
+    )
+
+    on_exit(fn ->
+      Marquee.q!("DROP PUBLICATION IF EXISTS #{@bind_publication}")
+      Marquee.q!("DROP TABLE IF EXISTS contract_orders")
+      Marquee.q!("DROP TABLE IF EXISTS contract_extras")
+    end)
 
     for slot <- [@slot, @fresh_slot] do
       Marquee.drop_slot!(slot)
@@ -552,6 +580,7 @@ defmodule AshReplicant.CheckpointBindingTest do
       resolver_index: generation.resolver_index,
       destination_manifest: generation.manifest,
       source_contract: generation.source_contract,
+      coverage: generation.coverage,
       source_identity: generation.source_identity,
       publication: generation.publication,
       generation: generation.reference,
@@ -627,6 +656,7 @@ defmodule AshReplicant.CheckpointBindingTest do
 
       row = bound_row(@slot)
       contract = contract_for(SinkA)
+
       assert row.publication_fingerprint == contract.fingerprint
       assert row.source_timeline == live_timeline()
       assert row.commit_lsn == watermark
@@ -719,10 +749,16 @@ defmodule AshReplicant.CheckpointBindingTest do
   # --- helpers ---
 
   defp start(sink, _slot) do
+    publication =
+      case sink do
+        FreshSink -> Marquee.publication()
+        _sink -> [@bind_publication]
+      end
+
     AshReplicant.start_link(
       sink: sink,
       connection: Marquee.conn(),
-      publication: Marquee.publication(),
+      publication: publication,
       source_identity: Marquee.source_identity(),
       go_forward_only: true
     )
@@ -756,8 +792,13 @@ defmodule AshReplicant.CheckpointBindingTest do
   end
 
   defp contract_for(sink) do
-    {:ok, contract} =
-      Identity.build_contract(sink.__ash_replicant_config__(), [Marquee.publication()])
+    publication =
+      case sink do
+        FreshSink -> Marquee.publication()
+        _sink -> [@bind_publication]
+      end
+
+    {:ok, contract} = Identity.build_contract(sink.__ash_replicant_config__(), publication)
 
     contract
   end

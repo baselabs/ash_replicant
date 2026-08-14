@@ -9,6 +9,17 @@ defmodule AshReplicant.Test.AdmittedGeneration do
     publication = Keyword.get(opts, :publication, ["test_publication"])
     {:ok, manifest} = Destination.manifest(config)
     {:ok, source_contract} = AshReplicant.Checkpoint.Identity.build_contract(config, publication)
+
+    coverage =
+      case Keyword.get(opts, :coverage) do
+        nil ->
+          {:ok, index} = AshReplicant.Resolver.build_index(config.domains)
+          AshReplicant.Coverage.from_manifest(index, source_contract.manifest)
+
+        provided ->
+          provided
+      end
+
     {:ok, resolver_index} = AshReplicant.Resolver.build_index(config.domains)
     {:ok, dynamic_repo} = Destination.effective_dynamic_repo(config.repo)
     {:ok, code_modules} = Destination.code_modules(sink, manifest)
@@ -23,6 +34,8 @@ defmodule AshReplicant.Test.AdmittedGeneration do
       manifest: manifest,
       manifest_digest: manifest.digest,
       source_contract: source_contract,
+      source_connection: Keyword.get(opts, :source_connection),
+      coverage: coverage,
       code_modules: code_modules,
       code_fingerprint: code_fingerprint,
       source_identity:
