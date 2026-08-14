@@ -4,7 +4,12 @@ Date: 2026-08-13
 
 ## Status
 
-Accepted for the 1.0.0 release line.
+Accepted for the 1.0.0 release line. The final Decision bullet's deferral
+("Persisting the accepted source identity and resolver/publication manifest
+with checkpoint state remains B2 work") is discharged by
+[ADR-0007](0007-source-bound-checkpoint-effect-once.md), which owns the
+durable binding; the activation comparison decided here remains binding's
+step 1.
 
 ## Context
 

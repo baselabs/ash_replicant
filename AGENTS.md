@@ -22,7 +22,11 @@ the resolver index maps `{schema,table}` → resource; effect-once is guaranteed
 a durable `commit_lsn` watermark checkpointed atomically with the mirrored changes.
 Activation requires the expected PostgreSQL system identifier and database;
 Replicant 1.x verifies that identity from the actual replication session before
-the first checkpoint read. Each slot has one serialized runtime generation, so
+the first checkpoint read. The durable checkpoint is additionally bound to the
+actual session identity (source system, database, slot, with the session
+timeline recorded and any timeline change an explicit operator decision) and
+carries a canonical contract manifest classified at every reconnect under the
+checkpoint lock. Each slot has one serialized runtime generation, so
 duplicate starts cannot replace or erase the active resolver and identity state.
 
 ## Critical rules
@@ -113,8 +117,13 @@ it never authorizes raw SQL, another Repo, asynchronous work, or external effect
 
 Every committed streaming transaction is applied in ONE `Repo.transaction` while
 the per-slot generation lease is held through commit/rollback. Skip any change whose
-`commit_lsn <= checkpoint`, apply each change through the admitted Ash action graph,
-then upsert the checkpoint in the same transaction. A failure rolls back every mapped
+`commit_lsn <= checkpoint` of the source-bound checkpoint row — bound to the actual
+replication-session identity (system identifier, database, slot name, with the
+session timeline recorded and any timeline change an explicit operator decision),
+locked `FOR UPDATE` for admission, and advanced monotonically so lower/equal LSNs
+never regress or reapply and concurrent callers produce one effect — apply each
+change through the admitted Ash action graph, then upsert the checkpoint in the
+same transaction. A failure rolls back every mapped
 row, declared local auxiliary effect, AshOnetime claim/response, and checkpoint; the
 un-acked WAL re-streams and dedups on resume.
 

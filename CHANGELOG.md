@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** the generated checkpoint resource is source-bound — the
+  composite primary key is `(source_system_id, source_database, slot_name)`
+  from the actual replication session, with `source_timeline`,
+  `publication_contract`/`publication_fingerprint`, nullable-until-first-commit
+  `commit_lsn`, reserved snapshot-frontier columns, timestamps, the
+  `:source_slot` identity, and a named `:operator_reset` destroy action. The
+  slot-only `:unique_slot` identity is gone and the shape change requires a
+  migration; see the upgrade runbook (usage-rules.md).
+- The sink binds the checkpoint row inside `handle_session_identity/2` (now a
+  mutating, lease-held callback) on every connect: a foreign same-slot
+  identity, a changed timeline, a watermark ahead of the session's WAL flush
+  position, or an incompatible contract transition halts fail-closed with
+  value-free reasons and a `[:ash_replicant, :checkpoint, :conflict]` event.
+- Admission takes the checkpoint row `FOR UPDATE` inside the destination
+  transaction; lower/equal LSNs never regress or reapply and concurrent
+  callers produce one effect. An absent row at admission is a permanent
+  `:checkpoint_unbound` halt (restart re-binds). The v1 snapshot handoff no
+  longer regresses the watermark on a re-delivered consistent point.
+
+### Added
+
+- `AshReplicant.adopt_checkpoint/3`, `AshReplicant.reset_checkpoint/2`, and
+  `AshReplicant.acknowledge_checkpoint_timeline/3` operator recovery surfaces,
+  plus `AshReplicant.Checkpoint.Identity.refuse_ambiguous_legacy_rows!/1` /
+  `legacy_checkpoint_row_count/1` for the slot-only upgrade path.
+- ADR-0007 records the source-bound, serialized checkpoint decision.
+
 ### Security
 
 - Raise the 1.0.0 dependency floor to audit-clean Ash 3.31.3 and exclude Ash 4

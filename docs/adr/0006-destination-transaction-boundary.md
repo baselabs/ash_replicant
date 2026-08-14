@@ -4,7 +4,11 @@ Date: 2026-08-14
 
 ## Status
 
-Accepted for the 1.0.0 release line.
+Accepted for the 1.0.0 release line. The final Consequences bullet ("The
+checkpoint row is still keyed by the existing schema until B2 binds the
+admitted source identity and canonical manifest durably") is discharged by
+[ADR-0007](0007-source-bound-checkpoint-effect-once.md); this ADR's
+transaction-boundary mechanism is unchanged and now terminates on that row.
 
 ## Context
 

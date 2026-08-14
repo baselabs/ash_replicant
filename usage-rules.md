@@ -336,6 +336,64 @@ rebuilt, so final-state convergence is not proof of zero physical repeats. Roadm
 C3 owns zero-repeat v1 and incremental restart. Message, sink-owned batch,
 incremental-progress, and append-log callbacks remain absent until C1 through C4.
 
+## Source-bound checkpoints, binding, and operator recovery
+
+The durable checkpoint row is keyed by the ACTUAL replication session's
+identity — `(source_system_id, source_database, slot_name)` — with the session
+timeline recorded beside it and the canonical contract manifest (what the
+adapter maps) plus its fingerprint stored on the row
+([ADR-0007](docs/adr/0007-source-bound-checkpoint-effect-once.md)).
+
+On every connect, before any checkpoint read, the sink binds the row under the
+per-slot lease: a foreign identity under the same slot name, a changed
+timeline, a watermark beyond the session's WAL flush position, or an
+incompatible contract transition halts the pipeline fail-closed with a
+value-free reason and one `[:ash_replicant, :checkpoint, :conflict]` telemetry
+event. Every halt is an explicit operator decision — there is no fail-open
+path. A halted pipeline does not restart itself (`:temporary`); restart it
+after resolving the halt and the identity gate re-binds.
+
+Contract transitions follow a set-monotone rule: ADDING a relation, a
+brand-new column, or an ignore advances automatically (the manifest is
+replaced atomically, the watermark untouched); changing or removing anything
+already recorded — re-targeting a column, changing a type or tenant source,
+un-skipping a recorded skip, changing the publication — halts.
+
+Operator recovery surfaces:
+
+- `AshReplicant.adopt_checkpoint(sink, source_identity, commit_lsn)` — adopt a
+  preserved legacy watermark into a source-bound row (offline; idempotent;
+  refuses when a different identity owns the slot name).
+- `AshReplicant.reset_checkpoint(sink, source_identity)` — destroy the bound
+  row (incompatible transition or identity rebind; you accept re-delivery or
+  re-snapshot). On an SCD2 mirror, pair a reset with a full re-snapshot —
+  bare re-delivery re-closes closed versions and halts mid-replay.
+- `AshReplicant.acknowledge_checkpoint_timeline(sink, source_identity,
+  timeline_id)` — after a `:source_timeline_changed` halt on a same-primary
+  crash restart (the new timeline replays the old WAL), re-bind the recorded
+  timeline without touching the watermark. After a failover you cannot prove
+  continuous, reset instead.
+
+## Upgrading from the slot-only checkpoint
+
+Pre-0.4.0-shaped tables (slot-only primary key) carry no recorded source
+identity, so no automatic adoption is possible — the shipped rows are exactly
+the ambiguous class:
+
+1. Stop the pipeline. Call
+   `AshReplicant.Checkpoint.Identity.legacy_checkpoint_row_count/1` — a
+   non-zero count blocks the migration (the migration itself also refuses
+   surviving rows).
+2. Capture each row's `(slot_name, commit_lsn)`.
+3. Delete the legacy rows.
+4. Regenerate and run your migration (`mix ash.codegen` + `mix ecto.migrate`).
+5. Per slot, `AshReplicant.adopt_checkpoint/3` with the captured watermark and
+   the source's ACTUAL identity (`SELECT system_identifier::text,
+   current_database() FROM pg_control_system()`). A slot that should
+   re-snapshot from zero is simply not adopted.
+6. Restart; the first connect fills the contract without touching the adopted
+   watermark.
+
 ## Non-negotiable rules
 
 - **Route writes through Ash actions.** The mirror writes through the host resource's

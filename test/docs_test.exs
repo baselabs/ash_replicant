@@ -15,6 +15,29 @@ defmodule AshReplicant.DocsTest do
     assert File.exists?("docs/CHARTER.md")
   end
 
+  test "ADR-0007 records the source-bound checkpoint decision and is indexed" do
+    assert File.exists?("docs/adr/0007-source-bound-checkpoint-effect-once.md")
+    adr = File.read!("docs/adr/0007-source-bound-checkpoint-effect-once.md")
+    assert adr =~ "source-bound"
+    assert adr =~ "source_timeline"
+    assert adr =~ ":checkpoint_unbound"
+
+    index = File.read!("docs/adr/README.md")
+    assert index =~ "0007-source-bound-checkpoint-effect-once.md"
+  end
+
+  test "AGENTS Critical Rule 6 carries the source-bound clause AND the surviving snapshot disclaimer" do
+    agents = File.read!("AGENTS.md")
+
+    # The amended watermark sentence (pinned by the B2 design note).
+    assert agents =~ "of the source-bound checkpoint row"
+
+    # The C3 snapshot disclaimer and the absent-callbacks enumeration survive
+    # VERBATIM (weakening either while amending is the named drift class).
+    assert agents =~ "snapshot-wide physical effect-once until C3 proves zero repeats"
+    assert agents =~ "remain absent until C1–C4"
+  end
+
   test "published destination participant examples compile against the public API" do
     for path <- ["README.md", "usage-rules.md"] do
       source = extract_participant_example!(path)

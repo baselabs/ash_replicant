@@ -88,7 +88,13 @@ end
 ```
 
 This generates an AshPostgres resource backed by the `ash_replicant_checkpoints`
-table (one row per replication slot, tracking the durable commit LSN watermark).
+table: one row per replication SOURCE and slot, keyed by
+`(source_system_id, source_database, slot_name)` from the actual replication
+session's identity, carrying the durable commit LSN watermark, the recorded
+session timeline, and the canonical contract manifest with its fingerprint
+([ADR-0007](docs/adr/0007-source-bound-checkpoint-effect-once.md)). The sink
+binds the row on every connect before any checkpoint read, admits under a
+`FOR UPDATE` row lock, and advances the watermark monotonically.
 
 The checkpoint is an internal watermark — nothing outside the sink should read or write
 it. If your app exposes its domain on a wire surface (JSON:API, MCP), pass the policy
@@ -114,7 +120,13 @@ end
 The sink reads and upserts the checkpoint with `authorize?: false`, so it bypasses these
 policies and effect-once is unaffected — including when you declare none (which
 fail-closes the resource to every actor except the sink). `authorizers:` defaults to
-`[]`, so omitting it reproduces the prior resource exactly.
+`[]`.
+
+**Upgrading from the slot-only shape:** the generated resource changed (see the
+[upgrade runbook](usage-rules.md#upgrading-from-the-slot-only-checkpoint)). With
+existing slot-only rows, run `AshReplicant.Checkpoint.Identity.refuse_ambiguous_legacy_rows!/1`
+before migrating — the migration itself refuses surviving rows — then capture,
+delete, migrate, and `AshReplicant.adopt_checkpoint/3` per slot.
 
 ### 2. Define the sink
 

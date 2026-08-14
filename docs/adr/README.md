@@ -19,6 +19,7 @@ the narrative "why"; an ADR is the tracked, per-decision record with code eviden
 | [0004](0004-public-authority-and-release-history.md) | Public authority follows live code and immutable receipts; historical gaps are reported, not invented | A4 / E1 |
 | [0005](0005-replicant-coordination.md) | Support Replicant 1.x from Hex, pin actual-session identity at activation, and preserve explicit capability gates | A3 / B2 / C1–C3 |
 | [0006](0006-destination-transaction-boundary.md) | Admit one recursive AshPostgres destination action graph and only WAL-safe local AshOnetime participants | B1 / C1–C4 |
+| [0007](0007-source-bound-checkpoint-effect-once.md) | Bind checkpoints to the actual-session source identity with a locked monotonic watermark and a classified contract manifest | B2 / C1–C3 / C5 |
 
 ## On-touch gap list (not yet authored — author when a slice next touches the surface)
 
@@ -27,7 +28,6 @@ from historical testimony):
 
 | Decision | Owner | Surface / code evidence |
 |---|---|---|
-| Source-bound effect-once checkpoint and serialization | B2 | `Sink.Impl.run_transaction/4`, `AshReplicant.Checkpoint` |
 | Sensitive type-shape and value-free boundary | B5 | `ValidateSensitive`, `AshReplicant.Error`, `AshReplicant.Telemetry` |
 | Tenant-blind layering and pipeline ownership | B7 | `AshReplicant`, `AshReplicant.Resolver` |
 | SCD2 destination constraints and continuous validation | C5 | `ValidateHistory`, `AshReplicant.Apply.Scd2` |
