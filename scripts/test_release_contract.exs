@@ -148,17 +148,36 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   ]
 
   def run do
-    valid_fixture_probes()
-    action_probes()
-    action_input_probes()
-    command_probes()
-    compatibility_probes()
-    workflow_structure_probes()
-    mix_contract_probes()
-    documentation_probes()
+    with_env("ASH_REPLICANT_REPLICANT_VERSION", nil, fn ->
+      valid_fixture_probes()
+      action_probes()
+      action_input_probes()
+      command_probes()
+      compatibility_probes()
+      workflow_structure_probes()
+      mix_contract_probes()
+      replicant_selector_probes()
+      documentation_probes()
+    end)
+
     IO.puts("release contract self-tests: PASS")
   after
     File.rm_rf!(@fixture_root)
+  end
+
+  defp replicant_selector_probes do
+    prepare_fixture()
+
+    replace_once!(
+      "mix.lock",
+      ~s("replicant": {:hex, :replicant, "1.1.0"),
+      ~s("replicant": {:hex, :replicant, "1.0.0")
+    )
+
+    with_env("ASH_REPLICANT_REPLICANT_VERSION", "1.0.0", &assert_valid!/0)
+
+    prepare_fixture()
+    with_env("ASH_REPLICANT_REPLICANT_VERSION", "1.0.0", &assert_invalid!/0)
   end
 
   defp valid_fixture_probes do
@@ -1009,6 +1028,26 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     raise "release contract checker accepted a negative fixture"
   rescue
     AshReplicant.ReleaseContractError -> :ok
+  end
+
+  defp with_env(key, value, function) do
+    previous = System.get_env(key)
+
+    try do
+      if value do
+        System.put_env(key, value)
+      else
+        System.delete_env(key)
+      end
+
+      function.()
+    after
+      if previous do
+        System.put_env(key, previous)
+      else
+        System.delete_env(key)
+      end
+    end
   end
 
   defp fixture_path(path), do: Path.join(@fixture_root, path)
