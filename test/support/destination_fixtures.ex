@@ -1186,6 +1186,73 @@ defmodule AshReplicant.Test.DestinationFixtures do
     end
   end
 
+  defmodule HiddenUpdateDefaultRoot do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.Test.DestinationFixtures.HiddenUpdateDefaultDomain,
+      data_layer: AshPostgres.DataLayer,
+      extensions: [AshReplicant.Resource]
+
+    postgres do
+      table "destination_hidden_update_default_roots"
+      repo AshReplicant.TestRepo
+    end
+
+    replicant do
+      source_table("destination_hidden_update_default_source_roots")
+    end
+
+    attributes do
+      uuid_primary_key :id
+      attribute :hidden, :string, writable?: false, update_default: fn -> "generated" end
+    end
+
+    actions do
+      defaults [:read, :destroy]
+
+      create :create do
+        primary? true
+        accept []
+      end
+    end
+  end
+
+  defmodule ParticipantDefaultRoot do
+    @moduledoc false
+    @behaviour AshReplicant.DestinationParticipant
+
+    use Ash.Resource,
+      domain: AshReplicant.Test.DestinationFixtures.ParticipantDefaultDomain,
+      data_layer: AshPostgres.DataLayer,
+      extensions: [AshReplicant.Resource]
+
+    postgres do
+      table "destination_participant_default_roots"
+      repo AshReplicant.TestRepo
+    end
+
+    replicant do
+      source_table("destination_participant_default_source_roots")
+    end
+
+    attributes do
+      uuid_primary_key :id
+      attribute :hidden, :string, writable?: false, default: fn -> "generated" end
+    end
+
+    actions do
+      defaults [:read, :destroy]
+
+      create :create do
+        primary? true
+        accept []
+      end
+    end
+
+    @impl AshReplicant.DestinationParticipant
+    def destination_participants(_opts, %Context{}), do: {:ok, :no_database}
+  end
+
   defmodule NamedDefaultRoot do
     @moduledoc false
     alias AshReplicant.Test.DestinationFixtures.NamedDefaultProvider
@@ -1206,6 +1273,10 @@ defmodule AshReplicant.Test.DestinationFixtures do
 
     attributes do
       uuid_primary_key :id
+
+      attribute :hidden, :string,
+        writable?: false,
+        update_default: &NamedDefaultProvider.default_value/0
     end
 
     actions do
@@ -1216,6 +1287,74 @@ defmodule AshReplicant.Test.DestinationFixtures do
         accept []
 
         argument :generated, :string, default: &NamedDefaultProvider.default_value/0
+      end
+    end
+  end
+
+  defmodule SoftDestroyChild do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.Test.DestinationFixtures.SoftDestroyDomain,
+      data_layer: AshPostgres.DataLayer
+
+    postgres do
+      table "destination_soft_destroy_children"
+      repo AshReplicant.TestRepo
+    end
+
+    attributes do
+      uuid_primary_key :id
+      attribute :root_id, :uuid, allow_nil?: false
+      attribute :discarded, :boolean, allow_nil?: false, default: false
+      attribute :hidden, :string, writable?: false, update_default: fn -> "generated" end
+    end
+
+    actions do
+      defaults [:read, create: :*]
+
+      destroy :destroy do
+        primary? true
+        soft? true
+        require_atomic? false
+        accept []
+        change set_attribute(:discarded, true)
+      end
+    end
+  end
+
+  defmodule SoftDestroyRoot do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.Test.DestinationFixtures.SoftDestroyDomain,
+      data_layer: AshPostgres.DataLayer,
+      extensions: [AshReplicant.Resource]
+
+    postgres do
+      table "destination_soft_destroy_roots"
+      repo AshReplicant.TestRepo
+    end
+
+    replicant do
+      source_table("destination_soft_destroy_source_roots")
+    end
+
+    attributes do
+      uuid_primary_key :id
+    end
+
+    relationships do
+      has_many :children, AshReplicant.Test.DestinationFixtures.SoftDestroyChild do
+        destination_attribute :root_id
+      end
+    end
+
+    actions do
+      defaults [:read, create: :*]
+
+      destroy :destroy do
+        primary? true
+        touches_resources [AshReplicant.Test.DestinationFixtures.SoftDestroyChild]
+        change cascade_destroy(:children)
       end
     end
   end
@@ -1685,12 +1824,43 @@ defmodule AshReplicant.Test.DestinationFixtures do
     end
   end
 
+  defmodule HiddenUpdateDefaultDomain do
+    @moduledoc false
+    use Ash.Domain, validate_config_inclusion?: false
+
+    resources do
+      resource AshReplicant.Test.DestinationFixtures.HiddenUpdateDefaultRoot
+      resource AshReplicant.Test.Checkpoint
+    end
+  end
+
+  defmodule ParticipantDefaultDomain do
+    @moduledoc false
+    use Ash.Domain, validate_config_inclusion?: false
+
+    resources do
+      resource AshReplicant.Test.DestinationFixtures.ParticipantDefaultRoot
+      resource AshReplicant.Test.Checkpoint
+    end
+  end
+
   defmodule NamedDefaultDomain do
     @moduledoc false
     use Ash.Domain, validate_config_inclusion?: false
 
     resources do
       resource AshReplicant.Test.DestinationFixtures.NamedDefaultRoot
+      resource AshReplicant.Test.Checkpoint
+    end
+  end
+
+  defmodule SoftDestroyDomain do
+    @moduledoc false
+    use Ash.Domain, validate_config_inclusion?: false
+
+    resources do
+      resource AshReplicant.Test.DestinationFixtures.SoftDestroyRoot
+      resource AshReplicant.Test.DestinationFixtures.SoftDestroyChild
       resource AshReplicant.Test.Checkpoint
     end
   end

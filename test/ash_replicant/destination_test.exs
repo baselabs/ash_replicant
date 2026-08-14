@@ -239,6 +239,39 @@ defmodule AshReplicant.DestinationTest do
              })
   end
 
+  test "anonymous non-writable update default is rejected for create upserts" do
+    assert {:error,
+            {:destination_participant_required, DestinationFixtures.HiddenUpdateDefaultRoot,
+             :create, Function}} =
+             Destination.manifest(%{
+               repo: AshReplicant.TestRepo,
+               domains: [DestinationFixtures.HiddenUpdateDefaultDomain],
+               checkpoint_resource: AshReplicant.Test.Checkpoint
+             })
+  end
+
+  test "resource participation does not admit generated anonymous defaults" do
+    assert {:error,
+            {:destination_participant_required, DestinationFixtures.ParticipantDefaultRoot,
+             :create, Function}} =
+             Destination.manifest(%{
+               repo: AshReplicant.TestRepo,
+               domains: [DestinationFixtures.ParticipantDefaultDomain],
+               checkpoint_resource: AshReplicant.Test.Checkpoint
+             })
+  end
+
+  test "soft destroy update defaults are inspected through recursive cascades" do
+    assert {:error,
+            {:destination_participant_required, DestinationFixtures.SoftDestroyChild, :destroy,
+             Function}} =
+             Destination.manifest(%{
+               repo: AshReplicant.TestRepo,
+               domains: [DestinationFixtures.SoftDestroyDomain],
+               checkpoint_resource: AshReplicant.Test.Checkpoint
+             })
+  end
+
   test "named default provider whose function begins with default is admitted by declaration" do
     assert {:ok, _manifest} =
              Destination.manifest(%{

@@ -334,7 +334,7 @@ defmodule AshReplicant.Destination do
       context = %Context{resource: resource, action: action.name, kind: :type}
 
       with {:ok, found} <- inspect_type(field.type, Map.get(field, :constraints, []), context),
-           {:ok, defaults} <- inspect_field_defaults(field, action.type, context) do
+           {:ok, defaults} <- inspect_field_defaults(field, action, context) do
         {:cont, {:ok, refs ++ found ++ defaults}}
       else
         {:error, _reason} = error -> {:halt, error}
@@ -357,6 +357,12 @@ defmodule AshReplicant.Destination do
   end
 
   defp runtime_default_attributes(resource, %{type: :update}) do
+    resource
+    |> Ash.Resource.Info.attributes()
+    |> Enum.filter(&(not is_nil(&1.update_default)))
+  end
+
+  defp runtime_default_attributes(resource, %{type: :destroy, soft?: true}) do
     resource
     |> Ash.Resource.Info.attributes()
     |> Enum.filter(&(not is_nil(&1.update_default)))
@@ -415,12 +421,23 @@ defmodule AshReplicant.Destination do
     end)
   end
 
-  defp inspect_field_defaults(%Ash.Resource.Attribute{} = field, action_type, context) do
-    keys = if action_type == :create, do: [:default, :update_default], else: [:update_default]
-    inspect_defaults(field, keys, context)
-  end
+  defp inspect_field_defaults(%Ash.Resource.Attribute{} = field, %{type: :create}, context),
+    do: inspect_defaults(field, [:default, :update_default], context)
 
-  defp inspect_field_defaults(field, _action_type, context),
+  defp inspect_field_defaults(%Ash.Resource.Attribute{} = field, %{type: :update}, context),
+    do: inspect_defaults(field, [:update_default], context)
+
+  defp inspect_field_defaults(
+         %Ash.Resource.Attribute{} = field,
+         %{type: :destroy, soft?: true},
+         context
+       ),
+       do: inspect_defaults(field, [:update_default], context)
+
+  defp inspect_field_defaults(%Ash.Resource.Attribute{} = _field, _action, _context),
+    do: {:ok, []}
+
+  defp inspect_field_defaults(field, _action, context),
     do: inspect_defaults(field, [:default], context)
 
   defp inspect_defaults(field, keys, context) do
@@ -463,8 +480,10 @@ defmodule AshReplicant.Destination do
     value = Atom.to_string(name)
 
     String.starts_with?(value, "-") or
-      (module == context.resource and String.starts_with?(value, "default_") and
-         not participant?(module))
+      (module == context.resource and
+         (String.starts_with?(value, "default_") or
+            String.starts_with?(value, "update_default_")) and
+         String.contains?(value, "_generated_"))
   end
 
   defp inspect_tenant_resolver(resource, action)
