@@ -81,6 +81,11 @@ defmodule AshReplicant.Test.DestinationFixtures do
     @impl Ash.Resource.Change
     def change(changeset, _opts, _context), do: changeset
 
+    # Deliberately violates the behaviour's nonempty_list success type: the
+    # runtime must still reject an empty declaration even though typespecs are
+    # not enforced at runtime. Narrow nowarn for exactly this fixture purpose.
+    @dialyzer {:nowarn_function, destination_participants: 2}
+
     @impl AshReplicant.DestinationParticipant
     def destination_participants(_opts, %Context{}), do: {:ok, {:actions, []}}
   end
