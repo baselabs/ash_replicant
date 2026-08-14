@@ -3,6 +3,7 @@ defmodule AshReplicant.ReplicantDependencyTest do
 
   test "the resolved Hex dependency exposes the coordinated major contract" do
     assert Code.ensure_loaded?(Replicant.SessionIdentity)
+    assert Code.ensure_loaded?(Replicant.Sink)
     assert function_exported?(Replicant.Sink, :accept_session_identity, 3)
     assert function_exported?(Replicant.Sink, :supports_batch?, 1)
     assert function_exported?(Replicant.Sink, :supports_messages?, 1)
