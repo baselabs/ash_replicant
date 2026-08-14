@@ -1,0 +1,468 @@
+defmodule AshReplicant.Coverage do
+  @moduledoc false
+  # Strict source coverage (roadmap B3) + the RIF half of B4: one rule
+  # evaluation over a source-catalog census, the activation preflight that
+  # gathers it on an identity-verified short-lived connection, and the
+  # per-change/per-record column accounting guards. Everything here reads
+  # CATALOGS only — no row data crosses, publication names bind `$1`, and
+  # every error is a value-free structural reason (Critical Rule 4).
+
+  alias AshReplicant.{Checkpoint.Identity, Error, Resource.Info}
+
+  @typedoc "Per-table catalog census: the live column shape + identity flags."
+  @type census :: %{
+          optional({String.t(), String.t()}) => %{
+            required(:columns) => [
+              %{required(:name) => String.t(), required(:type) => String.t()}
+            ],
+            required(:relreplident) => String.t(),
+            required(:pk) => [String.t()]
+          }
+        }
+
+  @typedoc "Per-relation declared facts derived from the sink config + manifest."
+  @type relation_facts :: %{
+          optional({String.t(), String.t()}) => %{
+            required(:resource) => module(),
+            required(:mapped) => MapSet.t(String.t()),
+            required(:skips) => MapSet.t(String.t()),
+            required(:target_types) => %{optional(String.t()) => term()},
+            required(:tenant?) => boolean(),
+            required(:scd2?) => boolean(),
+            required(:business_key) => [String.t()]
+          }
+        }
+
+  # The type matrix (design D6): allowed source pg typnames per TARGET Ash
+  # type. Arrays via `_`-prefixed unwrapping; unknown/custom target types are
+  # NOT judged (the runtime Ash cast stays per-row fail-closed).
+  @type_matrix %{
+    integer: ~w(int2 int4 int8),
+    string: ~w(text varchar bpchar name char),
+    atom: ~w(text varchar bpchar name),
+    binary: ~w(bytea),
+    boolean: ~w(bool),
+    float: ~w(float4 float8),
+    decimal: ~w(numeric),
+    date: ~w(date),
+    time: ~w(time timetz),
+    time_usec: ~w(time timetz),
+    utc_datetime: ~w(timestamptz timestamp),
+    utc_datetime_usec: ~w(timestamptz timestamp),
+    datetime: ~w(timestamptz timestamp),
+    naive_datetime: ~w(timestamp),
+    naive_datetime_usec: ~w(timestamp),
+    uuid: ~w(uuid),
+    map: ~w(json jsonb),
+    json_string: ~w(json jsonb),
+    struct: ~w(json jsonb),
+    tuple: ~w(json jsonb)
+  }
+
+  @default_array_prefix "_"
+
+  # --- pure rule evaluation ---
+
+  @doc """
+  Evaluate the coverage rules over a catalog census against the declared
+  relation facts and the ignored table set. Pure; halt reasons are structural
+  (table/column NAMES only — never a row value).
+
+  Rules: missing expected tables (rule 2); unignored publication tables
+  (rule 3); ignore∩mapped collision (rule 4b); unmapped columns (rule 5);
+  missing declared columns / stale skips (rule 6); invalid source types
+  (rule 7); RIF (rule 10).
+  """
+  @spec evaluate(census(), relation_facts(), [%{schema: String.t(), table: String.t()}]) ::
+          :ok | {:error, Error.t()}
+  def evaluate(census, facts, ignores) do
+    # MapSet.new(map) would enumerate {k, v} PAIRS — build the key set directly.
+    ignored_keys = MapSet.new(ignores, &{&1.schema, &1.table})
+
+    with :ok <- check_ignore_collisions(ignored_keys, facts),
+         :ok <- check_missing_expected(census, facts),
+         :ok <- check_unignored_publication(census, facts, ignored_keys),
+         :ok <- check_columns(census, facts),
+         :ok <- check_types(census, facts),
+         :ok <- check_replica_identity(census, facts) do
+      :ok
+    end
+  end
+
+  defp check_ignore_collisions(ignored_keys, facts) do
+    case Enum.find(ignored_keys, &Map.has_key?(facts, &1)) do
+      nil ->
+        :ok
+
+      {schema, table} ->
+        {:error,
+         Error.exception(
+           reason: :config_invalid,
+           resource: nil,
+           op: :preflight,
+           shape: "ignore_collides_with_mapping=#{schema}.#{table}"
+         )}
+    end
+  end
+
+  defp check_missing_expected(census, facts) do
+    case Enum.find(facts, fn {key, _} -> not Map.has_key?(census, key) end) do
+      nil ->
+        :ok
+
+      {{schema, table}, _} ->
+        {:error,
+         Error.exception(
+           reason: :source_table_missing,
+           resource: nil,
+           op: :preflight,
+           shape: "#{schema}.#{table}"
+         )}
+    end
+  end
+
+  defp check_unignored_publication(census, facts, ignored_keys) do
+    census
+    |> Enum.find(fn {key, _} ->
+      not Map.has_key?(facts, key) and not MapSet.member?(ignored_keys, key)
+    end)
+    |> case do
+      nil ->
+        :ok
+
+      {{schema, table}, _} ->
+        {:error,
+         Error.exception(
+           reason: :source_table_unmapped,
+           resource: nil,
+           op: :preflight,
+           shape: "#{schema}.#{table}"
+         )}
+    end
+  end
+
+  defp check_columns(census, facts) do
+    Enum.find_value(facts, :ok, fn {{schema, table}, fact} ->
+      live =
+        census |> Map.fetch!({schema, table}) |> Map.get(:columns) |> Map.new(&{&1.name, &1.type})
+
+      live_names = live |> Map.keys() |> MapSet.new()
+
+      missing_declared =
+        fact.mapped
+        |> MapSet.difference(live_names)
+        |> MapSet.to_list()
+
+      stale_skips =
+        fact.skips
+        |> MapSet.difference(live_names)
+        |> MapSet.to_list()
+
+      unmapped =
+        live_names
+        |> MapSet.difference(fact.mapped)
+        |> MapSet.difference(fact.skips)
+        |> MapSet.to_list()
+
+      cond do
+        missing_declared != [] ->
+          {:error,
+           Error.exception(
+             reason: :source_column_missing,
+             resource: fact.resource,
+             op: :preflight,
+             shape: "#{schema}.#{table}(#{Enum.join(Enum.sort(missing_declared), ",")})"
+           )}
+
+        stale_skips != [] ->
+          {:error,
+           Error.exception(
+             reason: :source_skip_stale,
+             resource: fact.resource,
+             op: :preflight,
+             shape: "#{schema}.#{table}(#{Enum.join(Enum.sort(stale_skips), ",")})"
+           )}
+
+        unmapped != [] ->
+          {:error,
+           Error.exception(
+             reason: :source_column_unmapped,
+             resource: fact.resource,
+             op: :preflight,
+             shape: "#{schema}.#{table}(#{Enum.join(Enum.sort(unmapped), ",")})"
+           )}
+
+        true ->
+          :ok
+      end
+    end)
+  end
+
+  defp check_types(census, facts) do
+    Enum.find_value(facts, :ok, fn {{schema, table}, fact} ->
+      live = census |> Map.fetch!({schema, table}) |> Map.get(:columns)
+
+      # find_value's default :ok fires only when NO column violates; an
+      # allowed/skipped column yields nil so the scan continues.
+      Enum.find_value(live, :ok, fn column ->
+        case Map.get(fact.target_types, column.name) do
+          nil ->
+            nil
+
+          target_type ->
+            unless type_allowed?(target_type, column.type) do
+              {:error,
+               Error.exception(
+                 reason: :source_type_invalid,
+                 resource: fact.resource,
+                 op: :preflight,
+                 shape: "#{schema}.#{table}(#{column.name}:#{column.type})"
+               )}
+            end
+        end
+      end)
+    end)
+  end
+
+  defp check_replica_identity(census, facts) do
+    Enum.find_value(facts, :ok, fn {{schema, table}, fact} ->
+      live = Map.fetch!(census, {schema, table})
+
+      needs_full? =
+        fact.tenant? or
+          (fact.scd2? and not business_key_is_pk?(fact, live.pk))
+
+      if needs_full? and live.relreplident != "f" do
+        {:error,
+         Error.exception(
+           reason: :source_replica_identity,
+           resource: fact.resource,
+           op: :preflight,
+           shape: "#{schema}.#{table}=#{live.relreplident}"
+         )}
+      else
+        :ok
+      end
+    end)
+  end
+
+  defp business_key_is_pk?(fact, pk) do
+    bk = fact.business_key
+    length(bk) > 0 and Enum.sort(bk) == Enum.sort(pk)
+  end
+
+  @doc """
+  True when the live source typname is admissible for the target Ash type.
+  Arrays (`_`-prefixed pg names) unwrap to the element rule; unknown/custom
+  target types are NOT judged (documented fail-open-for-unknown boundary —
+  the runtime Ash cast stays per-row fail-closed).
+  """
+  @spec type_allowed?(term(), String.t()) :: boolean()
+  def type_allowed?(target_type, source_type) do
+    base = unwrapped_type(target_type)
+
+    cond do
+      not is_atom(base) ->
+        # Unknown/custom target type: not statically judgable.
+        true
+
+      is_nil(Map.get(@type_matrix, base)) ->
+        true
+
+      String.starts_with?(source_type, @default_array_prefix) ->
+        element = String.trim_leading(source_type, @default_array_prefix)
+        Map.get(@type_matrix, base) |> List.wrap() |> Enum.member?(element)
+
+      true ->
+        Map.get(@type_matrix, base) |> List.wrap() |> Enum.member?(source_type)
+    end
+  end
+
+  defp unwrapped_type({:array, inner}), do: unwrapped_type(inner)
+  defp unwrapped_type(other), do: other
+
+  # --- delivery-side accounting guards ---
+
+  @doc """
+  The per-change column accounting (streaming): the change's table must be
+  mapped (or explicitly ignored) and every delivered column must be mapped or
+  skipped. Halts (raises a value-free Error) BEFORE any write.
+  """
+  @spec assert_change!(relation_facts(), MapSet.t(), Replicant.Change.t()) :: :ok
+  def assert_change!(facts, ignored_tables, %Replicant.Change{} = change) do
+    key = {change.schema || "public", change.table}
+
+    cond do
+      MapSet.member?(ignored_tables, key) ->
+        :ok
+
+      not Map.has_key?(facts, key) ->
+        raise Error.exception(
+                reason: :source_table_unmapped,
+                resource: nil,
+                op: :apply,
+                shape: "#{elem(key, 0)}.#{elem(key, 1)}"
+              )
+
+      true ->
+        fact = Map.fetch!(facts, key)
+
+        change.columns
+        |> Enum.map(& &1.name)
+        |> Enum.each(fn name ->
+          unless MapSet.member?(fact.mapped, name) or MapSet.member?(fact.skips, name) do
+            raise Error.exception(
+                    reason: :source_column_unmapped,
+                    resource: fact.resource,
+                    op: :apply,
+                    shape: "#{elem(key, 0)}.#{elem(key, 1)}(#{name})"
+                  )
+          end
+        end)
+
+        :ok
+    end
+  end
+
+  @doc """
+  The snapshot-side column accounting: snapshot changes carry `columns: []`,
+  so the record's keys are the live column set. Same rule, same halt shape.
+  """
+  @spec assert_record_columns!(relation_facts(), MapSet.t(), String.t() | nil, String.t(), map()) ::
+          :ok
+  def assert_record_columns!(facts, ignored_tables, schema, table, record)
+      when is_map(record) do
+    key = {schema || "public", table}
+
+    cond do
+      MapSet.member?(ignored_tables, key) ->
+        :ok
+
+      not Map.has_key?(facts, key) ->
+        raise Error.exception(
+                reason: :source_table_unmapped,
+                resource: nil,
+                op: :snapshot,
+                shape: "#{elem(key, 0)}.#{elem(key, 1)}"
+              )
+
+      true ->
+        fact = Map.fetch!(facts, key)
+
+        record
+        |> Map.keys()
+        |> Enum.each(fn name ->
+          name = to_string(name)
+
+          unless MapSet.member?(fact.mapped, name) or MapSet.member?(fact.skips, name) do
+            raise Error.exception(
+                    reason: :source_column_unmapped,
+                    resource: fact.resource,
+                    op: :snapshot,
+                    shape: "#{elem(key, 0)}.#{elem(key, 1)}(#{name})"
+                  )
+          end
+        end)
+
+        :ok
+    end
+  end
+
+  # --- relation facts derivation ---
+
+  @doc """
+  Derive the per-relation declared facts from the resolver index + the
+  canonical contract (mapped columns, skips, target types, tenant flag,
+  SCD2 flag, business key). Pure reflection over compiled resources.
+  """
+  @spec relation_facts(map(), Identity.manifest()) :: relation_facts()
+  def relation_facts(index, contract) do
+    relations =
+      contract
+      |> Map.get(:relations, [])
+      |> Map.new(&{{&1.schema, &1.table}, &1})
+
+    index
+    |> Map.new(fn {{schema, table}, resource} ->
+      relation = Map.fetch!(relations, {schema, table})
+
+      mapped =
+        relation.columns
+        |> Enum.map(& &1.source)
+        |> MapSet.new()
+
+      skips = relation.skips |> MapSet.new()
+
+      target_types =
+        relation.columns
+        |> Map.new(&{&1.source, Map.fetch!(relation.types, &1.target)})
+
+      facts = %{
+        resource: resource,
+        mapped: mapped,
+        skips: skips,
+        target_types: target_types,
+        tenant?: relation.tenant != nil,
+        scd2?: Info.history_scd2?(resource),
+        business_key: business_key_sources(resource)
+      }
+
+      {{schema, table}, facts}
+    end)
+  end
+
+  defp business_key_sources(resource) do
+    # The Spark accessor RAISES when the option is unset (no default); a
+    # non-SCD2 resource has no business key.
+    keys = Info.replicant_history_business_key!(resource)
+    Enum.map(keys, &to_string/1)
+  rescue
+    _ -> []
+  end
+
+  @doc """
+  The runtime coverage view cached in the Generation: the relation facts +
+  the ignored-table key set (one source of truth for the contract, the bind
+  classifier, and the delivery guards).
+  """
+  @spec from_manifest(map(), Identity.manifest()) :: %{
+          facts: relation_facts(),
+          ignored: MapSet.t()
+        }
+  def from_manifest(index, contract) do
+    %{
+      facts: relation_facts(index, contract),
+      ignored: MapSet.new(Map.get(contract, :ignores, []), &{&1.schema, &1.table})
+    }
+  end
+
+  # --- catalog SQL (identity probe is version-conditional; the rest reuse
+  # --- the framework's public QueryBuilder strings verbatim) ---
+
+  @doc """
+  ONE round-trip identity + version probe. pg_control_system() exists only on
+  PG17+ (the documented floor and CI run PG16; D6's matrix is PG15-18), so the
+  system identifier is read conditionally: below 170000 the probe compares the
+  DATABASE only — the weaker pre-PG17 leg, bounded by the B2 session gate
+  (configured == actual session on the stream) and the per-change guard.
+  """
+  @spec sql_identity_probe() :: String.t()
+  def sql_identity_probe do
+    "SELECT current_setting('server_version_num')::int, " <>
+      "CASE WHEN current_setting('server_version_num')::int >= 170000 " <>
+      "THEN (SELECT system_identifier::text FROM pg_control_system()) ELSE NULL END, " <>
+      "current_database()"
+  end
+
+  @doc """
+  The adapter-owned replica-identity census (one new SQL string; the join
+  shape mirrors the framework's `pk_columns/0`). Publication list binds `$1`.
+  """
+  @spec sql_relreplident() :: String.t()
+  def sql_relreplident do
+    "SELECT p.schemaname, p.tablename, c.relreplident " <>
+      "FROM (SELECT DISTINCT schemaname, tablename FROM pg_publication_tables WHERE pubname = ANY($1)) p " <>
+      "JOIN pg_class c ON c.relname = p.tablename " <>
+      "JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = p.schemaname"
+  end
+end
