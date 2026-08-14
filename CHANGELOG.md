@@ -31,6 +31,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   contexts still may not replace `:data_layer`. The core-code fingerprint now
   covers every delivery-reachable module including the value-free telemetry
   allowlist enforcer.
+- Close four cross-vendor-admission bypasses found by the peer review: a
+  `set_context` may no longer touch `:shared` (Ash promotes it over the whole
+  context, so a nested `shared.data_layer` redirected the destination) or the
+  sink-owned `:ash_replicant_operation` identity (a forged operation context
+  would mint one replay key for every row); `prepare build(context: ...)` is
+  rejected (Ash.Query.build's context option redirects `data_layer`); and every
+  admitted action — including declared auxiliary participants — must keep its
+  tenant scoping (`multitenancy :bypass`/`:bypass_all` is rejected, closing
+  cross-tenant auxiliary effects). Streaming transactions carry an explicit
+  120s timeout (the per-change generation guards can exceed DBConnection's 15s
+  default at scale, deterministically wedging replication), and a sink callback
+  defined BEFORE `use AshReplicant.Sink` now also fails compilation (it would
+  win dispatch and skip the generation guard, activation lock, and repo pin).
 
 ### Added
 

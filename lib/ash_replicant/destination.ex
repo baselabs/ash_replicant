@@ -134,7 +134,6 @@ defmodule AshReplicant.Destination do
   ]
 
   @safe_preparations [
-    Ash.Resource.Preparation.Build,
     Ash.Resource.Preparation.SetContext
   ]
 
@@ -553,6 +552,7 @@ defmodule AshReplicant.Destination do
       true ->
         with :ok <- validate_resource_repo(resource, repo),
              %{} = action <- Ash.Resource.Info.action(resource, action_name),
+             :ok <- validate_action_tenant_scoping(resource, action),
              {:ok, refs} <- inspect_action(resource, action),
              :ok <- validate_touches(resource, action, refs),
              {:ok, completed, entries} <-
@@ -568,6 +568,22 @@ defmodule AshReplicant.Destination do
           nil -> {:error, {:destination_action_missing, resource, action_name}}
           {:error, _reason} = error -> error
         end
+    end
+  end
+
+  # EVERY admitted action — mapped roots, checkpoint, SCD2 close, and declared
+  # auxiliary/participant actions — must keep its tenant scoping: `multitenancy
+  # :bypass`/`:bypass_all` makes Ash ignore the inherited tenant on the write or
+  # row match, defeating per-row tenant resolution on any participant effect.
+  # (The compile-time ValidateActionMultitenancy covers sink-SELECTED actions;
+  # this closes the declared-participant surface.)
+  defp validate_action_tenant_scoping(resource, action) do
+    # Map.get: generic actions carry no :multitenancy field at all (nothing to
+    # bypass — they cannot write); only typed CRUD/close actions can.
+    if Map.get(action, :multitenancy) in [:bypass, :bypass_all] do
+      {:error, {:destination_action_tenant_bypass, resource, action.name}}
+    else
+      :ok
     end
   end
 
@@ -887,6 +903,19 @@ defmodule AshReplicant.Destination do
     end
   end
 
+  # `prepare build(...)` forwards its options straight into `Ash.Query.build/2`,
+  # whose `context:` option can redirect `data_layer` — admit every other build
+  # shape, reject a context-carrying one.
+  defp inspect_item(Ash.Resource.Preparation.Build, opts, context) do
+    if Keyword.has_key?(Keyword.get(opts, :options, []) || [], :context) do
+      {:error,
+       {:destination_participant_invalid, context.resource, context.action,
+        Ash.Resource.Preparation.Build}}
+    else
+      {:ok, []}
+    end
+  end
+
   defp inspect_item(module, _opts, _context)
        when module in @safe_changes or module in @safe_validations or
               module in @safe_preparations,
@@ -905,7 +934,13 @@ defmodule AshReplicant.Destination do
   # An MFA (dynamic) context cannot be inspected statically: it is admissible
   # ONLY through the DestinationParticipant escape hatch — the module behind the
   # MFA declares its effects like any other opaque module. A static map is
-  # admitted only when it does not replace :data_layer.
+  # admitted only when it touches NONE of the sink-owned context keys:
+  # `:data_layer`/`"data_layer"` redirects the destination; `:shared` is
+  # promoted by Ash.Changeset.set_context over the whole context (so a nested
+  # `shared.data_layer` redirects too); and `:ash_replicant_operation` is the
+  # effect-once operation identity `DestinationParticipant.operation_key/2`
+  # reads — a host SetContext over it would forge replay keys (every row minting
+  # the first row's key and silently replaying its stored response).
   defp inspect_set_context({provider, _fun, _args}, _set_context_module, context)
        when is_atom(provider),
        do: inspect_provider(provider, [], context)
@@ -919,9 +954,20 @@ defmodule AshReplicant.Destination do
     end
   end
 
-  defp safe_context?(context) when is_map(context),
-    do: not Map.has_key?(context, :data_layer) and not Map.has_key?(context, "data_layer")
+  @sink_owned_context_keys ~w(data_layer shared ash_replicant_operation)a
 
+  for key <- @sink_owned_context_keys do
+    string_key = Atom.to_string(key)
+
+    defp safe_context?(context) when is_map(context) and is_map_key(context, unquote(key)),
+      do: false
+
+    defp safe_context?(context)
+         when is_map(context) and is_map_key(context, unquote(string_key)),
+         do: false
+  end
+
+  defp safe_context?(context) when is_map(context), do: true
   defp safe_context?(_context), do: false
 
   defp inspect_provider(module, opts, context) when is_atom(module) do

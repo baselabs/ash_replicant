@@ -29,13 +29,15 @@ defmodule AshReplicant.Sink do
 
   @doc false
   def __on_definition__(env, kind, name, args, _guards, _body) when kind in [:def, :defp] do
-    arity = length(args || [])
+    unless Process.get({__MODULE__, :expanding}, false) do
+      arity = length(args || [])
 
-    if {name, arity} in @final_callbacks do
-      raise CompileError,
-        file: env.file,
-        line: env.line,
-        description: "AshReplicant sink callback #{name}/#{arity} is final"
+      if {name, arity} in @final_callbacks do
+        raise CompileError,
+          file: env.file,
+          line: env.line,
+          description: "AshReplicant sink callback #{name}/#{arity} is final"
+      end
     end
   end
 
@@ -63,6 +65,26 @@ defmodule AshReplicant.Sink do
     end
 
     quote do
+      # A host def placed BEFORE `use` never fires @on_definition at all — scan
+      # the module's already-registered definitions at use time (an
+      # earlier-defined clause would win dispatch and skip the generation guard,
+      # activation lock, and dynamic-repo pin).
+      for {name, arity} <-
+            Module.definitions_in(__MODULE__, :def) ++
+              Module.definitions_in(__MODULE__, :defp),
+          {name, arity} in unquote(Enum.to_list(@final_callbacks)) do
+        raise CompileError,
+          file: __ENV__.file,
+          line: __ENV__.line,
+          description: "AshReplicant sink callback #{name}/#{arity} is final"
+      end
+
+      # Registered before the macro's own injected definitions: @on_definition
+      # fires only for definitions made AFTER the attribute is set, so any LATER
+      # host def hits the guard. The expanding flag exempts the injected defs.
+      @on_definition {AshReplicant.Sink, :__on_definition__}
+      Process.put({AshReplicant.Sink, :expanding}, true)
+
       @behaviour Replicant.Sink
       @after_compile {AshReplicant.Destination, :__after_compile__}
 
@@ -121,7 +143,7 @@ defmodule AshReplicant.Sink do
         end)
       end
 
-      @on_definition {AshReplicant.Sink, :__on_definition__}
+      Process.put({AshReplicant.Sink, :expanding}, false)
     end
   end
 end

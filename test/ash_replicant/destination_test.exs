@@ -484,6 +484,50 @@ defmodule AshReplicant.DestinationTest do
              })
   end
 
+  test "a SetContext through :shared promotion cannot redirect the data layer" do
+    assert {:error,
+            {:destination_participant_invalid, DestinationFixtures.SharedContextRedirectRoot,
+             :create, Ash.Resource.Change.SetContext}} =
+             Destination.manifest(%{
+               repo: AshReplicant.TestRepo,
+               domains: [DestinationFixtures.SharedContextRedirectDomain],
+               checkpoint_resource: AshReplicant.Test.Checkpoint
+             })
+  end
+
+  test "a SetContext cannot forge the sink-owned operation identity" do
+    assert {:error,
+            {:destination_participant_invalid, DestinationFixtures.ForgedOperationContextRoot,
+             :create, Ash.Resource.Change.SetContext}} =
+             Destination.manifest(%{
+               repo: AshReplicant.TestRepo,
+               domains: [DestinationFixtures.ForgedOperationContextDomain],
+               checkpoint_resource: AshReplicant.Test.Checkpoint
+             })
+  end
+
+  test "a build preparation carrying a context option is rejected" do
+    assert {:error,
+            {:destination_participant_invalid, DestinationFixtures.BuildContextRedirectRoot,
+             :read, Ash.Resource.Preparation.Build}} =
+             Destination.manifest(%{
+               repo: AshReplicant.TestRepo,
+               domains: [DestinationFixtures.BuildContextRedirectDomain],
+               checkpoint_resource: AshReplicant.Test.Checkpoint
+             })
+  end
+
+  test "a declared auxiliary action under multitenancy bypass is rejected" do
+    assert {:error,
+            {:destination_action_tenant_bypass, DestinationFixtures.TenantBypassAuxiliary,
+             :record}} =
+             Destination.manifest(%{
+               repo: AshReplicant.TestRepo,
+               domains: [DestinationFixtures.TenantBypassDomain],
+               checkpoint_resource: AshReplicant.Test.Checkpoint
+             })
+  end
+
   test "unknown lifecycle wrapper fails closed" do
     assert {:error,
             {:destination_participant_required, DestinationFixtures.UnknownWrapperRoot, :create,

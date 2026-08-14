@@ -1921,6 +1921,189 @@ defmodule AshReplicant.Test.DestinationFixtures do
     end
   end
 
+  # `:shared` promotion redirect — Ash.Changeset.set_context merges `map[:shared]`
+  # over the WHOLE context, so a nested shared.data_layer redirects too.
+  defmodule SharedContextRedirectRoot do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.Test.DestinationFixtures.SharedContextRedirectDomain,
+      data_layer: AshPostgres.DataLayer,
+      extensions: [AshReplicant.Resource]
+
+    postgres do
+      table "destination_shared_context_redirect_roots"
+      repo AshReplicant.TestRepo
+    end
+
+    replicant do
+      source_table("destination_shared_context_redirect_sources")
+    end
+
+    attributes do
+      uuid_primary_key :id
+    end
+
+    actions do
+      defaults [:read, :destroy]
+
+      create :create do
+        primary? true
+        accept []
+        change set_context(%{shared: %{data_layer: %{table: "unmanifested_shared_target"}}})
+      end
+    end
+  end
+
+  # Operation-identity forge: `:ash_replicant_operation` is the sink-owned
+  # effect-once identity operation_key/2 reads — a host SetContext over it would
+  # mint one replay key for every row.
+  defmodule ForgedOperationContextRoot do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.Test.DestinationFixtures.ForgedOperationContextDomain,
+      data_layer: AshPostgres.DataLayer,
+      extensions: [AshReplicant.Resource]
+
+    postgres do
+      table "destination_forged_operation_roots"
+      repo AshReplicant.TestRepo
+    end
+
+    replicant do
+      source_table("destination_forged_operation_sources")
+    end
+
+    attributes do
+      uuid_primary_key :id
+    end
+
+    actions do
+      defaults [:read, :destroy]
+
+      create :create do
+        primary? true
+        accept []
+        change set_context(%{ash_replicant_operation: %{commit_lsn: 0, ordinal: 0}})
+      end
+    end
+  end
+
+  # `prepare build(context: ...)` forwards into Ash.Query.build, whose context
+  # option can redirect data_layer.
+  defmodule BuildContextRedirectRoot do
+    @moduledoc false
+    use Ash.Resource,
+      primary_read_warning?: false,
+      domain: AshReplicant.Test.DestinationFixtures.BuildContextRedirectDomain,
+      data_layer: AshPostgres.DataLayer,
+      extensions: [AshReplicant.Resource]
+
+    postgres do
+      table "destination_build_context_redirect_roots"
+      repo AshReplicant.TestRepo
+    end
+
+    replicant do
+      source_table("destination_build_context_redirect_sources")
+    end
+
+    attributes do
+      uuid_primary_key :id
+    end
+
+    actions do
+      defaults [:destroy, create: :*]
+
+      read :read do
+        primary? true
+        prepare build(context: %{data_layer: %{table: "unmanifested_build_target"}})
+      end
+    end
+  end
+
+  # A declared auxiliary action under `multitenancy :bypass` — Ash would ignore
+  # the inherited tenant on its writes.
+  defmodule TenantBypassAuxiliary do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.Test.DestinationFixtures.TenantBypassDomain,
+      data_layer: AshPostgres.DataLayer
+
+    postgres do
+      table "destination_tenant_bypass_auxiliaries"
+      repo AshReplicant.TestRepo
+    end
+
+    attributes do
+      uuid_primary_key :id
+    end
+
+    actions do
+      defaults [:read]
+
+      create :record do
+        transaction? true
+        multitenancy :bypass
+        accept []
+      end
+    end
+  end
+
+  defmodule TenantBypassAuxiliaryChange do
+    @moduledoc false
+    use Ash.Resource.Change
+    @behaviour AshReplicant.DestinationParticipant
+
+    alias AshReplicant.DestinationParticipant.{ActionRef, Context}
+
+    @impl Ash.Resource.Change
+    def change(changeset, _opts, _context), do: changeset
+
+    @impl AshReplicant.DestinationParticipant
+    def destination_participants(_opts, %Context{}) do
+      {:ok,
+       {:actions,
+        [
+          %ActionRef{
+            resource: AshReplicant.Test.DestinationFixtures.TenantBypassAuxiliary,
+            action: :record
+          }
+        ]}}
+    end
+  end
+
+  defmodule TenantBypassRoot do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.Test.DestinationFixtures.TenantBypassDomain,
+      data_layer: AshPostgres.DataLayer,
+      extensions: [AshReplicant.Resource]
+
+    postgres do
+      table "destination_tenant_bypass_roots"
+      repo AshReplicant.TestRepo
+    end
+
+    replicant do
+      source_table("destination_tenant_bypass_sources")
+    end
+
+    attributes do
+      uuid_primary_key :id
+    end
+
+    actions do
+      defaults [:read, :destroy]
+
+      create :create do
+        primary? true
+        accept []
+        touches_resources [AshReplicant.Test.DestinationFixtures.TenantBypassAuxiliary]
+        change AshReplicant.Test.DestinationFixtures.TenantBypassAuxiliaryChange
+      end
+    end
+  end
+
   defmodule ContextRedirectScd2Root do
     @moduledoc false
     use Ash.Resource,
@@ -2764,6 +2947,47 @@ defmodule AshReplicant.Test.DestinationFixtures do
 
     resources do
       resource AshReplicant.Test.DestinationFixtures.ContextRedirectPreparationRoot
+      resource AshReplicant.Test.Checkpoint
+    end
+  end
+
+  defmodule SharedContextRedirectDomain do
+    @moduledoc false
+    use Ash.Domain, validate_config_inclusion?: false
+
+    resources do
+      resource AshReplicant.Test.DestinationFixtures.SharedContextRedirectRoot
+      resource AshReplicant.Test.Checkpoint
+    end
+  end
+
+  defmodule ForgedOperationContextDomain do
+    @moduledoc false
+    use Ash.Domain, validate_config_inclusion?: false
+
+    resources do
+      resource AshReplicant.Test.DestinationFixtures.ForgedOperationContextRoot
+      resource AshReplicant.Test.Checkpoint
+    end
+  end
+
+  defmodule BuildContextRedirectDomain do
+    @moduledoc false
+    use Ash.Domain, validate_config_inclusion?: false
+
+    resources do
+      resource AshReplicant.Test.DestinationFixtures.BuildContextRedirectRoot
+      resource AshReplicant.Test.Checkpoint
+    end
+  end
+
+  defmodule TenantBypassDomain do
+    @moduledoc false
+    use Ash.Domain, validate_config_inclusion?: false
+
+    resources do
+      resource AshReplicant.Test.DestinationFixtures.TenantBypassRoot
+      resource AshReplicant.Test.DestinationFixtures.TenantBypassAuxiliary
       resource AshReplicant.Test.Checkpoint
     end
   end

@@ -70,6 +70,28 @@ defmodule AshReplicant.SinkTest do
     end
   end
 
+  test "a callback defined BEFORE use cannot bypass the finality guard" do
+    # @on_definition only fires for definitions AFTER the attribute is set — an
+    # earlier-defined clause would win dispatch and skip the generation guard,
+    # activation lock, and dynamic-repo pin. The attribute is registered first
+    # inside __using__, so this must fail compilation.
+    assert_raise CompileError, ~r/handle_transaction\/1 is final/, fn ->
+      Code.compile_string("""
+      defmodule AshReplicant.Test.PreUseCallbackSink do
+        def handle_transaction(txn) do
+          {:ok, txn.commit_lsn}
+        end
+
+        use AshReplicant.Sink,
+          repo: AshReplicant.TestRepo,
+          domains: [AshReplicant.Test.Domain],
+          checkpoint_resource: AshReplicant.Test.Checkpoint,
+          slot_name: "pre_use_callback_slot"
+      end
+      """)
+    end
+  end
+
   test "a transaction at or below the checkpoint is skipped — zero changes applied" do
     assert {:ok, 100} = TestSink.handle_transaction(txn(100, [ins("1")]))
     assert {:ok, 100} = TestSink.handle_transaction(txn(100, [ins("999")]))

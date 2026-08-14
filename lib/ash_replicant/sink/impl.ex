@@ -452,23 +452,32 @@ defmodule AshReplicant.Sink.Impl do
   defp run_transaction(config, lsn, ts, changes) do
     started = System.monotonic_time()
 
+    # Explicit timeout: the per-change generation guards re-validate the
+    # manifest and re-hash core bytecode inside this transaction, so at scale
+    # the default 15s DBConnection ceiling can be exceeded by guard overhead
+    # alone — a deterministic wedge (replicant retries the same transaction
+    # forever and source WAL retention grows unbounded). Same ceiling as the
+    # snapshot transaction.
     result =
-      config.repo.transaction(fn ->
-        guard_generation!(config)
+      config.repo.transaction(
+        fn ->
+          guard_generation!(config)
 
-        case read_checkpoint(config) do
-          cp when is_integer(cp) and lsn <= cp ->
-            guard_generation!(config)
-            :skipped
+          case read_checkpoint(config) do
+            cp when is_integer(cp) and lsn <= cp ->
+              guard_generation!(config)
+              :skipped
 
-          _ ->
-            count = apply_all(config, changes, ts)
-            guard_generation!(config)
-            upsert_checkpoint(config, lsn)
-            guard_generation!(config)
-            {:applied, count}
-        end
-      end)
+            _ ->
+              count = apply_all(config, changes, ts)
+              guard_generation!(config)
+              upsert_checkpoint(config, lsn)
+              guard_generation!(config)
+              {:applied, count}
+          end
+        end,
+        timeout: @snapshot_transaction_timeout
+      )
 
     case result do
       {:ok, {:applied, count}} ->
