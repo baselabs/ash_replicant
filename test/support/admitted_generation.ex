@@ -6,7 +6,9 @@ defmodule AshReplicant.Test.AdmittedGeneration do
 
   def put!(sink, opts \\ []) when is_atom(sink) do
     config = sink.__ash_replicant_config__()
+    publication = Keyword.get(opts, :publication, ["test_publication"])
     {:ok, manifest} = Destination.manifest(config)
+    {:ok, source_contract} = AshReplicant.Checkpoint.Identity.build_contract(config, publication)
     {:ok, resolver_index} = AshReplicant.Resolver.build_index(config.domains)
     {:ok, dynamic_repo} = Destination.effective_dynamic_repo(config.repo)
     {:ok, code_modules} = Destination.code_modules(sink, manifest)
@@ -20,6 +22,7 @@ defmodule AshReplicant.Test.AdmittedGeneration do
       resolver_index: resolver_index,
       manifest: manifest,
       manifest_digest: manifest.digest,
+      source_contract: source_contract,
       code_modules: code_modules,
       code_fingerprint: code_fingerprint,
       source_identity:
@@ -27,7 +30,7 @@ defmodule AshReplicant.Test.AdmittedGeneration do
           system_identifier: "test-system",
           database: "test-database"
         }),
-      publication: Keyword.get(opts, :publication, ["test_publication"]),
+      publication: publication,
       dynamic_repo: dynamic_repo
     }
 

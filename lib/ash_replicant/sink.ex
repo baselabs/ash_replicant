@@ -100,7 +100,7 @@ defmodule AshReplicant.Sink do
 
       @impl Replicant.Sink
       def handle_session_identity(identity, context) do
-        AshReplicant.run_callback(unquote(slot_name), __MODULE__, :read, fn config ->
+        AshReplicant.run_callback(unquote(slot_name), __MODULE__, :mutate, fn config ->
           Impl.handle_session_identity(config, identity, context)
         end)
       end

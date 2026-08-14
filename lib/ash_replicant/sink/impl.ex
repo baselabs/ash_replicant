@@ -14,6 +14,7 @@ defmodule AshReplicant.Sink.Impl do
 
   alias AshPostgres.DataLayer.Info, as: PGInfo
   alias AshReplicant.{Apply, Destination, Error, Resolver, Telemetry}
+  alias AshReplicant.Checkpoint.Identity
   alias AshReplicant.Resource.Info
   alias Ecto.Adapters.SQL
 
@@ -28,19 +29,207 @@ defmodule AshReplicant.Sink.Impl do
             system_identifier: expected_system,
             database: expected_database
           }
-        },
+        } = config,
         %Replicant.SessionIdentity{
           system_identifier: expected_system,
           database: expected_database
-        },
+        } = identity,
         %{slot_name: expected_slot, publication: expected_publication}
       ) do
+    # The verdict event stays AT the verdict point, BEFORE any bind write —
+    # the first-event ordering red gate depends on it.
     Telemetry.event([:ash_replicant, :sink, :session_identity_accepted], %{}, %{})
-    :ok
+
+    bind_session(config, identity)
   end
 
   def handle_session_identity(_config, _identity, _context),
     do: {:error, :source_identity_mismatch}
+
+  # Durable source-bound binding (roadmap B2). Runs on EVERY connect/reconnect,
+  # inside the identity callback (the only place the ACTUAL session identity is
+  # in hand — a separate connection is the rejected TOCTOU class) and BEFORE any
+  # checkpoint read. Sequence (sibling-read-first — see the design note): lock
+  # the slot's rows, halt on a foreign triple (the shipped unique slot index is
+  # the cross-node race backstop), then bind-or-classify the source contract.
+  defp bind_session(config, %Replicant.SessionIdentity{} = identity) do
+    contract = config.source_contract
+
+    result =
+      config.repo.transaction(
+        fn ->
+          guard_generation!(config)
+
+          case locked_slot_rows(config) do
+            [] ->
+              insert_bound_row!(config, identity, contract)
+
+            [row] ->
+              verify_and_adapt_row!(config, identity, contract, row)
+
+            _many ->
+              # Multiple rows under one slot cannot occur past the unique slot
+              # index; a read here means the index was dropped. Fail closed.
+              rollback_conflict!(config, :source_identity_rebound)
+          end
+
+          guard_generation!(config)
+          :ok
+        end,
+        timeout: @snapshot_transaction_timeout
+      )
+
+    case result do
+      {:ok, :ok} -> :ok
+      {:error, %Error{} = error} -> {:error, error}
+      {:error, other} -> {:error, Error.scrub(other, config.checkpoint_resource, :bind)}
+    end
+  rescue
+    e -> {:error, Error.scrub(e, config.checkpoint_resource, :bind)}
+  end
+
+  defp locked_slot_rows(config) do
+    import Ash.Query, only: [filter: 2]
+
+    config.checkpoint_resource
+    |> filter(slot_name == ^config.slot_name)
+    |> Ash.read!(
+      lock: :for_update,
+      authorize?: false,
+      context: action_context(config)
+    )
+    |> List.wrap()
+  end
+
+  defp insert_bound_row!(config, identity, contract) do
+    write_bound_contract!(config, identity, contract, %{commit_lsn: nil})
+    :ok
+  end
+
+  defp verify_and_adapt_row!(config, identity, contract, row) do
+    with :ok <- verify_same_triple!(config, row),
+         :ok <- verify_timeline!(config, identity, row),
+         :ok <- verify_liveness!(config, identity, row) do
+      classify_and_store_contract!(config, identity, contract, row)
+    else
+      {:error, %Error{}} = error -> config.repo.rollback(error)
+    end
+  end
+
+  defp verify_same_triple!(config, row) do
+    filter = checkpoint_filter(config)
+
+    if row.source_system_id == filter.source_system_id and
+         row.source_database == filter.source_database and row.slot_name == filter.slot_name do
+      :ok
+    else
+      rollback_conflict!(config, :source_identity_rebound)
+    end
+  end
+
+  defp verify_timeline!(config, %Replicant.SessionIdentity{timeline_id: timeline}, row) do
+    if is_nil(row.source_timeline) or row.source_timeline == timeline do
+      :ok
+    else
+      rollback_conflict!(config, :source_timeline_changed)
+    end
+  end
+
+  defp verify_liveness!(
+         config,
+         %Replicant.SessionIdentity{current_lsn: current},
+         row
+       ) do
+    if is_integer(row.commit_lsn) and is_integer(current) and row.commit_lsn > current do
+      rollback_conflict!(config, :source_behind_watermark)
+    else
+      :ok
+    end
+  end
+
+  defp classify_and_store_contract!(config, identity, contract, row) do
+    stored_manifest =
+      case row.publication_contract do
+        nil ->
+          nil
+
+        binary ->
+          case Identity.decode(binary) do
+            {:ok, manifest} -> manifest
+            :error -> :error
+          end
+      end
+
+    cond do
+      stored_manifest == :error ->
+        rollback_conflict!(config, :publication_contract_incompatible, "reason=decode_failed")
+
+      is_nil(stored_manifest) ->
+        # Adopted row (task 5) or a pre-contract row: initialize without
+        # touching the watermark.
+        write_bound_contract!(config, identity, contract, %{})
+        :ok
+
+      stored_manifest == contract.manifest and row.source_timeline == identity.timeline_id ->
+        # Steady-state reconnect: verify-only, NO write.
+        :ok
+
+      true ->
+        case Identity.classify(stored_manifest, contract.manifest) do
+          {:incompatible, reason} ->
+            rollback_conflict!(
+              config,
+              :publication_contract_incompatible,
+              "reason=" <> inspect(reason)
+            )
+
+          _compatible_or_equal ->
+            write_bound_contract!(config, identity, contract, %{})
+            :ok
+        end
+    end
+  end
+
+  defp write_bound_contract!(config, identity, contract, extra) do
+    Ash.create!(
+      config.checkpoint_resource,
+      Map.merge(
+        Map.merge(checkpoint_filter(config), extra),
+        %{
+          source_timeline: identity.timeline_id,
+          publication_contract: contract.encoded,
+          publication_fingerprint: contract.fingerprint
+        }
+      ),
+      action: :upsert,
+      upsert?: true,
+      upsert_identity: :source_slot,
+      upsert_fields: [:source_timeline, :publication_contract, :publication_fingerprint],
+      authorize?: false,
+      context: action_context(config),
+      return_notifications?: true
+    )
+
+    :ok
+  end
+
+  defp rollback_conflict!(config, reason, shape \\ nil) do
+    error =
+      Error.exception(
+        reason: reason,
+        resource: config.checkpoint_resource,
+        op: :bind,
+        shape: shape
+      )
+
+    Telemetry.event(
+      [:ash_replicant, :checkpoint, :conflict],
+      %{count: 1},
+      %{reason: reason, error_class: error.class}
+    )
+
+    config.repo.rollback(error)
+  end
 
   @doc "Last durably-persisted commit LSN for the slot (`nil` = never), the dedup watermark."
   @spec checkpoint(map()) :: {:ok, Replicant.lsn() | nil} | {:error, term()}

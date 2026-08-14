@@ -20,6 +20,12 @@ defmodule AshReplicant.Error do
           | :truncate_halt
           | :duplicate_source
           | :config_invalid
+          | :source_identity_mismatch
+          | :source_identity_rebound
+          | :source_timeline_changed
+          | :source_behind_watermark
+          | :publication_contract_incompatible
+          | :checkpoint_unbound
           | {:invalid_destination_config, :onetime_store}
 
   @type t :: %__MODULE__{

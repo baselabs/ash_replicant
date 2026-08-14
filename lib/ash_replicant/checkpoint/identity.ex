@@ -41,6 +41,21 @@ defmodule AshReplicant.Checkpoint.Identity do
 
   @type tenant_source :: %{kind: :attribute, source: String.t()} | %{kind: :mfa, module: module()}
 
+  @typedoc "The admission-threaded contract bundle: the manifest, its durable encoding, and the digest."
+  @type contract :: %{manifest: manifest(), encoded: binary(), fingerprint: binary()}
+
+  @doc """
+  Build the admission-threaded contract bundle (manifest + deterministic
+  encoding + sha256 fingerprint) for a sink config and publication list.
+  """
+  @spec build_contract(map(), [String.t()]) :: {:ok, contract()} | {:error, term()}
+  def build_contract(sink_config, publication) do
+    with {:ok, manifest} <- canonical_contract(sink_config, publication) do
+      encoded = encode(manifest)
+      {:ok, %{manifest: manifest, encoded: encoded, fingerprint: fingerprint(encoded)}}
+    end
+  end
+
   @doc """
   Build the canonical contract from the admitted sink config and the normalized
   publication list. Deterministic: relations sorted by `{schema, table}`,

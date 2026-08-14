@@ -152,6 +152,8 @@ defmodule AshReplicant do
          publication
        ) do
     with {:ok, manifest} <- AshReplicant.Destination.manifest(sink_config),
+         {:ok, source_contract} <-
+           AshReplicant.Checkpoint.Identity.build_contract(sink_config, publication),
          {:ok, index} <- AshReplicant.Resolver.build_index(sink_config.domains),
          {:ok, dynamic_repo} <-
            AshReplicant.Destination.effective_dynamic_repo(sink_config.repo),
@@ -168,6 +170,7 @@ defmodule AshReplicant do
         resolver_index: index,
         manifest: manifest,
         manifest_digest: manifest.digest,
+        source_contract: source_contract,
         code_modules: code_modules,
         code_fingerprint: code_fingerprint,
         source_identity: source_identity,
@@ -269,6 +272,7 @@ defmodule AshReplicant do
          true <- config.destination_manifest == generation.manifest,
          true <- config.source_identity == generation.source_identity,
          true <- config.publication == generation.publication,
+         true <- config.source_contract == generation.source_contract,
          true <- config.dynamic_repo == generation.dynamic_repo,
          true <- config.data_layer_context == %{repo: generation.dynamic_repo},
          true <- config.authorize? == false do
@@ -284,6 +288,7 @@ defmodule AshReplicant do
       sink: generation.sink,
       resolver_index: generation.resolver_index,
       destination_manifest: generation.manifest,
+      source_contract: generation.source_contract,
       source_identity: generation.source_identity,
       publication: generation.publication,
       generation: generation.reference,

@@ -167,7 +167,11 @@ defmodule AshReplicant.StartLinkTest do
 
         context = %{slot_name: "valid_slot", publication: ["valid_pub"]}
 
-        assert :ok =
+        # The accepted path now BINDS the checkpoint row (B2) — without a live
+        # DB it fails closed into a value-free error; the accepted-path :ok
+        # proof lives in the integration marquees (checkpoint_binding_test).
+        assert match?(
+                 {:error, %AshReplicant.Error{}},
                  ValidSink.handle_session_identity(
                    %Replicant.SessionIdentity{
                      system_identifier: "741852963",
@@ -177,6 +181,7 @@ defmodule AshReplicant.StartLinkTest do
                    },
                    context
                  )
+               )
 
         assert {:error, :source_identity_mismatch} =
                  ValidSink.handle_session_identity(
