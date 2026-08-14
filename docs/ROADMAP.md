@@ -14,6 +14,25 @@ No row is optional for the release gate. Enhancements are included where the liv
 Replicant contract or Ash architecture already supports the capability; they are
 not silently narrowed out of the adapter.
 
+## Implementation and verification cadence
+
+This cadence is binding for every roadmap row and every implementation plan derived
+from it:
+
+- Non-closeout tasks run only the tests that directly exercise the changed behavior,
+  touched-file formatting, and compile with warnings as errors. They do not run the
+  repository-wide test suite, Credo, Dialyzer, docs, dependency audits, package builds,
+  the complete integration matrix, or GitHub Actions.
+- Each row has one explicit closeout task. That task runs the row-complete affected
+  test selection and the quality checks required by the row; it does not repeatedly
+  rerun unrelated release gates after each fix.
+- The complete repository release battery and exact-head GitHub CI run once in E2,
+  after all implementation rows and documentation are complete. Any final fix
+  invalidates only the directly affected focused evidence until the consolidated E2
+  closure battery is rerun.
+- Commits remain local during task implementation. Pushes are reserved for a planned
+  row closeout or an explicit user instruction, preventing per-task GitHub Actions.
+
 <!-- forge-roadmap-schema: 1 -->
 
 | ID | What | Acceptance | Depends | Why |
