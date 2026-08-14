@@ -223,6 +223,16 @@ defmodule AshReplicant.Test.DestinationFixtures do
     def change(changeset, _opts, _context), do: changeset
   end
 
+  defmodule NamedDefaultProvider do
+    @moduledoc false
+    @behaviour AshReplicant.DestinationParticipant
+
+    def default_value, do: "named-default"
+
+    @impl AshReplicant.DestinationParticipant
+    def destination_participants(_opts, %Context{}), do: {:ok, :no_database}
+  end
+
   defmodule OnetimeAuxiliaryChange do
     @moduledoc false
     use Ash.Resource.Change
@@ -1145,6 +1155,71 @@ defmodule AshReplicant.Test.DestinationFixtures do
     end
   end
 
+  defmodule HiddenDefaultRoot do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.Test.DestinationFixtures.HiddenDefaultDomain,
+      data_layer: AshPostgres.DataLayer,
+      extensions: [AshReplicant.Resource]
+
+    postgres do
+      table "destination_hidden_default_roots"
+      repo AshReplicant.TestRepo
+    end
+
+    replicant do
+      source_table("destination_hidden_default_source_roots")
+    end
+
+    attributes do
+      uuid_primary_key :id
+      attribute :hidden, :string, writable?: false, default: fn -> "generated" end
+    end
+
+    actions do
+      defaults [:read, :destroy]
+
+      create :create do
+        primary? true
+        accept []
+      end
+    end
+  end
+
+  defmodule NamedDefaultRoot do
+    @moduledoc false
+    alias AshReplicant.Test.DestinationFixtures.NamedDefaultProvider
+
+    use Ash.Resource,
+      domain: AshReplicant.Test.DestinationFixtures.NamedDefaultDomain,
+      data_layer: AshPostgres.DataLayer,
+      extensions: [AshReplicant.Resource]
+
+    postgres do
+      table "destination_named_default_roots"
+      repo AshReplicant.TestRepo
+    end
+
+    replicant do
+      source_table("destination_named_default_source_roots")
+    end
+
+    attributes do
+      uuid_primary_key :id
+    end
+
+    actions do
+      defaults [:read, :destroy]
+
+      create :create do
+        primary? true
+        accept []
+
+        argument :generated, :string, default: &NamedDefaultProvider.default_value/0
+      end
+    end
+  end
+
   defmodule ValidationRoot do
     @moduledoc false
     use Ash.Resource,
@@ -1596,6 +1671,26 @@ defmodule AshReplicant.Test.DestinationFixtures do
 
     resources do
       resource AshReplicant.Test.DestinationFixtures.AnonymousDefaultRoot
+      resource AshReplicant.Test.Checkpoint
+    end
+  end
+
+  defmodule HiddenDefaultDomain do
+    @moduledoc false
+    use Ash.Domain, validate_config_inclusion?: false
+
+    resources do
+      resource AshReplicant.Test.DestinationFixtures.HiddenDefaultRoot
+      resource AshReplicant.Test.Checkpoint
+    end
+  end
+
+  defmodule NamedDefaultDomain do
+    @moduledoc false
+    use Ash.Domain, validate_config_inclusion?: false
+
+    resources do
+      resource AshReplicant.Test.DestinationFixtures.NamedDefaultRoot
       resource AshReplicant.Test.Checkpoint
     end
   end

@@ -228,6 +228,26 @@ defmodule AshReplicant.DestinationTest do
              })
   end
 
+  test "anonymous non-writable attribute default is rejected even when the action accepts nothing" do
+    assert {:error,
+            {:destination_participant_required, DestinationFixtures.HiddenDefaultRoot, :create,
+             Function}} =
+             Destination.manifest(%{
+               repo: AshReplicant.TestRepo,
+               domains: [DestinationFixtures.HiddenDefaultDomain],
+               checkpoint_resource: AshReplicant.Test.Checkpoint
+             })
+  end
+
+  test "named default provider whose function begins with default is admitted by declaration" do
+    assert {:ok, _manifest} =
+             Destination.manifest(%{
+               repo: AshReplicant.TestRepo,
+               domains: [DestinationFixtures.NamedDefaultDomain],
+               checkpoint_resource: AshReplicant.Test.Checkpoint
+             })
+  end
+
   test "custom type nested inside a builtin union is inspected" do
     assert {:error,
             {:destination_participant_required, DestinationFixtures.UnionTypeRoot, :create,

@@ -325,13 +325,16 @@ defmodule AshReplicant.Destination do
     fields =
       action.arguments ++
         accepted_attributes(resource, action) ++
+        runtime_default_attributes(resource, action) ++
         Map.get(action, :metadata, []) ++ return_type(action)
+
+    fields = Enum.uniq(fields)
 
     Enum.reduce_while(fields, {:ok, []}, fn field, {:ok, refs} ->
       context = %Context{resource: resource, action: action.name, kind: :type}
 
       with {:ok, found} <- inspect_type(field.type, Map.get(field, :constraints, []), context),
-           {:ok, defaults} <- inspect_field_defaults(field, context) do
+           {:ok, defaults} <- inspect_field_defaults(field, action.type, context) do
         {:cont, {:ok, refs ++ found ++ defaults}}
       else
         {:error, _reason} = error -> {:halt, error}
@@ -346,6 +349,20 @@ defmodule AshReplicant.Destination do
     |> Enum.map(&Ash.Resource.Info.attribute(resource, &1))
     |> Enum.reject(&is_nil/1)
   end
+
+  defp runtime_default_attributes(resource, %{type: :create}) do
+    resource
+    |> Ash.Resource.Info.attributes()
+    |> Enum.filter(&(not is_nil(&1.default) or not is_nil(&1.update_default)))
+  end
+
+  defp runtime_default_attributes(resource, %{type: :update}) do
+    resource
+    |> Ash.Resource.Info.attributes()
+    |> Enum.filter(&(not is_nil(&1.update_default)))
+  end
+
+  defp runtime_default_attributes(_resource, _action), do: []
 
   defp return_type(%{type: :action, returns: nil}), do: []
 
@@ -398,8 +415,16 @@ defmodule AshReplicant.Destination do
     end)
   end
 
-  defp inspect_field_defaults(field, context) do
-    [:default, :update_default]
+  defp inspect_field_defaults(%Ash.Resource.Attribute{} = field, action_type, context) do
+    keys = if action_type == :create, do: [:default, :update_default], else: [:update_default]
+    inspect_defaults(field, keys, context)
+  end
+
+  defp inspect_field_defaults(field, _action_type, context),
+    do: inspect_defaults(field, [:default], context)
+
+  defp inspect_defaults(field, keys, context) do
+    keys
     |> Enum.map(&Map.get(field, &1))
     |> Enum.reduce_while({:ok, []}, fn default, {:ok, refs} ->
       case inspect_default(default, %{context | kind: :callback}) do
@@ -420,7 +445,7 @@ defmodule AshReplicant.Destination do
       {module, name, arity} in @safe_default_callbacks ->
         {:ok, []}
 
-      generated_default?(name) ->
+      generated_default?(module, name, context) ->
         {:error, {:destination_participant_required, context.resource, context.action, Function}}
 
       true ->
@@ -434,9 +459,12 @@ defmodule AshReplicant.Destination do
 
   defp inspect_default(_literal, _context), do: {:ok, []}
 
-  defp generated_default?(name) do
+  defp generated_default?(module, name, context) do
     value = Atom.to_string(name)
-    String.starts_with?(value, "-") or String.starts_with?(value, "default_")
+
+    String.starts_with?(value, "-") or
+      (module == context.resource and String.starts_with?(value, "default_") and
+         not participant?(module))
   end
 
   defp inspect_tenant_resolver(resource, action)
