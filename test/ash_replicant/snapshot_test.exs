@@ -96,6 +96,13 @@ defmodule AshReplicant.SnapshotTest do
     assert :ok = Sink.handle_snapshot([snap("4")], fresh_run)
     assert %{run_lsn: 900, ordinal: 1} = :persistent_term.get(ordinal_key)
 
+    # A NON-first batch with no matching run (stale shape, post-complete
+    # straggler) fails closed — never resets mid-run.
+    Impl.clear_snapshot_ordinals("snap_slot")
+
+    assert {:error, %AshReplicant.Error{reason: :config_invalid}} =
+             Sink.handle_snapshot([snap("5")], ctx(false))
+
     assert {:ok, 500} = Sink.handle_snapshot_complete(500)
     assert {:ok, 500} = Sink.checkpoint()
     assert :persistent_term.get(ordinal_key, :missing) == :missing

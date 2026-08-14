@@ -231,6 +231,10 @@ defmodule AshReplicant.SnapshotPipelineTest do
   test "a two-table snapshot gives each table's declared effects distinct operation keys" do
     Marquee.setup_multi_schema!()
     slot = Marquee.multi_slot()
+    # Pre-drop: a leftover slot from a hard-killed prior run would halt
+    # fail-closed (:snapshot_incomplete) and flake this test.
+    Marquee.drop_slot!(slot)
+    Marquee.q!("DELETE FROM ash_replicant_checkpoints WHERE slot_name = $1", [slot])
 
     on_exit(fn ->
       AshReplicant.stop_supervised(slot)
