@@ -17,21 +17,27 @@ not silently narrowed out of the adapter.
 ## Implementation and verification cadence
 
 This cadence is binding for every roadmap row and every implementation plan derived
-from it:
+from it (user directive 2026-08-14: unattended full-roadmap execution with
+selective per-task verification and ONE comprehensive closeout):
 
 - Non-closeout tasks run only the tests that directly exercise the changed behavior,
   touched-file formatting, and compile with warnings as errors. They do not run the
   repository-wide test suite, Credo, Dialyzer, docs, dependency audits, package builds,
   the complete integration matrix, or GitHub Actions.
-- Each row has one explicit closeout task. That task runs the row-complete affected
-  test selection and the quality checks required by the row; it does not repeatedly
-  rerun unrelated release gates after each fix.
-- The complete repository release battery and exact-head GitHub CI run once in E2,
-  after all implementation rows and documentation are complete. Any final fix
-  invalidates only the directly affected focused evidence until the consolidated E2
-  closure battery is rerun.
-- Commits remain local during task implementation. Pushes are reserved for a planned
-  row closeout or an explicit user instruction, preventing per-task GitHub Actions.
+- Rows execute in optimized units (see the unit plan in the governing handoff); a
+  unit shares one design note and plan while keeping per-row slice slugs for tracker
+  derivation. Each unit has ONE closeout task: the unit's affected test selection plus
+  only the checks the unit's rows name (ADR/docs tests, red-capable mutation proofs).
+  No per-row battery.
+- ONE comprehensive closeout runs before completion, on the exact final HEAD: the
+  complete repository release battery (full structural + integration suites, Credo,
+  Dialyzer, docs-WAE, dependency/security audits, package build + unpack inspection,
+  migration drift), one fresh-context review per unit's range plus the mandatory
+  cross-vendor run against the full range, and remediation of any finding with
+  re-verification of the directly affected checks. E2 owns this pass.
+- Commits remain local during task implementation. Pushes and every publish action
+  (tag, GitHub release, `mix hex.publish`) require explicit fresh user authorization
+  for the exact artifact.
 
 Every implementation plan must label every task with exactly one verification class
 and list the exact commands permitted for that task. A task without this label is not
@@ -39,11 +45,11 @@ ready to execute:
 
 | Verification class | When used | Permitted | Prohibited |
 |---|---|---|---|
-| `FOCUSED` | Every implementation task before its row's final task | Named tests that directly exercise the changed behavior, one red-capable mutation where required, touched-file format, compile-WAE | Row-wide or repository-wide suites; Credo; Dialyzer; docs; dependency/security audits; package builds; complete integration matrices; push; GitHub Actions |
-| `ROW CLOSEOUT` | Exactly one final task per roadmap row | One row-complete affected test selection and the quality/package/document checks named by that row | Repository-wide release battery; repeated full reruns after each correction; push or GitHub Actions unless the plan or user explicitly authorizes them |
-| `RELEASE CLOSEOUT` | E2 only | The complete repository release battery, release-byte checks, and one exact-head GitHub CI run | Per-task or per-row repetition of the release battery |
+| `FOCUSED` | Every implementation task | Named tests that directly exercise the changed behavior, one red-capable mutation where required, touched-file format, compile-WAE | Repository-wide suites; Credo; Dialyzer; docs; dependency/security audits; package builds; complete integration matrices; push; GitHub Actions |
+| `UNIT CLOSEOUT` | Exactly one final task per unit | The unit's affected test selection and the checks its rows name | Repository-wide battery; repeated full reruns after each correction; push or GitHub Actions |
+| `COMPREHENSIVE CLOSEOUT` | Once, before completion (E2) | The complete repository release battery on exact final HEAD, per-unit fresh-context reviews, cross-vendor against the full range, remediation + affected re-verification | Per-task or per-unit repetition of the full battery |
 
-When a focused or row-closeout check finds a defect, fix it and rerun the directly
+When a focused or unit-closeout check finds a defect, fix it and rerun the directly
 affected check. Do not promote that correction into a broader suite. The next broader
 gate runs only at its already-declared closeout boundary.
 
