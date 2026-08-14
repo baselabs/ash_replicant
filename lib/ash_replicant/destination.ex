@@ -32,10 +32,17 @@ defmodule AshReplicant.Destination do
 
   defmodule Manifest do
     @moduledoc false
-    @enforce_keys [:repo, :entries, :digest]
-    defstruct [:repo, :entries, :digest]
+    @enforce_keys [:repo, :entries, :onetime_prefixes_by_action, :digest]
+    defstruct [:repo, :entries, :onetime_prefixes_by_action, :digest]
 
-    @type t :: %__MODULE__{repo: module(), entries: [Entry.t()], digest: binary()}
+    @type prefix :: nil | String.t() | :context_tenant
+    @type action_key :: {module(), atom()}
+    @type t :: %__MODULE__{
+            repo: module(),
+            entries: [Entry.t()],
+            onetime_prefixes_by_action: %{optional(action_key()) => [prefix()]},
+            digest: binary()
+          }
   end
 
   defmodule Generation do
@@ -163,15 +170,26 @@ defmodule AshReplicant.Destination do
       when is_atom(repo) and is_list(domains) and is_atom(checkpoint) do
     with :ok <- validate_repo_module(repo),
          {:ok, roots} <- root_actions(domains, checkpoint),
-         {:ok, _completed, entries} <-
-           walk(roots, repo, %{}, %{}, []) do
+         {:ok, entries, onetime_prefixes_by_action} <- walk_roots(roots, repo),
+         :ok <- validate_onetime_entries(entries) do
       entries =
         entries
         |> Enum.uniq()
         |> Enum.sort_by(&entry_sort_key/1)
 
-      digest = :crypto.hash(:sha256, :erlang.term_to_binary({repo, entries}))
-      {:ok, %Manifest{repo: repo, entries: entries, digest: digest}}
+      digest =
+        :crypto.hash(
+          :sha256,
+          :erlang.term_to_binary({repo, entries, onetime_prefixes_by_action}, [:deterministic])
+        )
+
+      {:ok,
+       %Manifest{
+         repo: repo,
+         entries: entries,
+         onetime_prefixes_by_action: onetime_prefixes_by_action,
+         digest: digest
+       }}
     end
   rescue
     _error -> {:error, {:invalid_destination_config, :reflection_failed}}
@@ -237,6 +255,71 @@ defmodule AshReplicant.Destination do
   end
 
   @doc false
+  @spec preflight_onetime(Manifest.t(), atom() | pid()) ::
+          :ok | {:error, {:invalid_destination_config, :onetime_store}}
+  def preflight_onetime(%Manifest{} = manifest, dynamic_repo) do
+    manifest.onetime_prefixes_by_action
+    |> Map.values()
+    |> List.flatten()
+    |> Enum.reject(&(&1 == :context_tenant))
+    |> Enum.uniq()
+    |> Enum.reduce_while(:ok, fn prefix, :ok ->
+      case preflight_onetime_relations(dynamic_repo, prefix) do
+        :ok -> {:cont, :ok}
+        :error -> {:halt, {:error, {:invalid_destination_config, :onetime_store}}}
+      end
+    end)
+  rescue
+    _error -> {:error, {:invalid_destination_config, :onetime_store}}
+  catch
+    _kind, _reason -> {:error, {:invalid_destination_config, :onetime_store}}
+  end
+
+  @doc false
+  @spec preflight_onetime_transaction(
+          Manifest.t(),
+          atom() | pid(),
+          term(),
+          module(),
+          atom()
+        ) ::
+          :ok | {:error, {:invalid_destination_config, :onetime_store}}
+  def preflight_onetime_transaction(
+        %Manifest{} = manifest,
+        dynamic_repo,
+        tenant,
+        resource,
+        action
+      )
+      when is_atom(resource) and is_atom(action) do
+    context_tenant? =
+      manifest.onetime_prefixes_by_action
+      |> Map.get({resource, action}, [])
+      |> Enum.member?(:context_tenant)
+
+    cond do
+      not context_tenant? ->
+        :ok
+
+      not (is_binary(tenant) and byte_size(tenant) in 1..63) ->
+        {:error, {:invalid_destination_config, :onetime_store}}
+
+      preflight_onetime_relations(dynamic_repo, tenant) == :ok ->
+        :ok
+
+      true ->
+        {:error, {:invalid_destination_config, :onetime_store}}
+    end
+  rescue
+    _error -> {:error, {:invalid_destination_config, :onetime_store}}
+  catch
+    _kind, _reason -> {:error, {:invalid_destination_config, :onetime_store}}
+  end
+
+  def preflight_onetime_transaction(_manifest, _dynamic_repo, _tenant, _resource, _action),
+    do: {:error, {:invalid_destination_config, :onetime_store}}
+
+  @doc false
   @spec dynamic_repo_owned_by?(module(), atom() | pid()) :: boolean()
   def dynamic_repo_owned_by?(repo, repo), do: true
 
@@ -278,6 +361,39 @@ defmodule AshReplicant.Destination do
          ]}
     end
   end
+
+  defp walk_roots(roots, repo) do
+    Enum.reduce_while(roots, {:ok, [], %{}}, fn root, {:ok, all_entries, prefixes_by_action} ->
+      case walk([root], repo, %{}, %{}, []) do
+        {:ok, _completed, entries} ->
+          {resource, action, _role, _source, _tenant_mode, _replay_identity} = root
+
+          prefixes =
+            entries
+            |> Enum.filter(&is_map(&1.protection))
+            |> Enum.map(&onetime_static_prefix/1)
+            |> Enum.uniq()
+            |> Enum.sort_by(&prefix_sort_key/1)
+
+          prefixes_by_action =
+            Map.update(prefixes_by_action, {resource, action}, prefixes, fn existing ->
+              existing
+              |> Kernel.++(prefixes)
+              |> Enum.uniq()
+              |> Enum.sort_by(&prefix_sort_key/1)
+            end)
+
+          {:cont, {:ok, entries ++ all_entries, prefixes_by_action}}
+
+        {:error, _reason} = error ->
+          {:halt, error}
+      end
+    end)
+  end
+
+  defp prefix_sort_key(nil), do: {0, ""}
+  defp prefix_sort_key(:context_tenant), do: {1, ""}
+  defp prefix_sort_key(prefix) when is_binary(prefix), do: {2, prefix}
 
   defp mapped_root_actions(domains) do
     domains
@@ -793,8 +909,8 @@ defmodule AshReplicant.Destination do
   defp valid_replay_identity?(nil), do: true
 
   defp valid_replay_identity?(%ReplayIdentity{components: [_ | _] = components, participant: p})
-       when is_atom(p) do
-    allowed = [
+       when is_atom(p) and p not in [nil, true, false] do
+    components == [
       :source_system_identifier,
       :source_database,
       :slot_name,
@@ -802,11 +918,122 @@ defmodule AshReplicant.Destination do
       :ordinal,
       :participant
     ]
-
-    Enum.uniq(components) == components and Enum.all?(components, &(&1 in allowed))
   end
 
   defp valid_replay_identity?(_other), do: false
+
+  @doc false
+  @spec validate_onetime_entries([Entry.t()]) :: :ok | {:error, reason()}
+  def validate_onetime_entries(entries) do
+    entries
+    |> Enum.filter(&is_map(&1.protection))
+    |> Enum.reduce_while(:ok, fn entry, :ok ->
+      case validate_onetime_entry(entry) do
+        :ok -> {:cont, :ok}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp validate_onetime_entry(%Entry{
+         role: :auxiliary,
+         resource: resource,
+         action: action_name,
+         replay_identity: %ReplayIdentity{participant: participant} = replay_identity,
+         protection: protection
+       }) do
+    action = Ash.Resource.Info.action(resource, action_name)
+
+    with true <- valid_replay_identity?(replay_identity),
+         true <- protection.strategy == :idempotency,
+         true <- protection.commit == :with_action,
+         true <- protection.on_definite_store_failure == :fail_closed,
+         true <- is_nil(protection.external_effect),
+         true <- protection.key == [{:argument, :operation_key}],
+         true <- protection.scope == replay_scope(participant),
+         true <- private_operation_key?(action),
+         true <- valid_onetime_response?(protection.response),
+         true <- classified_cache?() do
+      :ok
+    else
+      _other -> {:error, {:destination_participant_invalid, AshOnetime.Resource}}
+    end
+  end
+
+  defp validate_onetime_entry(%Entry{}),
+    do: {:error, {:destination_participant_invalid, AshOnetime.Resource}}
+
+  defp replay_scope(participant) do
+    [
+      {:static, "ash_replicant:destination-participant:1"},
+      {:static, Atom.to_string(participant)}
+    ]
+  end
+
+  defp private_operation_key?(%{arguments: arguments}) do
+    Enum.any?(arguments, fn argument ->
+      argument.name == :operation_key and argument.public? == false and
+        argument.allow_nil? == false and Ash.Type.get_type!(argument.type) == Ash.Type.String
+    end)
+  end
+
+  defp private_operation_key?(_action), do: false
+
+  defp onetime_static_prefix(%Entry{resource: resource}) do
+    if Ash.Resource.Info.multitenancy_strategy(resource) == :context do
+      :context_tenant
+    else
+      AshPostgres.DataLayer.Info.schema(resource)
+    end
+  end
+
+  defp preflight_onetime_relations(dynamic_repo, prefix) do
+    claims = qualified_relation(prefix, "ash_onetime_idempotency_claims")
+    responses = qualified_relation(prefix, "ash_onetime_response_payloads")
+
+    sql = """
+    SELECT
+      to_regclass($1) IS NOT NULL,
+      to_regclass($2) IS NOT NULL,
+      EXISTS (
+        SELECT 1
+        FROM pg_inherits
+        WHERE inhparent = to_regclass($2)
+      )
+    """
+
+    case Ecto.Adapters.SQL.query(dynamic_repo, sql, [claims, responses]) do
+      {:ok, %{rows: [[true, true, true]]}} -> :ok
+      _other -> :error
+    end
+  end
+
+  defp qualified_relation(nil, relation), do: quote_ident(relation)
+
+  defp qualified_relation(prefix, relation) when is_binary(prefix),
+    do: quote_ident(prefix) <> "." <> quote_ident(relation)
+
+  defp quote_ident(value), do: ~s("#{String.replace(value, "\"", "\"\"")}")
+
+  defp valid_onetime_response?(%{codec: codec, classify: classifier})
+       when is_atom(codec) and is_atom(classifier),
+       do: true
+
+  defp valid_onetime_response?(_response), do: false
+
+  defp classified_cache? do
+    module = Application.get_env(:ash_onetime, :cache, AshOnetime.Cache.None)
+
+    Code.ensure_loaded?(module) and AshOnetime.Cache in behaviours(module)
+  end
+
+  defp behaviours(module) do
+    module.__info__(:attributes)
+    |> Keyword.get_values(:behaviour)
+    |> List.flatten()
+  rescue
+    _error -> []
+  end
 
   defp relationship_refs(module, opts, context) do
     relationship_name = Keyword.get(opts, :relationship)

@@ -13,9 +13,11 @@ defmodule AshReplicant.Sink.Impl do
   """
 
   alias AshPostgres.DataLayer.Info, as: PGInfo
-  alias AshReplicant.{Apply, Error, Resolver, Telemetry}
+  alias AshReplicant.{Apply, Destination, Error, Resolver, Telemetry}
   alias AshReplicant.Resource.Info
   alias Ecto.Adapters.SQL
+
+  @snapshot_transaction_timeout 120_000
 
   @doc false
   def handle_session_identity(
@@ -161,18 +163,21 @@ defmodule AshReplicant.Sink.Impl do
 
       case Resolver.lookup(config.resolver_index, schema, table) do
         # Unmapped table = legitimate partial-publication skip (no batch applied).
-        nil -> :ok
-        resource -> run_snapshot_batch(config, resource, changes, first?, table, ctx)
+        nil ->
+          :ok
+
+        resource ->
+          run_snapshot_batch(config, resource, changes, first?, {schema, table}, table, ctx)
       end
     end
   rescue
     e -> {:error, Error.scrub(e, nil, :snapshot)}
   end
 
-  defp run_snapshot_batch(config, resource, changes, first?, table, ctx) do
+  defp run_snapshot_batch(config, resource, changes, first?, source_key, table, ctx) do
     snapshot_lsn = Map.get(ctx, :snapshot_lsn)
 
-    with :ok <- run_snapshot(config, resource, changes, first?, snapshot_lsn) do
+    with :ok <- run_snapshot(config, resource, changes, first?, snapshot_lsn, source_key) do
       # Snapshot changes are a materialized list (the bulk path indexes them via
       # List.first), so counting is single-pass-safe here — unlike the streaming
       # path's lazy Enumerable.
@@ -186,24 +191,76 @@ defmodule AshReplicant.Sink.Impl do
     end
   end
 
-  defp run_snapshot(config, resource, changes, first?, snapshot_lsn) do
-    config.repo.transaction(fn ->
-      guard_generation!(config)
+  defp run_snapshot(config, resource, changes, first?, snapshot_lsn, source_key) do
+    with {:ok, ordinal_base} <- snapshot_ordinal_base(config, source_key, first?) do
+      result =
+        config.repo.transaction(
+          fn ->
+            guard_generation!(config)
+            config = preflight_snapshot_onetime!(config, resource, changes)
 
-      if first? do
-        clear_mirror(resource, config)
-        guard_generation!(config)
+            if first? do
+              clear_mirror(resource, config)
+              guard_generation!(config)
+            end
+
+            apply_snapshot_batch(config, resource, changes, snapshot_lsn, ordinal_base)
+            guard_generation!(config)
+          end,
+          timeout: @snapshot_transaction_timeout
+        )
+
+      case result do
+        {:ok, _} ->
+          put_snapshot_ordinal(config, source_key, ordinal_base + length(changes))
+          :ok
+
+        {:error, %Error{} = e} ->
+          {:error, e}
+
+        {:error, other} ->
+          {:error, Error.scrub(other, resource, :snapshot)}
       end
-
-      apply_snapshot_batch(config, resource, changes, snapshot_lsn)
-      guard_generation!(config)
-    end)
-    |> case do
-      {:ok, _} -> :ok
-      {:error, %Error{} = e} -> {:error, e}
-      {:error, other} -> {:error, Error.scrub(other, resource, :snapshot)}
+    else
+      :error ->
+        {:error, Error.exception(reason: :config_invalid, resource: resource, op: :snapshot)}
     end
   end
+
+  defp snapshot_ordinal_base(config, source_key, true) do
+    put_snapshot_ordinal(config, source_key, 0)
+    {:ok, 0}
+  end
+
+  defp snapshot_ordinal_base(config, source_key, false) do
+    case snapshot_ordinals(config) do
+      %{^source_key => ordinal} when is_integer(ordinal) and ordinal >= 0 -> {:ok, ordinal}
+      _other -> :error
+    end
+  end
+
+  defp snapshot_ordinals(config) do
+    case :persistent_term.get(snapshot_ordinals_key(config.slot_name), %{}) do
+      ordinals when is_map(ordinals) -> ordinals
+      _other -> %{}
+    end
+  end
+
+  defp put_snapshot_ordinal(config, source_key, ordinal) do
+    ordinals = Map.put(snapshot_ordinals(config), source_key, ordinal)
+    :persistent_term.put(snapshot_ordinals_key(config.slot_name), ordinals)
+  end
+
+  defp snapshot_ordinals_key(slot_name),
+    do: {__MODULE__, :snapshot_ordinals, slot_name}
+
+  @doc false
+  @spec clear_snapshot_ordinals(String.t()) :: true
+  def clear_snapshot_ordinals(slot_name) when is_binary(slot_name) do
+    :persistent_term.erase(snapshot_ordinals_key(slot_name))
+  end
+
+  def clear_snapshot_ordinals(_slot_name), do: true
 
   @doc "Durably set `checkpoint := snapshot_lsn` and return it (the snapshot handoff commit)."
   @spec handle_snapshot_complete(map(), Replicant.lsn()) ::
@@ -221,6 +278,8 @@ defmodule AshReplicant.Sink.Impl do
       end)
       |> case do
         {:ok, _} ->
+          clear_snapshot_ordinals(config.slot_name)
+
           Telemetry.event([:ash_replicant, :snapshot, :complete], %{}, %{commit_lsn: snapshot_lsn})
 
           {:ok, snapshot_lsn}
@@ -246,9 +305,9 @@ defmodule AshReplicant.Sink.Impl do
     SQL.query!(config.repo, ~s(DELETE FROM "#{schema}"."#{table}"), [])
   end
 
-  defp apply_snapshot_batch(_config, _resource, [], _snapshot_lsn), do: :ok
+  defp apply_snapshot_batch(_config, _resource, [], _snapshot_lsn, _ordinal_base), do: :ok
 
-  defp apply_snapshot_batch(config, resource, changes, snapshot_lsn) do
+  defp apply_snapshot_batch(config, resource, changes, snapshot_lsn, ordinal_base) do
     # The load-bearing driver of the split is `tenant_scoped?`: a single bulk
     # upsert carries one `tenant:`, so a mixed-tenant batch cannot go through bulk
     # — it MUST apply per-record, each row under its own resolved tenant.
@@ -262,9 +321,18 @@ defmodule AshReplicant.Sink.Impl do
     # batch's `snapshot_lsn` onto each change; it is INERT for the SCD1 sensitive/tenant
     # per-record upsert (which reads only `change.record`).
     if sensitive?(resource) or tenant_scoped?(resource) or Info.history_scd2?(resource) do
-      Enum.each(changes, fn c ->
+      changes
+      |> Enum.with_index(ordinal_base)
+      |> Enum.each(fn {c, ordinal} ->
         guard_generation!(config)
-        Apply.apply_change(config, %{c | op: :insert, commit_lsn: snapshot_lsn})
+
+        Apply.apply_change(config, %{
+          c
+          | op: :insert,
+            commit_lsn: snapshot_lsn,
+            ordinal: ordinal
+        })
+
         guard_generation!(config)
       end)
     else
@@ -291,7 +359,7 @@ defmodule AshReplicant.Sink.Impl do
           return_records?: false,
           return_notifications?: true,
           authorize?: config.authorize?,
-          context: action_context(config),
+          context: snapshot_action_context(config, snapshot_lsn, ordinal_base),
           transaction: false
         )
 
@@ -316,6 +384,38 @@ defmodule AshReplicant.Sink.Impl do
   defp tenant_scoped?(resource) do
     match?({:ok, _}, Info.replicant_tenant_attribute(resource)) or
       match?({:ok, _}, Info.replicant_tenant_mfa(resource))
+  end
+
+  defp preflight_snapshot_onetime!(config, resource, changes) do
+    action = Resolver.upsert_action(resource)
+
+    tenants =
+      if tenant_scoped?(resource) do
+        changes
+        |> Enum.map(&Resolver.resolve_tenant!(resource, &1.record, :upsert))
+        |> Enum.uniq()
+      else
+        [nil]
+      end
+
+    preflighted =
+      Enum.reduce(tenants, MapSet.new(), fn tenant, preflighted ->
+        case Destination.preflight_onetime_transaction(
+               config.destination_manifest,
+               config.dynamic_repo,
+               tenant,
+               resource,
+               action
+             ) do
+          :ok ->
+            MapSet.put(preflighted, {resource, action, tenant})
+
+          {:error, reason} ->
+            raise Error.exception(reason: reason, resource: resource, op: :snapshot)
+        end
+      end)
+
+    Map.put(config, :onetime_preflighted, preflighted)
   end
 
   defp run_transaction(config, lsn, ts, changes) do
@@ -415,4 +515,16 @@ defmodule AshReplicant.Sink.Impl do
 
   defp action_context(config),
     do: %{data_layer: Map.get(config, :data_layer_context, %{repo: config.repo})}
+
+  defp snapshot_action_context(config, snapshot_lsn, ordinal_base) do
+    config
+    |> action_context()
+    |> Map.put(:ash_replicant_operation, %{
+      source_system_identifier: config.source_identity.system_identifier,
+      source_database: config.source_identity.database,
+      slot_name: config.slot_name,
+      commit_lsn: snapshot_lsn,
+      ordinal_base: ordinal_base
+    })
+  end
 end

@@ -38,6 +38,8 @@ defmodule AshReplicant.SnapshotTest do
     on_exit(fn ->
       :persistent_term.erase({AshReplicant, "snap_slot"})
       :persistent_term.erase({AshReplicant, "scd2_snap"})
+      Impl.clear_snapshot_ordinals("snap_slot")
+      Impl.clear_snapshot_ordinals("scd2_snap")
     end)
 
     :ok
@@ -72,8 +74,14 @@ defmodule AshReplicant.SnapshotTest do
   end
 
   test "handle_snapshot_complete durably sets the checkpoint to snapshot_lsn" do
+    ordinal_key = {Impl, :snapshot_ordinals, "snap_slot"}
+
+    assert :ok = Sink.handle_snapshot([snap("1")], ctx(true))
+    assert %{{"public", "orders"} => 1} = :persistent_term.get(ordinal_key)
+
     assert {:ok, 500} = Sink.handle_snapshot_complete(500)
     assert {:ok, 500} = Sink.checkpoint()
+    assert :persistent_term.get(ordinal_key, :missing) == :missing
   end
 
   # An empty resolver index must fail closed on BOTH snapshot entry points, exactly

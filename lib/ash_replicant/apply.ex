@@ -58,14 +58,14 @@ defmodule AshReplicant.Apply do
     # resource keeps the existing upsert path unchanged.
     if op == :update and
          (pk_changed?(resource, change) or Resolver.tenant_changed?(resource, change)) do
-      destroy_by_pk(config, resource, change.old_record)
+      destroy_by_pk(config, resource, change.old_record, change)
     end
 
     upsert(config, resource, change)
   end
 
   defp apply_to(config, resource, %{op: :delete} = change, _commit_timestamp) do
-    destroy_by_pk(config, resource, change.old_record)
+    destroy_by_pk(config, resource, change.old_record, change)
   end
 
   defp apply_to(
@@ -102,15 +102,17 @@ defmodule AshReplicant.Apply do
   defp upsert(config, resource, change) do
     {inputs, upsert_fields} = Resolver.attrs_for_upsert(resource, change.record)
     tenant = Resolver.resolve_tenant!(resource, change.record, :upsert)
+    action = Resolver.upsert_action(resource)
+    preflight_onetime!(config, tenant, resource, action, :upsert)
 
     Ash.create!(resource, inputs,
-      action: Resolver.upsert_action(resource),
+      action: action,
       upsert?: true,
       upsert_identity: Resolver.upsert_identity(resource),
       upsert_fields: upsert_fields,
       tenant: tenant,
       authorize?: config.authorize?,
-      context: action_context(config),
+      context: action_context(config, change),
       # The sink owns the single outer Repo.transaction these actions join (spec
       # decision 7); `transaction?: false` skips a redundant per-row savepoint on
       # the upsert. (`Ash.destroy!` has no `transaction?` option — its per-action
@@ -125,7 +127,7 @@ defmodule AshReplicant.Apply do
     e -> reraise Error.scrub(e, resource, :upsert), __STACKTRACE__
   end
 
-  defp destroy_by_pk(config, resource, old_record) do
+  defp destroy_by_pk(config, resource, old_record, change) do
     pk_values = Resolver.pk_values(resource, old_record)
 
     # Fail closed on a missing PK BEFORE building the filter: a nil PK value would
@@ -136,11 +138,13 @@ defmodule AshReplicant.Apply do
     end
 
     tenant = Resolver.resolve_tenant!(resource, old_record, :destroy)
+    action = Resolver.destroy_action(resource)
+    preflight_onetime!(config, tenant, resource, action, :destroy)
 
     query =
       resource
       |> Ash.Query.do_filter(pk_values)
-      |> Ash.Query.set_context(action_context(config))
+      |> Ash.Query.set_context(action_context(config, change))
 
     # One atomic `DELETE ... WHERE pk` (single round-trip) instead of read-then-destroy.
     # `strategy: [:atomic, :stream]` takes the data-layer atomic path for the mirror's
@@ -156,12 +160,12 @@ defmodule AshReplicant.Apply do
     # above). A 0-row match (already-absent row) is `:success` → `:ok` (idempotent).
     # `notify?` defaults to false, so no notifier fires for mirrored changes (the sink
     # contract), matching the prior `return_notifications?: true` bundle-and-discard.
-    Ash.bulk_destroy!(query, Resolver.destroy_action(resource), %{},
+    Ash.bulk_destroy!(query, action, %{},
       strategy: [:atomic, :stream],
       transaction: false,
       tenant: tenant,
       authorize?: config.authorize?,
-      context: action_context(config),
+      context: action_context(config, change),
       return_errors?: true
     )
 
@@ -178,4 +182,64 @@ defmodule AshReplicant.Apply do
 
   defp action_context(config),
     do: %{data_layer: Map.get(config, :data_layer_context, %{repo: config.repo})}
+
+  defp action_context(config, change) do
+    context = action_context(config)
+
+    case operation_context(config, change) do
+      {:ok, operation} -> Map.put(context, :ash_replicant_operation, operation)
+      :error -> context
+    end
+  end
+
+  defp operation_context(
+         %{
+           source_identity: %{system_identifier: system_identifier, database: database},
+           slot_name: slot_name
+         },
+         %{commit_lsn: commit_lsn, ordinal: ordinal}
+       )
+       when is_binary(system_identifier) and is_binary(database) and is_binary(slot_name) and
+              is_integer(commit_lsn) and commit_lsn >= 0 and is_integer(ordinal) and ordinal >= 0,
+       do:
+         {:ok,
+          %{
+            source_system_identifier: system_identifier,
+            source_database: database,
+            slot_name: slot_name,
+            commit_lsn: commit_lsn,
+            ordinal: ordinal
+          }}
+
+  defp operation_context(_config, _change), do: :error
+
+  defp preflight_onetime!(config, tenant, resource, action, operation) do
+    already_preflighted? =
+      config
+      |> Map.get(:onetime_preflighted, MapSet.new())
+      |> MapSet.member?({resource, action, tenant})
+
+    case {already_preflighted?, Map.get(config, :destination_manifest)} do
+      {true, _manifest} ->
+        :ok
+
+      {false, %AshReplicant.Destination.Manifest{} = manifest} ->
+        case AshReplicant.Destination.preflight_onetime_transaction(
+               manifest,
+               Map.get(config, :dynamic_repo, config.repo),
+               tenant,
+               resource,
+               action
+             ) do
+          :ok ->
+            :ok
+
+          {:error, reason} ->
+            raise Error.exception(reason: reason, resource: resource, op: operation)
+        end
+
+      {false, _other} ->
+        :ok
+    end
+  end
 end

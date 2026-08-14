@@ -236,16 +236,32 @@ defmodule AshReplicant.Test.Marquee do
         changeset
       end)
       |> Ash.Changeset.after_action(fn changeset, result ->
+        private_arguments = private_arguments(auxiliary, changeset, opts)
+
         Ash.create!(auxiliary, %{},
           action: :record,
           authorize?: false,
           transaction?: false,
           return_notifications?: true,
+          private_arguments: private_arguments,
           context: %{data_layer: changeset.context[:data_layer] || %{}}
         )
 
         {:ok, result}
       end)
+    end
+
+    defp private_arguments(auxiliary, changeset, opts) do
+      if AshOnetime.Resource.Info.protected?(auxiliary, :record) do
+        participant = Keyword.fetch!(opts, :participant)
+
+        {:ok, operation_key} =
+          AshReplicant.DestinationParticipant.operation_key(changeset, participant)
+
+        %{operation_key: operation_key}
+      else
+        %{}
+      end
     end
 
     @impl AshReplicant.DestinationParticipant
@@ -326,11 +342,25 @@ defmodule AshReplicant.Test.Marquee do
     end
   end
 
+  defmodule StoreResponse do
+    @moduledoc false
+    @behaviour AshOnetime.ResponseClassifier
+    @behaviour AshReplicant.DestinationParticipant
+
+    @impl AshOnetime.ResponseClassifier
+    def classify(result, _context), do: {:store, result}
+
+    @impl AshReplicant.DestinationParticipant
+    def destination_participants(_opts, %AshReplicant.DestinationParticipant.Context{}),
+      do: {:ok, :no_database}
+  end
+
   defmodule Auxiliary do
     @moduledoc false
     use Ash.Resource,
       domain: AshReplicant.Test.Marquee.Domain,
-      data_layer: AshPostgres.DataLayer
+      data_layer: AshPostgres.DataLayer,
+      extensions: [AshOnetime.Resource]
 
     postgres do
       table "repl_mirror_auxiliary"
@@ -345,7 +375,30 @@ defmodule AshReplicant.Test.Marquee do
       defaults [:read]
 
       create :record do
+        transaction? true
+        argument :operation_key, :string, allow_nil?: false, public?: false
         accept []
+      end
+    end
+
+    onetime do
+      protect :record do
+        strategy :idempotency
+
+        scope([
+          {:static, "ash_replicant:destination-participant:1"},
+          {:static, "scd1_auxiliary"}
+        ])
+
+        key({:argument, :operation_key})
+        fingerprint(arguments: [:operation_key])
+
+        response(AshOnetime.Codec.Resource,
+          fields: [:id],
+          classify: AshReplicant.Test.Marquee.StoreResponse
+        )
+
+        retention({1, :day})
       end
     end
   end

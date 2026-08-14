@@ -193,6 +193,18 @@ defmodule AshReplicant.Test.DestinationFixtures do
     def destination_participants(_opts, %Context{}), do: {:ok, :no_database}
   end
 
+  defmodule StoreResponse do
+    @moduledoc false
+    @behaviour AshOnetime.ResponseClassifier
+    @behaviour AshReplicant.DestinationParticipant
+
+    @impl AshOnetime.ResponseClassifier
+    def classify(result, _context), do: {:store, result}
+
+    @impl AshReplicant.DestinationParticipant
+    def destination_participants(_opts, %Context{}), do: {:ok, :no_database}
+  end
+
   defmodule OpaqueProofVerifier do
     @moduledoc false
     @behaviour AshOnetime.Verifier
@@ -205,6 +217,14 @@ defmodule AshReplicant.Test.DestinationFixtures do
 
     @impl AshOnetime.Verifier
     def trust_model, do: :same_service
+  end
+
+  defmodule OpaqueCache do
+    @moduledoc false
+
+    def get(_key), do: :miss
+    def put(_key, _entry, _ttl), do: :ok
+    def delete(_key), do: :ok
   end
 
   defmodule OpaquePreparation do
@@ -251,6 +271,48 @@ defmodule AshReplicant.Test.DestinationFixtures do
             action: :record,
             replay_identity: %ReplayIdentity{
               participant: :onetime_auxiliary,
+              components: [
+                :source_system_identifier,
+                :source_database,
+                :slot_name,
+                :commit_lsn,
+                :ordinal,
+                :participant
+              ]
+            }
+          }
+        ]}}
+    end
+  end
+
+  defmodule ContextTenantResolver do
+    @moduledoc false
+    @behaviour AshReplicant.DestinationParticipant
+
+    def resolve(record), do: Map.get(record, "tenant")
+
+    @impl AshReplicant.DestinationParticipant
+    def destination_participants(_opts, %Context{}), do: {:ok, :no_database}
+  end
+
+  defmodule ContextOnetimeAuxiliaryChange do
+    @moduledoc false
+    use Ash.Resource.Change
+    @behaviour AshReplicant.DestinationParticipant
+
+    @impl Ash.Resource.Change
+    def change(changeset, _opts, _context), do: changeset
+
+    @impl AshReplicant.DestinationParticipant
+    def destination_participants(_opts, %Context{}) do
+      {:ok,
+       {:actions,
+        [
+          %ActionRef{
+            resource: AshReplicant.Test.DestinationFixtures.ContextOnetimeAuxiliary,
+            action: :record,
+            replay_identity: %ReplayIdentity{
+              participant: :context_onetime_auxiliary,
               components: [
                 :source_system_identifier,
                 :source_database,
@@ -379,17 +441,81 @@ defmodule AshReplicant.Test.DestinationFixtures do
 
       create :record do
         transaction? true
-        argument :proof, :string, allow_nil?: false
+        argument :operation_key, :string, allow_nil?: false, public?: false
         accept []
       end
     end
 
     onetime do
       protect :record do
-        strategy :one_time_nonce
-        scope([{:static, "destination-onetime"}])
-        key({:verified, :proof, AshReplicant.Test.DestinationFixtures.ProofVerifier})
-        window(max_age: {5, :minute}, clock_skew: {30, :second})
+        strategy :idempotency
+
+        scope([
+          {:static, "ash_replicant:destination-participant:1"},
+          {:static, "onetime_auxiliary"}
+        ])
+
+        key({:argument, :operation_key})
+        fingerprint(arguments: [:operation_key])
+
+        response(AshOnetime.Codec.Resource,
+          fields: [:id],
+          classify: AshReplicant.Test.DestinationFixtures.StoreResponse
+        )
+
+        retention({1, :day})
+      end
+    end
+  end
+
+  defmodule ContextOnetimeAuxiliary do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.Test.DestinationFixtures.ContextOnetimeDomain,
+      data_layer: AshPostgres.DataLayer,
+      extensions: [AshOnetime.Resource]
+
+    postgres do
+      table "destination_context_onetime_auxiliaries"
+      repo AshReplicant.TestRepo
+    end
+
+    multitenancy do
+      strategy :context
+    end
+
+    attributes do
+      uuid_primary_key :id
+    end
+
+    actions do
+      defaults [:read]
+
+      create :record do
+        transaction? true
+        argument :operation_key, :string, allow_nil?: false, public?: false
+        accept []
+      end
+    end
+
+    onetime do
+      protect :record do
+        strategy :idempotency
+
+        scope([
+          {:static, "ash_replicant:destination-participant:1"},
+          {:static, "context_onetime_auxiliary"}
+        ])
+
+        key({:argument, :operation_key})
+        fingerprint(arguments: [:operation_key])
+
+        response(AshOnetime.Codec.Resource,
+          fields: [:id],
+          classify: AshReplicant.Test.DestinationFixtures.StoreResponse
+        )
+
+        retention({1, :day})
       end
     end
   end
@@ -897,6 +1023,44 @@ defmodule AshReplicant.Test.DestinationFixtures do
         accept []
         touches_resources [AshReplicant.Test.DestinationFixtures.OnetimeAuxiliary]
         change AshReplicant.Test.DestinationFixtures.OnetimeAuxiliaryChange
+      end
+    end
+  end
+
+  defmodule ContextOnetimeRoot do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.Test.DestinationFixtures.ContextOnetimeDomain,
+      data_layer: AshPostgres.DataLayer,
+      extensions: [AshReplicant.Resource]
+
+    postgres do
+      table "destination_context_onetime_roots"
+      repo AshReplicant.TestRepo
+    end
+
+    replicant do
+      source_table("destination_context_onetime_source_roots")
+
+      tenant_mfa({AshReplicant.Test.DestinationFixtures.ContextTenantResolver, :resolve, []})
+    end
+
+    multitenancy do
+      strategy :context
+    end
+
+    attributes do
+      uuid_primary_key :id
+    end
+
+    actions do
+      defaults [:read, :destroy]
+
+      create :create do
+        primary? true
+        accept []
+        touches_resources [AshReplicant.Test.DestinationFixtures.ContextOnetimeAuxiliary]
+        change AshReplicant.Test.DestinationFixtures.ContextOnetimeAuxiliaryChange
       end
     end
   end
@@ -1737,6 +1901,17 @@ defmodule AshReplicant.Test.DestinationFixtures do
     resources do
       resource AshReplicant.Test.DestinationFixtures.OnetimeRoot
       resource AshReplicant.Test.DestinationFixtures.OnetimeAuxiliary
+      resource AshReplicant.Test.Checkpoint
+    end
+  end
+
+  defmodule ContextOnetimeDomain do
+    @moduledoc false
+    use Ash.Domain, validate_config_inclusion?: false
+
+    resources do
+      resource AshReplicant.Test.DestinationFixtures.ContextOnetimeRoot
+      resource AshReplicant.Test.DestinationFixtures.ContextOnetimeAuxiliary
       resource AshReplicant.Test.Checkpoint
     end
   end

@@ -155,6 +155,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       command_probes()
       compatibility_probes()
       workflow_structure_probes()
+      checker_wiring_probes()
       mix_contract_probes()
       replicant_selector_probes()
       documentation_probes()
@@ -163,6 +164,18 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     IO.puts("release contract self-tests: PASS")
   after
     File.rm_rf!(@fixture_root)
+  end
+
+  defp checker_wiring_probes do
+    prepare_fixture()
+
+    replace_once!(
+      "scripts/test-release-checkers.sh",
+      "scripts/test-ash-onetime-migration-checker.sh >/dev/null",
+      "true"
+    )
+
+    assert_invalid!()
   end
 
   defp replicant_selector_probes do
@@ -924,7 +937,15 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     File.cp!(Path.join(@source_root, @workflow), fixture_path(@workflow))
 
-    for path <- ["README.md", "CONTRIBUTING.md", "AGENTS.md", "mix.exs", "mix.lock"] do
+    for path <- [
+          "README.md",
+          "CONTRIBUTING.md",
+          "AGENTS.md",
+          "mix.exs",
+          "mix.lock",
+          "scripts/test-release-checkers.sh"
+        ] do
+      File.mkdir_p!(Path.dirname(fixture_path(path)))
       File.cp!(Path.join(@source_root, path), fixture_path(path))
     end
 

@@ -241,9 +241,25 @@ defmodule AshReplicant.ReleaseContract do
     assert_cache_partition(workflow)
     assert_mix_contract(root)
     assert_replicant_contract(root)
+    assert_checker_wiring(root)
     assert_docs(root)
   rescue
     _error in [YamlElixir.ParsingError, File.Error] -> fail("release contract input is invalid")
+  end
+
+  defp assert_checker_wiring(root) do
+    source = root |> Path.join("scripts/test-release-checkers.sh") |> File.read!()
+
+    count =
+      source
+      |> String.split("\n")
+      |> Enum.count(
+        &(String.trim(&1) == "scripts/test-ash-onetime-migration-checker.sh >/dev/null")
+      )
+
+    assert(count == 1, "AshOnetime migration checker wiring is incomplete")
+  rescue
+    _error in [File.Error] -> fail("AshOnetime migration checker wiring input is invalid")
   end
 
   def run_cli(root) do

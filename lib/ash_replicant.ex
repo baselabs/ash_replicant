@@ -64,6 +64,7 @@ defmodule AshReplicant do
     activation_lock(slot_name, fn ->
       result = safe_stop(slot_name)
       :persistent_term.erase({AshReplicant, slot_name})
+      AshReplicant.Sink.Impl.clear_snapshot_ordinals(slot_name)
       result
     end)
   end
@@ -149,6 +150,7 @@ defmodule AshReplicant do
          {:ok, index} <- AshReplicant.Resolver.build_index(sink_config.domains),
          {:ok, dynamic_repo} <-
            AshReplicant.Destination.effective_dynamic_repo(sink_config.repo),
+         :ok <- AshReplicant.Destination.preflight_onetime(manifest, dynamic_repo),
          {:ok, code_modules} <- AshReplicant.Destination.code_modules(sink, manifest),
          {:ok, code_fingerprint} <- AshReplicant.Destination.code_fingerprint(code_modules) do
       reference = make_ref()

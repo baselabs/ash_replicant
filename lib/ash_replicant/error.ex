@@ -20,6 +20,7 @@ defmodule AshReplicant.Error do
           | :truncate_halt
           | :duplicate_source
           | :config_invalid
+          | {:invalid_destination_config, :onetime_store}
 
   @type t :: %__MODULE__{
           reason: reason() | nil,
@@ -29,7 +30,7 @@ defmodule AshReplicant.Error do
         }
 
   def message(%{reason: reason, resource: resource, op: op, shape: shape}) do
-    "ash_replicant error reason=#{reason} resource=#{inspect(resource)} op=#{inspect(op)}" <>
+    "ash_replicant error reason=#{inspect(reason)} resource=#{inspect(resource)} op=#{inspect(op)}" <>
       if(shape, do: " shape=#{shape}", else: "")
   end
 

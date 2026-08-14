@@ -206,6 +206,8 @@ if [[ "$replicant_floor_requirement" != "== 1.0.0" ]]; then
   exit 1
 fi
 
+scripts/test-ash-onetime-migration-checker.sh >/dev/null
+
 printf '%s\n' \
   'defmodule AshReplicant.ReleaseCheckerFixtureTest do' \
   '  use ExUnit.Case, async: false' \

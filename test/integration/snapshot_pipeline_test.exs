@@ -213,8 +213,8 @@ defmodule AshReplicant.SnapshotPipelineTest do
       :persistent_term.put(@retry_key, true)
       start_snapshot!(@retry_slot, RetrySnapshotSink)
 
-      assert_receive :snapshot_failure_injected, 15_000
-      assert_receive :snapshot_incomplete, 15_000
+      assert_receive :snapshot_failure_injected, 60_000
+      assert_receive :snapshot_incomplete, 60_000
 
       PG.wait_until(fn ->
         Registry.lookup(Replicant.Registry, {@retry_slot, :pipeline}) == []

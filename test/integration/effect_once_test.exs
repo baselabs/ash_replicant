@@ -101,6 +101,27 @@ defmodule AshReplicant.EffectOnceTest do
     :telemetry.detach({__MODULE__, ref})
   end
 
+  test "activation preflight fails structurally when the authoritative store is absent" do
+    assert {:ok, manifest} =
+             AshReplicant.Destination.manifest(Marquee.Sink.__ash_replicant_config__())
+
+    assert :ok =
+             AshReplicant.Destination.preflight_onetime(manifest, AshReplicant.TestRepo)
+
+    assert {:ok, :checked} =
+             AshReplicant.TestRepo.transaction(fn ->
+               Marquee.q!("SET LOCAL search_path TO pg_temp")
+
+               assert {:error, {:invalid_destination_config, :onetime_store}} =
+                        AshReplicant.Destination.preflight_onetime(
+                          manifest,
+                          AshReplicant.TestRepo
+                        )
+
+               :checked
+             end)
+  end
+
   test "end-to-end: mapped, auxiliary, and checkpoint effects share one transaction", %{
     run_id: run_id
   } do
@@ -108,8 +129,25 @@ defmodule AshReplicant.EffectOnceTest do
     Marquee.q!("INSERT INTO #{Marquee.src()} (id, note) VALUES ('1', 'a')")
     PG.wait_until(fn -> Marquee.mirror_rows() == [["1", "a"]] end)
 
-    PG.wait_until(fn -> length(DestinationObserver.rows(run_id)) == 3 end)
+    PG.wait_until(fn -> length(DestinationObserver.rows(run_id)) == 6 end)
     assert_effect_counts(run_id, 1, 1, 1)
+    assert_onetime_effect_counts(run_id, 1, 1, 1)
+    assert_atomic_observer_groups(run_id)
+  end
+
+  test "two same-action changes at one commit LSN use distinct ordinal-bound claims", %{
+    run_id: run_id
+  } do
+    start!()
+    Marquee.q!("INSERT INTO #{Marquee.src()} (id, note) VALUES ('1', 'a'), ('2', 'b')")
+    PG.wait_until(fn -> Marquee.mirror_rows() == [["1", "a"], ["2", "b"]] end)
+
+    PG.wait_until(fn ->
+      DestinationObserver.effect_count(run_id, "onetime_claim", "INSERT") == 2
+    end)
+
+    assert_effect_counts(run_id, 2, 2, 1)
+    assert_onetime_effect_counts(run_id, 2, 2, 2)
     assert_atomic_observer_groups(run_id)
   end
 
@@ -128,6 +166,7 @@ defmodule AshReplicant.EffectOnceTest do
 
     PG.wait_until(fn -> DestinationObserver.effect_count(run_id, "checkpoint", "UPDATE") == 1 end)
     assert_effect_counts(run_id, 3, 3, 2)
+    assert_onetime_effect_counts(run_id, 3, 3, 3)
     assert_atomic_observer_groups(run_id)
   end
 
@@ -145,6 +184,7 @@ defmodule AshReplicant.EffectOnceTest do
     Process.sleep(500)
     assert Marquee.mirror_rows() == [["1", "a"]]
     assert_effect_counts(run_id, 1, 1, 1)
+    assert_onetime_effect_counts(run_id, 1, 1, 1)
 
     Marquee.q!("ALTER TABLE ash_replicant_checkpoints DROP CONSTRAINT tmp_block")
     AshReplicant.stop_supervised(@slot)
@@ -152,9 +192,42 @@ defmodule AshReplicant.EffectOnceTest do
     PG.wait_until(fn -> length(Marquee.mirror_rows()) == 2 end)
     assert Marquee.mirror_rows() == [["1", "a"], ["2", "b"]]
 
-    PG.wait_until(fn -> length(DestinationObserver.rows(run_id)) == 6 end)
+    PG.wait_until(fn -> length(DestinationObserver.rows(run_id)) == 12 end)
     assert_effect_counts(run_id, 2, 2, 2)
+    assert_onetime_effect_counts(run_id, 2, 2, 2)
     assert_atomic_observer_groups(run_id)
+
+    [[commit_lsn]] =
+      Marquee.q!(
+        "SELECT commit_lsn FROM ash_replicant_checkpoints WHERE slot_name = $1",
+        [@slot]
+      ).rows
+
+    source_identity = Map.new(Marquee.source_identity())
+
+    {:ok, operation_key} =
+      AshReplicant.DestinationParticipant.operation_key(
+        %{
+          source_system_identifier: source_identity.system_identifier,
+          source_database: source_identity.database,
+          slot_name: @slot,
+          commit_lsn: commit_lsn,
+          ordinal: 0
+        },
+        :scd1_auxiliary
+      )
+
+    replayed =
+      Ash.create!(Marquee.Auxiliary, %{},
+        action: :record,
+        authorize?: false,
+        private_arguments: %{operation_key: operation_key},
+        context: %{data_layer: %{repo: AshReplicant.TestRepo}}
+      )
+
+    assert AshOnetime.replayed?(replayed) == true
+    assert_effect_counts(run_id, 2, 2, 2)
+    assert_onetime_effect_counts(run_id, 2, 2, 2)
   end
 
   test "observer positive control exposes an auxiliary write that escapes through a second Repo",
@@ -197,6 +270,16 @@ defmodule AshReplicant.EffectOnceTest do
         participant: "checkpoint",
         operations: [:insert, :update],
         commit_lsn_column: "commit_lsn"
+      },
+      %{
+        table: "ash_onetime_idempotency_claims",
+        participant: "onetime_claim",
+        operations: [:insert, :update]
+      },
+      %{
+        table: "ash_onetime_response_payloads",
+        participant: "onetime_response",
+        operations: [:insert]
       }
     ]
   end
@@ -212,13 +295,28 @@ defmodule AshReplicant.EffectOnceTest do
     assert checkpoint_count == checkpoint
   end
 
+  defp assert_onetime_effect_counts(run_id, claims, completions, responses) do
+    assert DestinationObserver.effect_count(run_id, "onetime_claim", "INSERT") == claims
+    assert DestinationObserver.effect_count(run_id, "onetime_claim", "UPDATE") == completions
+    assert DestinationObserver.effect_count(run_id, "onetime_response", "INSERT") == responses
+  end
+
   defp assert_atomic_observer_groups(run_id) do
     run_id
     |> DestinationObserver.rows()
     |> Enum.group_by(& &1.transaction_id)
     |> Enum.each(fn {_transaction_id, rows} ->
       participants = MapSet.new(rows, & &1.participant)
-      assert participants == MapSet.new(["mapped", "auxiliary", "checkpoint"])
+
+      assert participants ==
+               MapSet.new([
+                 "mapped",
+                 "auxiliary",
+                 "checkpoint",
+                 "onetime_claim",
+                 "onetime_response"
+               ])
+
       assert Enum.count(rows, &(&1.participant == "checkpoint")) == 1
     end)
   end

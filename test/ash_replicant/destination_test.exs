@@ -372,15 +372,234 @@ defmodule AshReplicant.DestinationTest do
       )
 
     assert entry.source == DestinationFixtures.OnetimeAuxiliaryChange
-    assert entry.protection.strategy == :one_time_nonce
+    assert entry.protection.strategy == :idempotency
     assert entry.protection.commit == :with_action
     assert entry.protection.on_definite_store_failure == :fail_closed
 
     assert entry.protection.key == [
-             {:verified, :proof, DestinationFixtures.ProofVerifier}
+             {:argument, :operation_key}
+           ]
+
+    assert entry.protection.scope == [
+             {:static, "ash_replicant:destination-participant:1"},
+             {:static, "onetime_auxiliary"}
            ]
 
     refute Map.has_key?(entry.protection, :__spark_metadata__)
+  end
+
+  test "AshOnetime WAL admission matrix rejects every replay-incompatible profile" do
+    assert {:ok, manifest} =
+             Destination.manifest(%{
+               repo: AshReplicant.TestRepo,
+               domains: [DestinationFixtures.OnetimeDomain],
+               checkpoint_resource: AshReplicant.Test.Checkpoint
+             })
+
+    accepted =
+      Enum.find(
+        manifest.entries,
+        &(&1.resource == DestinationFixtures.OnetimeAuxiliary and &1.action == :record)
+      )
+
+    exact_components = accepted.replay_identity.components
+
+    rejected = [
+      {"mapped row action", %{accepted | role: :mapped}},
+      {"commit LSN only", put_in(accepted.replay_identity.components, [:commit_lsn])},
+      {"missing ordinal",
+       put_in(accepted.replay_identity.components, List.delete(exact_components, :ordinal))},
+      {"missing participant component",
+       put_in(accepted.replay_identity.components, List.delete(exact_components, :participant))},
+      {"missing participant identity", put_in(accepted.replay_identity.participant, nil)},
+      {"row-only identity", put_in(accepted.protection.key, [{:attribute, :id}])},
+      {"random minted identity", put_in(accepted.protection.key, [{:minted, Ash.UUID}])},
+      {"callable verified identity",
+       put_in(accepted.protection.key, [
+         {:verified, :operation_key, DestinationFixtures.ProofVerifier}
+       ])},
+      {"unversioned scope", put_in(accepted.protection.scope, [{:static, "auxiliary"}])},
+      {"nonce with action",
+       accepted
+       |> put_in([Access.key(:protection), :strategy], :one_time_nonce)
+       |> put_in([Access.key(:protection), :commit], :with_action)},
+      {"nonce independent",
+       accepted
+       |> put_in([Access.key(:protection), :strategy], :one_time_nonce)
+       |> put_in([Access.key(:protection), :commit], :independent)},
+      {"idempotency independent", put_in(accepted.protection.commit, :independent)},
+      {"execute untracked",
+       put_in(accepted.protection.on_definite_store_failure, :execute_untracked)},
+      {"external effect", put_in(accepted.protection.external_effect, String)},
+      {"missing response", put_in(accepted.protection.response, nil)}
+    ]
+
+    Enum.each(rejected, fn {label, entry} ->
+      assert {:error, {:destination_participant_invalid, AshOnetime.Resource}} =
+               Destination.validate_onetime_entries([entry]),
+             label
+    end)
+
+    assert :ok = Destination.validate_onetime_entries([accepted])
+  end
+
+  test "AshOnetime cache must declare its non-authoritative cache behaviour" do
+    previous = Application.get_env(:ash_onetime, :cache)
+    on_exit(fn -> restore_env(:ash_onetime, :cache, previous) end)
+
+    assert {:ok, manifest} =
+             Destination.manifest(%{
+               repo: AshReplicant.TestRepo,
+               domains: [DestinationFixtures.OnetimeDomain],
+               checkpoint_resource: AshReplicant.Test.Checkpoint
+             })
+
+    entry =
+      Enum.find(
+        manifest.entries,
+        &(&1.resource == DestinationFixtures.OnetimeAuxiliary and &1.action == :record)
+      )
+
+    Application.put_env(:ash_onetime, :cache, DestinationFixtures.OpaqueCache)
+
+    assert {:error, {:destination_participant_invalid, AshOnetime.Resource}} =
+             Destination.validate_onetime_entries([entry])
+
+    Application.put_env(:ash_onetime, :cache, AshOnetime.Cache.None)
+    assert :ok = Destination.validate_onetime_entries([entry])
+  end
+
+  @tag :integration
+  test "context-tenant store preflight is root-scoped and runs inside the transaction" do
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(AshReplicant.TestRepo)
+
+    assert {:ok, dynamic_repo} =
+             Destination.effective_dynamic_repo(AshReplicant.TestRepo)
+
+    assert {:ok, manifest} =
+             Destination.manifest(%{
+               repo: AshReplicant.TestRepo,
+               domains: [
+                 DestinationFixtures.OnetimeDomain,
+                 DestinationFixtures.ContextOnetimeDomain
+               ],
+               checkpoint_resource: AshReplicant.Test.Checkpoint
+             })
+
+    assert :ok = Destination.preflight_onetime(manifest, dynamic_repo)
+
+    assert :ok =
+             AshReplicant.TestRepo.transaction(fn ->
+               Destination.preflight_onetime_transaction(
+                 manifest,
+                 dynamic_repo,
+                 "public",
+                 DestinationFixtures.ContextOnetimeRoot,
+                 :create
+               )
+             end)
+             |> elem(1)
+
+    missing_prefix = "missing_#{System.unique_integer([:positive])}"
+
+    assert {:error, {:invalid_destination_config, :onetime_store}} =
+             AshReplicant.TestRepo.transaction(fn ->
+               Destination.preflight_onetime_transaction(
+                 manifest,
+                 dynamic_repo,
+                 missing_prefix,
+                 DestinationFixtures.ContextOnetimeRoot,
+                 :create
+               )
+             end)
+             |> elem(1)
+
+    assert %{rows: [[nil]]} =
+             Ecto.Adapters.SQL.query!(
+               AshReplicant.TestRepo,
+               "SELECT to_regclass('public.destination_context_onetime_roots')",
+               []
+             )
+
+    assert {:ok, resolver_index} =
+             AshReplicant.Resolver.build_index([DestinationFixtures.ContextOnetimeDomain])
+
+    config = %{
+      repo: AshReplicant.TestRepo,
+      dynamic_repo: dynamic_repo,
+      data_layer_context: %{repo: dynamic_repo},
+      destination_manifest: manifest,
+      resolver_index: resolver_index,
+      authorize?: false,
+      source_identity: %{system_identifier: "system", database: "source"},
+      slot_name: "slot"
+    }
+
+    change = %Replicant.Change{
+      op: :insert,
+      schema: "public",
+      table: "destination_context_onetime_source_roots",
+      record: %{"id" => Ash.UUID.generate(), "tenant" => missing_prefix},
+      commit_lsn: 42,
+      ordinal: 0
+    }
+
+    error =
+      assert_raise AshReplicant.Error, fn ->
+        AshReplicant.TestRepo.transaction(fn ->
+          AshReplicant.Apply.apply_change(config, change)
+        end)
+      end
+
+    assert error.reason == {:invalid_destination_config, :onetime_store}
+
+    assert :ok =
+             AshReplicant.TestRepo.transaction(fn ->
+               Destination.preflight_onetime_transaction(
+                 manifest,
+                 dynamic_repo,
+                 nil,
+                 DestinationFixtures.OnetimeRoot,
+                 :create
+               )
+             end)
+             |> elem(1)
+  end
+
+  test "operation keys are closed, deterministic, and ordinal-sensitive" do
+    context = %{
+      source_system_identifier: "system",
+      source_database: "source",
+      slot_name: "slot",
+      commit_lsn: 42,
+      ordinal: 0
+    }
+
+    assert {:ok, first} =
+             AshReplicant.DestinationParticipant.operation_key(context, :auxiliary)
+
+    assert {:ok, ^first} =
+             AshReplicant.DestinationParticipant.operation_key(context, :auxiliary)
+
+    assert {:ok, second} =
+             context
+             |> Map.put(:ordinal, 1)
+             |> AshReplicant.DestinationParticipant.operation_key(:auxiliary)
+
+    refute first == second
+
+    assert {:error, :invalid_declaration} =
+             context
+             |> Map.delete(:ordinal)
+             |> AshReplicant.DestinationParticipant.operation_key(:auxiliary)
+
+    assert {:error, :invalid_declaration} =
+             context
+             |> Map.put(:unexpected, true)
+             |> AshReplicant.DestinationParticipant.operation_key(:auxiliary)
+
+    assert {:error, :invalid_declaration} =
+             AshReplicant.DestinationParticipant.operation_key(context, nil)
   end
 
   test "AshOnetime verifier callback must declare destination participation" do
@@ -393,6 +612,9 @@ defmodule AshReplicant.DestinationTest do
                checkpoint_resource: AshReplicant.Test.Checkpoint
              })
   end
+
+  defp restore_env(app, key, nil), do: Application.delete_env(app, key)
+  defp restore_env(app, key, value), do: Application.put_env(app, key, value)
 
   test "managed relationship recursion rejects a foreign destination Repo" do
     assert {:error, {:destination_repo_mismatch, DestinationFixtures.ForeignChild}} =
