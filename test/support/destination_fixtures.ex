@@ -2176,6 +2176,9 @@ defmodule AshReplicant.Test.DestinationFixtures do
         accept [:slot_name, :commit_lsn]
         change set_context(%{data_layer: %{table: "unmanifested_checkpoint_target"}})
       end
+
+      # The checkpoint root set requires the operator-reset destroy (B2 shape).
+      destroy :operator_reset
     end
   end
 

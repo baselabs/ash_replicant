@@ -31,6 +31,7 @@ defmodule AshReplicant.DestinationTest do
     assert {DestinationFixtures.Root, :create, :mapped} in participants
     assert {AshReplicant.Test.Checkpoint, :upsert, :checkpoint} in participants
     assert {AshReplicant.Test.Checkpoint, :read, :checkpoint} in participants
+    assert {AshReplicant.Test.Checkpoint, :operator_reset, :checkpoint} in participants
 
     auxiliary =
       Enum.find(first.entries, &(&1.resource == DestinationFixtures.Auxiliary))

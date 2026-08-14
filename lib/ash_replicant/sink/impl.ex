@@ -530,8 +530,14 @@ defmodule AshReplicant.Sink.Impl do
     {:error, error}
   end
 
+  # Mechanical triple rekey (source-bound checkpoint, B2). The identity comes from the
+  # config's source_identity — legal only AFTER handle_session_identity proved
+  # configured == actual session before any read (the TOCTOU gate). Task 4 adds the
+  # admission lock and the absent-row halt; checkpoint/0 keeps this UNLOCKED advisory
+  # read (the framework uses it only to seed recovery — the authoritative dedup is the
+  # in-transaction locked read).
   defp read_checkpoint(config) do
-    case Ash.get!(config.checkpoint_resource, config.slot_name,
+    case Ash.get!(config.checkpoint_resource, checkpoint_filter(config),
            authorize?: false,
            context: action_context(config),
            error?: false
@@ -542,15 +548,25 @@ defmodule AshReplicant.Sink.Impl do
   end
 
   defp upsert_checkpoint(config, lsn) do
-    Ash.create!(config.checkpoint_resource, %{slot_name: config.slot_name, commit_lsn: lsn},
+    Ash.create!(
+      config.checkpoint_resource,
+      Map.merge(checkpoint_filter(config), %{commit_lsn: lsn}),
       action: :upsert,
       upsert?: true,
-      upsert_identity: :unique_slot,
+      upsert_identity: :source_slot,
       upsert_fields: [:commit_lsn],
       authorize?: false,
       context: action_context(config),
       return_notifications?: true
     )
+  end
+
+  defp checkpoint_filter(config) do
+    %{
+      source_system_id: config.source_identity.system_identifier,
+      source_database: config.source_identity.database,
+      slot_name: config.slot_name
+    }
   end
 
   defp action_context(config),

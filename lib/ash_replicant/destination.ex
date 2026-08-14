@@ -367,13 +367,26 @@ defmodule AshReplicant.Destination do
 
   defp root_actions(domains, checkpoint) do
     with {:ok, mapped_roots} <- mapped_root_actions(domains),
-         {:ok, checkpoint_read} <- required_primary_action(checkpoint, :read) do
+         {:ok, checkpoint_read} <- required_primary_action(checkpoint, :read),
+         :ok <- required_named_action(checkpoint, :destroy, :operator_reset) do
       {:ok,
        mapped_roots ++
          [
            root_ref(checkpoint, checkpoint_read, :checkpoint),
-           root_ref(checkpoint, :upsert, :checkpoint)
+           root_ref(checkpoint, :upsert, :checkpoint),
+           root_ref(checkpoint, :operator_reset, :checkpoint)
          ]}
+    end
+  end
+
+  # The checkpoint's operator-reset destroy is a library-written action in the same
+  # Repo (the reset escape hatch); admitting it as a root keeps the manifest honest
+  # about every action the library itself invokes. The sink never destroys mid-flight.
+  defp required_named_action(resource, type, name) do
+    if Enum.any?(Ash.Resource.Info.actions(resource), &(&1.name == name and &1.type == type)) do
+      :ok
+    else
+      {:error, {:destination_action_missing, resource, name}}
     end
   end
 
