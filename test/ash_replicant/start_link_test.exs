@@ -1,6 +1,12 @@
 defmodule AshReplicant.StartLinkTest do
   use ExUnit.Case, async: false
 
+  # The unreachable-port fixtures (port 1) deliberately let Postgrex fail to
+  # connect and RETRY — its protocol-level [error] logs are expected test
+  # behavior, not uncontrolled errors, but they match the structural
+  # battery's no-error gate. Capture them (shown only on failure).
+  @moduletag capture_log: true
+
   import ExUnit.CaptureLog
 
   alias AshReplicant.Destination.Generation
