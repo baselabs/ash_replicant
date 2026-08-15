@@ -230,8 +230,8 @@ defmodule AshReplicant.ActionContractFreezeTest do
 
     inventory = Telemetry.emitted_event_names() |> MapSet.new()
 
-    assert MapSet.subset?(emitted, inventory),
-           "events emitted in lib but missing from the conformance inventory: #{inspect(MapSet.to_list(MapSet.difference(emitted, inventory)))}"
+    assert MapSet.equal?(emitted, inventory),
+           "the conformance inventory must EQUAL the events emitted in lib — missing: #{inspect(MapSet.to_list(MapSet.difference(emitted, inventory)))}, stale: #{inspect(MapSet.to_list(MapSet.difference(inventory, emitted)))}"
   end
 
   describe "D9: compile-diagnostic completeness (the reason space enumerates, each naming its modules)" do

@@ -95,6 +95,42 @@ defmodule AshReplicant.DestinationParticipantTest do
              ]
     end
 
+    test "every label minted in lib is in the closed set, and every label is USED (live pin)" do
+      # Gate-integrity: the label->site mapping is not just comments — the
+      # labels minted at lib call sites are grepped and must EQUAL the
+      # closed set (a new effect site must add a label; an unused label is
+      # stale). Same-label reuse within one change stays pinned by the
+      # discriminator marquee's auxiliary-count assertion.
+      minted =
+        Path.wildcard("lib/**/*.ex")
+        |> Enum.flat_map(fn path ->
+          source = File.read!(path)
+
+          Regex.scan(~r/action_context\(config, change, :(\w+)\)/, source)
+          |> Enum.map(&Enum.at(&1, 1))
+          |> Kernel.++(
+            Regex.scan(~r/invocation: :(\w+)/, source)
+            |> Enum.map(&Enum.at(&1, 1))
+          )
+          |> Kernel.++(
+            Regex.scan(
+              ~r/destroy_by_pk\(config, resource, change\.old_record, change, :(\w+)\)/,
+              source
+            )
+            |> Enum.map(&Enum.at(&1, 1))
+          )
+        end)
+        |> MapSet.new()
+
+      closed =
+        Context.invocation_labels()
+        |> Enum.map(&Atom.to_string/1)
+        |> MapSet.new()
+
+      assert MapSet.equal?(minted, closed),
+             "minted labels in lib (#{inspect(MapSet.to_list(minted))}) must equal the closed set (#{inspect(MapSet.to_list(closed))})"
+    end
+
     test "the closed label set is shared by both homes and matches the call-site inventory" do
       # One label per sink mint site. EVERY label names the test that drives
       # its mint site — adding an effect site without a label (or a label
