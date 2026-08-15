@@ -38,7 +38,8 @@ defmodule AshReplicant.Apply.Scd2 do
       # opens the old version at exactly `lsn`; the open-path `< lsn` would miss it and leave a
       # ghost. Inclusive is safe for the normal cross-txn case (old version opened at lsn < this).
       close_current(config, resource, change.old_record, change, ts, prelude_old_tenant,
-        inclusive?: true
+        inclusive?: true,
+        invocation: :close_prior
       )
     end
 
@@ -47,7 +48,11 @@ defmodule AshReplicant.Apply.Scd2 do
         do: prelude_new_tenant,
         else: Resolver.resolve_tenant!(resource, change.record, :upsert)
 
-    close_current(config, resource, change.record, change, ts, tenant, inclusive?: false)
+    close_current(config, resource, change.record, change, ts, tenant,
+      inclusive?: false,
+      invocation: :close_current
+    )
+
     open_version(config, resource, change, ts, tenant)
     :ok
   rescue
@@ -61,7 +66,12 @@ defmodule AshReplicant.Apply.Scd2 do
 
   def apply(config, resource, %{op: :delete} = change, ts) do
     tenant = Resolver.resolve_tenant!(resource, change.old_record, :destroy)
-    close_current(config, resource, change.old_record, change, ts, tenant, inclusive?: true)
+
+    close_current(config, resource, change.old_record, change, ts, tenant,
+      inclusive?: true,
+      invocation: :close_prior
+    )
+
     :ok
   rescue
     e -> reraise Error.scrub(e, resource, :destroy), __STACKTRACE__
@@ -156,6 +166,7 @@ defmodule AshReplicant.Apply.Scd2 do
   end
 
   defp close_current(config, resource, record, change, ts, tenant, opts) do
+    invocation = Keyword.fetch!(opts, :invocation)
     lsn = change.commit_lsn
     action = Info.replicant_history_close_action!(resource)
     Context.preflight_onetime!(config, tenant, resource, action, :upsert)
@@ -173,7 +184,7 @@ defmodule AshReplicant.Apply.Scd2 do
     query =
       resource
       |> Resolver.open_version_query(record, lsn, opts)
-      |> Ash.Query.set_context(Context.action_context(config, change))
+      |> Ash.Query.set_context(Context.action_context(config, change, invocation))
 
     Ash.bulk_update!(
       query,
@@ -183,7 +194,7 @@ defmodule AshReplicant.Apply.Scd2 do
       transaction: false,
       tenant: tenant,
       authorize?: config.authorize?,
-      context: Context.action_context(config, change),
+      context: Context.action_context(config, change, invocation),
       return_notifications?: true,
       return_errors?: true
     )
@@ -205,7 +216,7 @@ defmodule AshReplicant.Apply.Scd2 do
       upsert_fields: upsert_fields,
       tenant: tenant,
       authorize?: config.authorize?,
-      context: Context.action_context(config, change),
+      context: Context.action_context(config, change, :open),
       transaction?: false,
       return_notifications?: true
     )

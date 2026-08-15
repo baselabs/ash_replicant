@@ -135,7 +135,7 @@ defmodule AshReplicant.EffectOnceScd2Test do
     assert v2.amount == "2"
 
     PG.wait_until(fn -> observer_checkpoint_count(run_id) == 4 end)
-    assert_observer_counts(run_id, 2, 2, 2, 4)
+    assert_observer_counts(run_id, 2, 2, 4, 4)
     assert_atomic_observer_groups(run_id)
   end
 
@@ -167,7 +167,7 @@ defmodule AshReplicant.EffectOnceScd2Test do
     assert is_nil(v2.to) and v2.current and v2.amount == "2"
 
     PG.wait_until(fn -> observer_checkpoint_count(run_id) == 3 end)
-    assert_observer_counts(run_id, 2, 1, 2, 3)
+    assert_observer_counts(run_id, 2, 1, 3, 3)
     assert_atomic_observer_groups(run_id)
   end
 
@@ -219,7 +219,7 @@ defmodule AshReplicant.EffectOnceScd2Test do
     assert v3.current and v3.amount == "3"
 
     PG.wait_until(fn -> observer_checkpoint_count(run_id) == 4 end)
-    assert_observer_counts(run_id, 3, 2, 3, 4)
+    assert_observer_counts(run_id, 3, 2, 5, 4)
     assert_atomic_observer_groups(run_id)
   end
 
@@ -251,7 +251,7 @@ defmodule AshReplicant.EffectOnceScd2Test do
     assert open.current and is_nil(open.to)
 
     PG.wait_until(fn -> observer_checkpoint_count(run_id) == 3 end)
-    assert_observer_counts(run_id, 2, 1, 2, 3)
+    assert_observer_counts(run_id, 2, 1, 3, 3)
     assert_atomic_observer_groups(run_id)
   end
 
@@ -429,10 +429,13 @@ defmodule AshReplicant.EffectOnceScd2Test do
       assert "checkpoint" in participants
       assert Enum.count(rows, &(&1.participant == "checkpoint")) == 1
 
-      mapped_inserts =
-        Enum.count(rows, &(&1.participant == "mapped" and &1.operation == "INSERT"))
+      mapped_effects =
+        Enum.count(rows, &(&1.participant == "mapped" and &1.operation in ["INSERT", "UPDATE"]))
 
-      assert Enum.count(rows, &(&1.participant == "auxiliary")) == mapped_inserts
+      # U3/D1: the participant rides the close (mapped UPDATE) as well as the
+      # open (mapped INSERT) — every mapped row effect carries exactly one
+      # auxiliary effect row.
+      assert Enum.count(rows, &(&1.participant == "auxiliary")) == mapped_effects
     end)
   end
 end

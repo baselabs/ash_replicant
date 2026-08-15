@@ -233,7 +233,10 @@ defmodule AshReplicant.EffectOnceTest do
           source_database: source_identity.database,
           slot_name: @slot,
           commit_lsn: commit_lsn,
-          ordinal: 0
+          ordinal: 0,
+          # F7: must EQUAL the sink-minted label at this effect site (the
+          # streaming upsert path) or the key matches no stored claim.
+          invocation: :upsert
         },
         :scd1_auxiliary
       )

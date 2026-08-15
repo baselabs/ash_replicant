@@ -800,7 +800,8 @@ defmodule AshReplicant.DestinationTest do
       source_database: "source",
       slot_name: "slot",
       commit_lsn: 42,
-      ordinal: 0
+      ordinal: 0,
+      invocation: :upsert
     }
 
     assert {:ok, first} =
@@ -814,7 +815,8 @@ defmodule AshReplicant.DestinationTest do
           source_database: "other-source",
           slot_name: "other-slot",
           commit_lsn: 43,
-          ordinal: 1
+          ordinal: 1,
+          invocation: :close_prior
         ] do
       assert {:ok, changed} =
                context

@@ -7,33 +7,50 @@ defmodule AshReplicant.Apply.Context do
 
   alias AshReplicant.Error
 
+  # The CLOSED mint set — one label per sink call site, the complete inventory
+  # of effect sites (enumeration-pinned by destination_participant_test). A new
+  # effect site must add a label here or the set fails to match the code.
+  @invocation_labels [
+    :close_prior,
+    :close_current,
+    :open,
+    :destroy_prior,
+    :upsert
+  ]
+
+  @doc "The closed per-invocation label set (the single home is shared with DestinationParticipant)."
+  @spec invocation_labels() :: [atom()]
+  def invocation_labels, do: @invocation_labels
+
   @doc false
   @spec action_context(map()) :: map()
   def action_context(config),
     do: %{data_layer: Map.get(config, :data_layer_context, %{repo: config.repo})}
 
   @doc false
-  @spec action_context(map(), map()) :: map()
-  def action_context(config, change) do
+  @spec action_context(map(), map(), atom()) :: map()
+  def action_context(config, change, invocation) when is_atom(invocation) do
     context = action_context(config)
 
-    case operation_context(config, change) do
+    case operation_context(config, change, invocation) do
       {:ok, operation} -> Map.put(context, :ash_replicant_operation, operation)
       :error -> context
     end
   end
 
   @doc false
-  @spec operation_context(map(), map()) :: {:ok, map()} | :error
+  @spec operation_context(map(), map(), atom()) :: {:ok, map()} | :error
   def operation_context(
         %{
           source_identity: %{system_identifier: system_identifier, database: database},
           slot_name: slot_name
         },
-        %{commit_lsn: commit_lsn, ordinal: ordinal}
+        %{commit_lsn: commit_lsn, ordinal: ordinal},
+        invocation
       )
       when is_binary(system_identifier) and is_binary(database) and is_binary(slot_name) and
-             is_integer(commit_lsn) and commit_lsn >= 0 and is_integer(ordinal) and ordinal >= 0,
+             is_integer(commit_lsn) and commit_lsn >= 0 and is_integer(ordinal) and ordinal >= 0 and
+             invocation in @invocation_labels,
       do:
         {:ok,
          %{
@@ -41,10 +58,11 @@ defmodule AshReplicant.Apply.Context do
            source_database: database,
            slot_name: slot_name,
            commit_lsn: commit_lsn,
-           ordinal: ordinal
+           ordinal: ordinal,
+           invocation: invocation
          }}
 
-  def operation_context(_config, _change), do: :error
+  def operation_context(_config, _change, _invocation), do: :error
 
   @doc false
   @spec preflight_onetime!(map(), term(), module(), atom(), atom()) :: :ok

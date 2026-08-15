@@ -622,6 +622,15 @@ defmodule AshReplicant.Test.Marquee do
 
       update :close_version do
         accept [:valid_to_lsn, :valid_to_ts, :is_current]
+
+        touches_resources [AshReplicant.Test.Marquee.Scd2Auxiliary]
+
+        change {AshReplicant.Test.Marquee.RecordAuxiliary,
+                resource: AshReplicant.Test.Marquee.Scd2Auxiliary,
+                participant: :scd2_auxiliary,
+                escape_table: "repl_version_auxiliary",
+                fault_key: {AshReplicant.Test.Marquee, :scd2_between_effects_fault},
+                observer_key: {AshReplicant.Test.Marquee, :observer}}
       end
     end
   end

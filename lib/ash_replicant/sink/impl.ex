@@ -954,7 +954,8 @@ defmodule AshReplicant.Sink.Impl do
       source_database: config.source_identity.database,
       slot_name: config.slot_name,
       commit_lsn: snapshot_lsn,
-      ordinal_base: ordinal_base
+      ordinal_base: ordinal_base,
+      invocation: :upsert
     })
   end
 end

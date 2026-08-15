@@ -1034,14 +1034,14 @@ defmodule AshReplicant.Destination do
 
   defp valid_replay_identity?(%ReplayIdentity{components: [_ | _] = components, participant: p})
        when is_atom(p) and p not in [nil, true, false] do
-    components == [
-      :source_system_identifier,
-      :source_database,
-      :slot_name,
-      :commit_lsn,
-      :ordinal,
-      :participant
-    ]
+    # Declarations stay 6-AXIS: the canonical component home minus the
+    # sink-minted :invocation (D1/U3). The discriminator is sink-owned — a
+    # host-declared axis would be a forgeable replay identity (the host
+    # controls the changeset and could alias two invocations onto one key,
+    # silently suppressing a declared effect — the exact R1 class), so the
+    # host has nothing legitimate to declare about intra-change identity.
+    components ==
+      AshReplicant.DestinationParticipant.operation_components() -- [:invocation]
   end
 
   defp valid_replay_identity?(_other), do: false

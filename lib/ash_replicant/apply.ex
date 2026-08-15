@@ -102,14 +102,14 @@ defmodule AshReplicant.Apply do
       Resolver.require_tenant_pair!(resource, change, op)
 
     if op == :update and (pk_changed?(resource, change) or transition == :reassigned) do
-      destroy_by_pk(config, resource, change.old_record, change)
+      destroy_by_pk(config, resource, change.old_record, change, :destroy_prior)
     end
 
     upsert(config, resource, change)
   end
 
   defp apply_to(config, resource, %{op: :delete} = change, _commit_timestamp) do
-    destroy_by_pk(config, resource, change.old_record, change)
+    destroy_by_pk(config, resource, change.old_record, change, :destroy_prior)
   end
 
   defp apply_to(
@@ -168,7 +168,7 @@ defmodule AshReplicant.Apply do
       upsert_fields: upsert_fields,
       tenant: tenant,
       authorize?: config.authorize?,
-      context: Context.action_context(config, change),
+      context: Context.action_context(config, change, :upsert),
       # The sink owns the single outer Repo.transaction these actions join (spec
       # decision 7); `transaction?: false` skips a redundant per-row savepoint on
       # the upsert. (`Ash.destroy!` has no `transaction?` option — its per-action
@@ -186,7 +186,7 @@ defmodule AshReplicant.Apply do
     :exit, value -> reraise Error.scrub(value, resource, :upsert), __STACKTRACE__
   end
 
-  defp destroy_by_pk(config, resource, old_record, change) do
+  defp destroy_by_pk(config, resource, old_record, change, invocation) do
     pk_values = Resolver.pk_values(resource, old_record)
 
     # Fail closed on a missing PK BEFORE building the filter: a nil PK value would
@@ -203,7 +203,7 @@ defmodule AshReplicant.Apply do
     query =
       resource
       |> Ash.Query.do_filter(pk_values)
-      |> Ash.Query.set_context(Context.action_context(config, change))
+      |> Ash.Query.set_context(Context.action_context(config, change, invocation))
 
     # One atomic `DELETE ... WHERE pk` (single round-trip) instead of read-then-destroy.
     # `strategy: [:atomic, :stream]` takes the data-layer atomic path for the mirror's
@@ -224,7 +224,7 @@ defmodule AshReplicant.Apply do
       transaction: false,
       tenant: tenant,
       authorize?: config.authorize?,
-      context: Context.action_context(config, change),
+      context: Context.action_context(config, change, invocation),
       return_errors?: true
     )
 

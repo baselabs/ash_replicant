@@ -66,8 +66,32 @@ defmodule AshReplicant.DestinationParticipant do
     :slot_name,
     :commit_lsn,
     :ordinal,
-    :participant
+    :participant,
+    :invocation
   ]
+
+  @invocation_labels AshReplicant.Apply.Context.invocation_labels()
+
+  @doc """
+  The canonical operation-identity component list — the ONE home consumed by
+  BOTH `operation_key/2` (minting) and the manifest's declaration check
+  (`valid_replay_identity?/1`, which requires the DECLARED axes to equal this
+  list minus the sink-minted `:invocation`). A per-invocation discriminator
+  closes the intra-change operation-key collision: one ordinal fans to up to
+  three effects (SCD2 close-prior + close-current + open), and without it the
+  second close replays the first's stored AshOnetime response — the declared
+  effect silently never runs.
+  """
+  @spec operation_components() :: [atom()]
+  def operation_components, do: @operation_components
+
+  @doc """
+  The closed per-invocation mint set (one label per sink call site). Shared
+  with `AshReplicant.Apply.Context` — the labels live there, beside the mint
+  sites they name.
+  """
+  @spec invocation_labels() :: [atom()]
+  def invocation_labels, do: @invocation_labels
 
   @doc """
   Builds the closed AshOnetime operation key for one admitted auxiliary participant.
@@ -98,6 +122,7 @@ defmodule AshReplicant.DestinationParticipant do
          slot_name when is_binary(slot_name) <- identity.slot_name,
          commit_lsn when is_integer(commit_lsn) and commit_lsn >= 0 <- identity.commit_lsn,
          ordinal when is_integer(ordinal) and ordinal >= 0 <- identity.ordinal,
+         invocation when invocation in @invocation_labels <- identity.invocation,
          {:ok, encoded} <-
            AshOnetime.Canonical.encode([
              source_system_identifier,
@@ -105,7 +130,8 @@ defmodule AshReplicant.DestinationParticipant do
              slot_name,
              commit_lsn,
              ordinal,
-             participant
+             participant,
+             invocation
            ]) do
       {:ok, Base.url_encode64(encoded, padding: false)}
     else
