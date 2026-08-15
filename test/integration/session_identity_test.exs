@@ -69,7 +69,7 @@ defmodule AshReplicant.SessionIdentityTest do
       15_000 -> flunk("session identity was not accepted")
     end
 
-    assert_receive {:checkpoint_accessed, ^access_ref}, 1_000
+    assert_receive {:checkpoint_accessed, ^access_ref}, 5_000
 
     assert_receive {:telemetry, ^identity_ref, [:replicant, :connection, :slot_active], %{}},
                    15_000

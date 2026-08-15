@@ -526,6 +526,60 @@ defmodule AshReplicant.Coverage do
     }
   end
 
+  @doc """
+  The reconnect re-check (rule-2/3 subset): every mapped table must still be
+  published and every publication table mapped or ignored. ONE short-lived
+  identity-verified connection; catalog faults DEFER (the source was
+  unreachable — it cannot stream, so the bind proceeds and the next reachable
+  re-check renders the verdict). Value-free reasons on violation.
+  """
+  @spec reconnect_check(keyword(), map(), [String.t()], map(), Identity.manifest()) ::
+          :ok | {:error, Error.t()}
+  def reconnect_check(connection_opts, source_identity, publication, index, contract) do
+    opts = Keyword.merge(connection_opts, pool_size: 1, sync_connect: true)
+    conn = start_preflight_connection(opts)
+
+    result =
+      with {:ok, conn} <- conn,
+           {:ok, census} <- collect_census(conn, publication),
+           :ok <- verify_probe_identity(census.identity, source_identity) do
+        facts = relation_facts(index, contract)
+        ignored = MapSet.new(contract.ignores, &{&1.schema, &1.table})
+
+        with :ok <- check_missing_expected(census.tables, facts) do
+          check_unignored_publication(census.tables, facts, ignored)
+        end
+      else
+        {:error, %Error{} = error} ->
+          {:error, error}
+
+        _census_connection_fault ->
+          :ok
+      end
+
+    with {:ok, db_conn} <- conn do
+      GenServer.stop(db_conn)
+    end
+
+    case result do
+      :ok -> :ok
+      {:error, %Error{} = error} -> emit_bind_conflict(error)
+    end
+  end
+
+  # (emit_bind_conflict returns the error so reconnect_check's caller halts)
+
+  # The bind-scoped halt telemetry (the same event the other bind guards use).
+  defp emit_bind_conflict(%Error{reason: reason}) do
+    AshReplicant.Telemetry.event(
+      [:ash_replicant, :checkpoint, :conflict],
+      %{count: 1},
+      %{reason: reason, error_class: :invalid}
+    )
+
+    {:error, %Error{reason: reason}}
+  end
+
   # --- catalog SQL (identity probe is version-conditional; the rest reuse
   # --- the framework's public QueryBuilder strings verbatim) ---
 

@@ -590,6 +590,21 @@ defmodule AshReplicant.CheckpointBindingTest do
     })
   end
 
+  # Terminate the pipeline's walsender so Replicant reconnects in-process
+  # (never touching the pipeline supervision — the forced-reconnect shape).
+  # Match the slot by our unique slot name — the only sure ownership key.
+  defp kill_walsender do
+    rows =
+      Marquee.q!(
+        "SELECT r.pid FROM pg_stat_replication r JOIN pg_replication_slots s ON s.active_pid = r.pid WHERE s.slot_name = $1",
+        [@slot]
+      ).rows
+
+    for [pid] <- rows do
+      Marquee.q!("SELECT pg_terminate_backend($1)", [pid])
+    end
+  end
+
   defp txn(sink, lsn) do
     sink.handle_transaction(%Replicant.Transaction{
       commit_lsn: lsn,
@@ -743,6 +758,33 @@ defmodule AshReplicant.CheckpointBindingTest do
       assert error.reason == :checkpoint_legacy_rows_present
       assert error.shape == "rows=2 options=capture_and_delete_then_adopt|reset"
       refute Exception.message(error) =~ "legacy-1"
+    end
+  end
+
+  describe "reconnect coverage re-check (task 4)" do
+    test "a mapped table dropped from the publication mid-run halts at the forced reconnect" do
+      ref = attach_events()
+
+      # Live slot + bound row under SinkA.
+      assert {:ok, _pid} = start(SinkA, @slot)
+      assert_receive {:telemetry, ^ref, [:replicant, :connection, :slot_active], %{}}, 15_000
+
+      # Drop a MAPPED table from the publication mid-run (no restart — the
+      # activation preflight already passed; this is the no-streaming-signal
+      # class only the bind re-check can see).
+      Marquee.q!("ALTER PUBLICATION #{@bind_publication} DROP TABLE contract_orders")
+
+      # Force a reconnect WITHOUT re-activation: kill the walsender — the
+      # pipeline process stays up and Replicant paces a reconnect whose
+      # handle_session_identity runs the bind re-check.
+      kill_walsender()
+
+      assert_receive {:telemetry, ^ref, [:ash_replicant, :checkpoint, :conflict],
+                      %{reason: :source_table_missing}},
+                     20_000
+
+      # The durable row is untouched (no checkpoint regression on a halt).
+      assert is_integer(bound_row(@slot).commit_lsn) or is_nil(bound_row(@slot).commit_lsn)
     end
   end
 

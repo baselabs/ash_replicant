@@ -604,6 +604,7 @@ defmodule AshReplicant do
       resolver_index: generation.resolver_index,
       destination_manifest: generation.manifest,
       source_contract: generation.source_contract,
+      source_connection: generation.source_connection,
       coverage: generation.coverage,
       source_identity: generation.source_identity,
       publication: generation.publication,

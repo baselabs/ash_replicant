@@ -55,37 +55,64 @@ defmodule AshReplicant.Sink.Impl do
   defp bind_session(config, %Replicant.SessionIdentity{} = identity) do
     contract = config.source_contract
 
-    result =
-      config.repo.transaction(
-        fn ->
-          guard_generation!(config)
+    # The reconnect coverage re-check (adversarial C2): a mapped table dropped
+    # from the publication mid-run has NO streaming signal; the bind re-check
+    # (rule-2/3 subset) catches it on every transport blip, BEFORE any
+    # checkpoint read. Runs on the short-lived source connection from the
+    # generation (outside the destination transaction — a catalog read).
+    with :ok <- reconnect_coverage_check(config) do
+      result =
+        config.repo.transaction(
+          fn ->
+            guard_generation!(config)
 
-          case locked_slot_rows(config) do
-            [] ->
-              insert_bound_row!(config, identity, contract)
+            case locked_slot_rows(config) do
+              [] ->
+                insert_bound_row!(config, identity, contract)
 
-            [row] ->
-              verify_and_adapt_row!(config, identity, contract, row)
+              [row] ->
+                verify_and_adapt_row!(config, identity, contract, row)
 
-            _many ->
-              # Multiple rows under one slot cannot occur past the unique slot
-              # index; a read here means the index was dropped. Fail closed.
-              rollback_conflict!(config, :source_identity_rebound)
-          end
+              _many ->
+                # Multiple rows under one slot cannot occur past the unique slot
+                # index; a read here means the index was dropped. Fail closed.
+                rollback_conflict!(config, :source_identity_rebound)
+            end
 
-          guard_generation!(config)
-          :ok
-        end,
-        timeout: @snapshot_transaction_timeout
-      )
+            guard_generation!(config)
+            :ok
+          end,
+          timeout: @snapshot_transaction_timeout
+        )
 
-    case result do
-      {:ok, :ok} -> :ok
-      {:error, %Error{} = error} -> {:error, error}
-      {:error, other} -> {:error, Error.scrub(other, config.checkpoint_resource, :bind)}
+      case result do
+        {:ok, :ok} -> :ok
+        {:error, %Error{} = error} -> {:error, error}
+        {:error, other} -> {:error, Error.scrub(other, config.checkpoint_resource, :bind)}
+      end
     end
   rescue
     e -> {:error, Error.scrub(e, config.checkpoint_resource, :bind)}
+  end
+
+  # The rule-2/3 subset on the source catalog: every mapped table published,
+  # every publication table mapped or ignored. Identity-verified short-lived
+  # connection (the same preflight machinery); catalog faults defer to the
+  # destination-transaction bind (an unreachable source cannot stream anyway).
+  defp reconnect_coverage_check(config) do
+    IO.inspect({:dbg_rc, Map.get(config, :source_connection) != nil, config.publication},
+      label: DBGRC
+    )
+
+    connection = Map.get(config, :source_connection) || []
+
+    AshReplicant.Coverage.reconnect_check(
+      connection,
+      config.source_identity,
+      config.publication,
+      config.resolver_index,
+      config.source_contract.manifest
+    )
   end
 
   defp locked_slot_rows(config) do
