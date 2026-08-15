@@ -670,12 +670,24 @@ defmodule AshReplicant.Destination do
                  kind: :notifier
                }) do
             {:ok, refs_from_notifier} ->
-              # Tag the edges: the walk's cycle rule treats a notifier's
-              # re-declaration of an already-active action as a redundant
-              # metadata edge, never a graph cycle (change-participant
-              # back-edges stay cycles).
+              # Tag the edges so the declared_by guard recognizes a
+              # notifier-sourced entry and skips re-probing the DECLARING
+              # notifier (its load genuinely triggers the resource's own
+              # read — the same logical edge, not a new one). The walk's
+              # cycle rule itself is source-blind: ANY re-entry into an
+              # active action is a cycle.
               tagged =
-                Enum.map(refs_from_notifier, fn {ref, _module} -> {ref, {:notifier, notifier}} end)
+                refs_from_notifier
+                # A notifier declaring the action it was probed ON is a
+                # SELF-EDGE — the action is already in the graph by
+                # construction; the edge records "my load reads this very
+                # action", redundant information, not a cycle of distinct
+                # nodes (a context-insensitive uniform declaration produces
+                # exactly this shape on the read probe).
+                |> Enum.reject(fn {ref, _src} ->
+                  ref.resource == resource and ref.action == action.name
+                end)
+                |> Enum.map(fn {ref, _module} -> {ref, {:notifier, notifier}} end)
 
               {:cont, {:ok, refs, all_refs ++ tagged}}
 

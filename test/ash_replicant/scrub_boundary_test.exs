@@ -16,21 +16,22 @@ defmodule AshReplicant.ScrubBoundaryTest do
   bodies are RED pre-fix (`rescue` misses them; schema-change is bare); the
   schema-change RAISE cell is RED pre-fix (no boundary at all); the five
   delivery bodies' raise cells are GREEN pre-fix (already rescued) — recorded
-  as already-closed depth. Bind's and schema-change's throw/exit cells are
-  covered by the clause-identical catches ONLY: the reconnect coverage gate
-  fires BEFORE any faultable seam (its own faults contained as
-  `{:error, :preflight_failed}`) and Spark's reflection seals the
-  schema-change body to a raise — no harness at any tier can drive these
-  cells (diff-review F4: verified by mutation — deleting the schema-change
-  :exit catch leaves the suite green).
+  as already-closed depth. Bind's :exit cell IS drivable in-unit (round 2):
+  an empty source_connection makes the reconnect gate map the Postgrex
+  failure to :unreachable and `GenServer.stop(:unreachable)` exits noproc —
+  the catch scrubs it. Schema-change's :throw/:exit cells ride Spark's
+  fetch_opt/2 direct_fn seam (a fault there escapes Spark's rescue-only
+  wrapper into the sink's catch); its :raise is re-wrapped by Spark into the
+  structural polished ArgumentError. Bind's :throw has no seam (the gate's
+  reachable paths raise or exit only) — clause-identical coverage.
 
   The PIPELINE-driven classification case (plan F2's live leg): the mislabel
   surface (replicant handle_message's :decode_failure on a RAISING sink) is
   closed BY CONSTRUCTION — the sink's own containment means the wrapper's
   rescue never engages on this path; a test would have to inject a fault the
   sink can no longer produce. The wrapper's lines are cited at
-  assembler.ex:241-249; the unit raise cell pins the containment that makes
-  them unreachable.
+  assembler.ex:241-249; the unit cells pin the containment that makes them
+  unreachable.
 
   The sentinel rule: a unique string sentinel appears in NO captured log, NO
   returned error message/inspect, and NO telemetry payload.
@@ -69,12 +70,18 @@ defmodule AshReplicant.ScrubBoundaryTest do
     def start_link(_opts \\ []), do: fault()
   end
 
-  # Schema-change injection: Spark's reflection calls the info accessor
-  # directly on the module (get_config_entry_with_fallback -> direct_fn),
-  # so a mapped "resource" that faults there drives the body's boundary.
-  defmodule FaultyReflection do
+  # Schema-change injection via Spark's REAL seam: the compiled
+  # `fetch_opt(path, key)` on the mapped module is the info accessor's
+  # direct_fn. A :throw/:exit from it escapes Spark's rescue-only wrapper
+  # into the sink's catch — the CARRIED sentinel proves the scrub; a raise
+  # is re-wrapped by Spark into its polished "not a Spark DSL module"
+  # ArgumentError (structural — the raise cell pins containment without a
+  # sentinel). (Diff-review round 2: an accessor like
+  # `replicant_on_schema_change/0` is unreachable — the Info chain never
+  # calls it.)
+  defmodule FaultyFetchOpt do
     @moduledoc false
-    def replicant_on_schema_change, do: FaultyRepo.fault()
+    def fetch_opt(_path, _key), do: FaultyRepo.fault()
   end
 
   # A REAL replicant resource for the policy path (mapped, additive → :ok).
@@ -113,7 +120,7 @@ defmodule AshReplicant.ScrubBoundaryTest do
   end
 
   @index %{{"public", "scrub_boundary_tbl"} => CalmMirror}
-  @faulty_index %{{"public", "scrub_boundary_tbl"} => FaultyReflection}
+  @faulty_index %{{"public", "scrub_boundary_tbl"} => FaultyFetchOpt}
 
   defp config(opts \\ []) do
     %{
@@ -266,29 +273,28 @@ defmodule AshReplicant.ScrubBoundaryTest do
       end
     end
 
-    test "schema-change: a body fault is scrubbed value-free AND fires the sink halt" do
-      # Raise-only injection: Spark's reflection seals the module-fault path
-      # (UndefinedFunctionError/ArgumentError from the direct accessor fall
-      # back to Module.get_attribute and surface as one polished ArgumentError
-      # INSIDE the body — the raw form escaping today is the leak). The
-      # :throw/:exit catch clauses are clause-identical to the four
-      # repo-seam boundaries above (proven there + by the closeout mutation
-      # proof); no seam in this body can throw or exit.
-      set_shape(:raise)
+    test "schema-change: throw/exit/raise body faults all scrub value-free AND fire the sink halt" do
+      # :throw/:exit ride the fetch_opt seam with their sentinels; :raise is
+      # re-wrapped by Spark into the structural polished ArgumentError (the
+      # pre-fix raw escape was exactly that class). All three shapes land in
+      # the sink's own containment with the halt event fired.
+      for shape <- [:throw, :exit, :raise] do
+        set_shape(shape)
 
-      {result, telemetry} =
-        assert_value_free(fn ->
-          Impl.handle_schema_change(
-            config(index: @faulty_index),
-            sc(:destructive, "scrub_boundary_tbl"),
-            %{}
-          )
-        end)
+        {result, telemetry} =
+          assert_value_free(fn ->
+            Impl.handle_schema_change(
+              config(index: @faulty_index),
+              sc(:destructive, "scrub_boundary_tbl"),
+              %{}
+            )
+          end)
 
-      assert {:error, %AshReplicant.Error{reason: :sink_failed}} = result
+        assert {:error, %AshReplicant.Error{reason: :sink_failed}} = result
 
-      assert Enum.any?(telemetry, &match?({[:ash_replicant, :sink, :halted], _, _}, &1)),
-             "the sink's own halt event must fire on the fault path"
+        assert Enum.any?(telemetry, &match?({[:ash_replicant, :sink, :halted], _, _}, &1)),
+               "the sink's own halt event must fire on the fault path (#{shape})"
+      end
     end
 
     test "schema-change: the non-fault paths are unchanged (additive :ok, destructive halt)" do

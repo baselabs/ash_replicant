@@ -1036,6 +1036,34 @@ defmodule AshReplicant.DestinationTest do
       assert {:notifier, DestinationFixtures.SecondLoadNotifier} in read_sources
     end
 
+    test "a CROSS-NOTIFIER declaration loop is a true cycle (diff-review F1 pin)" do
+      # The root's notifier declares AuxY's read; AuxY's declares AuxX's;
+      # AuxX's declares AuxY's again — a deterministic back-edge through
+      # NON-ROOT aux reads (memoization at completed cannot absorb it). The
+      # strict arm rejects it; the removed redundant-edge arm would have
+      # admitted it.
+      assert {:error, {:destination_participant_cycle, _resource, action}} =
+               Destination.manifest(%{
+                 repo: AshReplicant.TestRepo,
+                 domains: [DestinationFixtures.LoopRootDomain],
+                 checkpoint_resource: AshReplicant.Test.Checkpoint
+               })
+
+      assert is_atom(action)
+    end
+
+    test "a context-INSENSITIVE uniform declaration admits (diff-review F2 pin)" do
+      # Declares (R, :read) for EVERY action — including the :read it is
+      # probed on. The declared_by unwrap makes the self-probe the same
+      # logical edge; without it this shape false-cycles.
+      assert {:ok, _manifest} =
+               Destination.manifest(%{
+                 repo: AshReplicant.TestRepo,
+                 domains: [DestinationFixtures.UniformLoadDomain],
+                 checkpoint_resource: AshReplicant.Test.Checkpoint
+               })
+    end
+
     test "a no_database declaration admits with no new graph edge (the read is already admitted)" do
       assert {:ok, _manifest} =
                Destination.manifest(%{

@@ -3529,3 +3529,264 @@ defmodule AshReplicant.Test.DestinationFixtures.TwoNotifierLoadDomain do
     resource AshReplicant.Test.Checkpoint
   end
 end
+
+# --- U3 diff-review round-2 pins: the strict cycle rule + the uniform guard ---
+
+defmodule AshReplicant.Test.DestinationFixtures.UniformLoadNotifier do
+  @moduledoc false
+  # CONTEXT-INSENSITIVE: declares the resource's own read for EVERY action —
+  # including the :read it gets probed on. The declared_by unwrap makes that
+  # self-probe the same logical edge (no false cycle); without the unwrap
+  # this shape is rejected.
+  use Ash.Notifier
+
+  @behaviour AshReplicant.DestinationParticipant
+
+  alias AshReplicant.DestinationParticipant.{ActionRef, Context}
+
+  @impl Ash.Notifier
+  def notify(_notification), do: :ok
+
+  @impl Ash.Notifier
+  def load(_resource, _action), do: [:uniform_calc]
+
+  @impl AshReplicant.DestinationParticipant
+  def destination_participants(_opts, %Context{resource: resource}) do
+    {:ok,
+     {:actions,
+      [
+        %ActionRef{
+          resource: resource,
+          action: :read,
+          tenant_mode: :inherit
+        }
+      ]}}
+  end
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.UniformLoadRoot do
+  @moduledoc false
+  use Ash.Resource,
+    domain: AshReplicant.Test.DestinationFixtures.UniformLoadDomain,
+    data_layer: AshPostgres.DataLayer,
+    notifiers: [AshReplicant.Test.DestinationFixtures.UniformLoadNotifier],
+    extensions: [AshReplicant.Resource]
+
+  postgres do
+    table "uniform_load_roots"
+    repo AshReplicant.TestRepo
+  end
+
+  replicant do
+    source_table("uniform_load_source")
+  end
+
+  attributes do
+    uuid_primary_key :id
+  end
+
+  actions do
+    defaults [:read, :destroy]
+
+    create :create do
+      primary? true
+      accept []
+    end
+  end
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.UniformLoadDomain do
+  @moduledoc false
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource AshReplicant.Test.DestinationFixtures.UniformLoadRoot
+    resource AshReplicant.Test.Checkpoint
+  end
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.LoopAuxYNotifier do
+  @moduledoc false
+  # Cross-notifier declaration LOOP closing through NON-ROOT aux reads: the
+  # root's notifier declares AuxY's read; AuxY's notifier declares AuxX's
+  # read; AuxX's notifier declares AuxY's read again — a deterministic
+  # back-edge (the aux reads are never domain roots, so the loop closes
+  # inside one DFS instead of memoizing at completed).
+  use Ash.Notifier
+
+  @behaviour AshReplicant.DestinationParticipant
+
+  alias AshReplicant.DestinationParticipant.{ActionRef, Context}
+
+  @impl Ash.Notifier
+  def notify(_notification), do: :ok
+
+  @impl Ash.Notifier
+  def load(_resource, _action), do: [:loop_calc]
+
+  @impl AshReplicant.DestinationParticipant
+  def destination_participants(_opts, %Context{}) do
+    {:ok,
+     {:actions,
+      [
+        %ActionRef{
+          resource: AshReplicant.Test.DestinationFixtures.LoopAuxX,
+          action: :read,
+          tenant_mode: :inherit
+        }
+      ]}}
+  end
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.LoopAuxXNotifier do
+  @moduledoc false
+  use Ash.Notifier
+
+  @behaviour AshReplicant.DestinationParticipant
+
+  alias AshReplicant.DestinationParticipant.{ActionRef, Context}
+
+  @impl Ash.Notifier
+  def notify(_notification), do: :ok
+
+  @impl Ash.Notifier
+  def load(_resource, _action), do: [:loop_calc]
+
+  @impl AshReplicant.DestinationParticipant
+  def destination_participants(_opts, %Context{}) do
+    {:ok,
+     {:actions,
+      [
+        %ActionRef{
+          resource: AshReplicant.Test.DestinationFixtures.LoopAuxY,
+          action: :read,
+          tenant_mode: :inherit
+        }
+      ]}}
+  end
+
+  def destination_participants(_opts, _context), do: {:ok, :no_database}
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.LoopAuxX do
+  @moduledoc false
+  use Ash.Resource,
+    domain: AshReplicant.Test.DestinationFixtures.LoopRootDomain,
+    data_layer: AshPostgres.DataLayer,
+    notifiers: [AshReplicant.Test.DestinationFixtures.LoopAuxXNotifier]
+
+  postgres do
+    table "loop_aux_x"
+    repo AshReplicant.TestRepo
+  end
+
+  attributes do
+    uuid_primary_key :id
+  end
+
+  actions do
+    defaults [:read, :destroy]
+
+    create :create do
+      primary? true
+      accept []
+    end
+  end
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.LoopAuxY do
+  @moduledoc false
+  use Ash.Resource,
+    domain: AshReplicant.Test.DestinationFixtures.LoopRootDomain,
+    data_layer: AshPostgres.DataLayer,
+    notifiers: [AshReplicant.Test.DestinationFixtures.LoopAuxYNotifier]
+
+  postgres do
+    table "loop_aux_y"
+    repo AshReplicant.TestRepo
+  end
+
+  attributes do
+    uuid_primary_key :id
+  end
+
+  actions do
+    defaults [:read, :destroy]
+
+    create :create do
+      primary? true
+      accept []
+    end
+  end
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.LoopRootNotifier do
+  @moduledoc false
+  use Ash.Notifier
+
+  @behaviour AshReplicant.DestinationParticipant
+
+  alias AshReplicant.DestinationParticipant.{ActionRef, Context}
+
+  @impl Ash.Notifier
+  def notify(_notification), do: :ok
+
+  @impl Ash.Notifier
+  def load(_resource, _action), do: [:loop_calc]
+
+  @impl AshReplicant.DestinationParticipant
+  def destination_participants(_opts, %Context{action: action}) when action != :read do
+    {:ok,
+     {:actions,
+      [
+        %ActionRef{
+          resource: AshReplicant.Test.DestinationFixtures.LoopAuxY,
+          action: :read,
+          tenant_mode: :inherit
+        }
+      ]}}
+  end
+
+  def destination_participants(_opts, _context), do: {:ok, :no_database}
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.LoopRoot do
+  @moduledoc false
+  use Ash.Resource,
+    domain: AshReplicant.Test.DestinationFixtures.LoopRootDomain,
+    data_layer: AshPostgres.DataLayer,
+    notifiers: [AshReplicant.Test.DestinationFixtures.LoopRootNotifier],
+    extensions: [AshReplicant.Resource]
+
+  postgres do
+    table "loop_roots"
+    repo AshReplicant.TestRepo
+  end
+
+  replicant do
+    source_table("loop_roots_source")
+  end
+
+  attributes do
+    uuid_primary_key :id
+  end
+
+  actions do
+    defaults [:read, :destroy]
+
+    create :create do
+      primary? true
+      accept []
+    end
+  end
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.LoopRootDomain do
+  @moduledoc false
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource AshReplicant.Test.DestinationFixtures.LoopRoot
+    resource AshReplicant.Test.Checkpoint
+  end
+end
