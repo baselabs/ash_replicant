@@ -188,4 +188,26 @@ defmodule AshReplicant.TelemetryTest do
 
     :telemetry.detach(ref)
   end
+
+  test "span/3's exception event carries the structural class only, never the value (cross-vendor final4)" do
+    ref =
+      :telemetry_test.attach_event_handlers(self(), [
+        [:ash_replicant, :sink, :start],
+        [:ash_replicant, :sink, :stop]
+      ])
+
+    assert_raise ArgumentError, fn ->
+      Telemetry.span(:sink, %{commit_lsn: 1}, fn ->
+        raise ArgumentError, "SENTINEL-SPAN-RAW-df77"
+      end)
+    end
+
+    assert_received {[:ash_replicant, :sink, :start], ^ref, _, %{commit_lsn: 1}}
+    assert_received {[:ash_replicant, :sink, :stop], ^ref, _, meta}
+
+    refute inspect(meta) =~ "SENTINEL", "the raw exception message must never reach handlers"
+    assert Map.has_key?(meta, :error_class)
+
+    :telemetry.detach(ref)
+  end
 end

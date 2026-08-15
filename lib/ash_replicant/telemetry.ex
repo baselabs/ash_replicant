@@ -60,13 +60,59 @@ defmodule AshReplicant.Telemetry do
     ]
   end
 
+  # Hand-rolled span (NOT :telemetry.span/3): the library wrapper's
+  # exception event emits the RAW exception to every handler — a value leak
+  # (cross-vendor final4). Here a raising fun emits the STOP event with the
+  # scrubbed structural reason only, then re-raises the original for the
+  # caller (semantics preserved; the telemetry boundary stays value-free).
   @spec span(atom(), map(), (-> {term(), map()})) :: term()
   def span(op, start_meta, fun) when is_atom(op) and is_map(start_meta) and is_function(fun, 0) do
-    :telemetry.span([:ash_replicant, op], validate!(start_meta), fn ->
-      {result, stop_meta} = fun.()
-      {result, validate!(Map.merge(start_meta, stop_meta))}
-    end)
+    start = System.monotonic_time()
+    :telemetry.execute([:ash_replicant, op, :start], %{duration: 0}, validate!(start_meta))
+
+    result =
+      try do
+        fun.()
+      rescue
+        e ->
+          stopped = System.monotonic_time() - start
+
+          :telemetry.execute(
+            [:ash_replicant, op, :stop],
+            %{duration: stopped},
+            validate!(Map.put(start_meta, :error_class, class_of(e)))
+          )
+
+          reraise e, __STACKTRACE__
+      catch
+        kind, value ->
+          stopped = System.monotonic_time() - start
+
+          :telemetry.execute(
+            [:ash_replicant, op, :stop],
+            %{duration: stopped},
+            validate!(Map.put(start_meta, :error_class, class_of(value)))
+          )
+
+          :erlang.raise(kind, value, __STACKTRACE__)
+      end
+
+    {_, stop_meta} = wrapped = result
+    stopped = System.monotonic_time() - start
+
+    :telemetry.execute(
+      [:ash_replicant, op, :stop],
+      %{duration: stopped},
+      validate!(Map.merge(start_meta, stop_meta))
+    )
+
+    elem(wrapped, 0)
   end
+
+  # The structural class only (the Splode class field when the raised term
+  # carries one) — never the value.
+  defp class_of(%{class: class}) when is_atom(class), do: class
+  defp class_of(_other), do: :error
 
   @spec event([atom(), ...], map(), map()) :: :ok
   def event(name, measurements, meta)
@@ -113,9 +159,13 @@ defmodule AshReplicant.Telemetry do
        when is_nil(v) or is_atom(v),
        do: true
 
-  defp meta_value_ok?("nil | atom | {:invalid_destination_config, atom}", {:invalid_destination_config, tag})
-      when is_atom(tag),
-      do: true
+  defp meta_value_ok?(
+         "nil | atom | {:invalid_destination_config, atom}",
+         {:invalid_destination_config, tag}
+       )
+       when is_atom(tag),
+       do: true
+
   defp meta_value_ok?("nil | binary", v), do: is_binary(v)
   defp meta_value_ok?("boolean", v), do: is_boolean(v)
   defp meta_value_ok?("non_neg_integer", v), do: is_integer(v) and v >= 0
