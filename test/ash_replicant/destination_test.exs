@@ -1015,6 +1015,27 @@ defmodule AshReplicant.DestinationTest do
                })
     end
 
+    test "TWO declared load-carrying notifiers on one resource admit (redundant edges, never a cycle)" do
+      assert {:ok, manifest} =
+               Destination.manifest(%{
+                 repo: AshReplicant.TestRepo,
+                 domains: [DestinationFixtures.TwoNotifierLoadDomain],
+                 checkpoint_resource: AshReplicant.Test.Checkpoint
+               })
+
+      # Both notifiers' declared reads enter the graph, each sourced from its
+      # own declaration.
+      read_sources =
+        manifest.entries
+        |> Enum.filter(
+          &(&1.resource == DestinationFixtures.TwoNotifierLoadRoot and &1.action == :read)
+        )
+        |> Enum.map(& &1.source)
+
+      assert {:notifier, DestinationFixtures.DeclaredLoadNotifier} in read_sources
+      assert {:notifier, DestinationFixtures.SecondLoadNotifier} in read_sources
+    end
+
     test "a no_database declaration admits with no new graph edge (the read is already admitted)" do
       assert {:ok, _manifest} =
                Destination.manifest(%{
@@ -1035,7 +1056,8 @@ defmodule AshReplicant.DestinationTest do
       assert Enum.any?(
                manifest.entries,
                &(&1.resource == DestinationFixtures.DeclaredLoadRoot and
-                   &1.action == :read and &1.source == DestinationFixtures.DeclaredLoadNotifier)
+                   &1.action == :read and
+                   &1.source == {:notifier, DestinationFixtures.DeclaredLoadNotifier})
              ),
              "the load-triggered read enters the admitted graph, sourced from the notifier declaration"
     end

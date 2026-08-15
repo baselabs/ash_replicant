@@ -3451,3 +3451,81 @@ defmodule AshReplicant.Test.DestinationFixtures.SnapshotLoadDomain do
     resource AshReplicant.Test.Checkpoint
   end
 end
+
+defmodule AshReplicant.Test.DestinationFixtures.SecondLoadNotifier do
+  @moduledoc false
+  # A SECOND declared load-carrying notifier on the same resource: both
+  # declare the resource's own read — redundant metadata edges, never a walk
+  # cycle (cross-vendor finding).
+  use Ash.Notifier
+
+  @behaviour AshReplicant.DestinationParticipant
+
+  alias AshReplicant.DestinationParticipant.{ActionRef, Context}
+
+  @impl Ash.Notifier
+  def notify(_notification), do: :ok
+
+  @impl Ash.Notifier
+  def load(_resource, _action), do: [:other_calculation]
+
+  @impl AshReplicant.DestinationParticipant
+  def destination_participants(_opts, %Context{resource: resource, action: action})
+      when action != :read do
+    {:ok,
+     {:actions,
+      [
+        %ActionRef{
+          resource: resource,
+          action: :read,
+          tenant_mode: :inherit
+        }
+      ]}}
+  end
+
+  def destination_participants(_opts, _context), do: {:ok, :no_database}
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.TwoNotifierLoadRoot do
+  @moduledoc false
+  use Ash.Resource,
+    domain: AshReplicant.Test.DestinationFixtures.TwoNotifierLoadDomain,
+    data_layer: AshPostgres.DataLayer,
+    notifiers: [
+      AshReplicant.Test.DestinationFixtures.DeclaredLoadNotifier,
+      AshReplicant.Test.DestinationFixtures.SecondLoadNotifier
+    ],
+    extensions: [AshReplicant.Resource]
+
+  postgres do
+    table "two_notifier_load_roots"
+    repo AshReplicant.TestRepo
+  end
+
+  replicant do
+    source_table("two_notifier_load_source")
+  end
+
+  attributes do
+    uuid_primary_key :id
+  end
+
+  actions do
+    defaults [:read, :destroy]
+
+    create :create do
+      primary? true
+      accept []
+    end
+  end
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.TwoNotifierLoadDomain do
+  @moduledoc false
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource AshReplicant.Test.DestinationFixtures.TwoNotifierLoadRoot
+    resource AshReplicant.Test.Checkpoint
+  end
+end

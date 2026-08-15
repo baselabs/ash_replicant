@@ -14,7 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   minters — tests, replay probes — must carry the mint-site label). Closes the
   intra-change AshOnetime key collision where one change's two SCD2 closes
   shared a key and the second close replayed the first's stored response
-  (ADR-0010).
+  (ADR-0010). Upgrade note: sink-side claims live and die in the SAME
+  transaction as their effects and the checkpoint (atomic), so no sink-side
+  durable claim can survive across the upgrade — but any HOST-side store
+  holding manually-minted keys under the old 6-component encoding must be
+  drained before upgrading; admission already rejects independent-commit
+  claims, so this only affects out-of-band host tooling.
 - A notifier whose `load/2` returns a non-empty statement must implement
   `AshReplicant.DestinationParticipant` (`:notifier` kind): its dependency
   pre-load read executes inside the admitted transaction regardless of notify

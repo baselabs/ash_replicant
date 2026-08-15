@@ -145,9 +145,11 @@ defmodule AshReplicant.TelemetryTest do
       # The BEAM cannot produce NaN/inf floats at all: arithmetic raises
       # badarith on the constructions (0.0/0.0, 1.0e308*10), and decoding the
       # raw IEEE754 payloads via a float bit-match is REJECTED by the unifier
-      # (verified live). The validator's finiteness clause is therefore
-      # defensive documentation, not a reachable cell on this platform — this
-      # test pins that unconstructibility so a future port knows the gap.
+      # (verified live). The validator's NaN clause is therefore defensive
+      # documentation, not a reachable cell on this platform — and NO
+      # absorption check exists (a finite float >= 2^53 absorbs additions and
+      # is legitimate). This test pins the unconstructibility so a future
+      # port knows the gap.
       assert_raise ArithmeticError, fn -> 0.0 / 0.0 end
       assert_raise MatchError, fn -> <<_::float-big-64>> = <<0x7FF8000000000000::64>> end
     end
@@ -167,5 +169,23 @@ defmodule AshReplicant.TelemetryTest do
 
       :telemetry.detach(ref)
     end
+  end
+
+  test "the library's own tuple-shaped reason mints valid telemetry (cross-vendor blocker regression)" do
+    # {:invalid_destination_config, :onetime_store} is a RUNTIME reason minted
+    # by preflight_onetime_transaction, raised on the apply path, and forwarded
+    # by halt/2 — the typing must accept it or the halt path itself crashes.
+    ref = :telemetry_test.attach_event_handlers(self(), [[:ash_replicant, :sink, :halted]])
+
+    :ok =
+      Telemetry.event([:ash_replicant, :sink, :halted], %{}, %{
+        reason: {:invalid_destination_config, :onetime_store},
+        error_class: :invalid
+      })
+
+    assert_received {[:ash_replicant, :sink, :halted], ^ref, _m,
+                     %{reason: {:invalid_destination_config, :onetime_store}}}
+
+    :telemetry.detach(ref)
   end
 end

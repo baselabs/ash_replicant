@@ -324,15 +324,13 @@ defmodule AshReplicant.ReleaseContract do
         end)
       end)
 
-    expected =
-      lib
-      |> Enum.filter(&String.ends_with?(&1, Path.join(["lib", "ash_replicant", "sink.ex"])))
-      |> length()
-      |> Kernel.*(2)
+    sink_lines = Path.join(["lib", "ash_replicant", "sink.ex"])
 
     assert(
-      length(ledger_hits) == expected and expected == 2,
-      "apply_ledger must appear in lib/ exactly twice (the removed-option fail-closed error), found: #{inspect(ledger_hits)}"
+      length(ledger_hits) == 2 and
+        Enum.all?(ledger_hits, &String.contains?(&1, sink_lines)) and
+        Enum.sort(Enum.map(ledger_hits, &Path.basename(&1))) == ["sink.ex:63", "sink.ex:73"],
+      "apply_ledger must appear ONLY as the two allowlisted fail-closed lines (63 and 73) of lib/ash_replicant/sink.ex, found: #{inspect(ledger_hits)}"
     )
 
     secret_hits =
@@ -343,9 +341,15 @@ defmodule AshReplicant.ReleaseContract do
         |> String.split("\n")
         |> Enum.with_index()
         |> Enum.flat_map(fn {line, ix} ->
-          if Regex.match?(~r/[A-Za-z0-9+\/]{40,}={0,2}/, line),
-            do: ["#{path}:#{ix + 1}"],
-            else: []
+          # Standard base64 (the +/ alphabet), plus the URL-safe alphabet
+          # ONLY for runs containing a hyphen (cross-vendor finding: base64url
+          # tokens) — a bare [A-Za-z0-9_-]{40,} run matches every long
+          # snake_case identifier in the source, a false-positive class, not
+          # a detector. This is a tripwire, not a secret scanner.
+          if Regex.match?(~r|[A-Za-z0-9+/]{40,}={0,2}|, line) or
+               Regex.match?(~r|[A-Za-z0-9_-]*-[A-Za-z0-9_-]{39,}={0,2}|, line),
+             do: ["#{path}:#{ix + 1}"],
+             else: []
         end)
       end)
 

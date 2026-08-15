@@ -26,7 +26,7 @@ defmodule AshReplicant.Telemetry do
     change_count: "nil | non_neg_integer",
     tenant?: "boolean",
     duration: "non_neg_integer",
-    reason: "nil | atom",
+    reason: "nil | atom | {:invalid_destination_config, atom}",
     error_class: "nil | atom",
     kind: "nil | atom",
     slot_name: "nil | binary"
@@ -105,6 +105,17 @@ defmodule AshReplicant.Telemetry do
   defp meta_value_ok?("nil | " <> _, nil), do: true
   defp meta_value_ok?("nil | non_neg_integer", v), do: is_integer(v) and v >= 0
   defp meta_value_ok?("nil | atom", v), do: is_atom(v)
+
+  # The library's own runtime reason includes one STRUCTURAL tuple (the
+  # onetime-store preflight halt) — shape-typed, never a value; atoms and nil
+  # keep their ordinary acceptance under the same key.
+  defp meta_value_ok?("nil | atom | {:invalid_destination_config, atom}", v)
+       when is_nil(v) or is_atom(v),
+       do: true
+
+  defp meta_value_ok?("nil | atom | {:invalid_destination_config, atom}", {:invalid_destination_config, tag})
+      when is_atom(tag),
+      do: true
   defp meta_value_ok?("nil | binary", v), do: is_binary(v)
   defp meta_value_ok?("boolean", v), do: is_boolean(v)
   defp meta_value_ok?("non_neg_integer", v), do: is_integer(v) and v >= 0
@@ -133,13 +144,13 @@ defmodule AshReplicant.Telemetry do
   end
 
   # On the BEAM floats are always finite (arithmetic raises badarith instead
-  # of producing NaN/inf — unconstructible, verified live), so the finiteness
-  # clauses are defensive documentation for any future port, not a reachable
-  # rejection here: NaN is the only value unequal to itself; +inf absorbs
-  # any addition.
+  # of producing NaN/inf — unconstructible, verified live), so the NaN clause
+  # is defensive documentation for any future port, not a reachable rejection
+  # here. No absorption check: `v + 1 != v` would reject every finite float
+  # >= 2^53 (cross-vendor finding) — large finite floats are legitimate.
   defp finite_non_negative_number?(v)
        when is_number(v) and v >= 0,
-       do: v == v and v + 1 != v
+       do: v == v
 
   defp finite_non_negative_number?(_v), do: false
 end

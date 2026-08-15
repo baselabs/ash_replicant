@@ -427,6 +427,19 @@ defmodule AshReplicant.Destination do
     end)
   end
 
+  defp merge_active_source(active, key, source),
+    do: Map.update(active, key, MapSet.new([source]), &MapSet.put(&1, source))
+
+  # A notifier-sourced edge into an action another notifier already declared
+  # active: redundant metadata, not a cycle.
+  defp redundant_notifier_edge?(active, key, {:notifier, _notifier}) do
+    active
+    |> Map.get(key, MapSet.new())
+    |> Enum.any?(&match?({:notifier, _other}, &1))
+  end
+
+  defp redundant_notifier_edge?(_active, _key, _source), do: false
+
   defp prefix_sort_key(nil), do: {0, ""}
   defp prefix_sort_key(:context_tenant), do: {1, ""}
   defp prefix_sort_key(prefix) when is_binary(prefix), do: {2, prefix}
@@ -564,6 +577,15 @@ defmodule AshReplicant.Destination do
     }
 
     cond do
+      MapSet.member?(Map.get(active, key, MapSet.new()), source) ->
+        {:error, {:destination_participant_cycle, resource, action_name}}
+
+      redundant_notifier_edge?(active, key, source) ->
+        # Two notifiers re-declaring the same already-active action is a
+        # REDUNDANT metadata edge, not a graph cycle (cross-vendor finding) —
+        # recorded into the branch's source set, never walked twice.
+        walk(rest, repo, merge_active_source(active, key, source), completed, [entry | entries])
+
       Map.has_key?(active, key) ->
         {:error, {:destination_participant_cycle, resource, action_name}}
 
@@ -583,7 +605,7 @@ defmodule AshReplicant.Destination do
                walk(
                  participant_roots(all_refs),
                  repo,
-                 Map.put(active, key, true),
+                 merge_active_source(active, key, source),
                  completed,
                  [entry | entries]
                ) do
@@ -621,18 +643,11 @@ defmodule AshReplicant.Destination do
         validate_notifier(resource, action, refs, all_refs, notifier)
       end
     end)
-  rescue
-    _error ->
-      {:error,
-       {:destination_notifier_required, resource, action.name,
-        Ash.Resource.Info.notifiers(resource) ++ List.wrap(Map.get(action, :notifiers))}}
-  catch
-    _kind, _reason ->
-      {:error,
-       {:destination_notifier_required, resource, action.name,
-        Ash.Resource.Info.notifiers(resource) ++ List.wrap(Map.get(action, :notifiers))}}
   end
 
+  # The probe faults name the FAULTING notifier (a raising load/2 or
+  # destination_participants callback is this module's defect), never the
+  # whole notifier list (cross-vendor finding).
   defp validate_notifier(resource, action, refs, all_refs, notifier) do
     statement =
       if implements_load?(notifier) do
@@ -662,7 +677,14 @@ defmodule AshReplicant.Destination do
                  kind: :notifier
                }) do
             {:ok, refs_from_notifier} ->
-              {:cont, {:ok, refs, all_refs ++ refs_from_notifier}}
+              # Tag the edges: the walk's cycle rule treats a notifier's
+              # re-declaration of an already-active action as a redundant
+              # metadata edge, never a graph cycle (change-participant
+              # back-edges stay cycles).
+              tagged =
+                Enum.map(refs_from_notifier, fn {ref, _module} -> {ref, {:notifier, notifier}} end)
+
+              {:cont, {:ok, refs, all_refs ++ tagged}}
 
             {:error, _reason} = error ->
               {:halt, error}
@@ -671,6 +693,11 @@ defmodule AshReplicant.Destination do
           {:halt, {:error, {:destination_notifier_required, resource, action.name, notifier}}}
         end
     end
+  rescue
+    _error -> {:halt, {:error, {:destination_notifier_required, resource, action.name, notifier}}}
+  catch
+    _kind, _reason ->
+      {:halt, {:error, {:destination_notifier_required, resource, action.name, notifier}}}
   end
 
   # `function_exported?/3` does not load the module — mirror Ash's exact gate.
@@ -1340,9 +1367,16 @@ defmodule AshReplicant.Destination do
         AshPostgres.DataLayer.Info.table(resource)
         | scd2_window_columns(resource)
       ]
-      |> Enum.reject(&is_nil/1)
 
-    if Enum.all?(identifiers, &Sql.valid_identifier?/1) do
+    # A NIL TABLE is itself a misconfiguration (table-less/polymorphic
+    # resources cannot back a mirror): admission rejects it rather than
+    # deferring to the effect-time raise (cross-vendor finding). A nil SCHEMA
+    # is legitimate (defaults to "public") and drops out of the scan.
+    table = AshPostgres.DataLayer.Info.table(resource)
+
+    identifiers = Enum.reject(identifiers, &is_nil/1)
+
+    if is_binary(table) and Enum.all?(identifiers, &Sql.valid_identifier?/1) do
       :ok
     else
       {:error, {:invalid_destination_config, :identifier}}
