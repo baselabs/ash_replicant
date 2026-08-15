@@ -93,6 +93,12 @@ defmodule AshReplicant.Sink.Impl do
     end
   rescue
     e -> {:error, Error.scrub(e, config.checkpoint_resource, :bind)}
+  catch
+    # D3: `rescue` misses :throw/:exit (DBConnection re-raises them after
+    # rollback). The catch routes them into the SAME scrub — value-free on
+    # every fault shape, not just raises.
+    :throw, value -> {:error, Error.scrub(value, config.checkpoint_resource, :bind)}
+    :exit, value -> {:error, Error.scrub(value, config.checkpoint_resource, :bind)}
   end
 
   # The rule-2/3 subset on the source catalog: every mapped table published,
@@ -260,6 +266,9 @@ defmodule AshReplicant.Sink.Impl do
     {:ok, read_checkpoint(config)}
   rescue
     e -> {:error, Error.scrub(e, config.checkpoint_resource, :checkpoint)}
+  catch
+    :throw, value -> {:error, Error.scrub(value, config.checkpoint_resource, :checkpoint)}
+    :exit, value -> {:error, Error.scrub(value, config.checkpoint_resource, :checkpoint)}
   end
 
   @doc """
@@ -292,6 +301,10 @@ defmodule AshReplicant.Sink.Impl do
     end
   rescue
     e -> halt(e, config)
+  catch
+    # D3: throw/exit reach the same halt path — scrubbed, :halted fired.
+    :throw, value -> halt(value, config)
+    :exit, value -> halt(value, config)
   end
 
   # The empty-resolver-index fail-closed guard. Shared by ALL delivery entry
@@ -353,6 +366,17 @@ defmodule AshReplicant.Sink.Impl do
            shape: "#{sc.schema || "public"}.#{sc.table}"
          )}
     end
+  rescue
+    # D3 (design C2): this was the ONLY boundary body with no containment —
+    # a fault escaped raw, and replicant's handle_message wrapper scrubbed it
+    # one frame up but MISLABELED it :decode_failure (assembler.ex:241-249)
+    # while the sink's own halt telemetry never fired. The sink now contains
+    # its own faults: the structural reason classifies correctly and
+    # [:ash_replicant, :sink, :halted] fires from here.
+    e -> halt_schema_change_fault(e, config)
+  catch
+    :throw, value -> halt_schema_change_fault(value, config)
+    :exit, value -> halt_schema_change_fault(value, config)
   end
 
   @doc """
@@ -404,6 +428,11 @@ defmodule AshReplicant.Sink.Impl do
     end
   rescue
     e -> {:error, Error.scrub(e, nil, :snapshot)}
+  catch
+    # D3: throw/exit scrubbed like raises (the snapshotter would otherwise
+    # surface them as its generic :snapshot_failed with no structural reason).
+    :throw, value -> {:error, Error.scrub(value, nil, :snapshot)}
+    :exit, value -> {:error, Error.scrub(value, nil, :snapshot)}
   end
 
   defp run_snapshot_batch(config, resource, changes, first?, table, ctx) do
@@ -570,6 +599,12 @@ defmodule AshReplicant.Sink.Impl do
     end
   rescue
     e -> {:error, Error.scrub(e, config.checkpoint_resource, :snapshot_complete)}
+  catch
+    :throw, value ->
+      {:error, Error.scrub(value, config.checkpoint_resource, :snapshot_complete)}
+
+    :exit, value ->
+      {:error, Error.scrub(value, config.checkpoint_resource, :snapshot_complete)}
   end
 
   # B3 snapshot-side accounting: unmapped tables halt unless ignored, and the
@@ -818,6 +853,20 @@ defmodule AshReplicant.Sink.Impl do
       :ok -> :ok
       {:error, %Error{} = error} -> config.repo.rollback(error)
     end
+  end
+
+  # The schema-change fault containment: same scrub as `halt/2` plus the
+  # sink's OWN halted event — on this path (and only here) the framework's
+  # wrapper would otherwise misclassify a sink fault as stream corruption.
+  defp halt_schema_change_fault(reason, config) do
+    error = Error.scrub(reason, config.checkpoint_resource, :schema_change)
+
+    Telemetry.event([:ash_replicant, :sink, :halted], %{}, %{
+      reason: error.reason,
+      error_class: error.class
+    })
+
+    {:error, error}
   end
 
   # Value-free fail-closed halt: scrub to a structural reason, emit `:halted`
