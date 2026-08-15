@@ -13,7 +13,7 @@ defmodule AshReplicant.Sink.Impl do
   """
 
   alias AshPostgres.DataLayer.Info, as: PGInfo
-  alias AshReplicant.{Apply, Destination, Error, Resolver, Telemetry}
+  alias AshReplicant.{Apply, Destination, Error, Resolver, Sql, Telemetry}
   alias AshReplicant.Checkpoint.Identity
   alias AshReplicant.Resource.Info
   alias Ecto.Adapters.SQL
@@ -631,7 +631,12 @@ defmodule AshReplicant.Sink.Impl do
     # never from a row value.
     schema = PGInfo.schema(resource) || "public"
     table = PGInfo.table(resource)
-    SQL.query!(config.repo, ~s(DELETE FROM "#{schema}"."#{table}"), [])
+
+    SQL.query!(
+      config.repo,
+      "DELETE FROM " <> Sql.quote_identifier(schema) <> "." <> Sql.quote_identifier(table),
+      []
+    )
   end
 
   defp apply_snapshot_batch(_config, _resource, [], _snapshot_lsn, _ordinal_base), do: :ok

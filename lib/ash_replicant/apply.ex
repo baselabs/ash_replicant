@@ -14,7 +14,7 @@ defmodule AshReplicant.Apply do
   alias AshPostgres.DataLayer.Info, as: PGInfo
   alias AshReplicant.Apply.Context
   alias AshReplicant.Apply.Scd2
-  alias AshReplicant.{Error, Resolver}
+  alias AshReplicant.{Error, Resolver, Sql}
   alias AshReplicant.Resource.Info
   alias Ecto.Adapters.SQL
 
@@ -128,7 +128,14 @@ defmodule AshReplicant.Apply do
         # boundary), never a row value, and idents are quoted.
         pg_schema = PGInfo.schema(resource) || "public"
         pg_table = PGInfo.table(resource)
-        SQL.query!(config.repo, ~s(DELETE FROM "#{pg_schema}"."#{pg_table}"), [])
+
+        SQL.query!(
+          config.repo,
+          "DELETE FROM " <>
+            Sql.quote_identifier(pg_schema) <> "." <> Sql.quote_identifier(pg_table),
+          []
+        )
+
         :ok
 
       :halt ->

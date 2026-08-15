@@ -15,6 +15,15 @@ defmodule AshReplicant.Test.RaisingMfaOrder do
     data_layer: Ash.DataLayer.Ets,
     extensions: [AshReplicant.Resource]
 
+  # The multitenancy block satisfies ValidateMultitenancy's compile gate: the
+  # fixture's DELIBERATE fault is the RAISING resolver (the runtime
+  # :tenant_resolution_failed cell), not the verifier-rejectable missing block —
+  # a module-level fixture carrying invalid config warns on every compile and
+  # trips the structural battery's no-error gate.
+  multitenancy do
+    strategy(:context)
+  end
+
   replicant do
     source_table("raising_mfa_orders")
     tenant_mfa({AshReplicant.Test.RaisingTenantMfa, :resolve, ["tenant_key"]})
@@ -49,6 +58,44 @@ defmodule AshReplicant.ApplyTest do
 
     resources do
       allow_unregistered?(true)
+    end
+  end
+
+  # U3/D4: an EMBEDDED-QUOTE mirror table. Ecto's identifier policy forbids `"`
+  # in table names on the ASH path, so this resource deliberately has NO Ash
+  # writes driven against it — the truncate `:mirror` path issues only the raw
+  # tenant-blind DELETE, whose exact construction (PG-canonical `""` doubling)
+  # is what this fixture pins. A bare `"#{table}"` interpolation would break
+  # out of the quoting; the Sql home must render `"ord""ers"` and delete
+  # EXACTLY that table while the same-schema decoy `orders` survives.
+  defmodule EmbeddedQuoteTruncate do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.ApplyTest.MirrorTruncateDomain,
+      validate_domain_inclusion?: false,
+      data_layer: AshPostgres.DataLayer,
+      extensions: [AshReplicant.Resource]
+
+    postgres do
+      table "ord\"ers"
+      repo AshReplicant.TestRepo
+    end
+
+    replicant do
+      source_table("embedded_quote_src")
+      on_truncate(:mirror)
+    end
+
+    attributes do
+      attribute :id, :string do
+        primary_key? true
+        allow_nil? false
+        public? true
+      end
+    end
+
+    actions do
+      defaults [:read, :destroy, create: :*, update: :*]
     end
   end
 
@@ -333,6 +380,38 @@ defmodule AshReplicant.ApplyTest do
 
     assert %ReassignOrder{note: "n"} =
              Ash.get!(ReassignOrder, "p2", tenant: "org_2", authorize?: false)
+  end
+
+  describe "identifier quoting drives the raw truncate SQL (U3/D4)" do
+    setup do
+      q = &Ecto.Adapters.SQL.query!(AshReplicant.TestRepo, &1, [])
+
+      q.("DROP TABLE IF EXISTS \"ord\"\"ers\"")
+      q.("CREATE TABLE \"ord\"\"ers\" (id text primary key)")
+
+      on_exit(fn -> q.("DROP TABLE IF EXISTS \"ord\"\"ers\"") end)
+
+      :ok
+    end
+
+    # RED capability: a bare `"#{table}"` interpolation renders
+    # `DELETE FROM "public"."ord"ers"` — a Postgres syntax error, the raised
+    # error is scrubbed to `{:error, %Error{}}`, and this `assert :ok` fails.
+    test "the :mirror truncate DELETE doubles the embedded quote and hits exactly that table" do
+      q = &Ecto.Adapters.SQL.query!(AshReplicant.TestRepo, &1, [])
+      q.("INSERT INTO \"ord\"\"ers\" VALUES ('q1')")
+
+      cfg = %{
+        resolver_index: %{{"public", "embedded_quote_src"} => EmbeddedQuoteTruncate},
+        repo: AshReplicant.TestRepo,
+        authorize?: false
+      }
+
+      assert :ok = Apply.apply_change(cfg, change(:truncate, "embedded_quote_src", nil))
+
+      assert q.("SELECT count(*) FROM \"ord\"\"ers\"").rows == [[0]],
+             "the embedded-quote table must be wiped by the correctly doubled ident"
+    end
   end
 
   test "on_truncate :mirror clears a NON-global tenant resource tenant-blind (no TenantRequired dead-end)" do

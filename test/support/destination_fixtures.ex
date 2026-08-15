@@ -3023,3 +3023,142 @@ defmodule AshReplicant.Test.DestinationFixtures do
       slot_name: "destination_fixture_slot"
   end
 end
+
+# --- U3/D4 admission-time identifier-validation fixtures (top level: the
+# manifest walk reflects on these through Ash.Domain.Info, which requires
+# fully-registered Spark DSL modules) ---
+
+defmodule AshReplicant.Test.DestinationFixtures.BadTableDomain do
+  @moduledoc false
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource AshReplicant.Test.DestinationFixtures.BadTableRoot
+    resource AshReplicant.Test.Checkpoint
+  end
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.BadTableRoot do
+  @moduledoc false
+  use Ash.Resource,
+    domain: AshReplicant.Test.DestinationFixtures.BadTableDomain,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshReplicant.Resource]
+
+  postgres do
+    table "bad\tname"
+    repo AshReplicant.TestRepo
+  end
+
+  replicant do
+    source_table("bad_table_source")
+  end
+
+  attributes do
+    uuid_primary_key :id
+  end
+
+  actions do
+    defaults [:read, :destroy]
+
+    create :create do
+      primary? true
+      accept []
+    end
+  end
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.BadSchemaDomain do
+  @moduledoc false
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource AshReplicant.Test.DestinationFixtures.BadSchemaRoot
+    resource AshReplicant.Test.Checkpoint
+  end
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.BadSchemaRoot do
+  @moduledoc false
+  use Ash.Resource,
+    domain: AshReplicant.Test.DestinationFixtures.BadSchemaDomain,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshReplicant.Resource]
+
+  postgres do
+    table "bad_schema_roots"
+    schema "bad\nschema"
+    repo AshReplicant.TestRepo
+  end
+
+  replicant do
+    source_table("bad_schema_source")
+  end
+
+  attributes do
+    uuid_primary_key :id
+  end
+
+  actions do
+    defaults [:read, :destroy]
+
+    create :create do
+      primary? true
+      accept []
+    end
+  end
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.BadWindowDomain do
+  @moduledoc false
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource AshReplicant.Test.DestinationFixtures.BadWindowVersion
+    resource AshReplicant.Test.Checkpoint
+  end
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.BadWindowVersion do
+  @moduledoc false
+  use Ash.Resource,
+    domain: AshReplicant.Test.DestinationFixtures.BadWindowDomain,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshReplicant.Resource]
+
+  postgres do
+    table "bad_window_versions"
+    repo AshReplicant.TestRepo
+  end
+
+  replicant do
+    source_table("bad_window_source")
+    history_strategy(:scd2)
+    history_business_key([:order_id])
+    upsert_identity(:bad_window_version)
+    history_close_action(:close_version)
+    history_current_attribute(:is_current)
+    history_valid_to_timestamp_attribute(:valid_to_ts)
+  end
+
+  attributes do
+    uuid_primary_key :id
+    attribute :order_id, :string, allow_nil?: false, public?: true
+    attribute :valid_from_lsn, :integer, allow_nil?: false, public?: true
+    attribute :valid_to_lsn, :integer, allow_nil?: true, public?: true
+    attribute :valid_to_ts, :utc_datetime_usec, source: :"bad\nts", public?: true
+    attribute :is_current, :boolean, allow_nil?: false, default: true, public?: true
+  end
+
+  identities do
+    identity :bad_window_version, [:order_id, :valid_from_lsn]
+  end
+
+  actions do
+    defaults [:read, :destroy, create: :*, update: :*]
+
+    update :close_version do
+      accept [:valid_to_lsn, :valid_to_ts, :is_current]
+    end
+  end
+end

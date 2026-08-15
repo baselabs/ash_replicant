@@ -4,6 +4,7 @@ defmodule AshReplicant.Destination do
   alias AshReplicant.DestinationParticipant
   alias AshReplicant.DestinationParticipant.{ActionRef, Context, ReplayIdentity}
   alias AshReplicant.Resource.Info
+  alias AshReplicant.Sql
   alias Ecto.Adapters.SQL
   alias Spark.Dsl.Extension, as: DslExtension
 
@@ -570,6 +571,7 @@ defmodule AshReplicant.Destination do
 
       true ->
         with :ok <- validate_resource_repo(resource, repo),
+             :ok <- validate_resource_identifiers(resource),
              %{} = action <- Ash.Resource.Info.action(resource, action_name),
              :ok <- validate_action_tenant_scoping(resource, action),
              {:ok, refs} <- inspect_action(resource, action),
@@ -1135,7 +1137,7 @@ defmodule AshReplicant.Destination do
   defp qualified_relation(prefix, relation) when is_binary(prefix),
     do: quote_ident(prefix) <> "." <> quote_ident(relation)
 
-  defp quote_ident(value), do: ~s("#{String.replace(value, "\"", "\"\"")}")
+  defp quote_ident(value), do: Sql.quote_identifier(value)
 
   defp valid_onetime_response?(%{codec: codec, classify: classifier})
        when is_atom(codec) and is_atom(classifier),
@@ -1237,6 +1239,57 @@ defmodule AshReplicant.Destination do
       {:error, {:destination_participant_mismatch, resource, action.name}}
     end
   end
+
+  # Admission-time identifier hygiene (U3/D4): every identifier the walk reads
+  # — the PGInfo schema/table (the truncate, wipe, and relation targets) and
+  # the SCD2 window columns the on_truncate :close UPDATE interpolates — is
+  # checked by the ONE quoting home's predicate. A control-char/empty
+  # identifier is a misconfiguration and fails at ADMISSION (activation /
+  # after-compile), never interpolating at effect time. Value-free: the reason
+  # names the class, never the identifier.
+  defp validate_resource_identifiers(resource) do
+    identifiers =
+      [
+        AshPostgres.DataLayer.Info.schema(resource),
+        AshPostgres.DataLayer.Info.table(resource)
+        | scd2_window_columns(resource)
+      ]
+      |> Enum.reject(&is_nil/1)
+
+    if Enum.all?(identifiers, &Sql.valid_identifier?/1) do
+      :ok
+    else
+      {:error, {:invalid_destination_config, :identifier}}
+    end
+  end
+
+  # The SCD2 window columns the raw close UPDATE touches (mirrors the column
+  # derivation in Apply.Scd2): the close target column, the optional close
+  # timestamp, and the optional current flag. Source columns (`attr.source`)
+  # carry the same operator-trust boundary as table names.
+  defp scd2_window_columns(resource) do
+    if Info.history_scd2?(resource) do
+      [
+        window_source(Info.replicant_history_valid_to_lsn_attribute!(resource), resource),
+        window_opt(Info.replicant_history_valid_to_timestamp_attribute(resource), resource),
+        window_opt(Info.replicant_history_current_attribute(resource), resource)
+      ]
+    else
+      []
+    end
+  end
+
+  defp window_source(attr, resource) when is_atom(attr) do
+    case Ash.Resource.Info.attribute(resource, attr) do
+      %{source: source} when not is_nil(source) -> to_string(source)
+      _other -> to_string(attr)
+    end
+  end
+
+  defp window_opt({:ok, attr}, resource) when is_atom(attr),
+    do: window_source(attr, resource)
+
+  defp window_opt(_missing, _resource), do: nil
 
   defp validate_resource_repo(resource, repo) do
     raw = DslExtension.get_opt(resource, [:postgres], :repo, nil, false)

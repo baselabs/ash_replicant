@@ -14,7 +14,7 @@ defmodule AshReplicant.Apply.Scd2 do
 
   alias AshPostgres.DataLayer.Info, as: PGInfo
   alias AshReplicant.Apply.Context
-  alias AshReplicant.{Error, Resolver}
+  alias AshReplicant.{Error, Resolver, Sql}
   alias AshReplicant.Resource.Info
   alias Ecto.Adapters.SQL
 
@@ -102,7 +102,13 @@ defmodule AshReplicant.Apply.Scd2 do
 
     SQL.query!(
       config.repo,
-      ~s(UPDATE "#{schema}"."#{table}" SET #{sets} WHERE "#{to_lsn}" IS NULL),
+      "UPDATE " <>
+        Sql.quote_identifier(schema) <>
+        "." <>
+        Sql.quote_identifier(table) <>
+        " SET " <>
+        sets <>
+        " WHERE " <> Sql.quote_identifier(to_lsn) <> " IS NULL",
       params
     )
 
@@ -112,7 +118,13 @@ defmodule AshReplicant.Apply.Scd2 do
   defp mirror_wipe(config, resource) do
     schema = PGInfo.schema(resource) || "public"
     table = PGInfo.table(resource)
-    SQL.query!(config.repo, ~s(DELETE FROM "#{schema}"."#{table}"), [])
+
+    SQL.query!(
+      config.repo,
+      "DELETE FROM " <> Sql.quote_identifier(schema) <> "." <> Sql.quote_identifier(table),
+      []
+    )
+
     :ok
   end
 
@@ -126,7 +138,7 @@ defmodule AshReplicant.Apply.Scd2 do
   defp build_set(pairs) do
     {frags, params, _i} =
       Enum.reduce(pairs, {[], [], 1}, fn {col, val}, {frags, params, i} ->
-        {["\"#{col}\" = $#{i}" | frags], [val | params], i + 1}
+        {[Sql.quote_identifier(col) <> " = $#{i}" | frags], [val | params], i + 1}
       end)
 
     {frags |> Enum.reverse() |> Enum.join(", "), Enum.reverse(params)}

@@ -997,4 +997,33 @@ defmodule AshReplicant.DestinationTest do
     refute function_exported?(DestinationFixtures.Sink, :snapshot_progress, 0)
     refute function_exported?(DestinationFixtures.Sink, :append, 2)
   end
+
+  describe "admission-time identifier validation (U3/D4)" do
+    test "a control-character table name fails the manifest before any SQL" do
+      assert {:error, {:invalid_destination_config, :identifier}} =
+               Destination.manifest(%{
+                 repo: AshReplicant.TestRepo,
+                 domains: [DestinationFixtures.BadTableDomain],
+                 checkpoint_resource: AshReplicant.Test.Checkpoint
+               })
+    end
+
+    test "a control-character schema name fails the manifest" do
+      assert {:error, {:invalid_destination_config, :identifier}} =
+               Destination.manifest(%{
+                 repo: AshReplicant.TestRepo,
+                 domains: [DestinationFixtures.BadSchemaDomain],
+                 checkpoint_resource: AshReplicant.Test.Checkpoint
+               })
+    end
+
+    test "a control-character SCD2 window column fails the manifest" do
+      assert {:error, {:invalid_destination_config, :identifier}} =
+               Destination.manifest(%{
+                 repo: AshReplicant.TestRepo,
+                 domains: [DestinationFixtures.BadWindowDomain],
+                 checkpoint_resource: AshReplicant.Test.Checkpoint
+               })
+    end
+  end
 end
