@@ -1,6 +1,8 @@
 defmodule AshReplicant.TelemetryTest do
   use ExUnit.Case, async: true
 
+  import ExUnit.CaptureLog
+
   alias AshReplicant.Telemetry
 
   test "validate! passes an allowlisted map and returns it" do
@@ -207,6 +209,27 @@ defmodule AshReplicant.TelemetryTest do
 
     refute inspect(meta) =~ "SENTINEL", "the raw exception message must never reach handlers"
     assert Map.has_key?(meta, :error_class)
+
+    :telemetry.detach(ref)
+  end
+
+  test "span/3 with a MALFORMED fun result leaks no value and returns it (cross-vendor final5)" do
+    ref =
+      :telemetry_test.attach_event_handlers(self(), [
+        [:ash_replicant, :sink, :start],
+        [:ash_replicant, :sink, :stop]
+      ])
+
+    sentinel_out = {:ok, "SENTINEL-SPAN-MALFORMED-3ea1"}
+
+    returned =
+      capture_log(fn ->
+        assert ^sentinel_out = Telemetry.span(:sink, %{commit_lsn: 1}, fn -> sentinel_out end)
+      end)
+
+    assert_received {[:ash_replicant, :sink, :stop], ^ref, _, meta}
+    refute inspect(meta) =~ "SENTINEL"
+    assert returned =~ "" or is_binary(returned)
 
     :telemetry.detach(ref)
   end

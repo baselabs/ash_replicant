@@ -97,7 +97,16 @@ defmodule AshReplicant.Telemetry do
           :erlang.raise(kind, value, __STACKTRACE__)
       end
 
-    {_, stop_meta} = wrapped = result
+    # A malformed fun result (anything but {term, map}) must not leak its
+    # value through a BadMapError on the merge — the stop event falls back
+    # to the start metadata and the VALUE itself is returned untouched
+    # (cross-vendor final5).
+    {value, stop_meta} =
+      case result do
+        {v, meta} when is_map(meta) -> {v, meta}
+        v -> {v, %{}}
+      end
+
     stopped = System.monotonic_time() - start
 
     :telemetry.execute(
@@ -106,7 +115,7 @@ defmodule AshReplicant.Telemetry do
       validate!(Map.merge(start_meta, stop_meta))
     )
 
-    elem(wrapped, 0)
+    value
   end
 
   # The structural class only (the Splode class field when the raised term
