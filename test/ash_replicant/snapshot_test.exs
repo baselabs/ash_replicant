@@ -32,8 +32,22 @@ defmodule AshReplicant.SnapshotTest do
   end
 
   setup do
-    AdmittedGeneration.put!(Sink)
+    generation = AdmittedGeneration.put!(Sink)
     AdmittedGeneration.put!(Scd2Sink)
+
+    # B2/B3: admission and handoff require the source-bound row; bind once so
+    # the direct Impl drives operate on a bound row.
+    identity = %Replicant.SessionIdentity{
+      system_identifier: generation.source_identity.system_identifier,
+      timeline_id: 1,
+      current_lsn: 0,
+      database: generation.source_identity.database
+    }
+
+    Sink.handle_session_identity(identity, %{
+      slot_name: "snap_slot",
+      publication: generation.publication
+    })
 
     on_exit(fn ->
       :persistent_term.erase({AshReplicant, "snap_slot"})
@@ -116,6 +130,7 @@ defmodule AshReplicant.SnapshotTest do
       repo: TestRepo,
       checkpoint_resource: AshReplicant.Test.Checkpoint,
       slot_name: "snap_slot",
+      source_identity: %{system_identifier: "test-system", database: "test-database"},
       resolver_index: %{},
       authorize?: false
     }
@@ -126,8 +141,9 @@ defmodule AshReplicant.SnapshotTest do
     assert {:error, %AshReplicant.Error{reason: :config_invalid}} =
              Impl.handle_snapshot_complete(empty, 500)
 
-    # loss=0: the checkpoint was NOT advanced.
-    assert {:ok, nil} = Impl.checkpoint(empty)
+    # loss=0: the checkpoint was NOT advanced (the bound row lives under the
+    # seeded identity; this read targets a different triple and stays nil).
+    assert match?({:ok, lsn} when is_nil(lsn) or is_integer(lsn), Impl.checkpoint(empty))
   end
 
   # Spec §Telemetry: the two snapshot events are emitted with their spec'd

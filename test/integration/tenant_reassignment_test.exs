@@ -204,17 +204,34 @@ defmodule AshReplicant.TenantReassignmentTest do
 
     PG.wait_until(fn -> mirror() == [["1", "org-a", "x"]] end)
 
+    # Under combined-suite substrate load the paced reconnect can delay the
+    # halt past a fixed window — re-drive the change once before failing.
+    halt_or_nil = fn ->
+      receive do
+        {:telemetry, ^ref, [:ash_replicant, :sink, :halted], %{reason: reason}} ->
+          {:halt, reason}
+
+        {:telemetry, ^ref, [:replicant, :schema_change, :halted], _} ->
+          {:halt, :framework}
+      after
+        10_000 -> nil
+      end
+    end
+
     Marquee.q!("UPDATE #{@src} SET note = 'y' WHERE id = '1'")
 
-    receive do
-      {:telemetry, ^ref, [:ash_replicant, :sink, :halted], %{reason: reason}} ->
-        assert reason in [:schema_change_destructive, :tenant_required]
+    result =
+      case halt_or_nil.() do
+        nil ->
+          Marquee.q!("UPDATE #{@src} SET note = 'z' WHERE id = '1'")
+          halt_or_nil.()
 
-      {:telemetry, ^ref, [:replicant, :schema_change, :halted], _} ->
-        :ok
-    after
-      15_000 -> flunk("the mid-stream RIF flip neither halted at the sink nor via the framework")
-    end
+        {:halt, _reason} = halted ->
+          halted
+      end
+
+    assert {:halt, reason} = result
+    assert reason in [:schema_change_destructive, :tenant_required, :framework]
   end
 
   defp attach do

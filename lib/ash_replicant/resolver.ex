@@ -133,14 +133,37 @@ defmodule AshReplicant.Resolver do
   end
 
   # Insert-shaped (see above).
-  # A change with NO :old_record KEY AT ALL is insert-shaped (pgoutput emits
-  # no old tuple for inserts; under DEFAULT identity it ALSO omits it for
-  # non-key updates — the caller routes those here only after its own op
-  # check; the apply paths call this arm for :insert alone).
-  def require_tenant_pair!(resource, %{record: record}, op) when is_map(record) do
+  # Insert-shaped changes (and snapshot batches, which carry no old side).
+  def require_tenant_pair!(resource, %{record: record}, op)
+      when is_map(record) and op in [:insert, :snapshot, :create] do
     with {:ok, new_tenant} <- resolve_side(resource, record, :new, op) do
       {:ok, :same, nil, new_tenant}
     end
+  end
+
+  # An update/delete whose :old_record is MISSING ENTIRELY (nil — the
+  # DEFAULT-replica-identity pgoutput shape: no old tuple is sent when no key
+  # column changed) is the silently-ambiguous case B4 halts — but ONLY for a
+  # TENANT-SCOPED resource (nothing to reassign otherwise; the non-tenant
+  # fixture paths legitimately omit the old side in unit tests).
+  def require_tenant_pair!(resource, %{record: record}, op) when is_map(record) do
+    if tenant_scoped?(resource) do
+      raise Error.exception(
+              reason: :tenant_required,
+              resource: resource,
+              op: op,
+              shape: "side=old"
+            )
+    else
+      with {:ok, new_tenant} <- resolve_side(resource, record, :new, op) do
+        {:ok, :same, nil, new_tenant}
+      end
+    end
+  end
+
+  defp tenant_scoped?(resource) do
+    match?({:ok, _}, Info.replicant_tenant_attribute(resource)) or
+      match?({:ok, _}, Info.replicant_tenant_mfa(resource))
   end
 
   defp resolve_side(resource, row, side, op) do

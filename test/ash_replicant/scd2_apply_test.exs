@@ -349,10 +349,14 @@ defmodule AshReplicant.Scd2ApplyTest do
     )
 
     # An UPDATE to t1's "x" closes t1's current version and opens a new one — the close
-    # `bulk_update` is scoped to t1's resolved tenant.
+    # `bulk_update` is scoped to t1's resolved tenant. B4: a tenant-scoped update
+    # carries old_record (the RIF shape) so the prelude can classify :same.
     AshReplicant.Apply.apply_change(
       ps_config,
-      change(:update, %{"order_id" => "x", "org_id" => "t1", "amount" => "2"}, 200),
+      change(:update, %{"order_id" => "x", "org_id" => "t1", "amount" => "2"}, 200, %{
+        "order_id" => "x",
+        "org_id" => "t1"
+      }),
       nil
     )
 

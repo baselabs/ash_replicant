@@ -100,10 +100,6 @@ defmodule AshReplicant.Sink.Impl do
   # connection (the same preflight machinery); catalog faults defer to the
   # destination-transaction bind (an unreachable source cannot stream anyway).
   defp reconnect_coverage_check(config) do
-    IO.inspect({:dbg_rc, Map.get(config, :source_connection) != nil, config.publication},
-      label: DBGRC
-    )
-
     connection = Map.get(config, :source_connection) || []
 
     AshReplicant.Coverage.reconnect_check(

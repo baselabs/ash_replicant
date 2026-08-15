@@ -93,4 +93,49 @@ defmodule AshReplicant.SchemaChangeTest do
     assert {:error, %AshReplicant.Error{}} =
              Sink.handle_schema_change(sc(:destructive, "unmapped_tbl"), %{relation: :rel})
   end
+
+  describe "the B3/B4 carve-out — replica_identity_changed and type_changed are never ignorable" do
+    test "an :ignore-declared resource still halts on replica_identity_changed" do
+      config = %{resolver_index: %{{"public", "ignore_tbl"} => IgnoreMirror}}
+
+      assert {:error, %AshReplicant.Error{reason: :schema_change_destructive}} =
+               Impl.handle_schema_change(
+                 config,
+                 sc_class(:destructive, :replica_identity_changed, "ignore_tbl"),
+                 %{relation: :rel}
+               )
+    end
+
+    test "an :ignore-declared resource still halts on type_changed" do
+      config = %{resolver_index: %{{"public", "ignore_tbl"} => IgnoreMirror}}
+
+      assert {:error, %AshReplicant.Error{reason: :schema_change_destructive}} =
+               Impl.handle_schema_change(
+                 config,
+                 sc_class(:destructive, :type_changed, "ignore_tbl"),
+                 %{relation: :rel}
+               )
+    end
+
+    test "a still-ignorable destructive class keeps the declared :ignore policy" do
+      config = %{resolver_index: %{{"public", "ignore_tbl"} => IgnoreMirror}}
+
+      assert :ok =
+               Impl.handle_schema_change(
+                 config,
+                 sc_class(:destructive, :column_dropped, "ignore_tbl"),
+                 %{relation: :rel}
+               )
+    end
+  end
+
+  defp sc_class(kind, change_class, table) do
+    %Replicant.SchemaChange{
+      kind: kind,
+      change: change_class,
+      schema: "public",
+      table: table,
+      detail: "mutation probe"
+    }
+  end
 end

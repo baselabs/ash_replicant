@@ -464,15 +464,30 @@ defmodule AshReplicant.Coverage do
   """
   @spec source_mapped_set(module()) :: MapSet.t(String.t())
   def source_mapped_set(resource) do
-    {skip, _cloak, attrs} = AshReplicant.Resolver.upsert_reflection(resource)
+    {skip, cloak, attrs} = AshReplicant.Resolver.upsert_reflection(resource)
 
     window = sink_generated_attribute_atoms(resource)
+
+    # AshCloak replaces the plaintext attribute with encrypted_<name>; the
+    # SOURCE column keeps the plaintext name — reverse-map so coverage judges
+    # the real source column (the contract builder does the same).
+    cloak_sources =
+      cloak
+      |> Enum.map(&Atom.to_string/1)
+      |> MapSet.new()
 
     attrs
     |> MapSet.to_list()
     |> Kernel.--(skip)
     |> Kernel.--(window)
-    |> Enum.map(&Atom.to_string/1)
+    |> Enum.map(fn attr ->
+      name = Atom.to_string(attr)
+
+      case String.replace_prefix(name, "encrypted_", "") do
+        ^name -> name
+        plain -> if plain in cloak_sources, do: plain, else: name
+      end
+    end)
     |> MapSet.new()
   end
 
