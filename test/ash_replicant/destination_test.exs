@@ -507,6 +507,17 @@ defmodule AshReplicant.DestinationTest do
              })
   end
 
+  test "a SetContext cannot pin the framework-written bulk_create index (security F1)" do
+    assert {:error,
+            {:destination_participant_invalid, DestinationFixtures.ForgedBulkIndexRoot, :create,
+             Ash.Resource.Change.SetContext}} =
+             Destination.manifest(%{
+               repo: AshReplicant.TestRepo,
+               domains: [DestinationFixtures.ForgedBulkIndexDomain],
+               checkpoint_resource: AshReplicant.Test.Checkpoint
+             })
+  end
+
   test "a build preparation carrying a context option is rejected" do
     assert {:error,
             {:destination_participant_invalid, DestinationFixtures.BuildContextRedirectRoot,

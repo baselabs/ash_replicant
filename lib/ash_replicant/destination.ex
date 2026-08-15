@@ -1093,7 +1093,13 @@ defmodule AshReplicant.Destination do
     end
   end
 
-  @sink_owned_context_keys ~w(data_layer shared ash_replicant_operation)a
+  # :bulk_create is sink-adjacent framework state: the snapshot bulk path's
+  # operation keys derive their per-row ordinal axis from
+  # changeset.context[:bulk_create][:index], which the framework writes — a
+  # host SetContext over it would alias every row of the batch onto ONE
+  # operation key (the R1 replay-suppression class). Rejecting it at
+  # admission keeps the axis non-host-controllable (security lens F1).
+  @sink_owned_context_keys ~w(data_layer shared ash_replicant_operation bulk_create)a
 
   for key <- @sink_owned_context_keys do
     string_key = Atom.to_string(key)

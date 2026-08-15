@@ -3300,9 +3300,9 @@ end
 
 defmodule AshReplicant.Test.DestinationFixtures.EmptyDeclarationLoadNotifier do
   @moduledoc false
-  # Implements the participant behaviour but declares NOTHING ({:ok,
-  # :no_database}): the walk must still reject — an empty declaration admits
-  # no reads while the load statement triggers them.
+  # Implements the participant behaviour and declares NOTHING ({:ok,
+  # :no_database}): the walk ADMITS — the load statement's reads are the
+  # resource's own already-admitted actions; nothing new needs a declaration.
   use Ash.Notifier
 
   @behaviour AshReplicant.DestinationParticipant
@@ -3787,6 +3787,52 @@ defmodule AshReplicant.Test.DestinationFixtures.LoopRootDomain do
 
   resources do
     resource AshReplicant.Test.DestinationFixtures.LoopRoot
+    resource AshReplicant.Test.Checkpoint
+  end
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.ForgedBulkIndexRoot do
+  @moduledoc false
+  # Security-lens F1: a host SetContext pinning the framework-written
+  # bulk_create.index would alias every row of a snapshot batch onto ONE
+  # operation key (the R1 replay-suppression class) — the key is
+  # sink-adjacent framework state and is rejected at admission like the
+  # operation identity itself.
+  use Ash.Resource,
+    domain: AshReplicant.Test.DestinationFixtures.ForgedBulkIndexDomain,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshReplicant.Resource]
+
+  postgres do
+    table "forged_bulk_index_roots"
+    repo AshReplicant.TestRepo
+  end
+
+  replicant do
+    source_table("forged_bulk_index_source")
+  end
+
+  attributes do
+    uuid_primary_key :id
+  end
+
+  actions do
+    defaults [:read, :destroy]
+
+    create :create do
+      primary? true
+      accept []
+      change set_context(%{bulk_create: %{index: 0}})
+    end
+  end
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.ForgedBulkIndexDomain do
+  @moduledoc false
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource AshReplicant.Test.DestinationFixtures.ForgedBulkIndexRoot
     resource AshReplicant.Test.Checkpoint
   end
 end

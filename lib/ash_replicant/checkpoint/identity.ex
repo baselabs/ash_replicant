@@ -11,6 +11,7 @@ defmodule AshReplicant.Checkpoint.Identity do
   # governing design's "mapping-incompatible" halt class. Both sides of the
   # line are mechanically detectable because the declared skip set is recorded.
 
+  alias AshReplicant.Sql
   alias AshReplicant.{Error, Resource.Info, Resolver}
 
   @contract_version 1
@@ -273,7 +274,7 @@ defmodule AshReplicant.Checkpoint.Identity do
 
       # Legacy (slot-only) shape: count the rows that block the migration.
       {:ok, %{rows: [[0]]}} ->
-        case repo.query("SELECT count(*) FROM #{table}", []) do
+        case repo.query("SELECT count(*) FROM " <> Sql.quote_identifier(table), []) do
           {:ok, %{rows: [[count]]}} -> {:ok, count}
           # A count failure must not read as "nothing ambiguous" — surface it.
           _ -> {:error, :checkpoint_probe_failed}
