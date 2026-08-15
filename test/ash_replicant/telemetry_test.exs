@@ -49,4 +49,123 @@ defmodule AshReplicant.TelemetryTest do
       Telemetry.span(:sink, %{commit_lsn: 1}, fn -> {:done, %{secret_value: "4111"}} end)
     end
   end
+
+  describe "typed metadata values (U3/D5)" do
+    test "a binary under the atom-typed reason key raises, naming key + expected type only" do
+      e =
+        assert_raise ArgumentError, ~r/reason/, fn ->
+          Telemetry.validate!(%{reason: "SENTINEL"})
+        end
+
+      refute e.message =~ "SENTINEL", "the offending VALUE never renders"
+      assert e.message =~ "atom", "the expected type renders"
+    end
+
+    @type_violations [
+      {:commit_lsn, "5"},
+      {:commit_lsn, -1},
+      {:resource, "Foo"},
+      {:table, :orders},
+      {:change_count, "3"},
+      {:change_count, -1},
+      {:tenant?, "yes"},
+      {:tenant?, nil},
+      {:duration, -1},
+      {:duration, "1"},
+      {:error_class, "invalid"},
+      {:kind, "identity"},
+      {:slot_name, 5}
+    ]
+
+    for {key, bad} <- @type_violations do
+      test "off-type #{inspect(key)} = #{inspect(bad)} raises naming key + expected type" do
+        e =
+          assert_raise ArgumentError, fn ->
+            Telemetry.validate!(%{unquote(key) => unquote(bad)})
+          end
+
+        assert e.message =~ to_string(unquote(key)),
+               "the KEY renders (structural, not a value)"
+      end
+    end
+
+    test "typed keys accept their legit shapes incl. nil where allowed" do
+      meta = %{
+        commit_lsn: nil,
+        resource: Foo,
+        table: "orders",
+        change_count: 0,
+        tenant?: false,
+        duration: 17,
+        reason: :halted,
+        error_class: :invalid,
+        kind: :coverage,
+        slot_name: "slot"
+      }
+
+      assert Telemetry.validate!(meta) == meta
+    end
+
+    test "the off-allowlist raise names the COUNT of offending keys, never the keys" do
+      sentinel_key = String.to_atom("row" <> "-value-key-SENTINEL")
+
+      e =
+        assert_raise ArgumentError, fn ->
+          Telemetry.validate!(%{sentinel_key => 1})
+        end
+
+      refute e.message =~ "SENTINEL", "a row value in KEY position must never render"
+      assert e.message =~ "1", "the count of offending keys renders"
+    end
+  end
+
+  describe "closed measurement keys + numeric shape (U3/D5)" do
+    test "an off-set measurement key raises (byte_size reserved for C1)" do
+      e =
+        assert_raise ArgumentError, fn ->
+          Telemetry.event([:ash_replicant, :sink, :applied], %{last_value: 5}, %{commit_lsn: 1})
+        end
+
+      assert e.message =~ "measurement"
+    end
+
+    test "a non-numeric measurement raises naming key + expected shape" do
+      assert_raise ArgumentError, ~r/count/, fn ->
+        Telemetry.event([:ash_replicant, :sink, :applied], %{count: "1"}, %{commit_lsn: 1})
+      end
+    end
+
+    test "a negative measurement raises" do
+      assert_raise ArgumentError, fn ->
+        Telemetry.event([:ash_replicant, :sink, :applied], %{count: -1}, %{commit_lsn: 1})
+      end
+    end
+
+    test "non-finite measurements cannot reach the gate on the BEAM (documented)" do
+      # The BEAM cannot produce NaN/inf floats at all: arithmetic raises
+      # badarith on the constructions (0.0/0.0, 1.0e308*10), and decoding the
+      # raw IEEE754 payloads via a float bit-match is REJECTED by the unifier
+      # (verified live). The validator's finiteness clause is therefore
+      # defensive documentation, not a reachable cell on this platform — this
+      # test pins that unconstructibility so a future port knows the gap.
+      assert_raise ArithmeticError, fn -> 0.0 / 0.0 end
+      assert_raise MatchError, fn -> <<_::float-big-64>> = <<0x7FF8000000000000::64>> end
+    end
+
+    test "the closed measurement set passes (count, change_count, duration)" do
+      ref = :telemetry_test.attach_event_handlers(self(), [[:ash_replicant, :sink, :applied]])
+
+      :ok =
+        Telemetry.event(
+          [:ash_replicant, :sink, :applied],
+          %{count: 1, change_count: 2, duration: 3.5},
+          %{commit_lsn: 1}
+        )
+
+      assert_received {[:ash_replicant, :sink, :applied], ^ref,
+                       %{count: 1, change_count: 2, duration: 3.5}, %{commit_lsn: 1}}
+
+      :telemetry.detach(ref)
+    end
+  end
 end
