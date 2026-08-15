@@ -264,15 +264,24 @@ defmodule AshReplicant.ScrubBoundaryTest do
       rendered = Exception.message(scrubbed) <> inspect(scrubbed)
       refute rendered =~ @sentinel_throw, "a thrown Error's shape must never render"
 
-      # A forged REASON is dropped too (cross-vendor final: scrub must not
+      # A forged REASON is dropped too (cross-vendor finals: scrub must not
       # trust any field of an incoming struct — only the closed typed shape
-      # survives).
+      # survives, and a host can MINT an atom from a row value, so the
+      # atom class alone is not closure).
       forged = %AshReplicant.Error{reason: @sentinel_throw, shape: @sentinel_throw}
 
       scrubbed2 = AshReplicant.Error.scrub_caught(forged, nil, :sink)
 
       assert scrubbed2.reason == :sink_failed
       refute Exception.message(scrubbed2) <> inspect(scrubbed2) =~ @sentinel_throw
+
+      minted_atom = String.to_atom(@sentinel_throw)
+      forged_atom = %AshReplicant.Error{reason: minted_atom}
+
+      scrubbed3 = AshReplicant.Error.scrub_caught(forged_atom, nil, :sink)
+
+      assert scrubbed3.reason == :sink_failed,
+             "a host-minted atom reason is not in the library's closed set — dropped"
 
       # The one structural tuple reason survives (the library's own runtime
       # reason for the onetime-store preflight halt).

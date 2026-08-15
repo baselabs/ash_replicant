@@ -63,4 +63,55 @@ defmodule AshReplicant.ErrorTest do
     # non-atom __struct__ falls through to the value-free _other clause: no shape set
     assert err.shape == nil
   end
+
+  test "the closed reason set equals every reason minted in lib (live pin)" do
+    minted =
+      Path.wildcard("lib/**/*.ex")
+      |> Enum.flat_map(fn path ->
+        File.read!(path)
+        |> String.split("\n")
+        |> Enum.flat_map(fn line ->
+          case Regex.run(~r/reason: :([a-z_]+)/, line) do
+            [_, r] -> [r]
+            nil -> []
+          end
+        end)
+      end)
+      |> Enum.uniq()
+      |> MapSet.new()
+
+    closed =
+      Enum.flat_map(
+        [
+          :sink_failed,
+          :tenant_required,
+          :tenant_resolution_failed,
+          :schema_change_destructive,
+          :truncate_halt,
+          :duplicate_source,
+          :config_invalid,
+          :source_identity_mismatch,
+          :source_identity_rebound,
+          :source_timeline_changed,
+          :source_behind_watermark,
+          :publication_contract_incompatible,
+          :source_column_missing,
+          :source_column_unmapped,
+          :source_replica_identity,
+          :source_skip_stale,
+          :source_table_missing,
+          :source_table_unmapped,
+          :source_type_invalid,
+          :checkpoint_unbound,
+          :checkpoint_adopt_conflict,
+          :checkpoint_adopt_invalid,
+          :checkpoint_legacy_rows_present
+        ],
+        &[Atom.to_string(&1)]
+      )
+      |> MapSet.new()
+
+    assert MapSet.subset?(minted, closed),
+           "reasons minted in lib but not in the closed set: #{inspect(MapSet.to_list(MapSet.difference(minted, closed)))}"
+  end
 end

@@ -76,13 +76,45 @@ defmodule AshReplicant.Error do
     %__MODULE__{reason: :sink_failed, resource: resource, op: op}
   end
 
-  # The closed reason shape: an atom (every reason this library mints) or
-  # the one structural tuple. Anything else a forged struct carries is
-  # dropped — value-free by construction, not by trust.
-  defp typed_reason(reason) when is_atom(reason), do: reason
+  # The closed reason shape: one of the atoms THIS library mints, or the
+  # one structural tuple with a library-minted tag. Anything else a forged
+  # struct carries is dropped — value-free by construction, not by trust (a
+  # host can mint an atom from a row value via String.to_atom/1; only the
+  # finite closed set survives).
+  # The complete mint inventory (grep reason: across lib/ + the bind-conflict
+  # rollback atoms): every reason the library itself can raise.
+  @closed_reasons [
+    :sink_failed,
+    :tenant_required,
+    :tenant_resolution_failed,
+    :schema_change_destructive,
+    :truncate_halt,
+    :duplicate_source,
+    :config_invalid,
+    :source_identity_mismatch,
+    :source_identity_rebound,
+    :source_timeline_changed,
+    :source_behind_watermark,
+    :publication_contract_incompatible,
+    :source_column_missing,
+    :source_column_unmapped,
+    :source_replica_identity,
+    :source_skip_stale,
+    :source_table_missing,
+    :source_table_unmapped,
+    :source_type_invalid,
+    :checkpoint_unbound,
+    :checkpoint_adopt_conflict,
+    :checkpoint_adopt_invalid,
+    :checkpoint_legacy_rows_present
+  ]
 
-  defp typed_reason({:invalid_destination_config, tag}) when is_atom(tag),
-    do: {:invalid_destination_config, tag}
+  for reason <- @closed_reasons do
+    defp typed_reason(unquote(reason)), do: unquote(reason)
+  end
+
+  defp typed_reason({:invalid_destination_config, :onetime_store}),
+    do: {:invalid_destination_config, :onetime_store}
 
   defp typed_reason(_other), do: :sink_failed
 end
