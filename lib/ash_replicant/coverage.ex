@@ -261,6 +261,11 @@ defmodule AshReplicant.Coverage do
   def type_allowed?(target_type, source_type) do
     base = unwrapped_type(target_type)
 
+    # The contract's types carry Ash's runtime module atoms (e.g. Ash.Type.String
+    # for the :string builtin — OBSERVED from relation_facts on the live
+    # substrate); normalize to the builtin literal before the matrix lookup.
+    base = builtin_type(base)
+
     cond do
       not is_atom(base) ->
         # Unknown/custom target type: not statically judgable.
@@ -280,6 +285,29 @@ defmodule AshReplicant.Coverage do
 
   defp unwrapped_type({:array, inner}), do: unwrapped_type(inner)
   defp unwrapped_type(other), do: other
+
+  # The contract's types carry Ash's runtime module atoms (Ash.Type.String
+  # for the :string builtin — OBSERVED live); Ash.Type.storage_type/2
+  # normalizes them to the literal the matrix keys on. Unknown/custom types
+  # keep their atom and hit the fail-open-for-unknown boundary.
+  defp builtin_type({:array, inner}), do: {:array, builtin_type(inner)}
+
+  defp builtin_type(base) when is_atom(base) do
+    cond do
+      Map.has_key?(@type_matrix, base) ->
+        base
+
+      Code.ensure_loaded?(base) and function_exported?(base, :storage_type, 1) ->
+        Ash.Type.storage_type(base)
+
+      true ->
+        base
+    end
+  catch
+    _, _ -> base
+  end
+
+  defp builtin_type(other), do: other
 
   # --- delivery-side accounting guards ---
 

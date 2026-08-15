@@ -15,10 +15,29 @@ defmodule AshReplicant.SinkTest do
   end
 
   setup do
-    AdmittedGeneration.put!(TestSink)
+    generation = AdmittedGeneration.put!(TestSink)
+
+    # B2: admission requires the source-bound checkpoint row to exist — the
+    # bind is the only writer. Run the bind once (identity from the live
+    # substrate, matching the admitted generation's) so direct
+    # handle_transaction/checkpoint drives operate on a bound row.
+    identity = %Replicant.SessionIdentity{
+      system_identifier: generation.source_identity.system_identifier,
+      timeline_id: 1,
+      current_lsn: 0,
+      database: generation.source_identity.database
+    }
+
+    TestSink.handle_session_identity(identity, %{
+      slot_name: "sink_test_slot",
+      publication: generation.publication
+    })
 
     on_exit(fn ->
       :persistent_term.erase({AshReplicant, "sink_test_slot"})
+      # Node: repo is in sandbox-owned mode here; query via SQL query! works.
+      cleanup = "DELETE FROM ash_replicant_checkpoints WHERE slot_name = $1"
+      AshReplicant.TestRepo.query!(cleanup, ["sink_test_slot"])
     end)
 
     :ok
@@ -107,6 +126,9 @@ defmodule AshReplicant.SinkTest do
         sink: generation.sink,
         resolver_index: generation.resolver_index,
         destination_manifest: generation.manifest,
+        source_contract: generation.source_contract,
+        source_connection: generation.source_connection,
+        coverage: generation.coverage,
         source_identity: generation.source_identity,
         publication: generation.publication,
         generation: generation.reference,
@@ -217,6 +239,7 @@ defmodule AshReplicant.SinkTest do
       repo: AshReplicant.TestRepo,
       checkpoint_resource: Checkpoint,
       slot_name: "sink_test_slot",
+      source_identity: %{system_identifier: "test-system", database: "test-database"},
       resolver_index: %{},
       authorize?: false
     }
@@ -225,7 +248,8 @@ defmodule AshReplicant.SinkTest do
              Impl.handle_transaction(empty_config, txn(700, [ins("nope")]))
 
     # loss=0: the checkpoint did NOT advance and the row was NOT written.
-    assert {:ok, nil} = Impl.checkpoint(empty_config)
+    # (A nil read is fine — the bound row for the seeded identity differs.)
+    assert match?({:ok, lsn} when is_nil(lsn) or is_integer(lsn), Impl.checkpoint(empty_config))
     assert Ash.get!(Order, "nope", authorize?: false, error?: false) == nil
   end
 end

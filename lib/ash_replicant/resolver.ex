@@ -132,6 +132,11 @@ defmodule AshReplicant.Resolver do
     end
   end
 
+  # Insert-shaped (see above).
+  # A change with NO :old_record KEY AT ALL is insert-shaped (pgoutput emits
+  # no old tuple for inserts; under DEFAULT identity it ALSO omits it for
+  # non-key updates — the caller routes those here only after its own op
+  # check; the apply paths call this arm for :insert alone).
   def require_tenant_pair!(resource, %{record: record}, op) when is_map(record) do
     with {:ok, new_tenant} <- resolve_side(resource, record, :new, op) do
       {:ok, :same, nil, new_tenant}
