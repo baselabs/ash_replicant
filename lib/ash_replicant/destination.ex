@@ -20,6 +20,7 @@ defmodule AshReplicant.Destination do
     AshReplicant.Resource.Info,
     AshReplicant.Sink,
     AshReplicant.Sink.Impl,
+    AshReplicant.Sql,
     AshReplicant.Telemetry
   ]
 

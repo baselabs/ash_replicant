@@ -60,8 +60,8 @@ defmodule AshReplicant.Apply.Scd2 do
   catch
     # D3: throw/exit scrub with the same op label (the sink boundary above
     # converts the reraised scrub to the halted error).
-    :throw, value -> reraise Error.scrub(value, resource, :upsert), __STACKTRACE__
-    :exit, value -> reraise Error.scrub(value, resource, :upsert), __STACKTRACE__
+    :throw, value -> reraise Error.scrub_caught(value, resource, :upsert), __STACKTRACE__
+    :exit, value -> reraise Error.scrub_caught(value, resource, :upsert), __STACKTRACE__
   end
 
   def apply(config, resource, %{op: :delete} = change, ts) do
@@ -76,8 +76,8 @@ defmodule AshReplicant.Apply.Scd2 do
   rescue
     e -> reraise Error.scrub(e, resource, :destroy), __STACKTRACE__
   catch
-    :throw, value -> reraise Error.scrub(value, resource, :destroy), __STACKTRACE__
-    :exit, value -> reraise Error.scrub(value, resource, :destroy), __STACKTRACE__
+    :throw, value -> reraise Error.scrub_caught(value, resource, :destroy), __STACKTRACE__
+    :exit, value -> reraise Error.scrub_caught(value, resource, :destroy), __STACKTRACE__
   end
 
   def apply(config, resource, %{op: :truncate} = change, ts) do
@@ -99,8 +99,8 @@ defmodule AshReplicant.Apply.Scd2 do
   rescue
     e -> reraise Error.scrub(e, resource, :truncate), __STACKTRACE__
   catch
-    :throw, value -> reraise Error.scrub(value, resource, :truncate), __STACKTRACE__
-    :exit, value -> reraise Error.scrub(value, resource, :truncate), __STACKTRACE__
+    :throw, value -> reraise Error.scrub_caught(value, resource, :truncate), __STACKTRACE__
+    :exit, value -> reraise Error.scrub_caught(value, resource, :truncate), __STACKTRACE__
   end
 
   # Tenant-blind close of window columns only. Real column names via attribute.source || name;

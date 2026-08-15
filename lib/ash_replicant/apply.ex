@@ -151,8 +151,8 @@ defmodule AshReplicant.Apply do
   catch
     # D3: throw/exit scrub with the SAME op label so triage keeps the
     # operation name (reraise keeps the origin stacktrace).
-    :throw, value -> reraise Error.scrub(value, resource, :truncate), __STACKTRACE__
-    :exit, value -> reraise Error.scrub(value, resource, :truncate), __STACKTRACE__
+    :throw, value -> reraise Error.scrub_caught(value, resource, :truncate), __STACKTRACE__
+    :exit, value -> reraise Error.scrub_caught(value, resource, :truncate), __STACKTRACE__
   end
 
   defp upsert(config, resource, change) do
@@ -182,8 +182,8 @@ defmodule AshReplicant.Apply do
   rescue
     e -> reraise Error.scrub(e, resource, :upsert), __STACKTRACE__
   catch
-    :throw, value -> reraise Error.scrub(value, resource, :upsert), __STACKTRACE__
-    :exit, value -> reraise Error.scrub(value, resource, :upsert), __STACKTRACE__
+    :throw, value -> reraise Error.scrub_caught(value, resource, :upsert), __STACKTRACE__
+    :exit, value -> reraise Error.scrub_caught(value, resource, :upsert), __STACKTRACE__
   end
 
   defp destroy_by_pk(config, resource, old_record, change, invocation) do
@@ -232,8 +232,8 @@ defmodule AshReplicant.Apply do
   rescue
     e -> reraise Error.scrub(e, resource, :destroy), __STACKTRACE__
   catch
-    :throw, value -> reraise Error.scrub(value, resource, :destroy), __STACKTRACE__
-    :exit, value -> reraise Error.scrub(value, resource, :destroy), __STACKTRACE__
+    :throw, value -> reraise Error.scrub_caught(value, resource, :destroy), __STACKTRACE__
+    :exit, value -> reraise Error.scrub_caught(value, resource, :destroy), __STACKTRACE__
   end
 
   defp pk_changed?(resource, %{record: record, old_record: old}) when is_map(old) do

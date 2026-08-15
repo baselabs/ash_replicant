@@ -106,8 +106,8 @@ defmodule AshReplicant.Sink.Impl do
     # D3: `rescue` misses :throw/:exit (DBConnection re-raises them after
     # rollback). The catch routes them into the SAME scrub — value-free on
     # every fault shape, not just raises.
-    :throw, value -> {:error, Error.scrub(value, config.checkpoint_resource, :bind)}
-    :exit, value -> {:error, Error.scrub(value, config.checkpoint_resource, :bind)}
+    :throw, value -> {:error, Error.scrub_caught(value, config.checkpoint_resource, :bind)}
+    :exit, value -> {:error, Error.scrub_caught(value, config.checkpoint_resource, :bind)}
   end
 
   # The rule-2/3 subset on the source catalog: every mapped table published,
@@ -276,8 +276,8 @@ defmodule AshReplicant.Sink.Impl do
   rescue
     e -> {:error, Error.scrub(e, config.checkpoint_resource, :checkpoint)}
   catch
-    :throw, value -> {:error, Error.scrub(value, config.checkpoint_resource, :checkpoint)}
-    :exit, value -> {:error, Error.scrub(value, config.checkpoint_resource, :checkpoint)}
+    :throw, value -> {:error, Error.scrub_caught(value, config.checkpoint_resource, :checkpoint)}
+    :exit, value -> {:error, Error.scrub_caught(value, config.checkpoint_resource, :checkpoint)}
   end
 
   @doc """
@@ -440,8 +440,8 @@ defmodule AshReplicant.Sink.Impl do
   catch
     # D3: throw/exit scrubbed like raises (the snapshotter would otherwise
     # surface them as its generic :snapshot_failed with no structural reason).
-    :throw, value -> {:error, Error.scrub(value, nil, :snapshot)}
-    :exit, value -> {:error, Error.scrub(value, nil, :snapshot)}
+    :throw, value -> {:error, Error.scrub_caught(value, nil, :snapshot)}
+    :exit, value -> {:error, Error.scrub_caught(value, nil, :snapshot)}
   end
 
   defp run_snapshot_batch(config, resource, changes, first?, table, ctx) do
@@ -610,10 +610,10 @@ defmodule AshReplicant.Sink.Impl do
     e -> {:error, Error.scrub(e, config.checkpoint_resource, :snapshot_complete)}
   catch
     :throw, value ->
-      {:error, Error.scrub(value, config.checkpoint_resource, :snapshot_complete)}
+      {:error, Error.scrub_caught(value, config.checkpoint_resource, :snapshot_complete)}
 
     :exit, value ->
-      {:error, Error.scrub(value, config.checkpoint_resource, :snapshot_complete)}
+      {:error, Error.scrub_caught(value, config.checkpoint_resource, :snapshot_complete)}
   end
 
   # B3 snapshot-side accounting: unmapped tables halt unless ignored, and the

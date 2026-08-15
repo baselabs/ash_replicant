@@ -94,6 +94,15 @@ Two silent-failure classes sat inside the admitted destination graph:
 
 ## Residual (named, not silent)
 
+**Probe-to-use gap (cross-vendor, named):** admission probes `load/2` on a
+best-effort basis, but Ash calls `load/2` AGAIN at action runtime — a
+stateful callback can return empty at every admission probe and non-empty
+mid-action, executing an undeclared preload while every guard stays green.
+This is the same declared-semantics trust boundary as the lying module
+below: the declaration carries the trust, the probe is advisory; closing it
+would require wrapping Ash's own notifier dispatch, outside the admitted
+action path. Named here rather than silently assumed.
+
 The discriminator is minted per SINK call site and rides the ONE operation
 map per host-action invocation: a HOST change module that invokes its
 declared protected auxiliary twice inside ONE invocation still mints one

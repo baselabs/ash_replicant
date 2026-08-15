@@ -249,6 +249,26 @@ defmodule AshReplicant.ScrubBoundaryTest do
       end
     end
 
+    test "a THROWN pre-built %Error{} keeps only its typed reason — its shape never renders (cross-vendor B1)" do
+      # The smuggling channel: scrub's already-%Error{} passthrough trusts the
+      # incoming shape — a host throwing a hand-built Error with a row value
+      # in :shape would render it. scrub_caught (what every catch clause
+      # routes through) drops the shape; only the typed reason survives.
+      thrown = AshReplicant.Error.exception(reason: :sink_failed, shape: @sentinel_throw)
+
+      scrubbed = AshReplicant.Error.scrub_caught(thrown, nil, :sink)
+
+      assert scrubbed.reason == :sink_failed
+      assert is_nil(scrubbed.shape)
+
+      rendered = Exception.message(scrubbed) <> inspect(scrubbed)
+      refute rendered =~ @sentinel_throw, "a thrown Error's shape must never render"
+
+      # And the caught term still mints the halt telemetry through the real
+      # boundary (the transaction cell's harness proves the wiring above).
+      assert match?(%AshReplicant.Error{}, scrubbed)
+    end
+
     test "transaction: raise/throw/exit all scrub value-free and halt" do
       for shape <- [:raise, :throw, :exit] do
         set_shape(shape)

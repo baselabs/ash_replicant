@@ -44,6 +44,19 @@ defmodule AshReplicant.Error do
   end
 
   @doc """
+  A caught `:throw`/`:exit` value normalized for the sink's catch clauses: a
+  value that is ALREADY an `%AshReplicant.Error{}` cannot be trusted (the
+  thrower may have built it with any `:shape`) — the REASON alone survives
+  (it is typed: an atom or the one structural tuple); `:shape` is dropped.
+  """
+  @spec scrub_caught(term(), module() | nil, atom()) :: t()
+  def scrub_caught(%__MODULE__{reason: reason}, resource, op) do
+    %__MODULE__{reason: reason, resource: resource, op: op}
+  end
+
+  def scrub_caught(value, resource, op), do: scrub(value, resource, op)
+
+  @doc """
   Normalize any error into a value-free `%AshReplicant.Error{}`. Never inspects a
   message, changeset, or value — keeps only the struct-module name on `:shape`.
   """
