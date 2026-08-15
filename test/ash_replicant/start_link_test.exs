@@ -117,7 +117,11 @@ defmodule AshReplicant.StartLinkTest do
           Task.async(fn -> AshReplicant.start_link(start_opts()) end)
         end
 
-      results = [Task.await(first), Task.await(second)]
+      # Two full activation chains against the deliberately-unreachable port
+      # (Postgrex retry backoff) can exceed the default 5s await under
+      # full-suite load — the race under test is the START GATE, not the
+      # timeout.
+      results = [Task.await(first, 15_000), Task.await(second, 15_000)]
 
       assert [{:ok, winner}] = Enum.filter(results, &match?({:ok, _pid}, &1))
       assert [duplicate] = Enum.reject(results, &match?({:ok, _pid}, &1))
