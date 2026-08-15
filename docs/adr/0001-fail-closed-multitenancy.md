@@ -44,9 +44,27 @@ Two failure modes must be closed:
   A tenant-scoped delete, key-changing update, or tenant reassignment needs the old
   tenant in `old_record`, so the source table must be `REPLICA IDENTITY FULL` (see
   AGENTS.md Critical Rule 2). A `tenant_mfa` must resolve deterministically from both
-  record shapes. The current reassignment detector treats an absent/raising old-side
-  resolution as indeterminate and retains the non-relocating path; roadmap B4 owns
-  the value-free fail-closed halt for that case.
+  record shapes.
+
+  **Amendment (roadmap B4, 2026-08-14):** an absent, blank, or `false`
+  OLD-side tenant resolution is a structural halt —
+  `reason: :tenant_required`, `shape: "side=old"` — and a RAISING old-side
+  resolver halts `reason: :tenant_resolution_failed`, in BOTH apply
+  strategies, BEFORE any write or checkpoint advance. The indeterminate
+  branch is deleted: `tenant_changed?/2` no longer exists; the apply
+  prelude resolves the old and new tenant first (the transition is
+  `:same`, `:reassigned`, or `:indeterminate` — and `:indeterminate`
+  halts), then branches relocate / terminal-close / upsert. An update or
+  delete whose `old_record` is absent ENTIRELY (the DEFAULT-replica-identity
+  pgoutput shape) also halts — the prelude cannot prove reassignment. This
+  does not over-reject ordinary same-tenant updates because activation
+  preflight ([ADR-0008](0008-strict-source-coverage.md)) enforces
+  `REPLICA IDENTITY FULL` on every tenant-scoped mapped source table, and
+  on every SCD2 source table whose `history_business_key` is not the source
+  primary key — so `old_record` carries the tenant discriminator on every
+  update and delete EXCEPT an unchanged out-of-line (TOAST) value, where
+  the prelude halts `:tenant_required` all the same. A replica-identity
+  transition mid-stream always halts (never ignorable).
 
 - **Compile time (mode 2):** a declared tenant source requires an Ash `multitenancy` block —
   **symmetrically for both sources**:

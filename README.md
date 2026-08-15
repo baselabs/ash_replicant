@@ -274,6 +274,19 @@ AshReplicant.start_link(
   Incremental snapshot configuration is rejected until roadmap C3 adds durable
   progress and target provenance.
 
+## Strict source coverage
+
+Every publication table is mapped, explicitly ignored
+(`ignored_sources: ["public.audit_events"]`), or the pipeline refuses to
+start; every delivered column is mapped or skipped, or delivery halts before
+writing. Column types are checked against the target at activation, and
+`REPLICA IDENTITY FULL` is enforced on tenant-scoped and non-PK-business-key
+SCD2 source tables. The preflight runs at activation (identity-verified,
+short-lived source connection) and the table-membership check re-runs at
+every reconnect — see
+[ADR-0008](docs/adr/0008-strict-source-coverage.md) and
+[usage-rules](usage-rules.md) for the operator rules.
+
 ## Effect-Once Semantics
 
 Each transaction is applied in **one** `Repo.transaction`:

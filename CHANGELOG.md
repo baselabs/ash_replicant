@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** an unmapped publication table now HALTS
+  (`:source_table_unmapped`) instead of the silent partial-publication
+  skip — declare `ignored_sources` for intentional partial coverage. An
+  unaccounted delivered column halts (`:source_column_unmapped`).
+  `:replica_identity_changed` and `:type_changed` schema changes always
+  halt regardless of `on_schema_change :ignore`.
+- **Removed:** `AshReplicant.Resolver.writable_target/2` (dead code) and
+  `Resolver.tenant_changed?/2` (its fail-open caveat is the class B4
+  closed).
+
 - **Breaking:** the generated checkpoint resource is source-bound — the
   composite primary key is `(source_system_id, source_database, slot_name)`
   from the actual replication session, with `source_timeline`,
@@ -30,6 +40,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Activation source-catalog preflight (roadmap B3): missing expected tables,
+  unignored publication tables, unmapped columns, missing declared columns,
+  stale skips, invalid source types, and wrong replica identity halt before
+  any checkpoint advance; the check re-runs at every reconnect; an
+  unreachable source defers the verdict. `ignored_sources` declares
+  intentional partial publications. ADR-0008.
+- Tenant reassignment is fail-closed (roadmap B4): both tenants resolve
+  before any write; an absent/blank/false/raising old side — or a missing
+  `old_record` — halts value-free; SCD1 relocates, SCD2 terminally closes
+  under the old tenant. ADR-0001 amended.
 - `AshReplicant.adopt_checkpoint/3`, `AshReplicant.reset_checkpoint/2`, and
   `AshReplicant.acknowledge_checkpoint_timeline/3` operator recovery surfaces,
   plus `AshReplicant.Checkpoint.Identity.refuse_ambiguous_legacy_rows!/1` /

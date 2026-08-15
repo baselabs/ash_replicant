@@ -26,6 +26,29 @@ defmodule AshReplicant.DocsTest do
     assert index =~ "0007-source-bound-checkpoint-effect-once.md"
   end
 
+  test "ADR-0008 records the strict source-coverage decision and is indexed" do
+    assert File.exists?("docs/adr/0008-strict-source-coverage.md")
+    adr = File.read!("docs/adr/0008-strict-source-coverage.md")
+    assert adr =~ "preflight"
+    assert adr =~ "ignored_sources"
+    assert adr =~ "REPLICA IDENTITY FULL"
+
+    index = File.read!("docs/adr/README.md")
+    assert index =~ "0008-strict-source-coverage.md"
+  end
+
+  test "the B4 caveat sentence is GONE and the amended rule is present" do
+    agents = File.read!("AGENTS.md")
+    refute agents =~ "Until roadmap B4 lands"
+    assert agents =~ "activation preflight enforces"
+  end
+
+  test "ADR-0001 carries the B4 amendment (tri-modal halt + RIF + TOAST scoping)" do
+    adr = File.read!("docs/adr/0001-fail-closed-multitenancy.md")
+    assert adr =~ "tenant_resolution_failed"
+    assert adr =~ "unchanged out-of-line"
+  end
+
   test "AGENTS Critical Rule 6 carries the source-bound clause AND the surviving snapshot disclaimer" do
     agents = File.read!("AGENTS.md")
 

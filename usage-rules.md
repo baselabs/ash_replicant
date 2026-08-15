@@ -394,6 +394,51 @@ the ambiguous class:
 6. Restart; the first connect fills the contract without touching the adopted
    watermark.
 
+## Source coverage, ignores, and replica identity
+
+Every publication table must be mapped, explicitly ignored, or the pipeline
+refuses to start; every delivered column must be mapped or skipped, or the
+pipeline halts before writing ([ADR-0008](docs/adr/0008-strict-source-coverage.md)).
+The preflight runs at activation on a short-lived identity-verified source
+connection and re-runs the table-membership check at every reconnect.
+
+- **Partial publications** (tables you do not mirror) must declare them:
+      use AshReplicant.Sink,
+        ignored_sources: ["public.audit_events"]
+  Strictly qualified `schema.table` strings; bare names and duplicates are
+  compile errors; an ignore colliding with a mapped resource fails
+  activation. Column-level ignoring is the resource-level `skip` list.
+  Ignores are standing intent — their hygiene is yours; the doctor surface
+  (roadmap D2) will report never-matching entries as a warning.
+- **Source columns** must all be mapped or skipped. A source `ADD COLUMN`
+  halts the first changed row (`:source_column_unmapped`) until you map or
+  skip it. A declared column that vanishes, or a `skip` naming a column that
+  does not exist, halts at activation.
+- **Column types** are checked against the target attribute at activation
+  (`:source_type_invalid`); custom target types are not judged statically —
+  the runtime cast stays per-row fail-closed.
+- **REPLICA IDENTITY FULL** is enforced at activation on every
+  tenant-scoped mapped table and every SCD2 table whose business key is not
+  the source primary key (`:source_replica_identity`); a mid-stream identity
+  or type change always halts, never ignorable via `on_schema_change
+  :ignore`.
+- **Boot ordering**: a source unreachable at activation defers the coverage
+  verdict (the pipeline starts and paces reconnects); the verdict renders on
+  the first reachable connection — before any checkpoint advance.
+
+## Tenant reassignment is fail-closed
+
+On a tenant-scoped mirror, every update and delete resolves BOTH the old and
+new tenant before any write. An absent, blank, `false`, or raising old-side
+resolution halts (`:tenant_required` / `:tenant_resolution_failed`,
+`shape: "side=old"`) — an update whose `old_record` is missing entirely (the
+DEFAULT-identity shape) halts too. Same-tenant updates apply normally;
+reassignment relocates the row (SCD1) or terminally closes the old-tenant
+version and opens the new one (SCD2). This is safe to require precisely
+because the preflight enforces FULL identity, so `old_record` carries the
+tenant on every update and delete (an unchanged TOASTed discriminator still
+halts — do not TOAST your tenant column).
+
 ## Non-negotiable rules
 
 - **Route writes through Ash actions.** The mirror writes through the host resource's

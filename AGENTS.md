@@ -74,9 +74,11 @@ close), which would otherwise let Ash ignore the tenant on a write OR a `bulk_up
 > table backing a tenant-scoped mirror so `old_record` carries the tenant column.
 > Ordinary same-tenant, non-PK-changing updates need only the new `record`; tenant
 > reassignment also needs the old record and is not exempt. A `tenant_mfa` must resolve
-> deterministically from both record shapes. Until roadmap B4 lands, an absent or
-> raising old-side resolution cannot prove reassignment and may retain the old SCD1
-> owner or SCD2 current version. (Non-tenant mirrors work under the default identity.)
+> deterministically from both record shapes. An absent, blank, or raising
+> old-side resolution is a structural halt (`:tenant_required` /
+> `:tenant_resolution_failed`) before any write; activation preflight enforces
+> the FULL-identity requirement, so `old_record` carries the tenant on every
+> update and delete. (Non-tenant mirrors work under the default identity.)
 >
 > The same `REPLICA IDENTITY FULL` requirement applies to an **SCD2 resource whose
 > `history_business_key` is not the source primary key** — a delete / key-changing
