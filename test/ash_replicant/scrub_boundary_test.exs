@@ -397,4 +397,21 @@ defmodule AshReplicant.ScrubBoundaryTest do
     assert real.shape == "ArgumentError"
     refute Exception.message(real) =~ @sentinel_throw
   end
+
+  test "a Repo.rollback'd forged %Error{} scrubs through the transaction arms (cross-vendor close)" do
+    # The rollback verb of the forged-struct class: bind and
+    # run_snapshot_transaction both returned {:error, %Error{}} verbatim —
+    # host hooks run inside both transactions. The arms now scrub; scrub
+    # rebuilds from the closed typed reason only.
+    rolled_back = %AshReplicant.Error{
+      reason: String.to_atom(@sentinel_throw),
+      shape: @sentinel_throw
+    }
+
+    scrubbed = AshReplicant.Error.scrub(rolled_back, nil, :bind)
+
+    assert scrubbed.reason == :sink_failed
+    assert is_nil(scrubbed.shape)
+    refute Exception.message(scrubbed) <> inspect(scrubbed) =~ @sentinel_throw
+  end
 end

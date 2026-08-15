@@ -95,9 +95,17 @@ defmodule AshReplicant.Sink.Impl do
         )
 
       case result do
-        {:ok, :ok} -> :ok
-        {:error, %Error{} = error} -> {:error, error}
-        {:error, other} -> {:error, Error.scrub(other, config.checkpoint_resource, :bind)}
+        {:ok, :ok} ->
+          :ok
+
+        # A Repo.rollback'd %Error{} is host-buildable inside the bind
+        # transaction — scrub it like every other fault shape (the rollback
+        # verb of the forged-struct class; raise/throw already covered).
+        {:error, %Error{} = error} ->
+          {:error, Error.scrub(error, config.checkpoint_resource, :bind)}
+
+        {:error, other} ->
+          {:error, Error.scrub(other, config.checkpoint_resource, :bind)}
       end
     end
   rescue
@@ -492,8 +500,10 @@ defmodule AshReplicant.Sink.Impl do
         put_snapshot_ordinal(config, snapshot_lsn, ordinal_base + length(changes))
         :ok
 
+      # Scrub'd like the other arm: a host hook can Repo.rollback a forged
+      # %Error{} from inside the snapshot transaction.
       {:error, %Error{} = e} ->
-        {:error, e}
+        {:error, Error.scrub(e, resource, :snapshot)}
 
       {:error, other} ->
         {:error, Error.scrub(other, resource, :snapshot)}
