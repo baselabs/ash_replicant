@@ -4,7 +4,11 @@ Date: 2026-08-14
 
 ## Status
 
-Accepted for the 1.0.0 release line.
+Accepted for the 1.0.0 release line. The admitted-effects side of this
+decision carries the per-invocation operation discriminator from
+[ADR-0010](0010-host-action-contract.md) (each invocation of a declared
+participant within one change mints its own AshOnetime key; this decision's
+watermark discipline is unchanged).
 
 Supersedes the checkpoint wording of [ADR-0005](0005-replicant-coordination.md)
 (the activation identity comparison remains in force as step 1 of binding; the

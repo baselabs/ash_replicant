@@ -326,7 +326,11 @@ An auxiliary action that needs replay protection may use AshOnetime only as loca
 idempotency committed with the action in the admitted Repo. It must be
 transactional, fail closed on store failure, accept a private non-null string
 `operation_key`, use the exact versioned participant scope, and derive its key with
-`AshReplicant.DestinationParticipant.operation_key/2`. AshOnetime one-time nonces
+`AshReplicant.DestinationParticipant.operation_key/2` — the context the sink
+supplies carries a per-invocation label (`invocation:`) that the derivation
+REQUIRES; manual minters (tests, replay probes) must pass the label the sink
+mints at that effect site (`:close_prior | :close_current | :open |
+:destroy_prior | :upsert`). AshOnetime one-time nonces
 are rejected for WAL replay. Independent commits, external effects, opaque stores,
 and incomplete replay identities are rejected.
 

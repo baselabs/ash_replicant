@@ -96,8 +96,13 @@ removed). Never list the `tenant_attribute` as `sensitive`.
 **4. value-free — no row value in any error, log, or telemetry event, INCLUDING
 the halt path.** Assume every value is PII or a secret. Errors are scrubbed to a
 structural reason (operator + field) before Ash inspects them into logs. Column
-names are strings, never atoms. Telemetry metadata is allowlisted (LSNs, table
-names, counts, durations, error classes) — never row values. Sink failures and
+names are strings, never atoms. Telemetry metadata is allowlisted AND TYPED
+per key (LSNs, table names, counts, durations, error classes) with a closed
+measurement-key set — never row values (ADR-0009). All six sink boundary bodies
+catch `:throw`/`:exit` into the same scrub (the schema-change body fires the
+sink's own `:halted` with the structural reason — never the sibling's
+`:decode_failure` mislabel), and raw-SQL identifiers route through the ONE
+quoting home, which rejects control characters at admission. Sink failures and
 schema-change halts carry a cause (the `Replicant.Error` reason or `SchemaChange`
 classification), not the offending column value.
 
@@ -132,9 +137,14 @@ un-acked WAL re-streams and dedups on resume.
 AshOnetime is permitted only for an admitted local auxiliary action using
 `:idempotency` with `:with_action`, fail-closed PostgreSQL storage in the same Repo,
 no external effect, a private non-null `operation_key`, and the exact versioned
-source-system/database/slot/commit-LSN/ordinal/participant identity. Use
-`DestinationParticipant.operation_key/2`. Reject nonce, independent, external,
-opaque-store, or incomplete-identity profiles. Static stores preflight at activation;
+source-system/database/slot/commit-LSN/ordinal/participant identity plus the
+SINK-MINTED per-invocation label (`:close_prior | :close_current | :open |
+:destroy_prior | :upsert` — ADR-0010; declarations stay 6-axis, the label is
+appended at encode). Use `DestinationParticipant.operation_key/2`. Reject nonce,
+independent, external, opaque-store, or incomplete-identity profiles. A
+notifier whose `load/2` returns a non-empty statement must declare
+`DestinationParticipant` (the `:notifier` kind) — its dependency pre-load read
+runs inside the admitted transaction; suppression covers dispatch only. Static stores preflight at activation;
 context-tenant stores preflight inside the outer transaction.
 
 Generated delivery callbacks are final and call `Sink.Impl` directly. Never add a

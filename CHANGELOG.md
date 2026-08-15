@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+- `AshReplicant.DestinationParticipant.operation_key/2` now requires an
+  `:invocation` label in the operation context (the sink mints it; manual
+  minters — tests, replay probes — must carry the mint-site label). Closes the
+  intra-change AshOnetime key collision where one change's two SCD2 closes
+  shared a key and the second close replayed the first's stored response
+  (ADR-0010).
+- A notifier whose `load/2` returns a non-empty statement must implement
+  `AshReplicant.DestinationParticipant` (`:notifier` kind): its dependency
+  pre-load read executes inside the admitted transaction regardless of notify
+  gates (ADR-0010).
+
+### Added
+
+- Completed value-free boundary: `catch :throw`/`:exit` at all six sink bodies;
+  the schema-change fault path fires the sink's own `:halted` with the
+  structural reason (previously mislabeled `:decode_failure` by the framework
+  wrapper) (ADR-0009).
+- Typed telemetry: per-key metadata types, a closed measurement-key set
+  (`byte_size` reserved for C1), count-only off-allowlist raises, and a
+  conformance integration gate over every emitted event name.
+- `AshReplicant.Sql`: the one identifier quoting home (PG-canonical doubling,
+  control-character rejection) — admission-time identifier validation in the
+  manifest walk; all raw-SQL sites routed through it (ADR-0009).
+- The action-contract freeze table (live-reflection source-pin test), the
+  reason-space enumeration, and the Ash-bump grep procedure (CONTRIBUTING).
+- Release-contract absence gates: `apply_ledger` (exactly the two allowlisted
+  fail-closed lines) and a secret-literal scan over `lib/`.
+- `AshReplicant.Apply.Context.invocation_labels/0` and
+  `AshReplicant.DestinationParticipant.operation_components/0` (the single
+  component-list home).
+
+
 ### Changed
 
 - **Breaking:** an unmapped publication table now HALTS

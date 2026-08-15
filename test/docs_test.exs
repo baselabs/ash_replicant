@@ -89,4 +89,23 @@ defmodule AshReplicant.DocsTest do
         flunk("expected one destination participant example in #{path}, got #{length(matches)}")
     end
   end
+
+  test "ADR-0009/0010 exist, are indexed, and 0006 carries the seven-component amendment (U3)" do
+    readme = File.read!("docs/adr/README.md")
+    assert readme =~ "0009-classified-boundaries.md"
+    assert readme =~ "0010-host-action-contract.md"
+
+    adr9 = File.read!("docs/adr/0009-classified-boundaries.md")
+    assert adr9 =~ "typed telemetry" or adr9 =~ "Typed telemetry"
+    assert adr9 =~ "quote_identifier" or adr9 =~ "identifier quoting home"
+    assert adr9 =~ "byte_size"
+
+    adr10 = File.read!("docs/adr/0010-host-action-contract.md")
+    assert adr10 =~ "invocation"
+    assert adr10 =~ "SINGLE-INVOCATION"
+
+    adr6 = File.read!("docs/adr/0006-destination-transaction-boundary.md")
+    assert adr6 =~ "Amendment (roadmap B6 / U3"
+    assert adr6 =~ "per-invocation label"
+  end
 end

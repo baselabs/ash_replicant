@@ -296,8 +296,65 @@ defmodule AshReplicant.ReleaseContract do
     assert_b1_docs(root)
     assert_b1_examples(root)
     assert_no_b1_positive_contradictions(root)
+    assert_b5_absence_scans(root)
   rescue
     _error in [YamlElixir.ParsingError, File.Error] -> fail("release contract input is invalid")
+  end
+
+  # U3/B5 (D6): the durable effect ledger stays ABSENT from lib/ — the only
+  # permitted occurrences are the removed-option fail-closed compile error
+  # (exactly the two allowlisted lines in sink.ex) — and no secret-shaped
+  # literal ships in lib/.
+  defp assert_b5_absence_scans(root) do
+    lib =
+      Path.wildcard(Path.join(root, "lib/*.ex")) ++
+        Path.wildcard(Path.join(root, "lib/**/*.ex"))
+
+    lib = lib |> Enum.uniq()
+
+    ledger_hits =
+      lib
+      |> Enum.flat_map(fn path ->
+        path
+        |> File.read!()
+        |> String.split("\n")
+        |> Enum.with_index()
+        |> Enum.flat_map(fn {line, ix} ->
+          if String.contains?(line, "apply_ledger"), do: ["#{path}:#{ix + 1}"], else: []
+        end)
+      end)
+
+    expected =
+      lib
+      |> Enum.filter(&String.ends_with?(&1, "/lib/ash_replicant/sink.ex"))
+      |> length()
+      |> Kernel.*(2)
+
+    assert(
+      length(ledger_hits) == expected and expected == 2,
+      "apply_ledger must appear in lib/ exactly twice (the removed-option fail-closed error), found: #{inspect(ledger_hits)}"
+    )
+
+    secret_hits =
+      lib
+      |> Enum.flat_map(fn path ->
+        path
+        |> File.read!()
+        |> String.split("\n")
+        |> Enum.with_index()
+        |> Enum.flat_map(fn {line, ix} ->
+          if Regex.match?(~r/[A-Za-z0-9+\/]{40,}={0,2}/, line),
+            do: ["#{path}:#{ix + 1}"],
+            else: []
+        end)
+      end)
+
+    assert(
+      secret_hits == [],
+      "secret-shaped literals in lib/ are a classified-boundary violation, found: #{inspect(secret_hits)}"
+    )
+  rescue
+    _error in [File.Error] -> fail("absence-scan input is invalid")
   end
 
   defp assert_checker_wiring(root) do

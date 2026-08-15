@@ -68,6 +68,20 @@ also not unique when one transaction contains several effects.
   commit LSN, ordinal, and participant. `operation_key/2` derives the key supplied
   to the protected action. Nonce, independent-commit, external, opaque-store, and
   incomplete identity profiles are rejected.
+
+  **Amendment (roadmap B6 / U3, 2026-08-14).** The minted operation identity
+  gains a SEVENTH, sink-minted component — the per-invocation label
+  (`:close_prior | :close_current | :open | :destroy_prior | :upsert`) —
+  appended to the canonical encoding by `operation_key/2`. The DECLARED
+  replay identity above stays exactly six-axis: the label is not
+  host-controllable (a declared discriminator axis would be a forgeable
+  replay identity — see
+  [ADR-0010](0010-host-action-contract.md) for the derivation and the
+  collision it closes). This decision's walk is also extended by ADR-0010:
+  a notifier whose `load/2` returns a non-empty statement must declare
+  destination participation for the `:notifier` kind (the dependency
+  pre-load read runs inside the admitted transaction; suppression covers
+  dispatch only).
 - Action and preparation `SetContext` declarations may not replace `:data_layer`;
   admission rejects table/schema/Repo redirection. The dynamic (MFA) context form
   cannot be inspected statically, so it is admissible ONLY when the module behind
