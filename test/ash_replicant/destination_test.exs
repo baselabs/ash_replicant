@@ -1000,6 +1000,47 @@ defmodule AshReplicant.DestinationTest do
     refute function_exported?(DestinationFixtures.Sink, :append, 2)
   end
 
+  describe "notifier load/2 manifest admission (U3/D2)" do
+    test "an undeclared non-empty load/2 fails the manifest naming resource+action+notifier" do
+      # The walk visits the mapped read first; a load-carrying notifier
+      # WITHOUT the participant behaviour is undeclared on every
+      # sink-driven action.
+      assert {:error,
+              {:destination_notifier_required, DestinationFixtures.LoadRoot, :read,
+               DestinationFixtures.LoadNotifier}} =
+               Destination.manifest(%{
+                 repo: AshReplicant.TestRepo,
+                 domains: [DestinationFixtures.LoadDomain],
+                 checkpoint_resource: AshReplicant.Test.Checkpoint
+               })
+    end
+
+    test "a no_database declaration admits with no new graph edge (the read is already admitted)" do
+      assert {:ok, _manifest} =
+               Destination.manifest(%{
+                 repo: AshReplicant.TestRepo,
+                 domains: [DestinationFixtures.EmptyDeclarationLoadDomain],
+                 checkpoint_resource: AshReplicant.Test.Checkpoint
+               })
+    end
+
+    test "a DECLARED load/2 admits (the reads it can trigger enter the manifest)" do
+      assert {:ok, manifest} =
+               Destination.manifest(%{
+                 repo: AshReplicant.TestRepo,
+                 domains: [DestinationFixtures.DeclaredLoadDomain],
+                 checkpoint_resource: AshReplicant.Test.Checkpoint
+               })
+
+      assert Enum.any?(
+               manifest.entries,
+               &(&1.resource == DestinationFixtures.DeclaredLoadRoot and
+                   &1.action == :read and &1.source == DestinationFixtures.DeclaredLoadNotifier)
+             ),
+             "the load-triggered read enters the admitted graph, sourced from the notifier declaration"
+    end
+  end
+
   describe "admission-time identifier validation (U3/D4)" do
     test "a control-character table name fails the manifest before any SQL" do
       assert {:error, {:invalid_destination_config, :identifier}} =

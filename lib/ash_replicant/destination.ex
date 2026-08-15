@@ -186,6 +186,7 @@ defmodule AshReplicant.Destination do
           | {:destination_participant_invalid, module()}
           | {:destination_participant_mismatch, module(), atom()}
           | {:destination_participant_cycle, module(), atom()}
+          | {:destination_notifier_required, module(), atom(), module()}
 
   @spec manifest(map()) :: {:ok, Manifest.t()} | {:error, reason()}
   def manifest(%{repo: repo, domains: domains, checkpoint_resource: checkpoint})
@@ -575,10 +576,12 @@ defmodule AshReplicant.Destination do
              %{} = action <- Ash.Resource.Info.action(resource, action_name),
              :ok <- validate_action_tenant_scoping(resource, action),
              {:ok, refs} <- inspect_action(resource, action),
+             {:ok, refs, all_refs} <-
+               validate_action_notifiers(resource, action, refs, source),
              :ok <- validate_touches(resource, action, refs),
              {:ok, completed, entries} <-
                walk(
-                 participant_roots(refs),
+                 participant_roots(all_refs),
                  repo,
                  Map.put(active, key, true),
                  completed,
@@ -590,6 +593,89 @@ defmodule AshReplicant.Destination do
           {:error, _reason} = error -> error
         end
     end
+  end
+
+  # D2 (U3): Ash runs the notifier-dependency PRE-LOAD read after every
+  # successful create/destroy with NO notify gate — suppression covers
+  # DISPATCH only (verified: the sink's bulk_create passes
+  # return_notifications?: true, so need_notifications? keeps the pre-load
+  # alive even under return_records?: false). A notifier whose load/2 returns
+  # a non-empty statement triggers host reads INSIDE the sink's delivery
+  # transaction, so it must declare a DestinationParticipant for the new
+  # :notifier kind — the same trust model as tenant_mfa. The probe replicates
+  # ASH'S OWN gate exactly: implements_load? first (a notifier implementing
+  # the behaviour WITHOUT load/2 — the optional callback — imposes nothing),
+  # then Ash.Notifier.load/2 with non-empty = List.wrap(statement) != [].
+  # `declared_by` is the module whose DestinationParticipant declaration
+  # admitted THIS action into the walk: when that same module is a
+  # load-carrying notifier, its declaration already covers the reads its
+  # load statement triggers here — re-demanding on the referenced action
+  # would regress infinitely (declare :read → visit :read → demand again).
+  defp validate_action_notifiers(resource, action, refs, declared_by) do
+    notifiers = Ash.Resource.Info.notifiers(resource) ++ List.wrap(Map.get(action, :notifiers))
+
+    Enum.reduce_while(notifiers, {:ok, refs, refs}, fn notifier, {:ok, refs, all_refs} ->
+      if notifier == declared_by do
+        {:cont, {:ok, refs, all_refs}}
+      else
+        validate_notifier(resource, action, refs, all_refs, notifier)
+      end
+    end)
+  rescue
+    _error ->
+      {:error,
+       {:destination_notifier_required, resource, action.name,
+        Ash.Resource.Info.notifiers(resource) ++ List.wrap(Map.get(action, :notifiers))}}
+  catch
+    _kind, _reason ->
+      {:error,
+       {:destination_notifier_required, resource, action.name,
+        Ash.Resource.Info.notifiers(resource) ++ List.wrap(Map.get(action, :notifiers))}}
+  end
+
+  defp validate_notifier(resource, action, refs, all_refs, notifier) do
+    statement =
+      if implements_load?(notifier) do
+        Ash.Notifier.load(notifier, resource, action)
+      else
+        []
+      end
+
+    case List.wrap(statement) do
+      [] ->
+        {:cont, {:ok, refs, all_refs}}
+
+      _non_empty ->
+        # A load-carrying notifier MUST implement the participant behaviour —
+        # its declaration carries the trust (same model as tenant_mfa).
+        # {:ok, :no_database} / empty refs ADMIT with nothing new: the load
+        # statement's reads are often the resource's own already-admitted
+        # read. Notifier-sourced refs join the WALK (the reads enter the
+        # admitted graph) but NOT the host action's touches_resources
+        # tie-out: a same-resource load read cannot be declared on a
+        # `defaults [:read]` action — the tie-out is the ACTION-participant
+        # contract (Rule 6).
+        if participant?(notifier) do
+          case inspect_provider(notifier, [], %Context{
+                 resource: resource,
+                 action: action.name,
+                 kind: :notifier
+               }) do
+            {:ok, refs_from_notifier} ->
+              {:cont, {:ok, refs, all_refs ++ refs_from_notifier}}
+
+            {:error, _reason} = error ->
+              {:halt, error}
+          end
+        else
+          {:halt, {:error, {:destination_notifier_required, resource, action.name, notifier}}}
+        end
+    end
+  end
+
+  # `function_exported?/3` does not load the module — mirror Ash's exact gate.
+  defp implements_load?(notifier) do
+    Code.ensure_loaded?(notifier) and function_exported?(notifier, :load, 2)
   end
 
   # EVERY admitted action — mapped roots, checkpoint, SCD2 close, and declared

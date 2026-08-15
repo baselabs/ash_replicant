@@ -17,7 +17,14 @@ defmodule AshReplicant.DestinationParticipant do
     defstruct [:resource, :action, :kind]
 
     @type kind ::
-            :change | :validation | :preparation | :manual | :callback | :type | :tenant_resolver
+            :change
+            | :validation
+            | :preparation
+            | :manual
+            | :callback
+            | :type
+            | :tenant_resolver
+            | :notifier
     @type t :: %__MODULE__{resource: module(), action: atom(), kind: kind()}
   end
 

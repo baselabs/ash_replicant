@@ -867,3 +867,12 @@ defmodule AshReplicant.Test.Marquee do
     end
   end
 end
+
+defmodule SnapshotLoadSink do
+  @moduledoc false
+  use AshReplicant.Sink,
+    repo: AshReplicant.TestRepo,
+    domains: [AshReplicant.Test.DestinationFixtures.SnapshotLoadDomain],
+    checkpoint_resource: AshReplicant.Test.Checkpoint,
+    slot_name: "notifier_snapshot_slot"
+end

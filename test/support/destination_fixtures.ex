@@ -3162,3 +3162,292 @@ defmodule AshReplicant.Test.DestinationFixtures.BadWindowVersion do
     end
   end
 end
+
+# --- U3/D2 notifier load/2 admission fixtures ---
+
+defmodule AshReplicant.Test.DestinationFixtures.LoadNotifier do
+  @moduledoc false
+  # A notifier carrying a NON-EMPTY load/2 statement: Ash's dependency
+  # pre-load read runs it inside the sink's delivery transaction (no notify
+  # gate on the pre-load — only dispatch is suppressed), so the walk must
+  # demand a DestinationParticipant declaration for it.
+  use Ash.Notifier
+
+  @impl Ash.Notifier
+  def notify(_notification), do: :ok
+
+  @impl Ash.Notifier
+  def load(_resource, _action), do: [:some_calculation]
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.LoadRoot do
+  @moduledoc false
+  use Ash.Resource,
+    domain: AshReplicant.Test.DestinationFixtures.LoadDomain,
+    data_layer: AshPostgres.DataLayer,
+    notifiers: [AshReplicant.Test.DestinationFixtures.LoadNotifier],
+    extensions: [AshReplicant.Resource]
+
+  postgres do
+    table "load_roots"
+    repo AshReplicant.TestRepo
+  end
+
+  replicant do
+    source_table("load_source")
+  end
+
+  attributes do
+    uuid_primary_key :id
+  end
+
+  actions do
+    defaults [:read, :destroy]
+
+    create :create do
+      primary? true
+      accept []
+    end
+  end
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.LoadDomain do
+  @moduledoc false
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource AshReplicant.Test.DestinationFixtures.LoadRoot
+    resource AshReplicant.Test.Checkpoint
+  end
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.DeclaredLoadNotifier do
+  @moduledoc false
+  # Same load/2 imposition, but DECLARES its destination participation: the
+  # reads its load statement can trigger are admitted into the manifest.
+  use Ash.Notifier
+
+  @behaviour AshReplicant.DestinationParticipant
+
+  alias AshReplicant.DestinationParticipant.{ActionRef, Context}
+
+  @impl Ash.Notifier
+  def notify(_notification), do: :ok
+
+  @impl Ash.Notifier
+  def load(_resource, _action), do: [:some_calculation]
+
+  @impl AshReplicant.DestinationParticipant
+  # The load statement reads the resource itself: on the WRITE actions that
+  # read is a NEW graph edge (declared); on :read the graph already contains
+  # it — nothing new to admit ({:ok, :no_database}).
+  def destination_participants(_opts, %Context{resource: resource, action: action})
+      when action != :read do
+    {:ok,
+     {:actions,
+      [
+        %ActionRef{
+          resource: resource,
+          action: :read,
+          tenant_mode: :inherit
+        }
+      ]}}
+  end
+
+  def destination_participants(_opts, _context), do: {:ok, :no_database}
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.DeclaredLoadRoot do
+  @moduledoc false
+  use Ash.Resource,
+    domain: AshReplicant.Test.DestinationFixtures.DeclaredLoadDomain,
+    data_layer: AshPostgres.DataLayer,
+    notifiers: [AshReplicant.Test.DestinationFixtures.DeclaredLoadNotifier],
+    extensions: [AshReplicant.Resource]
+
+  postgres do
+    table "declared_load_roots"
+    repo AshReplicant.TestRepo
+  end
+
+  replicant do
+    source_table("declared_load_source")
+  end
+
+  attributes do
+    uuid_primary_key :id
+  end
+
+  actions do
+    defaults [:read, :destroy]
+
+    create :create do
+      primary? true
+      accept []
+    end
+  end
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.DeclaredLoadDomain do
+  @moduledoc false
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource AshReplicant.Test.DestinationFixtures.DeclaredLoadRoot
+    resource AshReplicant.Test.Checkpoint
+  end
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.EmptyDeclarationLoadNotifier do
+  @moduledoc false
+  # Implements the participant behaviour but declares NOTHING ({:ok,
+  # :no_database}): the walk must still reject — an empty declaration admits
+  # no reads while the load statement triggers them.
+  use Ash.Notifier
+
+  @behaviour AshReplicant.DestinationParticipant
+
+  @impl Ash.Notifier
+  def notify(_notification), do: :ok
+
+  @impl Ash.Notifier
+  def load(_resource, _action), do: [:some_calculation]
+
+  @impl AshReplicant.DestinationParticipant
+  def destination_participants(_opts, _context), do: {:ok, :no_database}
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.EmptyDeclarationLoadRoot do
+  @moduledoc false
+  use Ash.Resource,
+    domain: AshReplicant.Test.DestinationFixtures.EmptyDeclarationLoadDomain,
+    data_layer: AshPostgres.DataLayer,
+    notifiers: [AshReplicant.Test.DestinationFixtures.EmptyDeclarationLoadNotifier],
+    extensions: [AshReplicant.Resource]
+
+  postgres do
+    table "empty_decl_load_roots"
+    repo AshReplicant.TestRepo
+  end
+
+  replicant do
+    source_table("empty_decl_load_source")
+  end
+
+  attributes do
+    uuid_primary_key :id
+  end
+
+  actions do
+    defaults [:read, :destroy]
+
+    create :create do
+      primary? true
+      accept []
+    end
+  end
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.EmptyDeclarationLoadDomain do
+  @moduledoc false
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource AshReplicant.Test.DestinationFixtures.EmptyDeclarationLoadRoot
+    resource AshReplicant.Test.Checkpoint
+  end
+end
+
+# --- U3/D2: the snapshot bulk_create notifier leg (declared load/2). The
+# --- SINK lives in test/support/marquee.ex (compiles after this file).
+
+defmodule AshReplicant.Test.DestinationFixtures.SpyLoadNotifier do
+  @moduledoc false
+  # A DECLARED load/2-carrying notifier (U3/D2): the load statement reads the
+  # resource itself — a NEW graph edge on the write actions, nothing new on
+  # :read (already admitted). The spy calculation + the notify probe prove,
+  # on the snapshot path, that the dependency pre-load EXECUTES while
+  # notification DISPATCH stays suppressed.
+  use Ash.Notifier
+
+  @behaviour AshReplicant.DestinationParticipant
+
+  alias AshReplicant.DestinationParticipant.{ActionRef, Context}
+
+  @impl Ash.Notifier
+  def notify(%Ash.Notifier.Notification{action: action, data: data}) do
+    case Application.get_env(:ash_replicant, :notifier_probe_pid) do
+      nil -> :ok
+      pid -> send(pid, {:notified, action.type, Map.get(data, :id)})
+    end
+  end
+
+  @impl Ash.Notifier
+  def load(_resource, _action), do: [:spy_probe]
+
+  @impl AshReplicant.DestinationParticipant
+  def destination_participants(_opts, %Context{resource: resource, action: action})
+      when action != :read do
+    {:ok,
+     {:actions,
+      [
+        %ActionRef{
+          resource: resource,
+          action: :read,
+          tenant_mode: :inherit
+        }
+      ]}}
+  end
+
+  def destination_participants(_opts, _context), do: {:ok, :no_database}
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.SnapshotLoadOrder do
+  @moduledoc false
+  use Ash.Resource,
+    domain: AshReplicant.Test.DestinationFixtures.SnapshotLoadDomain,
+    data_layer: AshPostgres.DataLayer,
+    notifiers: [AshReplicant.Test.DestinationFixtures.SpyLoadNotifier],
+    extensions: [AshReplicant.Resource]
+
+  postgres do
+    table "orders"
+    repo AshReplicant.TestRepo
+  end
+
+  replicant do
+    source_table("orders")
+  end
+
+  attributes do
+    attribute :id, :string, primary_key?: true, allow_nil?: false, public?: true
+    attribute :note, :string, public?: true
+  end
+
+  calculations do
+    calculate :spy_probe, :boolean do
+      calculation fn records, _ctx ->
+        case Application.get_env(:ash_replicant, :notifier_probe_pid) do
+          nil -> :ok
+          pid -> send(pid, {:spy_calc_ran, length(records)})
+        end
+
+        Enum.map(records, fn _ -> true end)
+      end
+    end
+  end
+
+  actions do
+    defaults [:read, :destroy, create: :*, update: :*]
+  end
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.SnapshotLoadDomain do
+  @moduledoc false
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource AshReplicant.Test.DestinationFixtures.SnapshotLoadOrder
+    resource AshReplicant.Test.Checkpoint
+  end
+end

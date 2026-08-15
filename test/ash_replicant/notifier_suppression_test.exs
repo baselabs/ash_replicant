@@ -147,6 +147,68 @@ defmodule AshReplicant.NotifierSuppressionTest do
     }
   end
 
+  # U3/D2: a load-carrying notifier on a snapshot-mirrored resource. Ash runs
+  # the notifier-dependency PRE-LOAD read inside the delivery path even under
+  # `return_records?: false` (the sink's bulk_create passes
+  # return_notifications?: true, so need_notifications? keeps it alive) — the
+  # spy calculation proves the pre-load EXECUTES while the probe proves NO
+  # notification dispatches: suppression is dispatch-only, the load dependency
+  # is real and (at the manifest level) must be declared.
+  test "the snapshot bulk_create pre-load EXECUTES the notifier load dependency and dispatches NOTHING" do
+    # NON-VACUITY CONTROL (both directions): a direct create dispatches the
+    # notifier AND evaluates the spy calculation — the wiring is live, so both
+    # halves below can genuinely go red.
+    Ash.create!(AshReplicant.Test.DestinationFixtures.SnapshotLoadOrder, %{id: "ctl", note: "c"},
+      authorize?: false
+    )
+
+    assert_receive {:notified, :create, "ctl"}, 500
+    assert_receive {:spy_calc_ran, _}, 500
+
+    generation = AshReplicant.Test.AdmittedGeneration.put!(SnapshotLoadSink)
+
+    identity = %Replicant.SessionIdentity{
+      system_identifier: generation.source_identity.system_identifier,
+      timeline_id: 1,
+      current_lsn: 0,
+      database: generation.source_identity.database
+    }
+
+    SnapshotLoadSink.handle_session_identity(identity, %{
+      slot_name: "notifier_snapshot_slot",
+      publication: generation.publication
+    })
+
+    changes = [
+      %Replicant.Change{
+        op: :snapshot,
+        schema: "public",
+        table: "orders",
+        record: %{"id" => "s1", "note" => "n"}
+      }
+    ]
+
+    on_exit(fn ->
+      AshReplicant.Test.Marquee.q!("DELETE FROM orders WHERE id IN ('ctl', 's1')")
+      :persistent_term.erase({AshReplicant, "notifier_snapshot_slot"})
+      AshReplicant.Sink.Impl.clear_snapshot_ordinals("notifier_snapshot_slot")
+    end)
+
+    assert :ok =
+             SnapshotLoadSink.handle_snapshot(changes, %{
+               table: "public.orders",
+               first_for_table?: true,
+               snapshot_lsn: 10
+             })
+
+    # The pre-load ran the dependency (the spy calculation evaluated inside
+    # the snapshot delivery — on the loaded records, not the input batch).
+    assert_receive {:spy_calc_ran, _}, 2_000
+
+    # The dispatch contract holds on the snapshot path too.
+    refute_receive {:notified, _type, "s1"}, 300
+  end
+
   test "a mirrored insert and delete fire NO Ash notifier (sink suppresses notifications)",
        %{cfg: cfg} do
     # NON-VACUITY CONTROL: a NON-mirrored create DOES dispatch to the notifier — this

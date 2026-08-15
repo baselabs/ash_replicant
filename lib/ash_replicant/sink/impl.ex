@@ -10,6 +10,15 @@ defmodule AshReplicant.Sink.Impl do
   value and the sink discards them. Mirrored bulk destroys use Ash's default
   `notify?: false`. Ash notifiers/pubsub therefore do not fire for mirrored
   changes; the mechanisms differ by action path.
+
+  Suppression is DISPATCH-only (U3/D2): Ash runs a notifier's `load/2`
+  dependency pre-load read inside the delivery path regardless of any notify
+  gate — including the snapshot `bulk_create` under `return_records?: false`
+  (the sink passes `return_notifications?: true`, keeping the pre-load
+  alive). A load-carrying notifier therefore executes host reads inside the
+  admitted transaction; the destination manifest requires such notifiers to
+  declare `DestinationParticipant` (the `:notifier` kind), admitting those
+  reads into the graph — the same trust model as `tenant_mfa`.
   """
 
   alias AshPostgres.DataLayer.Info, as: PGInfo
