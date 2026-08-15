@@ -49,6 +49,39 @@ scripts/with-release-runtime.sh mix hex.build
 4. Update `CHANGELOG.md` under `[Unreleased]`.
 5. Open a Pull Request against `main`.
 
+
+### Ash-bump grep procedure (B6 old-contract clause)
+
+The frozen host action contract is pinned by `test/ash_replicant/action_contract_freeze_test.exs`
+(the D8 table, asserted against live reflection) and the suppression/admission suites. Ash is a
+pinned dependency (`~> 3.31`); when bumping it, run the old-contract grep BEFORE trusting green
+tests — a behavior change inside Ash can silently invalidate a pinned fact while the pin still
+passes against the NEW behavior:
+
+```bash
+# 1. The dispatch-suppression contract (impl.ex documents it): confirm Ash still
+#    bundles-and-discards under return_notifications?: true and defaults notify?: false.
+grep -rn "return_notifications" deps/ash/lib/ash/actions/ | head
+grep -rn "notify?" deps/ash/lib/ash/actions/destroy/bulk.ex | head
+
+# 2. The notifier pre-load gate (U3/D2): implements_load? + load/2 must still run
+#    ungated on the pre-load path (only dispatch is suppressed).
+grep -n "implements_load?" deps/ash/lib/ash/notifier/notifier.ex
+grep -n "need_notifications?" deps/ash/lib/ash/actions/create/bulk.ex | head
+
+# 3. The bulk_create ordinal context (materialize_bulk_ordinal reads
+#    changeset.context[:bulk_create][:index]): confirm the key shape survived.
+grep -rn "bulk_create" deps/ash/lib/ash/changeset/changeset.ex | grep -i index | head
+
+# 4. AshOnetime replay semantics (the discriminator's whole premise):
+#    a replayed claim must skip the body and replay the stored response.
+grep -n "replay" deps/ash_onetime/lib/ash_onetime/change.ex | head
+```
+
+Any drift found in the greps is a contract change: update the freeze table's cells and the
+affected tests in the same change, and record the Ash version contract delta in the ADR
+(`docs/adr/0010`) amendment.
+
 ## Ash conventions
 
 - This is an Ash **sink adapter** — a `Spark.Dsl.Extension` implementing the
