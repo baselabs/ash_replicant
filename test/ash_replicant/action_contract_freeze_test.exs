@@ -15,6 +15,7 @@ defmodule AshReplicant.ActionContractFreezeTest do
 
   alias AshReplicant.Apply.Context
   alias AshReplicant.Destination
+  alias AshReplicant.Telemetry
   alias AshReplicant.DestinationParticipant
   alias AshReplicant.Test.{Order, OrderVersion}
   alias AshReplicant.Test.DestinationFixtures
@@ -209,6 +210,30 @@ defmodule AshReplicant.ActionContractFreezeTest do
     end
   end
 
+  test "the telemetry conformance inventory covers every event name emitted in lib (live pin)" do
+    # Diff-review F7: emitted_event_names/0 is hand-maintained — a new event
+    # name in lib without an inventory row goes red here (the payload typing
+    # still gates at event/3; this pins the conformance gate's coverage).
+    emitted =
+      Path.wildcard("lib/**/*.ex")
+      |> Enum.flat_map(fn path ->
+        source = File.read!(path)
+
+        Regex.scan(~r/Telemetry\.event\(\s*\[(:[a-z_]+,\s*:[a-z_]+,\s*:[a-z_]+)\]/, source)
+        |> Enum.map(fn [_, inner] ->
+          inner
+          |> String.split(~r/[,\s]+/, trim: true)
+          |> Enum.map(&String.to_atom(String.trim_leading(&1, ":")))
+        end)
+      end)
+      |> MapSet.new()
+
+    inventory = Telemetry.emitted_event_names() |> MapSet.new()
+
+    assert MapSet.subset?(emitted, inventory),
+           "events emitted in lib but missing from the conformance inventory: #{inspect(MapSet.to_list(MapSet.difference(emitted, inventory)))}"
+  end
+
   describe "D9: compile-diagnostic completeness (the reason space enumerates, each naming its modules)" do
     @reason_fixtures [
       {{:destination_action_missing, DestinationFixtures.MissingRootAction, :create},
@@ -222,8 +247,32 @@ defmodule AshReplicant.ActionContractFreezeTest do
         DestinationFixtures.LoadNotifier}, nil},
       {{:destination_participant_cycle, nil, nil}, nil},
       {{:destination_repo_not_postgres, DestinationFixtures.SimpleRoot}, nil},
+      {{:destination_repo_dynamic, DestinationFixtures.ForeignChild}, nil},
       {{:destination_repo_mismatch, DestinationFixtures.ForeignMappedRoot}, nil}
     ]
+
+    test "the enumeration covers EVERY destination_* reason kind actually constructed in lib (live pin)" do
+      # Diff-review F5: the fixture list alone is self-referential. This cell
+      # greps the LIVE constructors — a new reason kind added to destination.ex
+      # without a fixture row goes red here.
+      source = File.read!("lib/ash_replicant/destination.ex")
+
+      constructed =
+        Regex.scan(~r/\{:(destination_[a-z_]+),/, source)
+        |> Enum.map(&String.to_atom(Enum.at(&1, 1)))
+        |> MapSet.new()
+
+      enumerated =
+        @reason_fixtures
+        |> Enum.map(fn {reason, _cfg} -> elem(reason, 0) end)
+        |> MapSet.new()
+
+      assert MapSet.subset?(constructed, enumerated),
+             "reason kinds constructed in lib but not enumerated: #{inspect(MapSet.to_list(MapSet.difference(constructed, enumerated)))}"
+
+      assert MapSet.subset?(enumerated, constructed),
+             "enumerated kinds no longer constructed (stale fixtures): #{inspect(MapSet.to_list(MapSet.difference(enumerated, constructed)))}"
+    end
 
     test "every reason kind of the live @type carries resource/action/module in its tuple arity" do
       # The arity pin: each reason kind's tuple is exactly the shape the

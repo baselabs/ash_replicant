@@ -16,11 +16,21 @@ defmodule AshReplicant.ScrubBoundaryTest do
   bodies are RED pre-fix (`rescue` misses them; schema-change is bare); the
   schema-change RAISE cell is RED pre-fix (no boundary at all); the five
   delivery bodies' raise cells are GREEN pre-fix (already rescued) — recorded
-  as already-closed depth. Bind's throw/exit cells are covered by the
-  clause-identical catch + the closeout mutation proof: the reconnect coverage
-  gate (which fires BEFORE any faultable seam and converts its own faults to
-  `{:error, :preflight_failed}`) makes a unit injection unreachable without a
-  live source connection.
+  as already-closed depth. Bind's and schema-change's throw/exit cells are
+  covered by the clause-identical catches ONLY: the reconnect coverage gate
+  fires BEFORE any faultable seam (its own faults contained as
+  `{:error, :preflight_failed}`) and Spark's reflection seals the
+  schema-change body to a raise — no harness at any tier can drive these
+  cells (diff-review F4: verified by mutation — deleting the schema-change
+  :exit catch leaves the suite green).
+
+  The PIPELINE-driven classification case (plan F2's live leg): the mislabel
+  surface (replicant handle_message's :decode_failure on a RAISING sink) is
+  closed BY CONSTRUCTION — the sink's own containment means the wrapper's
+  rescue never engages on this path; a test would have to inject a fault the
+  sink can no longer produce. The wrapper's lines are cited at
+  assembler.ex:241-249; the unit raise cell pins the containment that makes
+  them unreachable.
 
   The sentinel rule: a unique string sentinel appears in NO captured log, NO
   returned error message/inspect, and NO telemetry payload.

@@ -40,7 +40,7 @@ defmodule AshReplicant.Destination do
             role: atom(),
             resource: module(),
             action: atom(),
-            source: module() | :framework,
+            source: module() | {:notifier, module()} | :framework,
             tenant_mode: :inherit,
             replay_identity: ReplayIdentity.t() | nil,
             protection: map() | nil
@@ -430,16 +430,6 @@ defmodule AshReplicant.Destination do
   defp merge_active_source(active, key, source),
     do: Map.update(active, key, MapSet.new([source]), &MapSet.put(&1, source))
 
-  # A notifier-sourced edge into an action another notifier already declared
-  # active: redundant metadata, not a cycle.
-  defp redundant_notifier_edge?(active, key, {:notifier, _notifier}) do
-    active
-    |> Map.get(key, MapSet.new())
-    |> Enum.any?(&match?({:notifier, _other}, &1))
-  end
-
-  defp redundant_notifier_edge?(_active, _key, _source), do: false
-
   defp prefix_sort_key(nil), do: {0, ""}
   defp prefix_sort_key(:context_tenant), do: {1, ""}
   defp prefix_sort_key(prefix) when is_binary(prefix), do: {2, prefix}
@@ -577,16 +567,14 @@ defmodule AshReplicant.Destination do
     }
 
     cond do
-      MapSet.member?(Map.get(active, key, MapSet.new()), source) ->
-        {:error, {:destination_participant_cycle, resource, action_name}}
-
-      redundant_notifier_edge?(active, key, source) ->
-        # Two notifiers re-declaring the same already-active action is a
-        # REDUNDANT metadata edge, not a graph cycle (cross-vendor finding) —
-        # recorded into the branch's source set, never walked twice.
-        walk(rest, repo, merge_active_source(active, key, source), completed, [entry | entries])
-
       Map.has_key?(active, key) ->
+        # ANY re-entry into an on-stack (ancestor) action is a cycle —
+        # cross-notifier declaration loops included. The walk's frontier is
+        # sequential and `active` is the DFS path, so a sibling declaration
+        # of an already-COMPLETED action terminates at the completed arm
+        # below (redundant metadata, no cycle); only true back-edges land
+        # here (diff-review F1: the earlier redundant-edge arm could only
+        # ever fire on these, downgrading real cycles).
         {:error, {:destination_participant_cycle, resource, action_name}}
 
       Map.has_key?(completed, key) ->
@@ -637,7 +625,12 @@ defmodule AshReplicant.Destination do
     notifiers = Ash.Resource.Info.notifiers(resource) ++ List.wrap(Map.get(action, :notifiers))
 
     Enum.reduce_while(notifiers, {:ok, refs, refs}, fn notifier, {:ok, refs, all_refs} ->
-      if notifier == declared_by do
+      # Unwrap the {:notifier, module} tag: a notifier-sourced entry's
+      # declaration of the action it was probed on is the same logical edge
+      # (the load genuinely triggers the resource's own read) — re-probing it
+      # would false-cycle for a context-INSENSITIVE uniform declaration
+      # (diff-review F2). Everything else re-validates.
+      if declared_by in [notifier, {:notifier, notifier}] do
         {:cont, {:ok, refs, all_refs}}
       else
         validate_notifier(resource, action, refs, all_refs, notifier)
