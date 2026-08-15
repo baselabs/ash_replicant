@@ -16,10 +16,12 @@ defmodule AshReplicant.ScrubBoundaryTest do
   bodies are RED pre-fix (`rescue` misses them; schema-change is bare); the
   schema-change RAISE cell is RED pre-fix (no boundary at all); the five
   delivery bodies' raise cells are GREEN pre-fix (already rescued) — recorded
-  as already-closed depth. Bind's :exit cell IS drivable in-unit (round 2):
-  an empty source_connection makes the reconnect gate map the Postgrex
-  failure to :unreachable and `GenServer.stop(:unreachable)` exits noproc —
-  the catch scrubs it. Schema-change's :throw/:exit cells ride Spark's
+  as already-closed depth. Bind's :exit cell is drivable in-unit (round 3):
+  the reconnect gate DEFERS its census connection faults to the destination
+  transaction by design (:unreachable -> :ok), so with an empty
+  source_connection bind proceeds to repo.transaction — a faulting repo
+  carrying an :exit sentinel reaches the catch clause there. Schema-change's
+  :throw/:exit cells ride Spark's
   fetch_opt/2 direct_fn seam (a fault there escapes Spark's rescue-only
   wrapper into the sink's catch); its :raise is re-wrapped by Spark into the
   structural polished ArgumentError. Bind's :throw has no seam (the gate's
@@ -203,13 +205,35 @@ defmodule AshReplicant.ScrubBoundaryTest do
   end
 
   describe "the six boundary bodies, direct drive (mutation matrix)" do
-    test "bind: a raise is scrubbed value-free (raise cell — already-closed depth)" do
-      cfg = config(extra: [source_contract: %{}])
-      set_shape(:raise)
+    test "bind: raise (missing manifest KeyError) and :exit (unreachable source) scrub value-free" do
+      # The drivable unit seams (diff-review rounds 2-3): (a) a
+      # source_contract without :manifest raises KeyError INSIDE the body —
+      # scrubbed by the rescue; (b) an EMPTY source_connection makes the
+      # reconnect gate's census checkout exit noproc — the census's first
+      # query runs Postgrex.query against the :unreachable placeholder and
+      # DBConnection's checkout exits {:noproc, ...} (the gate's later
+      # GenServer.stop is dead on this path) — a REAL :exit caught by the
+      # catch clause with a structural reason.
+      cfg_raise = config(extra: [source_contract: %{}])
 
       {{:error, %AshReplicant.Error{reason: :sink_failed}}, _} =
         assert_value_free(fn ->
-          Impl.handle_session_identity(cfg, session_identity(), %{
+          Impl.handle_session_identity(cfg_raise, session_identity(), %{
+            slot_name: "scrub_boundary_slot",
+            publication: "scrub_boundary_pub"
+          })
+        end)
+
+      # The exit leg: the gate DEFERS its census faults (:unreachable
+      # defers to the destination transaction by design), so bind proceeds
+      # to repo.transaction — where the FaultyRepo's :exit carries the
+      # sentinel INTO the catch clause.
+      cfg_exit = config(extra: [source_contract: %{manifest: %{}}, source_connection: []])
+      set_shape(:exit)
+
+      {{:error, %AshReplicant.Error{reason: :sink_failed}}, _} =
+        assert_value_free(fn ->
+          Impl.handle_session_identity(cfg_exit, session_identity(), %{
             slot_name: "scrub_boundary_slot",
             publication: "scrub_boundary_pub"
           })

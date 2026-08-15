@@ -1054,8 +1054,9 @@ defmodule AshReplicant.DestinationTest do
 
     test "a context-INSENSITIVE uniform declaration admits (diff-review F2 pin)" do
       # Declares (R, :read) for EVERY action — including the :read it is
-      # probed on. The declared_by unwrap makes the self-probe the same
-      # logical edge; without it this shape false-cycles.
+      # probed on. The SELF-EDGE DROP admits it: a notifier declaring the
+      # action it was probed on is redundant information, not a cycle of
+      # distinct nodes; without the drop this shape cycles at the read root.
       assert {:ok, _manifest} =
                Destination.manifest(%{
                  repo: AshReplicant.TestRepo,

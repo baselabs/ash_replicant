@@ -3535,9 +3535,9 @@ end
 defmodule AshReplicant.Test.DestinationFixtures.UniformLoadNotifier do
   @moduledoc false
   # CONTEXT-INSENSITIVE: declares the resource's own read for EVERY action —
-  # including the :read it gets probed on. The declared_by unwrap makes that
-  # self-probe the same logical edge (no false cycle); without the unwrap
-  # this shape is rejected.
+  # including the :read it gets probed on. The SELF-EDGE DROP admits it
+  # (redundant information, not a cycle); without the drop this shape is
+  # rejected at the read root.
   use Ash.Notifier
 
   @behaviour AshReplicant.DestinationParticipant
