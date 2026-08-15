@@ -46,22 +46,27 @@ defmodule AshReplicant.Error do
   @doc """
   A caught `:throw`/`:exit` value normalized for the sink's catch clauses: a
   value that is ALREADY an `%AshReplicant.Error{}` cannot be trusted (the
-  thrower may have built it with any `:shape`) — the REASON alone survives
-  (it is typed: an atom or the one structural tuple); `:shape` is dropped.
+  thrower may have built it with ANY field) — the reason survives only when
+  it matches the closed typed reason shape (an atom, or the one structural
+  `{:invalid_destination_config, atom}` tuple); everything else is dropped.
   """
   @spec scrub_caught(term(), module() | nil, atom()) :: t()
-  def scrub_caught(%__MODULE__{reason: reason}, resource, op) do
-    %__MODULE__{reason: reason, resource: resource, op: op}
-  end
-
   def scrub_caught(value, resource, op), do: scrub(value, resource, op)
 
   @doc """
   Normalize any error into a value-free `%AshReplicant.Error{}`. Never inspects a
   message, changeset, or value — keeps only the struct-module name on `:shape`.
+  An INCOMING `%AshReplicant.Error{}` (raised or thrown by host code inside
+  the sink's call) is rebuilt from its reason when — and only when — the
+  reason matches the closed typed shape; a forged struct's other fields
+  (shape/resource/class) never render. Our OWN structural errors carry
+  typed reasons throughout, so their reason survives; their config-shaped
+  `shape` strings are traded away for the closed boundary.
   """
   @spec scrub(term(), module() | nil, atom()) :: t()
-  def scrub(%__MODULE__{} = already, _resource, _op), do: already
+  def scrub(%__MODULE__{reason: reason}, resource, op) do
+    %__MODULE__{reason: typed_reason(reason), resource: resource, op: op}
+  end
 
   def scrub(%{__struct__: mod}, resource, op) when is_atom(mod) do
     %__MODULE__{reason: :sink_failed, resource: resource, op: op, shape: inspect(mod)}
@@ -70,4 +75,14 @@ defmodule AshReplicant.Error do
   def scrub(_other, resource, op) do
     %__MODULE__{reason: :sink_failed, resource: resource, op: op}
   end
+
+  # The closed reason shape: an atom (every reason this library mints) or
+  # the one structural tuple. Anything else a forged struct carries is
+  # dropped — value-free by construction, not by trust.
+  defp typed_reason(reason) when is_atom(reason), do: reason
+
+  defp typed_reason({:invalid_destination_config, tag}) when is_atom(tag),
+    do: {:invalid_destination_config, tag}
+
+  defp typed_reason(_other), do: :sink_failed
 end

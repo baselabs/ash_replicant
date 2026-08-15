@@ -264,9 +264,26 @@ defmodule AshReplicant.ScrubBoundaryTest do
       rendered = Exception.message(scrubbed) <> inspect(scrubbed)
       refute rendered =~ @sentinel_throw, "a thrown Error's shape must never render"
 
-      # And the caught term still mints the halt telemetry through the real
-      # boundary (the transaction cell's harness proves the wiring above).
-      assert match?(%AshReplicant.Error{}, scrubbed)
+      # A forged REASON is dropped too (cross-vendor final: scrub must not
+      # trust any field of an incoming struct — only the closed typed shape
+      # survives).
+      forged = %AshReplicant.Error{reason: @sentinel_throw, shape: @sentinel_throw}
+
+      scrubbed2 = AshReplicant.Error.scrub_caught(forged, nil, :sink)
+
+      assert scrubbed2.reason == :sink_failed
+      refute Exception.message(scrubbed2) <> inspect(scrubbed2) =~ @sentinel_throw
+
+      # The one structural tuple reason survives (the library's own runtime
+      # reason for the onetime-store preflight halt).
+      keep =
+        AshReplicant.Error.scrub_caught(
+          %AshReplicant.Error{reason: {:invalid_destination_config, :onetime_store}},
+          nil,
+          :sink
+        )
+
+      assert keep.reason == {:invalid_destination_config, :onetime_store}
     end
 
     test "transaction: raise/throw/exit all scrub value-free and halt" do

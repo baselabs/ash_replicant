@@ -101,7 +101,11 @@ mid-action, executing an undeclared preload while every guard stays green.
 This is the same declared-semantics trust boundary as the lying module
 below: the declaration carries the trust, the probe is advisory; closing it
 would require wrapping Ash's own notifier dispatch, outside the admitted
-action path. Named here rather than silently assumed.
+action path. Named here rather than silently assumed. The same boundary
+covers the walk's `declared_by` skip: while walking an action that notifier
+N declared, N is not re-probed for THAT action's context — a
+context-parameterized declaration could carry different edges per
+(resource, action); its edges from every OTHER probe still validate.
 
 The discriminator is minted per SINK call site and rides the ONE operation
 map per host-action invocation: a HOST change module that invokes its
