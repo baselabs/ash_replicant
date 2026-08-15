@@ -326,7 +326,7 @@ defmodule AshReplicant.ReleaseContract do
 
     expected =
       lib
-      |> Enum.filter(&String.ends_with?(&1, "/lib/ash_replicant/sink.ex"))
+      |> Enum.filter(&String.ends_with?(&1, Path.join(["lib", "ash_replicant", "sink.ex"])))
       |> length()
       |> Kernel.*(2)
 
