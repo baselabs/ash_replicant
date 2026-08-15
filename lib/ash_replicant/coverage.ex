@@ -308,9 +308,9 @@ defmodule AshReplicant.Coverage do
         fact = Map.fetch!(facts, key)
 
         change.columns
-        |> Enum.map(& &1.name)
+        |> Enum.map(&to_string(&1.name))
         |> Enum.each(fn name ->
-          unless MapSet.member?(fact.mapped, name) or MapSet.member?(fact.skips, name) do
+          unless member_any?(fact.mapped, name) or member_any?(fact.skips, name) do
             raise Error.exception(
                     reason: :source_column_unmapped,
                     resource: fact.resource,
@@ -354,7 +354,7 @@ defmodule AshReplicant.Coverage do
         |> Enum.each(fn name ->
           name = to_string(name)
 
-          unless MapSet.member?(fact.mapped, name) or MapSet.member?(fact.skips, name) do
+          unless member_any?(fact.mapped, name) or member_any?(fact.skips, name) do
             raise Error.exception(
                     reason: :source_column_unmapped,
                     resource: fact.resource,
@@ -366,6 +366,13 @@ defmodule AshReplicant.Coverage do
 
         :ok
     end
+  end
+
+  # Record keys arrive as strings; declared sets may hold atoms — normalize.
+  defp member_any?(set, name) do
+    MapSet.member?(set, name) or MapSet.member?(set, String.to_atom(name))
+  rescue
+    ArgumentError -> MapSet.member?(set, name)
   end
 
   # --- relation facts derivation ---
@@ -386,11 +393,21 @@ defmodule AshReplicant.Coverage do
     |> Map.new(fn {{schema, table}, resource} ->
       relation = Map.fetch!(relations, {schema, table})
 
-      mapped =
-        relation.columns
-        |> Enum.map(& &1.source)
-        |> MapSet.new()
+      # Coverage judges only SOURCE-side columns; the contract's column list
+      # includes SCD2 window targets (sink-generated on the destination).
+      declared_sources = relation.columns |> Enum.map(& &1.source) |> MapSet.new()
 
+      sink_generated =
+        if Info.history_scd2?(resource) do
+          relation.columns
+          |> Enum.filter(&(&1.target in sink_generated_attribute_atoms(resource)))
+          |> Enum.map(& &1.source)
+          |> MapSet.new()
+        else
+          MapSet.new()
+        end
+
+      source_mapped = MapSet.difference(declared_sources, sink_generated)
       skips = relation.skips |> MapSet.new()
 
       target_types =
@@ -399,7 +416,7 @@ defmodule AshReplicant.Coverage do
 
       facts = %{
         resource: resource,
-        mapped: mapped,
+        mapped: source_mapped,
         skips: skips,
         target_types: target_types,
         tenant?: relation.tenant != nil,
@@ -410,6 +427,79 @@ defmodule AshReplicant.Coverage do
       {{schema, table}, facts}
     end)
   end
+
+  @doc """
+  The SOURCE-side mapped column set (strings): the upsert reflection's
+  attributes minus declared skips MINUS the SCD2 window/current columns —
+  those are sink-generated on the destination version table, never source
+  columns (their absence from the live source table is not a missing mapping).
+  """
+  @spec source_mapped_set(module()) :: MapSet.t(String.t())
+  def source_mapped_set(resource) do
+    {skip, _cloak, attrs} = AshReplicant.Resolver.upsert_reflection(resource)
+
+    window = sink_generated_attribute_atoms(resource)
+
+    attrs
+    |> MapSet.to_list()
+    |> Kernel.--(skip)
+    |> Kernel.--(window)
+    |> Enum.map(&Atom.to_string/1)
+    |> MapSet.new()
+  end
+
+  # The SCD2 window/current ATTRIBUTE atoms — sink-generated on the
+  # destination version table, never source columns.
+  defp sink_generated_attribute_atoms(resource) do
+    [
+      elem(Info.replicant_history_valid_from_lsn_attribute(resource), 1),
+      elem(Info.replicant_history_valid_to_lsn_attribute(resource), 1),
+      opt_value(Info.replicant_history_valid_from_timestamp_attribute(resource)),
+      opt_value(Info.replicant_history_valid_to_timestamp_attribute(resource)),
+      opt_value(Info.replicant_history_current_attribute(resource)),
+      # The destination-side SURROGATE primary key (uuid_primary_key) is not a
+      # source column — but ONLY on SCD2 version resources; an SCD1 mirror's
+      # single PK IS its source PK.
+      scd2_surrogate_pk(resource)
+    ]
+    |> Enum.reject(&is_nil/1)
+  rescue
+    _ -> []
+  end
+
+  defp scd2_surrogate_pk(resource) do
+    if Info.history_scd2?(resource), do: primary_key_atom(resource)
+  end
+
+  defp primary_key_atom(resource) do
+    history_pk = elem(Info.replicant_history_valid_from_lsn_attribute(resource), 1)
+
+    business_key = business_key_atoms(resource)
+
+    case Ash.Resource.Info.primary_key(resource) do
+      [pk] ->
+        # A single-column PK distinct from the window anchor and from the
+        # business key is the surrogate (uuid_primary_key) — sink-generated,
+        # not a source column.
+        if pk != history_pk and pk not in business_key, do: pk
+
+      _other ->
+        nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp business_key_atoms(resource) do
+    # The accessor RAISES when unset (no default) — a non-SCD2 or
+    # business-key-less resource has no business key.
+    Info.replicant_history_business_key!(resource)
+  rescue
+    _ -> []
+  end
+
+  defp opt_value({:ok, value}), do: value
+  defp opt_value(_), do: nil
 
   defp business_key_sources(resource) do
     # The Spark accessor RAISES when the option is unset (no default); a

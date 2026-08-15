@@ -288,7 +288,11 @@ defmodule AshReplicant.Sink.Impl do
   value-inspected. Unmapped tables use the behaviour default.
   """
   @spec handle_schema_change(map(), Replicant.SchemaChange.t(), map()) :: :ok | {:error, term()}
-  def handle_schema_change(config, %Replicant.SchemaChange{kind: kind} = sc, _ctx) do
+  def handle_schema_change(
+        config,
+        %Replicant.SchemaChange{kind: kind, change: change_class} = sc,
+        _ctx
+      ) do
     resource = Resolver.lookup(config.resolver_index, sc.schema, sc.table)
 
     policy =
@@ -296,14 +300,28 @@ defmodule AshReplicant.Sink.Impl do
         do: Info.replicant_on_schema_change!(resource),
         else: :halt_destructive
 
-    case {kind, policy} do
-      {:additive, _} ->
+    # C1 carve-out (adversarial): these two destructive classes alter the
+    # meaning of old_record / the cast contract — the exact bases the B4
+    # prelude and B3 type rules stand on — so they are NEVER ignorable; other
+    # destructive classes keep the declared on_schema_change policy.
+    case {kind, change_class, policy} do
+      {_kind, change_class, _policy}
+      when change_class in [:replica_identity_changed, :type_changed] ->
+        {:error,
+         Error.exception(
+           reason: :schema_change_destructive,
+           resource: resource,
+           op: :schema_change,
+           shape: "#{sc.schema || "public"}.#{sc.table}(#{change_class})"
+         )}
+
+      {:additive, _change_class, _} ->
         :ok
 
-      {:destructive, :ignore} ->
+      {:destructive, _change_class, :ignore} ->
         :ok
 
-      {:destructive, :halt_destructive} ->
+      {:destructive, _change_class, :halt_destructive} ->
         {:error,
          Error.exception(
            reason: :schema_change_destructive,
@@ -350,8 +368,10 @@ defmodule AshReplicant.Sink.Impl do
           [t] -> {"public", t}
         end
 
+      assert_snapshot_coverage!(config, schema, table, changes)
+
       case Resolver.lookup(config.resolver_index, schema, table) do
-        # Unmapped table = legitimate partial-publication skip (no batch applied).
+        # Unmapped + explicitly ignored table = intentional partial coverage.
         nil ->
           :ok
 
@@ -527,6 +547,55 @@ defmodule AshReplicant.Sink.Impl do
     end
   rescue
     e -> {:error, Error.scrub(e, config.checkpoint_resource, :snapshot_complete)}
+  end
+
+  # B3 snapshot-side accounting: unmapped tables halt unless ignored, and the
+  # record keys must be mapped or skipped. The facts derive per-resource.
+  defp assert_snapshot_coverage!(config, schema, table, changes) do
+    ignored =
+      case Map.get(config, :coverage) do
+        %{ignored: ignored} -> ignored
+        _other -> MapSet.new()
+      end
+
+    case Resolver.lookup(config.resolver_index, schema, table) do
+      nil ->
+        unless MapSet.member?(ignored, {schema, table}) do
+          raise Error.exception(
+                  reason: :source_table_unmapped,
+                  resource: nil,
+                  op: :snapshot,
+                  shape: "#{schema}.#{table}"
+                )
+        end
+
+      resource ->
+        {skip, _cloak, _attrs} = Resolver.upsert_reflection(resource)
+
+        facts = %{
+          {schema, table} => %{
+            resource: resource,
+            mapped: AshReplicant.Coverage.source_mapped_set(resource),
+            skips: skip |> Enum.map(&Atom.to_string/1) |> MapSet.new(),
+            target_types: %{},
+            tenant?: false,
+            scd2?: false,
+            business_key: []
+          }
+        }
+
+        changes
+        |> Enum.take(1)
+        |> Enum.each(fn change ->
+          AshReplicant.Coverage.assert_record_columns!(
+            facts,
+            MapSet.new(),
+            schema,
+            table,
+            change.record || %{}
+          )
+        end)
+    end
   end
 
   defp clear_mirror(resource, config) do

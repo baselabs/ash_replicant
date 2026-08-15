@@ -30,6 +30,8 @@ defmodule AshReplicant.Apply do
   def apply_change(config, change, commit_timestamp \\ nil)
 
   def apply_change(config, %Replicant.Change{} = change, commit_timestamp) do
+    assert_source_coverage!(config, change)
+
     case resource_for(config, change) do
       nil ->
         :ok
@@ -45,6 +47,45 @@ defmodule AshReplicant.Apply do
 
   defp resource_for(config, %{schema: schema, table: table}) do
     Resolver.lookup(config.resolver_index, schema, table)
+  end
+
+  # B3 delivery-side accounting: the change's table must be mapped (or
+  # explicitly ignored) and every delivered column mapped or skipped — BEFORE
+  # any write. The facts derive from the resource via upsert_reflection (no
+  # Generation dependency); the ignored-table set rides the runtime config
+  # (default empty for bare unit configs).
+  defp assert_source_coverage!(config, change) do
+    facts =
+      case resource_for(config, change) do
+        nil -> %{}
+        resource -> coverage_facts(resource)
+      end
+
+    AshReplicant.Coverage.assert_change!(facts, coverage_ignored(config), change)
+  end
+
+  defp coverage_facts(resource) do
+    {skip, _cloak, _attrs} = Resolver.upsert_reflection(resource)
+
+    %{
+      {AshReplicant.Resource.Info.source_schema(resource),
+       AshReplicant.Resource.Info.source_table(resource)} => %{
+        resource: resource,
+        mapped: AshReplicant.Coverage.source_mapped_set(resource),
+        skips: skip |> Enum.map(&Atom.to_string/1) |> MapSet.new(),
+        target_types: %{},
+        tenant?: false,
+        scd2?: false,
+        business_key: []
+      }
+    }
+  end
+
+  defp coverage_ignored(config) do
+    case Map.get(config, :coverage) do
+      %{ignored: ignored} -> ignored
+      _other -> MapSet.new()
+    end
   end
 
   defp apply_to(config, resource, %{op: op} = change, _commit_timestamp)
