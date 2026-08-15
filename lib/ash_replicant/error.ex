@@ -69,7 +69,15 @@ defmodule AshReplicant.Error do
   end
 
   def scrub(%{__struct__: mod}, resource, op) when is_atom(mod) do
-    %__MODULE__{reason: :sink_failed, resource: resource, op: op, shape: inspect(mod)}
+    # Only a REAL compiled struct's name renders: a forged map can carry any
+    # atom in its __struct__ KEY (data-level, no module needed — cross-vendor
+    # final6); an unloaded atom is not a module and its name is not
+    # structural metadata.
+    if match?({:module, _}, Code.ensure_compiled(mod)) do
+      %__MODULE__{reason: :sink_failed, resource: resource, op: op, shape: inspect(mod)}
+    else
+      %__MODULE__{reason: :sink_failed, resource: resource, op: op}
+    end
   end
 
   def scrub(_other, resource, op) do

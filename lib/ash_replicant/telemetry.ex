@@ -118,9 +118,22 @@ defmodule AshReplicant.Telemetry do
     value
   end
 
-  # The structural class only (the Splode class field when the raised term
-  # carries one) — never the value.
-  defp class_of(%{class: class}) when is_atom(class), do: class
+  # The structural class only — and only from the CLOSED class set (a
+  # thrown map can mint an atom into its :class key at data level; the
+  # library emits Splode class atoms and :error only — cross-vendor final6).
+  @closed_classes [
+    :error,
+    :invalid,
+    :forbidden,
+    :unknown,
+    :not_found,
+    :required,
+    :runtime,
+    :conflict,
+    :framework
+  ]
+
+  defp class_of(%{class: class}) when class in @closed_classes, do: class
   defp class_of(_other), do: :error
 
   @spec event([atom(), ...], map(), map()) :: :ok

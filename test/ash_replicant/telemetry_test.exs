@@ -233,4 +233,22 @@ defmodule AshReplicant.TelemetryTest do
 
     :telemetry.detach(ref)
   end
+
+  test "span/3's error_class comes from the closed set — a thrown minted atom never emits (cross-vendor final6)" do
+    ref =
+      :telemetry_test.attach_event_handlers(self(), [
+        [:ash_replicant, :sink, :start],
+        [:ash_replicant, :sink, :stop]
+      ])
+
+    minted = String.to_atom("SENTINEL-CLASS-9d2f")
+
+    catch_throw(Telemetry.span(:sink, %{commit_lsn: 1}, fn -> throw(%{class: minted}) end))
+
+    assert_received {[:ash_replicant, :sink, :stop], ^ref, _, meta}
+    assert meta.error_class == :error
+    refute inspect(meta) =~ "SENTINEL"
+
+    :telemetry.detach(ref)
+  end
 end

@@ -384,4 +384,17 @@ defmodule AshReplicant.ScrubBoundaryTest do
       current_lsn: nil
     }
   end
+
+  test "a forged map's __struct__ atom never renders (cross-vendor final6)" do
+    minted = String.to_atom(@sentinel_throw)
+    scrubbed = AshReplicant.Error.scrub_caught(%{__struct__: minted}, nil, :sink)
+
+    refute Exception.message(scrubbed) <> inspect(scrubbed) =~ @sentinel_throw
+    assert is_nil(scrubbed.shape)
+
+    # A REAL exception's struct name still renders (structural triage).
+    real = AshReplicant.Error.scrub_caught(%ArgumentError{message: @sentinel_throw}, nil, :sink)
+    assert real.shape == "ArgumentError"
+    refute Exception.message(real) =~ @sentinel_throw
+  end
 end
