@@ -136,11 +136,7 @@ defmodule AshReplicant.ResolverTest do
     end
   end
 
-  describe "writable_target/2 + attrs_for_upsert/2 (classification)" do
-    test "a sensitive column maps to its AshCloak encrypted target" do
-      assert {:ok, :encrypted_pan} = Resolver.writable_target(Secret, "pan")
-    end
-
+  describe "attrs_for_upsert/2 (classification)" do
     test "attrs_for_upsert passes plaintext under the cloak argument but upsert_fields names the encrypted attr" do
       {inputs, fields} = Resolver.attrs_for_upsert(Secret, %{"id" => "1", "pan" => "4111"})
       assert inputs[:pan] == "4111"

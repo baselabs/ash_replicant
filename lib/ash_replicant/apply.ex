@@ -90,16 +90,18 @@ defmodule AshReplicant.Apply do
 
   defp apply_to(config, resource, %{op: op} = change, _commit_timestamp)
        when op in [:insert, :update] do
-    # A PK change OR a tenant reassignment must RELOCATE the row (destroy-old +
-    # upsert-new), not upsert-in-place. On a tenant change, a tenant-scoped upsert
-    # identity `(tenant, pk)` misses its conflict target under the new tenant and
-    # INSERTs, colliding with the row's GLOBAL primary key (the still-present
-    # old-tenant row) → the sink halts fail-closed and stalls the stream for ALL
-    # tenants. `Resolver.tenant_changed?` fires only when both tenants resolve and
-    # differ, so a key-only old_record (no REPLICA IDENTITY FULL) or a non-multitenant
-    # resource keeps the existing upsert path unchanged.
-    if op == :update and
-         (pk_changed?(resource, change) or Resolver.tenant_changed?(resource, change)) do
+    # The B4 tri-modal prelude: resolve BOTH tenants up front — :indeterminate
+    # (absent/blank/false old side, or a raising resolver) halts BEFORE any
+    # write (activation preflight enforces RIF, so old_record carries the
+    # discriminator; an old-side failure is a genuine fault). A PK change OR
+    # a :reassigned transition must RELOCATE the row (destroy-old +
+    # upsert-new): on a tenant change, a tenant-scoped upsert identity
+    # `(tenant, pk)` misses its conflict target under the new tenant and
+    # INSERTs, colliding with the row's GLOBAL primary key.
+    {:ok, transition, _old_tenant, _new_tenant} =
+      Resolver.require_tenant_pair!(resource, change, op)
+
+    if op == :update and (pk_changed?(resource, change) or transition == :reassigned) do
       destroy_by_pk(config, resource, change.old_record, change)
     end
 

@@ -20,8 +20,13 @@ defmodule AshReplicant.Apply.Scd2 do
 
   @spec apply(map(), module(), Replicant.Change.t(), DateTime.t() | nil) :: :ok
   def apply(config, resource, %{op: op} = change, ts) when op in [:insert, :update] do
-    if op == :update and
-         (bk_changed?(resource, change) or Resolver.tenant_changed?(resource, change)) do
+    # The B4 tri-modal prelude (symmetric with Apply): resolve BOTH tenants up
+    # front; :indeterminate halts BEFORE any write. The old-tenant open
+    # version retires on a business-key change OR a :reassigned transition.
+    {:ok, transition, prelude_old_tenant, prelude_new_tenant} =
+      Resolver.require_tenant_pair!(resource, change, op)
+
+    if op == :update and (bk_changed?(resource, change) or transition == :reassigned) do
       # The old (business key, tenant) pairing is being RETIRED — either the business key
       # changed, OR the row was reassigned to a new tenant (same business key, new tenant).
       # In BOTH cases the OLD-tenant open version must be terminally closed: without this a
@@ -32,11 +37,16 @@ defmodule AshReplicant.Apply.Scd2 do
       # inclusive `<= lsn` predicate the delete path uses. A same-commit_lsn insert-then-change
       # opens the old version at exactly `lsn`; the open-path `< lsn` would miss it and leave a
       # ghost. Inclusive is safe for the normal cross-txn case (old version opened at lsn < this).
-      old_tenant = Resolver.resolve_tenant!(resource, change.old_record, :destroy)
-      close_current(config, resource, change.old_record, change, ts, old_tenant, inclusive?: true)
+      close_current(config, resource, change.old_record, change, ts, prelude_old_tenant,
+        inclusive?: true
+      )
     end
 
-    tenant = Resolver.resolve_tenant!(resource, change.record, :upsert)
+    tenant =
+      if op == :update,
+        do: prelude_new_tenant,
+        else: Resolver.resolve_tenant!(resource, change.record, :upsert)
+
     close_current(config, resource, change.record, change, ts, tenant, inclusive?: false)
     open_version(config, resource, change, ts, tenant)
     :ok

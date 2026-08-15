@@ -107,61 +107,63 @@ defmodule AshReplicant.Resolver do
   end
 
   @doc """
-  True when the resolved tenant DIFFERS between a change's `record` and `old_record`
-  — a tenant reassignment (same source row moved between tenants). Shared by both apply
-  strategies (`Apply` relocates the SCD1 row; `Apply.Scd2` terminally closes the old-tenant
-  version) so the reassignment invariant is enforced identically on both paths.
-
-  Reports a change ONLY when BOTH sides resolve to a present tenant and they differ, so:
-  a non-multitenant resource (both resolve to `nil`), a same-tenant update, and a key-only
-  `old_record` whose tenant is unresolvable (no REPLICA IDENTITY FULL) all report `false` —
-  the caller then keeps its existing upsert/apply behavior unchanged.
-
-  Value-free: a raising `tenant_mfa` is caught and reported as "not changed" (never
-  propagating an unscrubbed row value out of the tenant check); the caller's own scrub
-  boundary handles any re-raise on the subsequent apply.
-
-  CAVEAT: because a raise resolves to "not changed", reassignment detection depends on a
-  NON-RAISING resolver. A `tenant_mfa` that raises on `old_record` (but not `record`) makes
-  a genuine reassignment invisible here — the caller then keeps its non-relocating path
-  (SCD1: the colliding upsert; SCD2: a double-current). This is strictly `tenant_mfa`-only
-  (`tenant_attribute` never raises — `Map.get` + tuple-returning `present_or_required`), and
-  it is not a regression (before this helper, neither path handled reassignment at all). Same
-  `old_record`-availability class as the REPLICA IDENTITY FULL requirement.
+  The B4 tri-modal tenant transition (roadmap B4): resolve BOTH sides up
+  front and classify — `{:ok, :same | :reassigned, old, new}` or an
+  `{:error, ...}` for the `:indeterminate` case. The old side is REQUIRED
+  on update/delete paths (RIF guarantees old_record carries the tenant
+  discriminator); an absent/blank/`false` old tenant halts
+  `:tenant_required` (shape "side=old") and a RAISING resolver halts
+  `:tenant_resolution_failed` — BEFORE any write. A non-tenant-scoped
+  resource always resolves `{:ok, :same, nil, nil}`.
   """
-  @spec tenant_changed?(module(), map()) :: boolean()
-  def tenant_changed?(resource, %{record: record, old_record: old})
+  @spec require_tenant_pair!(module(), map(), atom()) ::
+          {:ok, :same | :reassigned, term(), term()}
+  def require_tenant_pair!(resource, %{record: record, old_record: old}, op)
       when is_map(record) and is_map(old) do
-    case {safe_resolve(resource, record), safe_resolve(resource, old)} do
-      {{:ok, new_tenant}, {:ok, old_tenant}} -> new_tenant != old_tenant
-      _ -> false
+    with {:ok, new_tenant} <- resolve_side(resource, record, :new, op),
+         {:ok, old_tenant} <- resolve_side(resource, old, :old, op) do
+      # resolve_tenant has already rejected nil/false/blank sides, so both
+      # values are present by construction here.
+      if old_tenant != new_tenant do
+        {:ok, :reassigned, old_tenant, new_tenant}
+      else
+        {:ok, :same, old_tenant, new_tenant}
+      end
     end
   end
 
-  def tenant_changed?(_resource, _change), do: false
+  def require_tenant_pair!(resource, %{record: record}, op) when is_map(record) do
+    with {:ok, new_tenant} <- resolve_side(resource, record, :new, op) do
+      {:ok, :same, nil, new_tenant}
+    end
+  end
 
-  # Value-free wrapper: a raising `tenant_mfa` becomes `:error` (no row bytes escape),
-  # which the `tenant_changed?/2` match treats as "not changed".
-  defp safe_resolve(resource, row) do
-    resolve_tenant(resource, row)
+  defp resolve_side(resource, row, side, op) do
+    case resolve_tenant(resource, row) do
+      {:ok, tenant} ->
+        {:ok, tenant}
+
+      {:error, :tenant_required} ->
+        raise Error.exception(
+                reason: :tenant_required,
+                resource: resource,
+                op: op,
+                shape: "side=#{side}"
+              )
+    end
   rescue
-    _ -> :error
-  end
+    e in AshReplicant.Error ->
+      reraise e, __STACKTRACE__
 
-  @spec writable_target(module(), String.t()) :: {:ok, atom()} | :skip
-  def writable_target(resource, source_col) when is_binary(source_col) do
-    skip = Info.replicant_skip!(resource)
-    cloak = cloak_attributes(resource)
-    attrs = attribute_names(resource)
-    col = to_existing_atom(source_col)
-
-    cond do
-      is_nil(col) -> :skip
-      col in skip -> :skip
-      col in cloak -> {:ok, String.to_existing_atom("encrypted_#{source_col}")}
-      MapSet.member?(attrs, col) -> {:ok, col}
-      true -> :skip
-    end
+    # A RAISING tenant_mfa on either side: value-free structural halt, never
+    # an unscrubbed row value (the pre-B4 CAVEAT class — deleted).
+    _other ->
+      raise Error.exception(
+              reason: :tenant_resolution_failed,
+              resource: resource,
+              op: op,
+              shape: "side=#{side}"
+            )
   end
 
   @typedoc "The batch-invariant upsert reflection: `{skip, cloak_attrs, attribute_names}`."

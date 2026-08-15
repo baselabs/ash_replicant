@@ -176,6 +176,15 @@ defmodule AshReplicant.Test.MfaDomain do
   end
 end
 
+defmodule AshReplicant.Test.RaisingMfaDomain do
+  @moduledoc false
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource AshReplicant.Test.RaisingMfaOrder
+  end
+end
+
 defmodule AshReplicant.Test.MfaOrder do
   @moduledoc """
   Ets-backed replicant resource exercising `tenant_mfa {m, f, [extra_arg]}`.
