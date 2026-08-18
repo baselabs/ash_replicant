@@ -220,9 +220,12 @@ defmodule AshReplicant.Telemetry do
   # is defensive documentation for any future port, not a reachable rejection
   # here. No absorption check: `v + 1 != v` would reject every finite float
   # >= 2^53 (cross-vendor finding) — large finite floats are legitimate.
-  defp finite_non_negative_number?(v)
-       when is_number(v) and v >= 0,
-       do: v == v
+  defp finite_non_negative_number?(v) when is_number(v) and v >= 0 do
+    # NaN is the only value for which `v == v` is false (IEEE 754); the
+    # same-operand lint cannot see that.
+    # credo:disable-for-next-line Credo.Check.Warning.OperationOnSameValues
+    v == v
+  end
 
   defp finite_non_negative_number?(_v), do: false
 end

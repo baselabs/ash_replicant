@@ -184,14 +184,20 @@ defmodule AshReplicant.Resolver do
       reraise e, __STACKTRACE__
 
     # A RAISING tenant_mfa on either side: value-free structural halt, never
-    # an unscrubbed row value (the pre-B4 CAVEAT class — deleted).
-    _other ->
-      raise Error.exception(
-              reason: :tenant_resolution_failed,
-              resource: resource,
-              op: op,
-              shape: "side=#{side}"
-            )
+    # an unscrubbed row value (the pre-B4 CAVEAT class — deleted). Raised in
+    # a helper OUTSIDE the rescue body — this is a CONVERSION of an arbitrary
+    # fault into a new structural error, not a lost-stacktrace re-raise.
+    other ->
+      tenant_resolution_failed(other, resource, side, op)
+  end
+
+  defp tenant_resolution_failed(_fault, resource, side, op) do
+    raise Error.exception(
+            reason: :tenant_resolution_failed,
+            resource: resource,
+            op: op,
+            shape: "side=#{side}"
+          )
   end
 
   @typedoc "The batch-invariant upsert reflection: `{skip, cloak_attrs, attribute_names}`."

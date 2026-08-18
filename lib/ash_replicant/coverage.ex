@@ -248,7 +248,7 @@ defmodule AshReplicant.Coverage do
 
   defp business_key_is_pk?(fact, pk) do
     bk = fact.business_key
-    length(bk) > 0 and Enum.sort(bk) == Enum.sort(pk)
+    bk != [] and Enum.sort(bk) == Enum.sort(pk)
   end
 
   @doc """
@@ -737,13 +737,13 @@ defmodule AshReplicant.Coverage do
   # `{:error, :unreachable}` atom — callers route it through their
   # census-fault branch and never query or stop a placeholder.
   defp start_preflight_connection(opts) do
-    unless is_nil(resolved_database(opts)) do
+    if is_nil(resolved_database(opts)) do
+      {:error, :unreachable}
+    else
       case Postgrex.start_link(opts) do
         {:ok, conn} -> {:ok, conn}
         {:error, _reason} -> {:error, :unreachable}
       end
-    else
-      {:error, :unreachable}
     end
   rescue
     _ -> {:error, :unreachable}

@@ -302,7 +302,7 @@ defmodule AshReplicant.EffectOnceDiscriminatorTest do
     assert Enum.count(o2, &match?([_, _, nil], &1)) == 1,
            "exactly one open o2 version: the prior one must be CLOSED by its own close invocation, not left open by a replayed-away claim"
 
-    assert Enum.count(versions("o1"), &match?([_, _, nil], &1)) == 0,
+    refute Enum.any?(versions("o1"), &match?([_, _, nil], &1)),
            "o1's version must be terminally closed by close_prior"
 
     # Both close invocations recorded their auxiliary effect — the second
