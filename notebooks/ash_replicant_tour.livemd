@@ -536,10 +536,12 @@ defmodule MyApp.ReplicantCheckpoint do
 end
 ```
 
-> The checkpoint is an internal watermark. If your app exposes its domain on a wire
-> surface (JSON:API, MCP), pass `authorizers: [Ash.Policy.Authorizer]` and declare a
-> `policies do` block to lock it down — the sink reads/upserts with `authorize?: false`,
-> so effect-once is never gated by those policies. `authorizers:` defaults to `[]`.
+> The checkpoint is an internal watermark, and the generated resource is
+> **default-deny**: it carries `Ash.Policy.Authorizer` with an empty policy set, so
+> every external actor is forbidden on every action — even on a wire surface
+> (JSON:API, MCP). Declare a `policies do` block to grant specific access; the sink
+> reads/upserts with `authorize?: false`, so effect-once is never gated by policy.
+> `authorizers: []` reproduces the earlier unguarded shape (ADR-0014).
 
 **Step 2 — the sink** (carries repo/domains/checkpoint; `slot_name` is baked in here —
 it is *not* a `start_link` option, and it keys both the `:persistent_term` index and

@@ -45,10 +45,28 @@ defmodule AshReplicant.Test.AdmittedGeneration do
           database: "test-database"
         }),
       publication: publication,
-      dynamic_repo: dynamic_repo
+      dynamic_repo: dynamic_repo,
+      owner: Keyword.get(opts, :owner, placeholder_owner())
     }
 
     :persistent_term.put({AshReplicant, config.slot_name}, generation)
     generation
+  end
+
+  # ADR-0014: a generation admits callbacks only while its owner is alive.
+  # Tests that put! a generation without a real pipeline owner get a live
+  # placeholder tied to the CALLER — it exits when the caller does, so it can
+  # never outlive the test that owns the generation.
+  defp placeholder_owner do
+    caller = self()
+
+    spawn_link(fn ->
+      ref = Process.monitor(caller)
+
+      receive do
+        {:DOWN, ^ref, :process, _pid, _reason} -> :ok
+        :stop -> :ok
+      end
+    end)
   end
 end

@@ -26,7 +26,8 @@ defmodule AshReplicant do
   def version, do: @version
 
   @doc """
-  Start a CDC pipeline that mirrors into Ash resources. `opts`:
+  Start a CDC pipeline that mirrors into Ash resources, owned by a
+  `AshReplicant.PipelineOwner` that monitors it. `opts`:
 
     * `:sink` — a module built with `use AshReplicant.Sink` (carries repo/domains/checkpoint/slot).
     * `:connection` — Postgrex opts (point at a standby).
@@ -47,19 +48,15 @@ defmodule AshReplicant do
 
   Builds the `{schema,table}=>resource` index from the sink's domains, **fails
   closed** on a duplicate or missing source table, caches the index in
-  `:persistent_term`, then starts the `replicant` pipeline.
+  `:persistent_term`, then starts the `replicant` pipeline. Returns the
+  OWNER's pid (linked to the caller); a host supervisor should start the same
+  thing through `AshReplicant.PipelineOwner.child_spec/1` instead. When the
+  pipeline exits for any reason the owner erases the generation, so the slot
+  is immediately re-activatable (ADR-0014).
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
-    with {:ok, sink, sink_config} <- validate_sink(opts),
-         {:ok, source_identity} <- validate_source_identity(opts),
-         {:ok, publication} <- normalize_publication(Keyword.get(opts, :publication)) do
-      slot_name = sink_config.slot_name
-
-      activation_lock(slot_name, fn ->
-        activate(opts, sink, sink_config, source_identity, publication)
-      end)
-    end
+    AshReplicant.PipelineOwner.start_link(opts)
   end
 
   @doc """
@@ -79,6 +76,22 @@ defmodule AshReplicant do
   @doc false
   def erase_generation(slot_name, generation),
     do: erase_generation_key({AshReplicant, slot_name}, generation)
+
+  @doc false
+  # The pending-owner handshake's reap: if the caller died after activation
+  # succeeded but before adoption, the written generation names `owner_pid`
+  # as its owner — erase it (and stop any pipeline it started). Owned by
+  # PipelineOwner, not the public API.
+  def reclaim_owned_generation(slot_name, owner_pid) do
+    case :persistent_term.get({AshReplicant, slot_name}, :none) do
+      %Generation{reference: reference, owner: ^owner_pid} ->
+        _ = safe_stop(slot_name)
+        erase_generation_key({AshReplicant, slot_name}, reference)
+
+      _other ->
+        :ok
+    end
+  end
 
   @doc """
   Adopt a legacy slot-only watermark into a source-bound checkpoint row (the
@@ -153,17 +166,30 @@ defmodule AshReplicant do
     end
   end
 
-  # The operator surfaces run OFFLINE: they refuse while the slot has a live
-  # pipeline generation (the lease/activation state a running sink owns).
+  # The operator surfaces run OFFLINE: they refuse while the slot has a LIVE
+  # owner's generation (the lease/activation state a running sink owns). An
+  # entry whose owner is gone is reaped — with any orphan pipeline — instead
+  # of wedging recovery on a stale admission.
   defp offline_slot_operation(slot_name, operation) do
     activation_lock(slot_name, fn ->
-      if :persistent_term.get({AshReplicant, slot_name}, :none) == :none do
-        operation.()
-      else
-        {:error,
-         Error.exception(reason: :config_invalid, resource: nil, op: :slot_already_active)}
-      end
+      offline_slot_step(
+        slot_name,
+        :persistent_term.get({AshReplicant, slot_name}, :none),
+        operation
+      )
     end)
+  end
+
+  defp offline_slot_step(_slot_name, :none, operation), do: operation.()
+
+  defp offline_slot_step(slot_name, %Generation{owner: owner}, operation) do
+    if owner_alive?(owner) do
+      {:error, Error.exception(reason: :config_invalid, resource: nil, op: :slot_already_active)}
+    else
+      _ = safe_stop(slot_name)
+      :persistent_term.erase({AshReplicant, slot_name})
+      operation.()
+    end
   end
 
   defp validate_watermark(lsn) when is_integer(lsn) and lsn >= 0, do: :ok
@@ -421,9 +447,28 @@ defmodule AshReplicant do
     :failover
   ]
 
-  defp activate(opts, sink, sink_config, source_identity, publication) do
-    slot_name = sink_config.slot_name
-    key = {AshReplicant, slot_name}
+  # The owner's activation body (ADR-0014): the full validate + preflight +
+  # lock chain, run in the STARTING CALLER (PipelineOwner.start_link/1) so
+  # start errors return synchronously with the chain's own error shapes and a
+  # failed start never takes the caller down with it. A generation whose owner
+  # is gone admits nothing but would block re-activation — it is reaped (with
+  # any orphan pipeline) and replaced by the fresh activation.
+  @doc false
+  @spec activate_owner(keyword(), pid()) ::
+          {:ok, %{slot_name: String.t(), generation_ref: reference(), pipeline_pid: pid()}}
+          | {:error, term()}
+  def activate_owner(opts, owner_pid) when is_list(opts) and is_pid(owner_pid) do
+    with {:ok, sink, sink_config} <- validate_sink(opts),
+         {:ok, source_identity} <- validate_source_identity(opts),
+         {:ok, publication} <- normalize_publication(Keyword.get(opts, :publication)) do
+      activation_lock(sink_config.slot_name, fn ->
+        admit_slot(opts, sink, sink_config, source_identity, publication, owner_pid)
+      end)
+    end
+  end
+
+  defp admit_slot(opts, sink, sink_config, source_identity, publication, owner_pid) do
+    key = {AshReplicant, sink_config.slot_name}
 
     case :persistent_term.get(key, :none) do
       :none ->
@@ -433,11 +478,44 @@ defmodule AshReplicant do
           sink,
           sink_config,
           source_identity,
-          publication
+          publication,
+          owner_pid
         )
 
-      _active_generation ->
-        {:error, :slot_already_active}
+      %Generation{owner: owner} = _entry ->
+        admit_or_replace(
+          key,
+          opts,
+          sink,
+          sink_config,
+          source_identity,
+          publication,
+          owner_pid,
+          owner
+        )
+    end
+  end
+
+  # Live owner = live configuration (reject the duplicate start); dead owner
+  # = the stale entry is reaped, together with any orphan pipeline, and
+  # replaced by this activation.
+  defp admit_or_replace(
+         key,
+         opts,
+         sink,
+         sink_config,
+         source_identity,
+         publication,
+         owner_pid,
+         owner
+       ) do
+    if owner_alive?(owner) do
+      {:error, :slot_already_active}
+    else
+      _ = safe_stop(sink_config.slot_name)
+      :persistent_term.erase(key)
+
+      start_with_generation(key, opts, sink, sink_config, source_identity, publication, owner_pid)
     end
   end
 
@@ -447,7 +525,8 @@ defmodule AshReplicant do
          sink,
          sink_config,
          source_identity,
-         publication
+         publication,
+         owner_pid
        ) do
     with {:ok, manifest} <- AshReplicant.Destination.manifest(sink_config),
          {:ok, source_contract} <-
@@ -484,15 +563,27 @@ defmodule AshReplicant do
         code_fingerprint: code_fingerprint,
         source_identity: source_identity,
         publication: publication,
-        dynamic_repo: dynamic_repo
+        dynamic_repo: dynamic_repo,
+        owner: owner_pid
       }
 
       :persistent_term.put(key, runtime)
 
       result = safe_start(opts, sink_config.slot_name, sink)
 
-      if not match?({:ok, _pid}, result), do: erase_generation_key(key, reference)
-      result
+      case result do
+        {:ok, pipeline_pid} ->
+          {:ok,
+           %{
+             slot_name: sink_config.slot_name,
+             generation_ref: reference,
+             pipeline_pid: pipeline_pid
+           }}
+
+        _start_failed ->
+          erase_generation_key(key, reference)
+          result
+      end
     end
   end
 
@@ -520,8 +611,9 @@ defmodule AshReplicant do
   end
 
   defp run_admitted_callback(slot_name, sink, effect) do
-    with %Generation{sink: ^sink} = generation <-
+    with %Generation{sink: ^sink, owner: owner} = generation <-
            :persistent_term.get({AshReplicant, slot_name}, :none),
+         true <- owner_alive?(owner),
          :ok <- validate_generation(generation),
          {:ok, current_dynamic_repo} <- current_dynamic_repo(generation.sink_config.repo),
          true <-
@@ -684,6 +776,16 @@ defmodule AshReplicant do
     do: {:ok, publication}
 
   defp normalize_publication(_publication), do: {:error, :config_invalid}
+
+  # A generation is owned only by a live local owner (ADR-0014): anything
+  # else — a dead owner, a foreign pid shape — fails closed at every
+  # consumer. Remote pids cannot be checked locally and cannot occur on the
+  # single-node runtime Replicant 1.x guarantees; treat them as unowned.
+  defp owner_alive?(owner) when is_pid(owner) do
+    node(owner) == node() and Process.alive?(owner)
+  end
+
+  defp owner_alive?(_other), do: false
 
   defp activation_lock(slot_name, fun),
     do: :global.trans({{__MODULE__, node(), slot_name}, self()}, fun)

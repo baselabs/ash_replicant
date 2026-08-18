@@ -65,17 +65,29 @@ defmodule AshReplicant.CheckpointPolicyIntegrationTest do
              )
   end
 
-  test "the DEFAULT checkpoint stays open under authorize?: true (no authorizer to enforce)" do
-    {:ok, _} =
-      Ash.create(Checkpoint, source_row("open-slot", 3),
-        action: :upsert,
-        authorize?: false
-      )
+  test "the DEFAULT checkpoint is default-deny: external actors forbidden, sink bypass functional" do
+    # The B7 flip: the generated resource now carries the policy authorizer
+    # with an empty policy set, so the default DENIES external actors (the
+    # pre-B7 shape is available via `authorizers: []`).
+    assert {:error, %Ash.Error.Forbidden{}} =
+             Ash.get(Checkpoint, key("open-slot"), actor: %{system: true}, authorize?: true)
 
-    # No authorizer → authorize?: true is a no-op → the row is returned. This is the
-    # pre-0.4 behaviour, proving the opt is purely additive.
-    assert Ash.get!(Checkpoint, key("open-slot"), actor: %{system: false}, authorize?: true).commit_lsn ==
-             3
+    assert {:error, %Ash.Error.Forbidden{}} =
+             Ash.create(Checkpoint, source_row("open-slot", 5),
+               action: :upsert,
+               actor: %{system: true},
+               authorize?: true
+             )
+
+    # The sink's authorize?: false path is untouched by the authorizer:
+    # effect-once reads and writes still work on the DEFAULT resource.
+    assert {:ok, _} =
+             Ash.create(Checkpoint, source_row("open-slot", 3),
+               action: :upsert,
+               authorize?: false
+             )
+
+    assert Ash.get!(Checkpoint, key("open-slot"), authorize?: false).commit_lsn == 3
   end
 
   # The B2 source-bound shape: every access keys the (system, database, slot) triple.

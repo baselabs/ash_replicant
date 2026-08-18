@@ -85,8 +85,8 @@ defmodule AshReplicant.SourceCoverageTest do
   use ExUnit.Case, async: false
   @moduletag :integration
 
-  alias AshReplicant.Test.{Checkpoint, Marquee, PG}
   alias AshReplicant.Test.CheckpointBinding.{CovIgnoringSink, CovSink}
+  alias AshReplicant.Test.{Marquee, PG}
   alias Ecto.Adapters.SQL.Sandbox
 
   @slot "b3_cov_slot"
@@ -152,10 +152,25 @@ defmodule AshReplicant.SourceCoverageTest do
     )
   end
 
+  # Bounded load-aware poll (battery lesson: fixed sleeps flake under load).
+  defp eventually(fun, polls \\ 400) do
+    cond do
+      fun.() ->
+        :ok
+
+      polls == 0 ->
+        flunk("condition not reached within the poll budget")
+
+      true ->
+        Process.sleep(25)
+        eventually(fun, polls - 1)
+    end
+  end
+
   test "additive-column red: ALTER TABLE ADD COLUMN upstream halts the first changed row, checkpoint unchanged" do
     ref = attach()
 
-    assert {:ok, _pid} = start(CovSink)
+    assert {:ok, _owner} = start(CovSink)
     assert_receive {:telemetry, ^ref, [:replicant, :connection, :slot_active], %{}}, 15_000
 
     Marquee.q!("ALTER TABLE #{@src} ADD COLUMN surprise_col text")
@@ -170,6 +185,25 @@ defmodule AshReplicant.SourceCoverageTest do
       Marquee.q!("SELECT commit_lsn FROM ash_replicant_checkpoints WHERE slot_name = $1", [@slot]).rows
 
     assert is_nil(lsn)
+
+    # B7/ADR-0014: the fail-closed halt is PERMANENT, and the owner erases
+    # the generation when the pipeline exits — no stale admission state
+    # wedges the slot. Re-activation proceeds to its own preflight verdict
+    # (the unmapped column is now a START-gate red, not a wedge), and the
+    # operator can then drop the column or extend the skip to recover.
+    eventually(fn -> :persistent_term.get({AshReplicant, @slot}, :none) == :none end)
+
+    assert {:error, %AshReplicant.Error{reason: :source_column_unmapped}} = start(CovSink)
+    assert :none == :persistent_term.get({AshReplicant, @slot}, :none)
+
+    # Recovery path: drop the offending column and the slot activates again.
+    Marquee.q!("ALTER TABLE #{@src} DROP COLUMN surprise_col")
+
+    assert {:ok, _owner2} = start(CovSink)
+    assert_receive {:telemetry, ^ref, [:replicant, :connection, :slot_active], %{}}, 15_000
+
+    assert :ok = AshReplicant.stop_supervised(@slot)
+    assert :none == :persistent_term.get({AshReplicant, @slot}, :none)
   end
 
   test "publication-add red: a table added to the publication halts its first change" do

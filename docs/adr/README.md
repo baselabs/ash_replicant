@@ -26,19 +26,21 @@ the narrative "why"; an ADR is the tracked, per-decision record with code eviden
 | [0011](0011-frozen-reason-and-event-taxonomy.md) | The closed error-reason set and the telemetry event-name inventory are pinned public contract — additive growth only, removal/rename is breaking with migration notes | B5 / D3 / D8 |
 | [0012](0012-snapshot-run-scoped-ordinal-space.md) | One continuing ordinal axis per snapshot run, keyed by the run's consistent point — the axis ADR-0010's operation keys depend on | B6 / C3 |
 | [0013](0013-sensitive-type-shape-classification.md) | Sensitive classification admits only AshCloak cloak attributes, binary-storage attributes, or `skip` — verified by type shape at compile, never ciphertext; the tenant discriminator is never sensitive | Critical Rule 3 |
+| [0014](0014-internal-trust-and-lifecycle-ownership.md) | Generated internal resources are default-deny (policy authorizer, empty policy set); one `PipelineOwner` per live resolver generation monitors its Replicant pipeline, and a dead owner is fail-closed and replaceable | B7 |
 
 ## On-touch gap list (not yet authored — author when a slice next touches the surface)
 
 These decisions are authored by their owning roadmap row (do not bulk-author them
 from historical testimony). Rows whose decision has since been authored are
 retired here: the sensitive type-shape classification row is governed by
-[ADR-0013](0013-sensitive-type-shape-classification.md), and the `REPLICA IDENTITY FULL`
+[ADR-0013](0013-sensitive-type-shape-classification.md); the `REPLICA IDENTITY FULL`
 operational precondition row is governed by
 [ADR-0008](0008-strict-source-coverage.md) (enforced at activation by
 `AshReplicant.Coverage`'s preflight census) with the runtime old-side halt in
-[ADR-0001](0001-fail-closed-multitenancy.md)'s B4 amendment:
+[ADR-0001](0001-fail-closed-multitenancy.md)'s B4 amendment; and the
+tenant-blind layering / pipeline ownership row is governed by
+[ADR-0014](0014-internal-trust-and-lifecycle-ownership.md):
 
 | Decision | Owner | Surface / code evidence |
 |---|---|---|
-| Tenant-blind layering and pipeline ownership | B7 | `AshReplicant`, `AshReplicant.Resolver` |
 | SCD2 destination constraints and continuous validation | C5 | `ValidateHistory`, `AshReplicant.Apply.Scd2` |

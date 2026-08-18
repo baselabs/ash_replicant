@@ -26,20 +26,27 @@ defmodule AshReplicant.Checkpoint do
   ambiguous legacy rows (the NOT NULL identity columns abort `ecto.migrate` on
   any surviving row).
 
-  ## Locking the checkpoint down with policies
+  ## Default-deny trust posture (B7 / ADR-0014)
 
-  The checkpoint is an internal watermark, not tenant data: nothing outside the sink
-  should read or write it. By default the generated resource carries no authorizer (so
-  `policies do` is not even a declarable section), which means a host that exposes it on
-  a wire surface — a JSON:API route, an MCP tool — has no way to enforce that. Pass the
-  policy authorizer to close that:
+  The checkpoint is an internal watermark, not tenant data: nothing outside
+  the sink should read or write it. By default the generated resource carries
+  `Ash.Policy.Authorizer` with NO policies — an empty policy set authorizes
+  nothing, so EVERY external actor is denied every action (fail-closed), even
+  on a wire surface the host adds later.
+
+  The sink always reads and upserts the checkpoint with `authorize?: false`
+  on both paths (its internal read and upsert helpers), so it bypasses policy
+  — effect-once is unaffected by the authorizer. The operator functions
+  (`AshReplicant.adopt_checkpoint/3`, `reset_checkpoint/2`,
+  `acknowledge_checkpoint_timeline/3`) and the `:operator_reset` destroy they
+  route through run on the same bypass.
+
+  To grant specific access, declare your own policies in the module body:
 
       use AshReplicant.Checkpoint,
         repo: MyApp.Repo,
-        domain: MyApp.Domain,
-        authorizers: [Ash.Policy.Authorizer]
+        domain: MyApp.Domain
 
-      # ...then declare your own policies in the module body, e.g. system-only:
       policies do
         default_access_type :strict
 
@@ -48,25 +55,23 @@ defmodule AshReplicant.Checkpoint do
         end
       end
 
-  The sink always reads and upserts the checkpoint with `authorize?: false` on both
-  paths (its internal read and upsert helpers), so it bypasses
-  policy — effect-once is unaffected by whatever policies the host
-  declares, including none. With the authorizer present and no policies declared, the
-  resource is fail-closed to every actor except the sink's `authorize?: false` path,
-  which is the safe default for a watermark.
+  Hosts that already front the resource with their own authorization can
+  reproduce the pre-B7 unguarded shape with `authorizers: []`.
 
-  The generated `:operator_reset` destroy action exists for the operator escape
-  hatch (`AshReplicant.reset_checkpoint/2`) — the sink never destroys mid-flight.
+  The generated `:operator_reset` destroy action exists for the operator
+  escape hatch (`AshReplicant.reset_checkpoint/2`) — the sink never destroys
+  mid-flight. It is a NAMED action (not a primary `:destroy`) so code
+  interfaces and route generators do not auto-discover it.
   """
 
   @doc false
   defmacro __using__(opts) do
     repo = Keyword.fetch!(opts, :repo)
     domain = Keyword.fetch!(opts, :domain)
-    # Opt-in, default []. The consumer passes [Ash.Policy.Authorizer] to make the
-    # generated resource policy-capable and then declares its own `policies do` block;
-    # `authorizers: []` is identical to the option Ash already defaults to.
-    authorizers = Keyword.get(opts, :authorizers, [])
+    # DEFAULT-DENY (B7/ADR-0014): the policy authorizer with an empty policy
+    # set denies every external actor; the sink's authorize?: false paths are
+    # untouched. `authorizers: []` opts out to the pre-B7 unguarded shape.
+    authorizers = Keyword.get(opts, :authorizers, [Ash.Policy.Authorizer])
 
     quote do
       use Ash.Resource,
@@ -167,8 +172,8 @@ defmodule AshReplicant.Checkpoint do
 
         # NAMED destroy (not `defaults [:destroy]`): callable only by
         # AshReplicant.reset_checkpoint/2 — a primary destroy is what code interfaces
-        # and route generators auto-discover, and the resource is unguarded until
-        # default-deny policies land (roadmap B7).
+        # and route generators auto-discover; the named one stays off that surface,
+        # and the default-deny authorizer guards any other caller.
         destroy :operator_reset
       end
     end

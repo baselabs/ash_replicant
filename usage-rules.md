@@ -37,11 +37,11 @@ source_database, slot_name)` from the actual replication session's identity —
 carrying the durable `commit_lsn` watermark (see
 [ADR-0007](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0007-source-bound-checkpoint-effect-once.md)).
 
-To lock the checkpoint down when the host exposes its domain on a wire surface, pass
-`authorizers: [Ash.Policy.Authorizer]` and declare a `policies do` block on the module.
-The sink reads/upserts with `authorize?: false`, so policies never gate effect-once;
-with the authorizer and no policies the resource is fail-closed to everyone but the sink.
-`authorizers:` defaults to `[]` (no behaviour change when omitted).
+The generated resource is **default-deny** (ADR-0014): it carries
+`Ash.Policy.Authorizer` with an empty policy set, forbidding every external actor on
+every action. The sink reads/upserts with `authorize?: false`, so policies never gate
+effect-once. To grant access, declare a `policies do` block on the module; to
+reproduce the earlier unguarded shape, pass `authorizers: []`.
 
 ### 2. Define the sink module
 

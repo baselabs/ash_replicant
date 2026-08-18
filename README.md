@@ -100,15 +100,16 @@ binds the row on every connect before any checkpoint read, admits under a
 `FOR UPDATE` row lock, and advances the watermark monotonically.
 
 The checkpoint is an internal watermark — nothing outside the sink should read or write
-it. If your app exposes its domain on a wire surface (JSON:API, MCP), pass the policy
-authorizer so you can lock the checkpoint down, then declare your own policies:
+it. The generated resource is **default-deny**: it carries `Ash.Policy.Authorizer` with
+an empty policy set, which forbids every external actor on every action — even on a
+wire surface (JSON:API, MCP) you add later. To grant specific access, declare your own
+policies:
 
 ```elixir
 defmodule MyApp.ReplicantCheckpoint do
   use AshReplicant.Checkpoint,
     repo: MyApp.Repo,
-    domain: MyApp.Domain,
-    authorizers: [Ash.Policy.Authorizer]
+    domain: MyApp.Domain
 
   policies do
     default_access_type :strict
@@ -120,10 +121,11 @@ defmodule MyApp.ReplicantCheckpoint do
 end
 ```
 
-The sink reads and upserts the checkpoint with `authorize?: false`, so it bypasses these
-policies and effect-once is unaffected — including when you declare none (which
-fail-closes the resource to every actor except the sink). `authorizers:` defaults to
-`[]`.
+The sink reads and upserts the checkpoint with `authorize?: false`, so it bypasses
+policy — effect-once is unaffected whatever you declare, including nothing (the
+default). Hosts that already front the resource with their own authorization can
+reproduce the earlier unguarded shape with `authorizers: []`
+([ADR-0014](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0014-internal-trust-and-lifecycle-ownership.md)).
 
 **Upgrading from the slot-only shape:** the generated resource changed (see the
 [upgrade runbook](usage-rules.md#upgrading-from-the-slot-only-checkpoint)). With
@@ -269,8 +271,23 @@ AshReplicant.start_link(
 - The `slot_name` comes from the sink (not a `start_link` option).
 - `source_identity` is required. It pins the PostgreSQL system identifier and
   database that the actual replication session must report before checkpoint lookup.
-- Resolver activation is serialized per slot and cached as one generation; a
-  rejected or duplicate start cannot replace or erase the active generation.
+- Resolver activation is serialized per slot and cached as one generation owned by
+  an `AshReplicant.PipelineOwner` that monitors the pipeline: a rejected or
+  duplicate start cannot replace or erase the active generation, and when the
+  pipeline exits (halt, crash, stop) the owner erases it — the slot is
+  immediately re-activatable ([ADR-0014](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0014-internal-trust-and-lifecycle-ownership.md)).
+  Under your own supervision tree, start it as a `:temporary` child:
+
+  ```elixir
+  children = [
+    {AshReplicant.PipelineOwner,
+     sink: MyApp.ReplicantSink,
+     connection: [hostname: "standby.example.com", database: "source_db"],
+     publication: "shop_orders_pub",
+     source_identity: [system_identifier: "7378697629483820647", database: "source_db"],
+     go_forward_only: true}
+  ]
+  ```
 - Rows arrive from the source's CDC stream and are upserted into the mirrors.
 - `streaming`, `max_inflight_lag`, `max_command_retries`, and `failover` are passed
   through to Replicant 1.x.

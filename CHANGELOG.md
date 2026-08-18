@@ -9,6 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
+- The generated checkpoint resource is now **default-deny** (roadmap B7 /
+  ADR-0014): `use AshReplicant.Checkpoint` generates `Ash.Policy.Authorizer`
+  with an empty policy set, forbidding every external actor on every action.
+  The sink and operator paths run `authorize?: false` (unchanged,
+  effect-once is unaffected). Hosts that read or write the checkpoint from
+  their own code without an authorize bypass must now declare a `policies
+  do` block granting that access, or pass `authorizers: []` to reproduce
+  the earlier unguarded shape.
+- `AshReplicant.start_link/1` now returns the `AshReplicant.PipelineOwner`
+  pid (previously the Replicant pipeline pid) and links it to the caller;
+  both are opaque handles and `stop_supervised/1` is unchanged. A
+  host-supervision-tree shutdown now also stops the pipelines owned by
+  that tree.
+
+### Added
+
+- `AshReplicant.PipelineOwner` (roadmap B7 / ADR-0014): one owner per live
+  resolver generation. It runs the full activation chain (same validation,
+  preflights, lock, and synchronous error shapes), records itself as the
+  generation's owner, and monitors the Replicant pipeline — when the
+  pipeline exits (fail-closed halt, crash, external stop, host-tree
+  shutdown) it erases only its own generation and clears the snapshot
+  ordinals, so a halted slot is immediately re-activatable instead of
+  wedged on `:slot_already_active`. `child_spec/1` starts it as a
+  `:temporary` child (id `{AshReplicant.PipelineOwner, slot_name}`, so a
+  duplicate slot in one tree fails at supervisor start). A generation
+  whose owner has died fails closed at callback entry (the pipeline halts
+  itself) and is replaced — reaping any orphan pipeline — by the next
+  activation or offline operator function; offline adopt/reset/acknowledge
+  no longer wedge on a stale entry. Replicant retains transport ownership
+  throughout.
+- ADR-0014 (`docs/adr/0014-internal-trust-and-lifecycle-ownership.md`)
+  governs the internal-trust and lifecycle-ownership frame (and retires
+  the gap-list row "Tenant-blind layering and pipeline ownership").
 - `AshReplicant.DestinationParticipant.operation_key/2` now requires an
   `:invocation` label in the operation context (the sink mints it; manual
   minters — tests, replay probes — must carry the mint-site label). Closes the

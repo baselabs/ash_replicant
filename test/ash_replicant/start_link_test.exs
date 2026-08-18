@@ -353,21 +353,20 @@ defmodule AshReplicant.StartLinkTest do
     key = {AshReplicant, "valid_slot"}
     loser = make_ref()
 
-    # Stop the PIPELINE inside the capture window (not stop_supervised — this
-    # test needs the generation alive after): the port-1 connection retries with
-    # backoff, and an error logged after the window closes trips the structural
-    # gate's uncontrolled-error grep.
+    # The pipeline stays alive throughout (the owner erases the generation
+    # if it dies), so the whole flow lives inside one log window.
     capture_log(fn ->
-      assert {:ok, _pid} = AshReplicant.start_link(start_opts())
-      assert :ok = Replicant.stop("valid_slot")
+      assert {:ok, _owner} = AshReplicant.start_link(start_opts())
+
+      assert %Generation{reference: winner} = runtime = :persistent_term.get(key)
+
+      assert :ok = AshReplicant.erase_generation("valid_slot", loser)
+      assert runtime == :persistent_term.get(key)
+      assert :ok = AshReplicant.erase_generation("valid_slot", winner)
+      assert :none == :persistent_term.get(key, :none)
+
+      assert :ok = AshReplicant.stop_supervised("valid_slot")
     end)
-
-    assert %Generation{reference: winner} = runtime = :persistent_term.get(key)
-
-    assert :ok = AshReplicant.erase_generation("valid_slot", loser)
-    assert runtime == :persistent_term.get(key)
-    assert :ok = AshReplicant.erase_generation("valid_slot", winner)
-    assert :none == :persistent_term.get(key, :none)
   end
 
   test "transport-only Replicant options are forwarded instead of silently discarded" do
@@ -433,71 +432,72 @@ defmodule AshReplicant.StartLinkTest do
   end
 
   test "a foreign effective dynamic Repo is rejected at callback entry" do
+    # One window covers the live pipeline (the retrying port-1 connection)
+    # through the stop — with the generation ALIVE, so the callback error
+    # below is the foreign-repo rejection itself, not a missing generation.
     capture_log(fn ->
-      assert {:ok, _pid} = AshReplicant.start_link(start_opts())
-      # Pipeline-only stop inside the window (the callback below needs the
-      # generation alive); keeps the retrying port-1 connection from logging
-      # past the window into the structural gate's uncontrolled-error grep.
-      assert :ok = Replicant.stop("valid_slot")
+      assert {:ok, _owner} = AshReplicant.start_link(start_opts())
+
+      task =
+        Task.async(fn ->
+          previous =
+            AshReplicant.TestRepo.put_dynamic_repo(DestinationFixtures.ForeignRepo)
+
+          try do
+            ValidSink.checkpoint()
+          after
+            AshReplicant.TestRepo.put_dynamic_repo(previous)
+          end
+        end)
+
+      assert {:error, %AshReplicant.Error{reason: :config_invalid, op: :callback}} =
+               Task.await(task, 15_000)
+
+      assert :ok = AshReplicant.stop_supervised("valid_slot")
     end)
-
-    task =
-      Task.async(fn ->
-        previous =
-          AshReplicant.TestRepo.put_dynamic_repo(DestinationFixtures.ForeignRepo)
-
-        try do
-          ValidSink.checkpoint()
-        after
-          AshReplicant.TestRepo.put_dynamic_repo(previous)
-        end
-      end)
-
-    assert {:error, %AshReplicant.Error{reason: :config_invalid, op: :callback}} =
-             Task.await(task, 15_000)
   end
 
   test "stop waits for a mutating callback to leave the destination lease" do
     observer = self()
 
+    # One window: the pipeline stays live through the callback (the owner
+    # erases the generation if it dies), so the lease is genuinely held
+    # against the stopper, and the retrying port-1 connection never logs
+    # past the window.
     capture_log(fn ->
-      assert {:ok, _pid} = AshReplicant.start_link(start_opts(sink: LeaseSink))
-      # Pipeline-only stop inside the window; the lease callback below runs
-      # against the generation, and a surviving port-1 connection would log its
-      # retry error past the window (structural-gate flake).
-      assert :ok = Replicant.stop("lease_slot")
+      assert {:ok, _owner} = AshReplicant.start_link(start_opts(sink: LeaseSink))
+
+      callback =
+        Task.async(fn ->
+          result =
+            AshReplicant.run_callback("lease_slot", LeaseSink, :mutate, fn config ->
+              send(observer, {:inside_callback, self(), config.dynamic_repo})
+
+              receive do
+                :release_callback -> {:ok, 777}
+              end
+            end)
+
+          {result, AshReplicant.TestRepo.get_dynamic_repo()}
+        end)
+
+      # Callback entry re-validates the admitted generation: a manifest walk plus
+      # a bytecode fingerprint of the ~56-module closure (file reads through the
+      # serialized code server). ~4ms warm; observed >1s once under battery IO
+      # load (coincident with a substrate checkpoint), so budget for load — the
+      # assert still proves entry + dynamic repo, which is its actual subject.
+      assert_receive {:inside_callback, callback_pid, AshReplicant.TestRepo}, 15_000
+
+      stopper = Task.async(fn -> AshReplicant.stop_supervised("lease_slot") end)
+      # Negative window: the lease is HELD, so the stopper must not finish. Load
+      # only makes a held lease more likely to still be held — keep it tight.
+      assert Task.yield(stopper, 50) == nil
+
+      send(callback_pid, :release_callback)
+      assert {{:ok, 777}, AshReplicant.TestRepo} = Task.await(callback, 15_000)
+      assert :ok = Task.await(stopper, 15_000)
+      assert :none == :persistent_term.get({AshReplicant, "lease_slot"}, :none)
     end)
-
-    callback =
-      Task.async(fn ->
-        result =
-          AshReplicant.run_callback("lease_slot", LeaseSink, :mutate, fn config ->
-            send(observer, {:inside_callback, self(), config.dynamic_repo})
-
-            receive do
-              :release_callback -> {:ok, 777}
-            end
-          end)
-
-        {result, AshReplicant.TestRepo.get_dynamic_repo()}
-      end)
-
-    # Callback entry re-validates the admitted generation: a manifest walk plus
-    # a bytecode fingerprint of the ~56-module closure (file reads through the
-    # serialized code server). ~4ms warm; observed >1s once under battery IO
-    # load (coincident with a substrate checkpoint), so budget for load — the
-    # assert still proves entry + dynamic repo, which is its actual subject.
-    assert_receive {:inside_callback, callback_pid, AshReplicant.TestRepo}, 15_000
-
-    stopper = Task.async(fn -> AshReplicant.stop_supervised("lease_slot") end)
-    # Negative window: the lease is HELD, so the stopper must not finish. Load
-    # only makes a held lease more likely to still be held — keep it tight.
-    assert Task.yield(stopper, 50) == nil
-
-    send(callback_pid, :release_callback)
-    assert {{:ok, 777}, AshReplicant.TestRepo} = Task.await(callback, 15_000)
-    assert :ok = Task.await(stopper, 15_000)
-    assert :none == :persistent_term.get({AshReplicant, "lease_slot"}, :none)
   end
 
   test "a hot-loaded sink config is never merged into the admitted generation" do
@@ -508,42 +508,42 @@ defmodule AshReplicant.StartLinkTest do
     try do
       compile_runtime_sink(module, [AshReplicant.Test.Domain])
 
+      # One window: the pipeline stays live (the owner erases the
+      # generation if it dies), so the drift assert below exercises the
+      # LIVE admitted generation, and the port-1 retry noise never logs
+      # past the window.
       capture_log(fn ->
-        assert {:ok, _pid} = AshReplicant.start_link(start_opts(sink: module))
-        # Pipeline-only stop inside the window (generation must survive for the
-        # drift assert below; the retrying port-1 connection must not log past
-        # the window into the structural gate's grep).
-        assert :ok = Replicant.stop("runtime_drift_slot")
+        assert {:ok, _owner} = AshReplicant.start_link(start_opts(sink: module))
+
+        compile_runtime_sink(module, [DestinationFixtures.NamedDefaultDomain])
+
+        handle_schema_change = Function.capture(module, :handle_schema_change, 2)
+
+        assert {:error, %AshReplicant.Error{reason: :config_invalid}} =
+                 handle_schema_change.(
+                   %Replicant.SchemaChange{
+                     kind: :additive,
+                     change: :column_added,
+                     schema: "public",
+                     table: "orders",
+                     detail: "structural"
+                   },
+                   %{}
+                 )
+
+        assert %Generation{sink_config: admitted_config} =
+                 :persistent_term.get({AshReplicant, "runtime_drift_slot"})
+
+        assert admitted_config.domains == [AshReplicant.Test.Domain]
+
+        sink_config = Function.capture(module, :__ash_replicant_config__, 0)
+
+        assert sink_config.().domains == [
+                 DestinationFixtures.NamedDefaultDomain
+               ]
+
+        assert :ok = AshReplicant.stop_supervised("runtime_drift_slot")
       end)
-
-      compile_runtime_sink(module, [DestinationFixtures.NamedDefaultDomain])
-
-      handle_schema_change = Function.capture(module, :handle_schema_change, 2)
-
-      assert {:error, %AshReplicant.Error{reason: :config_invalid}} =
-               handle_schema_change.(
-                 %Replicant.SchemaChange{
-                   kind: :additive,
-                   change: :column_added,
-                   schema: "public",
-                   table: "orders",
-                   detail: "structural"
-                 },
-                 %{}
-               )
-
-      assert %Generation{sink_config: admitted_config} =
-               :persistent_term.get({AshReplicant, "runtime_drift_slot"})
-
-      assert admitted_config.domains == [AshReplicant.Test.Domain]
-
-      sink_config = Function.capture(module, :__ash_replicant_config__, 0)
-
-      assert sink_config.().domains == [
-               DestinationFixtures.NamedDefaultDomain
-             ]
-
-      assert :ok = AshReplicant.stop_supervised("runtime_drift_slot")
     after
       Code.put_compiler_option(:ignore_module_conflict, previous_ignore)
       :persistent_term.erase({AshReplicant, "runtime_drift_slot"})
@@ -560,29 +560,28 @@ defmodule AshReplicant.StartLinkTest do
     try do
       compile_runtime_sink(module, [AshReplicant.Test.Domain], :first)
 
+      # One window, pipeline live through the fingerprint-drift assert (same
+      # shape as the config-drift test above).
       capture_log(fn ->
-        assert {:ok, _pid} = AshReplicant.start_link(start_opts(sink: module))
-        # Pipeline-only stop inside the window (generation must survive for the
-        # fingerprint-drift assert below; same structural-gate flake guard).
-        assert :ok = Replicant.stop("runtime_drift_slot")
+        assert {:ok, _owner} = AshReplicant.start_link(start_opts(sink: module))
+
+        compile_runtime_sink(module, [AshReplicant.Test.Domain], :second)
+        handle_schema_change = Function.capture(module, :handle_schema_change, 2)
+
+        assert {:error, %AshReplicant.Error{reason: :config_invalid}} =
+                 handle_schema_change.(
+                   %Replicant.SchemaChange{
+                     kind: :additive,
+                     change: :column_added,
+                     schema: "public",
+                     table: "orders",
+                     detail: "structural"
+                   },
+                   %{}
+                 )
+
+        assert :ok = AshReplicant.stop_supervised("runtime_drift_slot")
       end)
-
-      compile_runtime_sink(module, [AshReplicant.Test.Domain], :second)
-      handle_schema_change = Function.capture(module, :handle_schema_change, 2)
-
-      assert {:error, %AshReplicant.Error{reason: :config_invalid}} =
-               handle_schema_change.(
-                 %Replicant.SchemaChange{
-                   kind: :additive,
-                   change: :column_added,
-                   schema: "public",
-                   table: "orders",
-                   detail: "structural"
-                 },
-                 %{}
-               )
-
-      assert :ok = AshReplicant.stop_supervised("runtime_drift_slot")
     after
       Code.put_compiler_option(:ignore_module_conflict, previous_ignore)
       :persistent_term.erase({AshReplicant, "runtime_drift_slot"})

@@ -26,8 +26,16 @@ the first checkpoint read. The durable checkpoint is additionally bound to the
 actual session identity (source system, database, slot, with the session
 timeline recorded and any timeline change an explicit operator decision) and
 carries a canonical contract manifest classified at every reconnect under the
-checkpoint lock. Each slot has one serialized runtime generation, so
-duplicate starts cannot replace or erase the active resolver and identity state.
+checkpoint lock. Each slot has one serialized runtime generation, **owned by an
+`AshReplicant.PipelineOwner`** that runs activation and monitors the pipeline
+(`:temporary` under the host supervisor; Replicant retains transport ownership):
+when the pipeline exits the owner erases the generation, a dead owner's
+generation fails closed at callback entry and is replaceable at the next
+activation, and duplicate starts cannot replace or erase the live generation's
+configuration ([ADR-0014](docs/adr/0014-internal-trust-and-lifecycle-ownership.md)).
+Generated internal resources (the checkpoint) are **default-deny**: the policy
+authorizer with an empty policy set forbids every external actor; the sink and
+operator paths run `authorize?: false`.
 
 ## Critical rules
 

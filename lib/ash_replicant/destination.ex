@@ -80,7 +80,8 @@ defmodule AshReplicant.Destination do
       :code_fingerprint,
       :source_identity,
       :publication,
-      :dynamic_repo
+      :dynamic_repo,
+      :owner
     ]
     defstruct @enforce_keys
 
@@ -99,7 +100,8 @@ defmodule AshReplicant.Destination do
             code_fingerprint: binary(),
             source_identity: map(),
             publication: [String.t()],
-            dynamic_repo: atom() | pid()
+            dynamic_repo: atom() | pid(),
+            owner: pid()
           }
   end
 
