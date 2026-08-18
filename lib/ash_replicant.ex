@@ -759,7 +759,9 @@ defmodule AshReplicant do
     if Keyword.has_key?(opts, :messages) do
       opts
     else
-      if function_exported?(sink, :handle_message, 2), do: Keyword.put(opts, :messages, true), else: opts
+      if function_exported?(sink, :handle_message, 2),
+        do: Keyword.put(opts, :messages, true),
+        else: opts
     end
   end
 

@@ -203,6 +203,7 @@ defmodule AshReplicant.ActionContractFreezeTest do
 
       assert Code.ensure_loaded?(sink)
       assert function_exported?(sink, :handle_transaction, 1)
+
       refute function_exported?(sink, :handle_message, 2),
              "a route-less sink must keep the message callback ABSENT"
 
@@ -256,7 +257,8 @@ defmodule AshReplicant.ActionContractFreezeTest do
       {{:destination_notifier_required, DestinationFixtures.LoadRoot, :read,
         DestinationFixtures.LoadNotifier}, nil},
       {{:destination_participant_cycle, nil, nil}, nil},
-      {{:destination_message_route_invalid, AshReplicant.Test.Messages.NonceOutbox, :record}, nil},
+      {{:destination_message_route_invalid, AshReplicant.Test.Messages.NonceOutbox, :record},
+       nil},
       {{:destination_repo_not_postgres, DestinationFixtures.SimpleRoot}, nil},
       {{:destination_repo_dynamic, DestinationFixtures.ForeignChild}, nil},
       {{:destination_repo_mismatch, DestinationFixtures.ForeignMappedRoot}, nil}

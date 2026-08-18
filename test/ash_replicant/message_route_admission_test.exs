@@ -158,7 +158,8 @@ defmodule AshReplicant.MessageRouteAdmissionTest do
       # the normalized protection — the destination_test precedent.
       {:ok, manifest} = manifest_for([{"outbox", Fixtures.Outbox, :record}])
 
-      entry = Enum.find(manifest.entries, &(&1.resource == Fixtures.Outbox and &1.role == :message))
+      entry =
+        Enum.find(manifest.entries, &(&1.resource == Fixtures.Outbox and &1.role == :message))
 
       no_retention = put_in(entry.protection.retention, nil)
 
@@ -177,7 +178,10 @@ defmodule AshReplicant.MessageRouteAdmissionTest do
       assert Enum.any?(
                manifest.entries,
                &(&1.resource == Fixtures.PeerOutbox and &1.role == :message and
-                   match?(%{external_effect: AshReplicant.Test.Messages.PeerEffect}, &1.protection))
+                   match?(
+                     %{external_effect: AshReplicant.Test.Messages.PeerEffect},
+                     &1.protection
+                   ))
              )
 
       # The auxiliary rejection is unchanged: an external effect on a

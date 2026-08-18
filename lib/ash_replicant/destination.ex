@@ -766,7 +766,12 @@ defmodule AshReplicant.Destination do
   end
 
   defp inspect_action(resource, action, message_root?) do
-    context = %Context{resource: resource, action: action.name, kind: :manual, message_route?: message_root?}
+    context = %Context{
+      resource: resource,
+      action: action.name,
+      kind: :manual,
+      message_route?: message_root?
+    }
 
     with {:ok, manual_refs} <- inspect_manual(action_implementation(action), context),
          {:ok, callback_refs} <- inspect_action_callbacks(action, context),
@@ -781,7 +786,13 @@ defmodule AshReplicant.Destination do
              message_root?
            ),
          {:ok, validation_refs} <-
-           inspect_items(resource, action, action_validations(resource, action), :validation, message_root?),
+           inspect_items(
+             resource,
+             action,
+             action_validations(resource, action),
+             :validation,
+             message_root?
+           ),
          {:ok, preparation_refs} <-
            inspect_items(
              resource,
@@ -1031,7 +1042,13 @@ defmodule AshReplicant.Destination do
   defp inspect_items(resource, action, items, kind, message_root?) do
     Enum.reduce_while(items, {:ok, []}, fn item, {:ok, refs} ->
       {module, opts, actual_kind} = item_module_opts(item, kind)
-      context = %Context{resource: resource, action: action.name, kind: actual_kind, message_route?: message_root?}
+
+      context = %Context{
+        resource: resource,
+        action: action.name,
+        kind: actual_kind,
+        message_route?: message_root?
+      }
 
       with {:ok, found} <- inspect_item(module, opts, context),
            {:ok, conditional} <- inspect_raw_items(Map.get(item, :where, []), context) do
@@ -1227,14 +1244,12 @@ defmodule AshReplicant.Destination do
   # replay-binding: same identity + different content halts, never replays
   # and never re-executes), a declared positive retention, and — on message
   # routes only — an optional external peer effect under three-state recovery.
-  defp validate_onetime_entry(
-         %Entry{
-           role: :message,
-           resource: resource,
-           action: action_name,
-           protection: protection
-         }
-       ) do
+  defp validate_onetime_entry(%Entry{
+         role: :message,
+         resource: resource,
+         action: action_name,
+         protection: protection
+       }) do
     action = Ash.Resource.Info.action(resource, action_name)
 
     with true <- is_map(protection),

@@ -143,7 +143,10 @@ defmodule AshReplicant.MessagesTest do
       {:ok, change_operation} = Context.operation_context(config, change, :upsert)
 
       assert {:ok, change_key} =
-               AshReplicant.DestinationParticipant.operation_key(change_operation, Fixtures.Outbox)
+               AshReplicant.DestinationParticipant.operation_key(
+                 change_operation,
+                 Fixtures.Outbox
+               )
 
       refute key == change_key
     end
