@@ -69,6 +69,7 @@ defmodule AshReplicant.Test.Messages do
 
   def with_digest_keys!(keys, fun) do
     {_keys, restore} = put_digest_keys!(keys)
+
     try do
       fun.()
     after
@@ -139,7 +140,8 @@ defmodule AshReplicant.Test.Messages do
       :persistent_term.put(AshReplicant.Test.Messages.peer_calls_key(), calls ++ [kind])
     end
 
-    defp record_count, do: :persistent_term.get(AshReplicant.Test.Messages.peer_calls_key(), []) |> length()
+    defp record_count,
+      do: :persistent_term.get(AshReplicant.Test.Messages.peer_calls_key(), []) |> length()
   end
 
   defmodule Outbox do
@@ -167,7 +169,6 @@ defmodule AshReplicant.Test.Messages do
         accept [:content]
         argument :operation_key, :string, allow_nil?: false, public?: false
         argument :content_digest, :string, allow_nil?: false, public?: false
-
       end
     end
 
@@ -218,7 +219,6 @@ defmodule AshReplicant.Test.Messages do
         accept [:content]
         argument :operation_key, :string, allow_nil?: false, public?: false
         argument :content_digest, :string, allow_nil?: false, public?: false
-
       end
     end
 
