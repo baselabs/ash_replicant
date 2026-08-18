@@ -44,7 +44,9 @@ the quoting home). This record covers the VOCABULARY freeze.
 2. Additive growth (a NEW reason for a NEW halt class, a NEW event for a NEW
    capability) is allowed with a CHANGELOG entry in the same landing.
 3. Removal, rename, or semantic re-pointing of an existing reason or event
-   name is breaking: it requires a minor-version boundary, a migration note
+   name is breaking under the project's SemVer 2.0.0 policy: on the current
+   0.x line it lands behind a CHANGELOG Breaking header at a minor boundary;
+   from 1.0.0 on it requires a MAJOR version bump, a migration note
    (old name → new name), and a grep sweep of docs/tests that match the old
    name. The freeze tests are the tripwire: the live reason-mint pin and the
    conformance gate go red if the sets drift from the code.
