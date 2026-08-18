@@ -15,6 +15,16 @@ defmodule AshReplicant.TenantReassignmentTest.TenantMirrorOrder do
     tenant_attribute(:org_id)
   end
 
+  # Required by ValidateMultitenancy (Critical Rule 2): the per-row tenant the
+  # sink passes as `tenant:` is honored by Ash only under declared
+  # multitenancy. Without the block the verifier fails this fixture at
+  # compile and its async warning trips the structural battery's no-error
+  # gate on a fresh compile.
+  multitenancy do
+    strategy :attribute
+    attribute :org_id
+  end
+
   attributes do
     attribute :id, :string do
       primary_key? true
