@@ -10,7 +10,7 @@ defmodule AshReplicant.Resolver do
     * `resolve_tenant/2` — per-row tenant from `tenant_attribute` / `tenant_mfa`,
       failing closed with `:tenant_required` on a nil/`false`/blank tenant (any value Ash would
       treat as unscoped); `resolve_tenant!/3` is the raising variant every apply path shares.
-    * `writable_target/2` / `attrs_for_upsert/2` — map source string columns to
+    * `attrs_for_upsert/2` — map source string columns to
       their real writable targets, routing AshCloak-sensitive columns through the
       cloak argument while naming `encrypted_<col>` in `upsert_fields`. The bulk
       snapshot path computes `upsert_reflection/1` once and maps each row via

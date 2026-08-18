@@ -396,7 +396,8 @@ defmodule AshReplicant.Scd2ApplyTest do
 
     # Reassign the row from t1 to t2 (SAME business key "y", NEW tenant). REPLICA IDENTITY
     # FULL → old_record carries the OLD org_id. `bk_changed?` is false (order_id unchanged),
-    # so ONLY `Resolver.tenant_changed?` triggers the terminal close of the old-tenant version.
+    # so ONLY `Resolver.require_tenant_pair!/3`'s reassignment verdict triggers the terminal
+    # close of the old-tenant version.
     #
     # Pre-fix this left t1's version OPEN (the per-tenant open-uniq index permits it, so no
     # halt) while opening a fresh current version under t2 — the entity read as "current"

@@ -195,9 +195,10 @@ format, Credo, and Dialyzer. Changes are recorded under `[Unreleased]` in
 
 ## Docs & lifecycle-artifact policy
 
-- **Tracked / published:** `AGENTS.md`, `README.md`, `CHANGELOG.md`,
-  `CONTRIBUTING.md`, `usage-rules.md`, `LICENSE`, `NOTICE`, and the project charter
-  (`docs/CHARTER.md`).
+- **Tracked / published:** `AGENTS.md`, `CLAUDE.md`, `README.md`, `CHANGELOG.md`,
+  `CONTRIBUTING.md`, `usage-rules.md`, `LICENSE`, `NOTICE`, the project charter
+  (`docs/CHARTER.md`), `docs/ROADMAP.md`, the ADR corpus (`docs/adr/`), and the
+  historical implementation handoffs (`docs/handoffs/`).
 - **Never tracked (local-only):** the superpowers lifecycle artifacts — brainstorm
   specs, plans, exec notes, reviews, and handoffs — under `/docs/superpowers/`, which
   is **gitignored** (the `replicant` convention). Keep them there.

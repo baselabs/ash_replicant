@@ -83,7 +83,7 @@ defmodule AshReplicant.SessionIdentityTest do
   end
 
   test "a wrong actual-session expectation halts before checkpoint lookup and stays value-free" do
-    identity_ref = attach_identity_events()
+    _identity_ref = attach_identity_events()
     access_ref = attach_checkpoint_access()
 
     sentinel_system = "sentinel-wrong-system"

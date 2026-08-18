@@ -203,6 +203,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   catch-all scrub — unreachable once admission returns error-tagged
   connections — is removed (the closed-case shape `reconnect_check/5`
   already uses).
+- The structural-test gate prints the offending lines on an
+  uncontrolled-error trip (its raw capture is otherwise trap-deleted,
+  leaving an intermittent trip undiagnosable when it does not
+  re-reproduce).
 - Reconcile public policy, snapshot, tenancy, notifier, and release-history
   documentation with live code. Host policies are not re-gated, the current
   adapter supports v1 snapshots only, and tenant reassignment requires the old

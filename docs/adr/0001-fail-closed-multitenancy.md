@@ -116,7 +116,9 @@ project's fail-closed-at-compile-time posture (`ValidateSensitive`, `ValidateTen
 ## Evidence
 
 - Runtime: `AshReplicant.Resolver.resolve_tenant/2`, `resolve_tenant!/3`, and
-  `tenant_changed?/2`; `AshReplicant.Apply`; `AshReplicant.Apply.Scd2`.
+  `require_tenant_pair!/3` (the old-side pair gate the B4 amendment added;
+  the former `tenant_changed?/2` was removed with its fail-open caveat);
+  `AshReplicant.Apply`; `AshReplicant.Apply.Scd2`.
 - Compile: `lib/ash_replicant/resource/verifiers/validate_multitenancy.ex` (both arms),
   `validate_tenant_source.ex` (converse), `validate_action_multitenancy.ex` (sink-action bypass).
 - Tests: `test/ash_replicant/validate_multitenancy_test.exs` + `validate_action_multitenancy_test.exs`

@@ -28,6 +28,9 @@ scripts/assert-exunit-output.sh "$raw_output" ${allow_excluded:+"$allow_excluded
 
 if grep -Eq '(^|[[:space:]])\[error\]|\*\* \(' "$raw_output"; then
   echo "test process emitted an uncontrolled structural error" >&2
+  # Surface the offending lines (the raw output is trap-deleted; without
+  # this the trip is undiagnosable when the flake does not re-reproduce).
+  grep -E '(^|[[:space:]])\[error\]|\*\* \(' "$raw_output" | head -5 >&2
   exit 1
 fi
 

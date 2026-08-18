@@ -27,11 +27,15 @@ the narrative "why"; an ADR is the tracked, per-decision record with code eviden
 ## On-touch gap list (not yet authored — author when a slice next touches the surface)
 
 These decisions are authored by their owning roadmap row (do not bulk-author them
-from historical testimony):
+from historical testimony). Rows whose decision has since been authored are
+retired here: the sensitive type-shape / value-free boundary row was authored as
+[ADR-0009](0009-classified-boundaries.md) (B5), and the `REPLICA IDENTITY FULL`
+operational precondition row is governed by
+[ADR-0008](0008-strict-source-coverage.md) (enforced at activation by
+`AshReplicant.Coverage`'s preflight census) with the runtime old-side halt in
+[ADR-0001](0001-fail-closed-multitenancy.md)'s B4 amendment:
 
 | Decision | Owner | Surface / code evidence |
 |---|---|---|
-| Sensitive type-shape and value-free boundary | B5 | `ValidateSensitive`, `AshReplicant.Error`, `AshReplicant.Telemetry` |
 | Tenant-blind layering and pipeline ownership | B7 | `AshReplicant`, `AshReplicant.Resolver` |
 | SCD2 destination constraints and continuous validation | C5 | `ValidateHistory`, `AshReplicant.Apply.Scd2` |
-| `REPLICA IDENTITY FULL` operational precondition | B4 / ADR-0001 amendment | `AshReplicant.Resource`, `Resolver.tenant_changed?/2` |
