@@ -183,6 +183,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The batteries' intermittent reds were fixed-budget flakes, closed by
+  making the affected waits load-proportional (no product change — the
+  pipeline behaved correctly in every observed red; only test budgets were
+  miscalibrated to an idle host). Three instances: the v1-snapshot restart
+  marquee's re-snapshot wait (a row-proportional phase: ~8-12s idle, 55s
+  observed under concurrent host load against a ~24s poll budget — the
+  postgres log's slot/stream timestamps pin the divergence; reproduced red
+  under synthetic CPU load and green under the same load after the fix), the
+  destination-lease test's 1s callback-entry assert (entry re-validates the
+  admitted generation — a manifest walk plus a bytecode fingerprint whose
+  file reads go through the serialized code server; ~4ms warm, observed >1s
+  once under battery IO load coincident with a substrate checkpoint), and
+  the concurrent-start race test's awaits (its own documented 5s flake of
+  2026-08-15 re-appeared once at 15s in the no-DB battery; the ceiling now
+  only bounds waiting — the start-gate asserts fire on the tasks' return
+  values). The negative lease window (the 50ms `Task.yield`) is unchanged —
+  load only makes a held lease more likely to hold.
+- The value-free battery receipt now locates the failing ASSERTION: the
+  structural formatter's `FAILED:` line appends the first stack frame from
+  the repo's own code (`file:line`, identified by module namespace —
+  dependency sources also live under `lib/`-shaped paths). Test name alone
+  could not say which assert of a multi-assert marquee tripped; this
+  investigation's third red stayed undiagnosable past the name exactly
+  because of that gap. Structural only — authored names and file:line,
+  never row values (ADR-0009).
 - CI's from-clean `MIX_ENV=test` compile-WAE is green again (warm local
   builds had masked three fixture-warning classes shipped in the unpushed
   span): the marquee's auxiliary-carrying `close_version` declares

@@ -118,10 +118,12 @@ defmodule AshReplicant.StartLinkTest do
         end
 
       # Two full activation chains against the deliberately-unreachable port
-      # (Postgrex retry backoff) can exceed the default 5s await under
-      # full-suite load — the race under test is the START GATE, not the
-      # timeout.
-      results = [Task.await(first, 15_000), Task.await(second, 15_000)]
+      # can exceed any fixed await under battery load — this test flaked at
+      # the 5s default (2026-08-15) and once more at 15s under the no-DB
+      # battery; the race under test is the START GATE (the return-value
+      # asserts below fire the moment both tasks return), so the ceiling only
+      # bounds waiting, never the outcome. 60s.
+      results = [Task.await(first, 60_000), Task.await(second, 60_000)]
 
       assert [{:ok, winner}] = Enum.filter(results, &match?({:ok, _pid}, &1))
       assert [duplicate] = Enum.reject(results, &match?({:ok, _pid}, &1))
@@ -452,7 +454,7 @@ defmodule AshReplicant.StartLinkTest do
       end)
 
     assert {:error, %AshReplicant.Error{reason: :config_invalid, op: :callback}} =
-             Task.await(task)
+             Task.await(task, 15_000)
   end
 
   test "stop waits for a mutating callback to leave the destination lease" do
@@ -480,14 +482,21 @@ defmodule AshReplicant.StartLinkTest do
         {result, AshReplicant.TestRepo.get_dynamic_repo()}
       end)
 
-    assert_receive {:inside_callback, callback_pid, AshReplicant.TestRepo}, 1_000
+    # Callback entry re-validates the admitted generation: a manifest walk plus
+    # a bytecode fingerprint of the ~56-module closure (file reads through the
+    # serialized code server). ~4ms warm; observed >1s once under battery IO
+    # load (coincident with a substrate checkpoint), so budget for load — the
+    # assert still proves entry + dynamic repo, which is its actual subject.
+    assert_receive {:inside_callback, callback_pid, AshReplicant.TestRepo}, 15_000
 
     stopper = Task.async(fn -> AshReplicant.stop_supervised("lease_slot") end)
+    # Negative window: the lease is HELD, so the stopper must not finish. Load
+    # only makes a held lease more likely to still be held — keep it tight.
     assert Task.yield(stopper, 50) == nil
 
     send(callback_pid, :release_callback)
-    assert {{:ok, 777}, AshReplicant.TestRepo} = Task.await(callback)
-    assert :ok = Task.await(stopper)
+    assert {{:ok, 777}, AshReplicant.TestRepo} = Task.await(callback, 15_000)
+    assert :ok = Task.await(stopper, 15_000)
     assert :none == :persistent_term.get({AshReplicant, "lease_slot"}, :none)
   end
 

@@ -17,7 +17,11 @@ defmodule AshReplicant.SnapshotPipelineTest do
 
   use ExUnit.Case, async: false
   @moduletag :integration
-  @moduletag timeout: 120_000
+  # The 1100-row marquee phases are row-proportional (2100 upserts + onetime
+  # claims + observer triggers) and slow ~2-5x under concurrent host load
+  # (observed: 55s re-snapshot vs 8-12s idle, against a ~24s poll budget).
+  # Budgets below scale for that; they still bound a wedged pipeline.
+  @moduletag timeout: 240_000
 
   import ExUnit.CaptureLog
 
@@ -158,7 +162,9 @@ defmodule AshReplicant.SnapshotPipelineTest do
 
       start_snapshot!(@retry_slot, RetrySnapshotSink)
 
-      assert_receive :snapshot_incomplete, 60_000
+      # Same row-proportional class as the reset wait below: 1100 rows through
+      # the halted run under load (observed 38s vs ~10s idle).
+      assert_receive :snapshot_incomplete, 120_000
 
       PG.wait_until(fn ->
         Registry.lookup(Replicant.Registry, {@retry_slot, :pipeline}) == []
@@ -172,9 +178,15 @@ defmodule AshReplicant.SnapshotPipelineTest do
       :ok = AshReplicant.stop_supervised(@retry_slot)
       Marquee.drop_slot!(@retry_slot)
       start_snapshot!(@retry_slot, RetrySnapshotSink)
-      PG.wait_until(fn -> length(Marquee.mirror_rows()) == 1100 end, 800)
 
-      PG.wait_until(fn -> observer_checkpoint_count(run_id) == 2 end)
+      # The re-snapshot re-applies every row (clear + 1100 upserts + auxiliary
+      # claims): ~8-12s idle, 55s observed under concurrent host load. 2400
+      # polls (~60s + eval) bounds a wedged restart while tolerating load.
+      PG.wait_until(fn -> length(Marquee.mirror_rows()) == 1100 end, 2_400)
+
+      # The handoff write trails the last batch by a committed transaction
+      # under load; default 400 (~10s) is boundary-exact there.
+      PG.wait_until(fn -> observer_checkpoint_count(run_id) == 2 end, 800)
       assert DestinationObserver.effect_count(run_id, "mapped", "INSERT") == 2100
       assert DestinationObserver.effect_count(run_id, "mapped", "DELETE") == 1000
       assert DestinationObserver.effect_count(run_id, "auxiliary", "INSERT") == 2100
