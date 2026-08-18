@@ -1,15 +1,16 @@
 defmodule AshReplicant.Checkpoint.Identity do
-  @moduledoc false
-  # The canonical publication/resolver contract: what THIS adapter maps, as
-  # value-free structure (names, modules, type terms — never row data), plus the
-  # set-monotone transition classifier applied to it at every bind under the
-  # checkpoint lock (roadmap B2).
-  #
-  # Compatible growth = NEW entries only (a relation, a brand-new column,
-  # an ignore). Any mutation or removal of a RECORDED entry — a re-target, a
-  # type change, a tenant-source change, reversing a recorded skip — is the
-  # governing design's "mapping-incompatible" halt class. Both sides of the
-  # line are mechanically detectable because the declared skip set is recorded.
+  @moduledoc """
+  The canonical publication/resolver contract: what THIS adapter maps, as
+  value-free structure (names, modules, type terms — never row data), plus the
+  set-monotone transition classifier applied to it at every bind under the
+  checkpoint lock (roadmap B2).
+
+  Compatible growth = NEW entries only (a relation, a brand-new column,
+  an ignore). Any mutation or removal of a RECORDED entry — a re-target, a
+  type change, a tenant-source change, reversing a recorded skip — is the
+  governing design's "mapping-incompatible" halt class. Both sides of the
+  line are mechanically detectable because the declared skip set is recorded.
+  """
 
   alias AshReplicant.Sql
   alias AshReplicant.{Error, Resource.Info, Resolver}

@@ -94,8 +94,9 @@ a `tenant_attribute` **or** `tenant_mfa` with no block (Ash would otherwise sile
 non-global multitenant resource with no tenant source. A tenant-scoped delete,
 PK-changing update, or tenant reassignment needs the old tenant in `old_record`, so
 the source table normally must be `REPLICA IDENTITY FULL`. A `tenant_mfa` must
-resolve both new and old record shapes; an indeterminate old-side result is the
-open fail-closed guard in roadmap B4. Recorded as
+resolve both new and old record shapes; an indeterminate old-side result halts
+fail-closed (`:tenant_required` `side=old` / `:tenant_resolution_failed`) before any
+write — the B4 amendment recorded in
 [ADR-0001](adr/0001-fail-closed-multitenancy.md).
 
 **Proof:** Compile-time `validate_multitenancy.ex` (both `tenant_attribute` and `tenant_mfa`

@@ -1,17 +1,18 @@
 defmodule AshReplicant.Sql do
-  @moduledoc false
-  # The ONE home for quoting config-shaped SQL identifiers (U3/D4). Every raw
-  # statement this library builds — the truncate/:mirror DELETE, the SCD2
-  # on_truncate :close UPDATE (incl. its SET column fragments), the snapshot
-  # clear_mirror DELETE, and the manifest's qualified relations — routes
-  # through `quote_identifier/1`.
-  #
-  # Identifiers come from the resource DSL (an operator trust boundary), never
-  # from a row value — but "operator-trusted" is not "safe to interpolate
-  # bare": an embedded `"` breaks out of the interpolation, and a control
-  # character (accepted by Postgres inside quoted identifiers — probed live)
-  # wrecks pg_stat_activity/logs either way. Both are misconfigurations, and a
-  # misconfiguration fails HERE, value-free, before any SQL reaches Postgres.
+  @moduledoc """
+  The ONE home for quoting config-shaped SQL identifiers (U3/D4). Every raw
+  statement this library builds — the truncate/:mirror DELETE, the SCD2
+  `on_truncate :close` UPDATE (incl. its SET column fragments), the snapshot
+  clear_mirror DELETE, and the manifest's qualified relations — routes
+  through `quote_identifier/1`.
+
+  Identifiers come from the resource DSL (an operator trust boundary), never
+  from a row value — but "operator-trusted" is not "safe to interpolate
+  bare": an embedded `"` breaks out of the interpolation, and a control
+  character (accepted by Postgres inside quoted identifiers — probed live)
+  wrecks pg_stat_activity/logs either way. Both are misconfigurations, and a
+  misconfiguration fails HERE, value-free, before any SQL reaches Postgres.
+  """
 
   alias AshReplicant.Error
 

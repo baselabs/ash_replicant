@@ -4,9 +4,10 @@
 # (ON CONFLICT DO UPDATE), not only on INSERT, when the write routes through a
 # single-row Ash action and `encrypted_<attr>` is in `upsert_fields`?
 #
-# This is proven LIVE on PG16 (localhost:5599) — a stub/mock would only prove the
-# code produces the request, never that Postgres+AshCloak refresh the ciphertext.
-# The inline resource + vault below are the minimal substrate for that proof.
+# This is proven LIVE on PG16 at spike time (localhost:5599) — a stub/mock would
+# only prove the code produces the request, never that Postgres+AshCloak refresh
+# the ciphertext. (Historical proof note: the local substrate has since moved to
+# PG18.) The inline resource + vault below are the minimal substrate for that proof.
 
 defmodule AshReplicant.Spike.Domain do
   @moduledoc false

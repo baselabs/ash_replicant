@@ -116,8 +116,9 @@ end
 - **`tenant_mfa`** — alternative: `{Module, :function, [extra_args]}` applied as
   `apply(Module, :function, [record | extra_args])` yielding the tenant. It must be
   deterministic and non-raising for both the new and old record shapes. An
-  indeterminate old-side result currently cannot prove reassignment; roadmap B4
-  owns the fail-closed runtime guard.
+  absent/blank/`false` old-side result halts `:tenant_required` (`side=old`) and a
+  raising resolver halts `:tenant_resolution_failed` — fail-closed before any write
+  (ADR-0001's B4 amendment).
 - **Multitenancy block required for either source.** Declaring `tenant_attribute` or
   `tenant_mfa` requires an Ash `multitenancy` block (any strategy — `:attribute`/`:context`,
   incl. `global?`); `ValidateMultitenancy` fails the build closed otherwise. Without a block
@@ -251,8 +252,8 @@ open version and opens under the new tenant even when the business key is unchan
 the tenant does not need to be added to `history_business_key`. The source must expose
 the old tenant (`REPLICA IDENTITY FULL` for a non-PK tenant column), and a `tenant_mfa`
 must resolve both record shapes. If the old tenant is absent or the MFA raises, the
-current code cannot prove a reassignment; roadmap B4 owns the value-free fail-closed
-halt for that indeterminate case.
+pipeline halts value-free — `:tenant_required` (`side=old`) / `:tenant_resolution_failed`
+— rather than guessing a reassignment (ADR-0001's B4 amendment).
 
 **History is retained on delete (soft-close).** A source delete **closes** the current
 version (stamps `valid_to_lsn`); it never erases prior versions. SCD2 therefore does
@@ -346,7 +347,7 @@ The durable checkpoint row is keyed by the ACTUAL replication session's
 identity — `(source_system_id, source_database, slot_name)` — with the session
 timeline recorded beside it and the canonical contract manifest (what the
 adapter maps) plus its fingerprint stored on the row
-([ADR-0007](docs/adr/0007-source-bound-checkpoint-effect-once.md)).
+([ADR-0007](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/docs/adr/0007-source-bound-checkpoint-effect-once.md)).
 
 On every connect, before any checkpoint read, the sink binds the row under the
 per-slot lease: a foreign identity under the same slot name, a changed
@@ -402,7 +403,7 @@ the ambiguous class:
 
 Every publication table must be mapped, explicitly ignored, or the pipeline
 refuses to start; every delivered column must be mapped or skipped, or the
-pipeline halts before writing ([ADR-0008](docs/adr/0008-strict-source-coverage.md)).
+pipeline halts before writing ([ADR-0008](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/docs/adr/0008-strict-source-coverage.md)).
 The preflight runs at activation on a short-lived identity-verified source
 connection and re-runs the table-membership check at every reconnect.
 

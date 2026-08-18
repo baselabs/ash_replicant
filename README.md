@@ -60,7 +60,10 @@ The current 1.0.0 hardening baseline is built and tested with:
 - Ash `>= 3.31.3 and < 4.0.0-0` and AshPostgres 2.11.x;
 - Replicant `>= 1.0.0 and < 2.0.0-0` (current release-candidate lock 1.1.0) and
   AshOnetime 0.6.x;
-- PostgreSQL 16 with `wal_level=logical` for the current live integration gate.
+- PostgreSQL with `wal_level=logical` for the live integration gate: CI pins
+  PostgreSQL 16, the local gate runs whatever instance `ASH_REPLICANT_TEST_URL`
+  points at (the current local substrate is PostgreSQL 18), and the support
+  matrix is PG15–18.
 
 The Ash lower bound excludes known-vulnerable patches, and the upper bound
 excludes Ash 4 prereleases. AshOnetime protects admitted local auxiliary actions
@@ -92,7 +95,7 @@ table: one row per replication SOURCE and slot, keyed by
 `(source_system_id, source_database, slot_name)` from the actual replication
 session's identity, carrying the durable commit LSN watermark, the recorded
 session timeline, and the canonical contract manifest with its fingerprint
-([ADR-0007](docs/adr/0007-source-bound-checkpoint-effect-once.md)). The sink
+([ADR-0007](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/docs/adr/0007-source-bound-checkpoint-effect-once.md)). The sink
 binds the row on every connect before any checkpoint read, admits under a
 `FOR UPDATE` row lock, and advances the watermark monotonically.
 
@@ -203,9 +206,10 @@ end
   reassignment (it is key-only under the default identity).
 - **`tenant_mfa`** — alternative tenant source: `{Module, :function, [extra_args]}`
   applied as `apply(Module, :function, [record | extra_args])` yielding the tenant.
-  It must resolve deterministically from both new and old record shapes. An old-side
-  raise currently makes reassignment indeterminate; that fail-closed guard is tracked
-  in roadmap B4.
+  It must resolve deterministically from both new and old record shapes. An absent,
+  blank, or `false` old-side resolution halts `:tenant_required` (`side=old`) and a
+  raising resolver halts `:tenant_resolution_failed` — both fail-closed before any
+  write (ADR-0001's B4 amendment).
 - **Compile-time tenancy checks** (fail-closed at build, `ValidateMultitenancy` /
   `ValidateActionMultitenancy` — see
   [ADR-0001](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0001-fail-closed-multitenancy.md)):
@@ -284,7 +288,7 @@ writing. Column types are checked against the target at activation, and
 SCD2 source tables. The preflight runs at activation (identity-verified,
 short-lived source connection) and the table-membership check re-runs at
 every reconnect — see
-[ADR-0008](docs/adr/0008-strict-source-coverage.md) and
+[ADR-0008](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/docs/adr/0008-strict-source-coverage.md) and
 [usage-rules](usage-rules.md) for the operator rules.
 
 ## Effect-Once Semantics

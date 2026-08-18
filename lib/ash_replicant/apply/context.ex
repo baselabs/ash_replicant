@@ -1,9 +1,10 @@
 defmodule AshReplicant.Apply.Context do
-  @moduledoc false
-  # The single home of the admitted-destination operation context shared by the
-  # SCD1 (`AshReplicant.Apply`) and SCD2 (`AshReplicant.Apply.Scd2`) apply paths.
-  # Previously duplicated byte-for-byte across both modules — a correction
-  # applied to one copy silently diverged the other's preflight semantics.
+  @moduledoc """
+  The single home of the admitted-destination operation context shared by the
+  SCD1 (`AshReplicant.Apply`) and SCD2 (`AshReplicant.Apply.Scd2`) apply paths.
+  Previously duplicated byte-for-byte across both modules — a correction
+  applied to one copy silently diverged the other's preflight semantics.
+  """
 
   alias AshReplicant.Error
 

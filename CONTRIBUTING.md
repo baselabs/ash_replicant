@@ -9,9 +9,11 @@ Thank you for your interest in contributing to AshReplicant!
 - Replicant `>= 1.0.0 and < 2.0.0-0` from Hex; the release-candidate lock is 1.1.0.
   No sibling checkout is required to build or test. A local checkout at
   `../replicant` is only needed for cross-repo design work and is never release evidence.
-- **PostgreSQL 16** for the current integration gate (with `wal_level=logical`); the
+- **PostgreSQL** with `wal_level=logical` for the live integration gate; the
   integration suite runs against a live Postgres with a logical replication slot
-  and publication
+  and publication. CI pins PostgreSQL 16; the local gate runs whatever instance
+  `ASH_REPLICANT_TEST_URL` points at (the current local substrate is 18), and the
+  support matrix is PG15–18
 
 ## Getting Started
 
