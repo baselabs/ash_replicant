@@ -478,14 +478,9 @@ defmodule AshReplicant.CheckpointBindingTest do
       # lease and the shared sandbox serialize ahead of the row lock), so the
       # marquee holds the lock on a SEPARATE real connection and proves the
       # admission BLOCKS at the locked read until release — then dedups.
-      {:ok, conn} =
-        Postgrex.start_link(
-          hostname: "127.0.0.1",
-          port: 5599,
-          username: "postgres",
-          database: "ash_replicant_test",
-          sync_connect: true
-        )
+      # Endpoint from Marquee.conn/0 (the live substrate) — never a
+      # machine-pinned port.
+      {:ok, conn} = Postgrex.start_link(Keyword.merge(Marquee.conn(), sync_connect: true))
 
       identity = Marquee.source_identity()
 
@@ -801,9 +796,16 @@ defmodule AshReplicant.CheckpointBindingTest do
     # way: keying on the raw opts shape would defer a reachable
     # env-configured source FOREVER — its coverage and replica-identity
     # checks silently skipped while it streams.
+    #
+    # The endpoint is derived from the live substrate (Marquee.conn/0) —
+    # NEVER a machine-pinned host/port: a hardcoded port connect-refuses on
+    # any other substrate, fails this assert, and logs uncontrolled
+    # pool-retry [error] lines into the battery output.
     test "a PGDATABASE-resolved source is CENSUSED, not deferred" do
+      {database, endpoint} = Keyword.pop(Marquee.conn(), :database)
+
       old = System.get_env("PGDATABASE")
-      System.put_env("PGDATABASE", "ash_replicant_test")
+      System.put_env("PGDATABASE", to_string(database))
 
       on_exit(fn ->
         if old, do: System.put_env("PGDATABASE", old), else: System.delete_env("PGDATABASE")
@@ -815,7 +817,7 @@ defmodule AshReplicant.CheckpointBindingTest do
       # {:ok, :deferred} without ever querying.
       assert {:error, %AshReplicant.Error{reason: :source_identity_mismatch}} =
                AshReplicant.Coverage.preflight(
-                 [hostname: "127.0.0.1", port: 5599, username: "postgres"],
+                 endpoint,
                  %{system_identifier: "sentinel-system", database: "sentinel-database"},
                  ["ash_replicant_no_such_publication"],
                  %{},

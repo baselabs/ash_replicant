@@ -253,6 +253,13 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     replace_once!(@workflow, "name: CI", "name: CI\n# Example text: uses: actions/setup-node@v4")
     assert_valid!()
 
+    # A third, non-allowlisted apply_ledger occurrence anywhere in lib/ fails
+    # the B5 absence scan (the gate's red direction).
+    prepare_fixture()
+    rogue = fixture_path(Path.join(["lib", "ash_replicant", "rogue.ex"]))
+    File.write!(rogue, "# apply_ledger (rogue third occurrence)\n")
+    assert_invalid!()
+
     prepare_fixture()
 
     replace_once!(
@@ -1061,6 +1068,24 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       File.mkdir_p!(Path.dirname(destination))
       File.cp!(Path.join([@source_root, "deps/replicant", path]), destination)
     end
+
+    # The B5 ledger gate scans lib/ for the removed `apply_ledger` option and
+    # pins its two allowlisted fail-closed occurrences at sink.ex lines 63 and
+    # 73. The fixture ships a SYNTHETIC sink.ex carrying the allowlisted lines
+    # at those positions: the self-test exercises the checker's logic without
+    # depending on live-code line drift (the real-repo pin runs in the
+    # release-contract assert itself).
+    sink_dir = fixture_path(Path.join(["lib", "ash_replicant"]))
+    File.mkdir_p!(sink_dir)
+
+    sink_fixture =
+      Enum.map(1..80, fn ix ->
+        if ix in [63, 73],
+          do: "  # apply_ledger (allowlisted line)",
+          else: "  # fixture line #{ix}"
+      end)
+
+    File.write!(Path.join(sink_dir, "sink.ex"), Enum.join(sink_fixture, "\n") <> "\n")
   end
 
   defp insert_after_first_checkout!(addition) do
