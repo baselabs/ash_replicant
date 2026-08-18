@@ -181,6 +181,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   inventory, strict-walk cycle detection on the destination manifest, and a
   load-realistic await for the concurrent-start race.
 
+### Added
+
+- ADR-0013 governs the sensitive type-shape classification (AshCloak cloak
+  attribute ∪ binary-storage attribute ∪ `skip`, verified by type shape at
+  compile — never ciphertext; the tenant discriminator is never sensitive).
+  The ADR gap list had retired this row by mis-attribution to ADR-0009
+  (which governs the value-free boundary); the retirement paragraph now
+  points at ADR-0013 and the corpus entry is registered.
+- The public `@type reason` is pinned to `@closed_reasons` by a source-level
+  test — the type had lagged ADR-0011's frozen set by 8 atoms
+  (Dialyzer-silent) and narrowed the destination tuple variant to one atom;
+  both fixed, and the next added reason must update type and set together
+  or the pin goes red.
+- Published-docs alignment sweep: the four doubled-path ADR links (README ×2,
+  usage-rules ×2 — `docs/adr/docs/adr/…` → 404s) repaired; the checkpoint
+  intro in `usage-rules.md` now states the source-bound triple (was the
+  pre-0.4.0 slot-only shape); `docs/ROADMAP.md` is explicitly status-free
+  (status of record = commit history + this changelog's `[Unreleased]`; the
+  dead host-pinned derivation command removed); the frozen 2026-07-09
+  closeout handoff carries a banner noting its commit IDs predate the
+  history rewrite and do not resolve; `AGENTS.md`'s docs policy names the
+  tracked notebook and all gitignored tool-state directories; `CLAUDE.md`
+  names `../replicant` as the only sibling (ash_postgres is a Hex dep);
+  the charter's Task-15 proof and ADR-0002's lock list are marked as
+  point-in-time snapshots with derive-don't-state notes; the substrate
+  version and battery URL in README/CONTRIBUTING are examples to derive
+  from, not current-state claims; `AshReplicant.Sql`'s sanctioned-site
+  enumeration includes the checkpoint legacy-probe count.
+
 ### Fixed
 
 - The batteries' intermittent reds were fixed-budget flakes, closed by

@@ -62,8 +62,8 @@ The current 1.0.0 hardening baseline is built and tested with:
   AshOnetime 0.6.x;
 - PostgreSQL with `wal_level=logical` for the live integration gate: CI pins
   PostgreSQL 16, the local gate runs whatever instance `ASH_REPLICANT_TEST_URL`
-  points at (the current local substrate is PostgreSQL 18), and the support
-  matrix is PG15–18.
+  points at (derive the live version with `SELECT version();` — never assume it
+  from this doc), and the support matrix is PG15–18.
 
 The Ash lower bound excludes known-vulnerable patches, and the upper bound
 excludes Ash 4 prereleases. AshOnetime protects admitted local auxiliary actions
@@ -95,7 +95,7 @@ table: one row per replication SOURCE and slot, keyed by
 `(source_system_id, source_database, slot_name)` from the actual replication
 session's identity, carrying the durable commit LSN watermark, the recorded
 session timeline, and the canonical contract manifest with its fingerprint
-([ADR-0007](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/docs/adr/0007-source-bound-checkpoint-effect-once.md)). The sink
+([ADR-0007](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0007-source-bound-checkpoint-effect-once.md)). The sink
 binds the row on every connect before any checkpoint read, admits under a
 `FOR UPDATE` row lock, and advances the watermark monotonically.
 
@@ -288,7 +288,7 @@ writing. Column types are checked against the target at activation, and
 SCD2 source tables. The preflight runs at activation (identity-verified,
 short-lived source connection) and the table-membership check re-runs at
 every reconnect — see
-[ADR-0008](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/docs/adr/0008-strict-source-coverage.md) and
+[ADR-0008](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0008-strict-source-coverage.md) and
 [usage-rules](usage-rules.md) for the operator rules.
 
 ## Effect-Once Semantics
@@ -407,7 +407,7 @@ env -u ASH_REPLICANT_TEST_URL \
   scripts/with-release-runtime.sh scripts/run-structural-tests.sh \
     --allow-excluded --exclude integration
 
-export ASH_REPLICANT_TEST_URL="postgres://postgres@localhost:5599/postgres"
+export ASH_REPLICANT_TEST_URL="postgres://postgres@localhost:5599/postgres" # example — point at YOUR logical-replication Postgres (host/port are machine-local; the database name is forced anyway)
 MIX_ENV=test scripts/with-release-runtime.sh mix ecto.create
 MIX_ENV=test scripts/with-release-runtime.sh mix ecto.migrate
 scripts/with-release-runtime.sh scripts/run-structural-tests.sh --include integration

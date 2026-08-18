@@ -114,4 +114,42 @@ defmodule AshReplicant.ErrorTest do
     assert MapSet.subset?(minted, closed),
            "reasons minted in lib but not in the closed set: #{inspect(MapSet.to_list(MapSet.difference(minted, closed)))}"
   end
+
+  test "the public @type reason admits every @closed_reasons atom (no silent type lag)" do
+    # ADR-0011's frozen set is the contract; the public type lagged it once
+    # (8 atoms unlisted, Dialyzer-silent). Pin type-equals-set from source so
+    # the next added reason must update both or this goes red.
+    source = File.read!("lib/ash_replicant/error.ex")
+
+    closed_block =
+      source
+      |> String.split("@closed_reasons [", parts: 2)
+      |> Enum.at(1)
+      |> String.split("]", parts: 2)
+      |> Enum.at(0)
+
+    typed_block =
+      source
+      |> String.split("@type reason ::", parts: 2)
+      |> Enum.at(1)
+      |> String.split("\n\n", parts: 2)
+      |> Enum.at(0)
+
+    atoms = fn block ->
+      Regex.scan(~r/:([a-z_]+)/, block, capture: :all_but_first)
+      |> List.flatten()
+      |> MapSet.new()
+    end
+
+    closed = atoms.(closed_block)
+    typed = atoms.(typed_block)
+
+    # The tuple variant's tag atom legitimately appears in the type without a
+    # bare closed-reasons entry; it is the only permitted extra.
+    assert MapSet.subset?(closed, typed),
+           "@type reason is missing closed-set atoms: #{inspect(MapSet.to_list(MapSet.difference(closed, typed)))}"
+
+    assert MapSet.to_list(MapSet.difference(typed, closed)) == ["invalid_destination_config"],
+           "@type reason carries atoms outside the closed set (beyond the tuple tag)"
+  end
 end

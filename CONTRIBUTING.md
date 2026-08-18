@@ -12,8 +12,9 @@ Thank you for your interest in contributing to AshReplicant!
 - **PostgreSQL** with `wal_level=logical` for the live integration gate; the
   integration suite runs against a live Postgres with a logical replication slot
   and publication. CI pins PostgreSQL 16; the local gate runs whatever instance
-  `ASH_REPLICANT_TEST_URL` points at (the current local substrate is 18), and the
-  support matrix is PG15–18
+  `ASH_REPLICANT_TEST_URL` points at (derive the live version with
+  `SELECT version();` — never assume it from this doc), and the support
+  matrix is PG15–18
 
 ## Getting Started
 
@@ -99,7 +100,7 @@ affected tests in the same change, and record the Ash version contract delta in 
   the instance — see `config/test.exs`). One-time provision, then run:
 
   ```bash
-  export ASH_REPLICANT_TEST_URL="postgres://postgres@localhost:5599/postgres"
+  export ASH_REPLICANT_TEST_URL="postgres://postgres@localhost:5599/postgres" # example — point at YOUR logical-replication Postgres (host/port are machine-local; the database name is forced anyway)
   MIX_ENV=test scripts/with-release-runtime.sh mix ecto.create
   MIX_ENV=test scripts/with-release-runtime.sh mix ecto.migrate
   scripts/with-release-runtime.sh scripts/run-structural-tests.sh --include integration

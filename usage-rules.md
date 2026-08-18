@@ -31,8 +31,11 @@ defmodule MyApp.ReplicantCheckpoint do
 end
 ```
 
-This generates an AshPostgres resource backing `ash_replicant_checkpoints` (one row
-per replication slot, storing the durable `commit_lsn` watermark).
+This generates an AshPostgres resource backing `ash_replicant_checkpoints`: one
+row per replication SOURCE and slot — keyed by `(source_system_id,
+source_database, slot_name)` from the actual replication session's identity —
+carrying the durable `commit_lsn` watermark (see
+[ADR-0007](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0007-source-bound-checkpoint-effect-once.md)).
 
 To lock the checkpoint down when the host exposes its domain on a wire surface, pass
 `authorizers: [Ash.Policy.Authorizer]` and declare a `policies do` block on the module.
@@ -347,7 +350,7 @@ The durable checkpoint row is keyed by the ACTUAL replication session's
 identity — `(source_system_id, source_database, slot_name)` — with the session
 timeline recorded beside it and the canonical contract manifest (what the
 adapter maps) plus its fingerprint stored on the row
-([ADR-0007](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/docs/adr/0007-source-bound-checkpoint-effect-once.md)).
+([ADR-0007](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0007-source-bound-checkpoint-effect-once.md)).
 
 On every connect, before any checkpoint read, the sink binds the row under the
 per-slot lease: a foreign identity under the same slot name, a changed
@@ -403,7 +406,7 @@ the ambiguous class:
 
 Every publication table must be mapped, explicitly ignored, or the pipeline
 refuses to start; every delivered column must be mapped or skipped, or the
-pipeline halts before writing ([ADR-0008](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/docs/adr/0008-strict-source-coverage.md)).
+pipeline halts before writing ([ADR-0008](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0008-strict-source-coverage.md)).
 The preflight runs at activation on a short-lived identity-verified source
 connection and re-runs the table-membership check at every reconnect.
 

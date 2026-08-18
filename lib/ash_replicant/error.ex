@@ -16,6 +16,7 @@ defmodule AshReplicant.Error do
   @type reason ::
           :sink_failed
           | :tenant_required
+          | :tenant_resolution_failed
           | :schema_change_destructive
           | :truncate_halt
           | :duplicate_source
@@ -25,11 +26,21 @@ defmodule AshReplicant.Error do
           | :source_timeline_changed
           | :source_behind_watermark
           | :publication_contract_incompatible
+          | :source_column_missing
+          | :source_column_unmapped
+          | :source_replica_identity
+          | :source_skip_stale
+          | :source_table_missing
+          | :source_table_unmapped
+          | :source_type_invalid
           | :checkpoint_unbound
           | :checkpoint_adopt_conflict
           | :checkpoint_adopt_invalid
           | :checkpoint_legacy_rows_present
-          | {:invalid_destination_config, :onetime_store}
+          # Destination admission re-uses this tuple shape with its own
+          # structural sub-reasons; their closed set is enumerated in
+          # `AshReplicant.Destination`'s own @type.
+          | {:invalid_destination_config, atom()}
 
   @type t :: %__MODULE__{
           reason: reason() | nil,

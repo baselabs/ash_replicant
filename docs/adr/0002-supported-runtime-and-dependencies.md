@@ -32,8 +32,11 @@ bound does not mean “Ash 3 only.”
 - Ash is declared as `>= 3.31.3 and < 4.0.0-0`. The lower bound excludes the
   known-vulnerable patches; the `-0` upper bound excludes every Ash 4
   prerelease.
-- The release lock resolves Ash 3.31.3, AshPostgres 2.11.0, AshOnetime 0.6.0,
-  EctoSQL 3.14.0, Postgrex 0.22.4, ymlr 5.1.6, and Replicant 1.1.0.
+- The release lock at the 1.0.0-rc decision point resolved Ash 3.31.3,
+  AshPostgres 2.11.0, AshOnetime 0.6.0, EctoSQL 3.14.0, Postgrex 0.22.4,
+  ymlr 5.1.6, and Replicant 1.1.0 (a point-in-time proof snapshot; patch
+  versions drift with `mix.lock` — derive the current set from the lock,
+  never from this sentence).
 - Public dependency families are bounded with patch-qualified requirements for
   AshPostgres 2.11, AshOnetime 0.6, Replicant 1.x, Spark 2.7, Telemetry 1.4,
   Postgrex 0.22.4, and ymlr 5.1.6.

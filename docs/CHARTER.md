@@ -78,8 +78,10 @@ entire txn back (fail-closed); on resume, the un-acked WAL re-streams and dedups
 against the durable watermark.
 
 **Proof:** Task 15 crash-injection marquee `test/integration/effect_once_test.exs`
-(loss = 0, effect-dup = 0 via the append-only no-PK ledger, real PG16) plus the
-sibling `replicant` crash-injection suite.
+(loss = 0, effect-dup = 0 via the append-only no-PK ledger, real Postgres —
+PG16 at the 2026-07 proof run, which predates the PG15-18 support matrix;
+the marquee runs against whatever substrate `ASH_REPLICANT_TEST_URL` names)
+plus the sibling `replicant` crash-injection suite.
 
 ### [D2] Multitenancy is fail-closed; never a "base tenant" fallback
 

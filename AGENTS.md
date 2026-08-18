@@ -197,11 +197,13 @@ format, Credo, and Dialyzer. Changes are recorded under `[Unreleased]` in
 
 - **Tracked / published:** `AGENTS.md`, `CLAUDE.md`, `README.md`, `CHANGELOG.md`,
   `CONTRIBUTING.md`, `usage-rules.md`, `LICENSE`, `NOTICE`, the project charter
-  (`docs/CHARTER.md`), `docs/ROADMAP.md`, the ADR corpus (`docs/adr/`), and the
-  historical implementation handoffs (`docs/handoffs/`).
+  (`docs/CHARTER.md`), `docs/ROADMAP.md`, the ADR corpus (`docs/adr/`), the
+  historical implementation handoffs (`docs/handoffs/`), and the guided tour
+  notebook (`notebooks/ash_replicant_tour.livemd`).
 - **Never tracked (local-only):** the superpowers lifecycle artifacts — brainstorm
-  specs, plans, exec notes, reviews, and handoffs — under `/docs/superpowers/`, which
-  is **gitignored** (the `replicant` convention). Keep them there.
+  specs, plans, exec notes, reviews, and handoffs — under `/docs/superpowers/`,
+  plus the tool-state directories `.forge/`, `.kimosabe/`, and `graphify-out/`;
+  all are **gitignored** (the `replicant` convention). Keep them there.
 
 ## Next action
 
@@ -209,7 +211,7 @@ Start from a working feature or bugfix; TDD against the critical rules above.
 
 ## graphify (code knowledge graph)
 
-`graphify-out/graph.json` maps this repo (tree-sitter AST; rebuilt by the git post-commit hook; gitignored).
+`graphify-out/graph.json` maps this repo (tree-sitter AST; rebuilt by the git post-commit hook when that hook is installed — not on a fresh clone; gitignored).
 
 - For orientation ("where is X handled", "what connects A to B", "explain module M"), prefer `graphify query "<question>"` / `graphify explain "<Module>"` / `graphify path "<A>" "<B>"` over grep/Read fan-outs — one call returns a scoped subgraph with file:line hits.
 - Graph output is NAVIGATION, never evidence. Edges reflect the last build, not the working tree, and cross-module call edges can be incomplete (Elixir: file-local only — alias-mediated calls are NOT resolved). Consumer sweeps and every load-bearing claim (review finding, plan anchor) still verify against live code: grep + file:line read.

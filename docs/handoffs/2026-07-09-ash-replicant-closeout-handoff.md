@@ -5,6 +5,12 @@
 > 1.0.0 roadmap supersede its continuation instructions. Do not act from its
 > "Open" or release language; use `docs/ROADMAP.md` and live code.
 >
+> **Commit IDs in this document predate an early history rewrite and do not
+> resolve in today's repository** (`git cat-file -t` fails on every SHA cited
+> below, including `4ee5338`, `cab54b8`, `82652e7`, `9052e0c`, `7cd8860`,
+> `4d438b8`, `2e50844`, `f3f2a1f`). Read them as labels for the named work,
+> never as retrievable objects.
+>
 > **[Superseded 2026-07-09]** The two carried F13/F14 optimizations this doc hands off
 > were implemented and closed at **100/100** (`/review-autopilot --fix`, slice commits
 > `4ee5338`/`cab54b8`/`82652e7` + closeout fix commits `9052e0c`/`7cd8860`/`4d438b8`),

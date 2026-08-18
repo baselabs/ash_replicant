@@ -2,13 +2,10 @@
 
 This is the canonical definition of the work required for the stable major
 release. It contains authored scope, acceptance, dependencies, and governing
-decision ownership only. Current status and evidence are derived from `.forge/`
-machine state:
-
-```bash
-python3 ~/.claude/scripts/forge-roadmap.py \
-  --repo /Users/rp/Developer/Base/ash_replicant --report
-```
+decision ownership only. This file carries NO status column and no derived
+status: the status source of record is the commit history plus
+`CHANGELOG.md`'s `[Unreleased]` section (derive a row's current state from
+those, never from this file's prose).
 
 No row is optional for the release gate. Enhancements are included where the live
 Replicant contract or Ash architecture already supports the capability; they are

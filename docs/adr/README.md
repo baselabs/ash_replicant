@@ -25,13 +25,14 @@ the narrative "why"; an ADR is the tracked, per-decision record with code eviden
 | [0010](0010-host-action-contract.md) | Per-invocation operation discriminator closing the intra-change AshOnetime key collision (declarations stay 6-axis); notifier `load/2` manifest admission; the action-contract freeze table | B6 |
 | [0011](0011-frozen-reason-and-event-taxonomy.md) | The closed error-reason set and the telemetry event-name inventory are pinned public contract — additive growth only, removal/rename is breaking with migration notes | B5 / D3 / D8 |
 | [0012](0012-snapshot-run-scoped-ordinal-space.md) | One continuing ordinal axis per snapshot run, keyed by the run's consistent point — the axis ADR-0010's operation keys depend on | B6 / C3 |
+| [0013](0013-sensitive-type-shape-classification.md) | Sensitive classification admits only AshCloak cloak attributes, binary-storage attributes, or `skip` — verified by type shape at compile, never ciphertext; the tenant discriminator is never sensitive | Critical Rule 3 |
 
 ## On-touch gap list (not yet authored — author when a slice next touches the surface)
 
 These decisions are authored by their owning roadmap row (do not bulk-author them
 from historical testimony). Rows whose decision has since been authored are
-retired here: the sensitive type-shape / value-free boundary row was authored as
-[ADR-0009](0009-classified-boundaries.md) (B5), and the `REPLICA IDENTITY FULL`
+retired here: the sensitive type-shape classification row is governed by
+[ADR-0013](0013-sensitive-type-shape-classification.md), and the `REPLICA IDENTITY FULL`
 operational precondition row is governed by
 [ADR-0008](0008-strict-source-coverage.md) (enforced at activation by
 `AshReplicant.Coverage`'s preflight census) with the runtime old-side halt in
