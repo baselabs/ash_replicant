@@ -329,8 +329,8 @@ defmodule AshReplicant.ReleaseContract do
     assert(
       length(ledger_hits) == 2 and
         Enum.all?(ledger_hits, &String.contains?(&1, sink_lines)) and
-        Enum.sort(Enum.map(ledger_hits, &Path.basename(&1))) == ["sink.ex:105", "sink.ex:86"],
-      "apply_ledger must appear ONLY as the two allowlisted fail-closed lines (86 and 105) of lib/ash_replicant/sink.ex, found: #{inspect(ledger_hits)}"
+        Enum.sort(Enum.map(ledger_hits, &Path.basename(&1))) == ["sink.ex:110", "sink.ex:91"],
+      "apply_ledger must appear ONLY as the two allowlisted fail-closed lines (91 and 110) of lib/ash_replicant/sink.ex, found: #{inspect(ledger_hits)}"
     )
 
     secret_hits =
