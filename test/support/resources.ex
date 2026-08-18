@@ -176,6 +176,40 @@ defmodule AshReplicant.Test.MfaDomain do
   end
 end
 
+defmodule AshReplicant.Test.RaisingMfaOrder do
+  @moduledoc false
+  use Ash.Resource,
+    domain: AshReplicant.Test.RaisingMfaDomain,
+    data_layer: Ash.DataLayer.Ets,
+    extensions: [AshReplicant.Resource]
+
+  # The multitenancy block satisfies ValidateMultitenancy's compile gate: the
+  # fixture's DELIBERATE fault is the RAISING resolver (the runtime
+  # :tenant_resolution_failed cell), not the verifier-rejectable missing block —
+  # a module-level fixture carrying invalid config warns on every compile and
+  # trips the structural battery's no-error gate.
+  multitenancy do
+    strategy(:context)
+  end
+
+  replicant do
+    source_table("raising_mfa_orders")
+    tenant_mfa({AshReplicant.Test.RaisingTenantMfa, :resolve, ["tenant_key"]})
+  end
+
+  attributes do
+    attribute :id, :string do
+      primary_key? true
+      allow_nil? false
+      public? true
+    end
+  end
+
+  actions do
+    defaults [:read, :destroy, create: :*, update: :*]
+  end
+end
+
 defmodule AshReplicant.Test.RaisingMfaDomain do
   @moduledoc false
   use Ash.Domain, validate_config_inclusion?: false

@@ -623,6 +623,10 @@ defmodule AshReplicant.Test.Marquee do
       update :close_version do
         accept [:valid_to_lsn, :valid_to_ts, :is_current]
 
+        # The auxiliary-effect change cannot be atomic (it records an
+        # observation while closing); this close is driven by bulk_update.
+        require_atomic? false
+
         touches_resources [AshReplicant.Test.Marquee.Scd2Auxiliary]
 
         change {AshReplicant.Test.Marquee.RecordAuxiliary,

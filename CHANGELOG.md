@@ -183,6 +183,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- CI's from-clean `MIX_ENV=test` compile-WAE is green again (warm local
+  builds had masked three fixture-warning classes shipped in the unpushed
+  span): the marquee's auxiliary-carrying `close_version` declares
+  `require_atomic? false` (its effect-recording change is non-atomic by
+  design), the destination-walk loop fixtures are registered in their own
+  domain, and `RaisingMfaOrder` moved to test support so a clean compile
+  can verify the domain that references it.
 - Admit the census preflight connection BEFORE starting a pool: a
   postgrex-UNRESOLVABLE `:connection` database (absent key with no
   `PGDATABASE`, or an explicit nil — postgrex discovers the missing

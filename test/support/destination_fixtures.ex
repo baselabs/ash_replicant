@@ -3787,6 +3787,8 @@ defmodule AshReplicant.Test.DestinationFixtures.LoopRootDomain do
 
   resources do
     resource AshReplicant.Test.DestinationFixtures.LoopRoot
+    resource AshReplicant.Test.DestinationFixtures.LoopAuxX
+    resource AshReplicant.Test.DestinationFixtures.LoopAuxY
     resource AshReplicant.Test.Checkpoint
   end
 end
