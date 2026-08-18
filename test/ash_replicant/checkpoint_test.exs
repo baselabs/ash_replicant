@@ -3,6 +3,7 @@ defmodule AshReplicant.CheckpointTest do
 
   @moduletag :integration
 
+  alias Ash.Resource.Info
   alias AshReplicant.Test.Checkpoint
 
   @sys "7673383468368400428"
@@ -10,15 +11,15 @@ defmodule AshReplicant.CheckpointTest do
 
   describe "generated shape (source-bound row)" do
     test "composite primary key on the identity triple" do
-      assert Ash.Resource.Info.primary_key(Checkpoint) ==
+      assert Info.primary_key(Checkpoint) ==
                [:source_system_id, :source_database, :slot_name]
     end
 
     test "identity and actions for the sink + operator surface" do
-      identity = Ash.Resource.Info.identity(Checkpoint, :source_slot)
+      identity = Info.identity(Checkpoint, :source_slot)
       assert identity.keys == [:source_system_id, :source_database, :slot_name]
 
-      action_names = Checkpoint |> Ash.Resource.Info.actions() |> Enum.map(& &1.name)
+      action_names = Checkpoint |> Info.actions() |> Enum.map(& &1.name)
       assert :read in action_names
       assert :upsert in action_names
       assert :operator_reset in action_names
@@ -26,7 +27,7 @@ defmodule AshReplicant.CheckpointTest do
     end
 
     test "attribute nullability matches the data model" do
-      attrs = Map.new(Ash.Resource.Info.attributes(Checkpoint), &{&1.name, &1})
+      attrs = Map.new(Info.attributes(Checkpoint), &{&1.name, &1})
 
       for name <- [:source_system_id, :source_database, :slot_name] do
         assert attrs[name].allow_nil? == false

@@ -657,44 +657,8 @@ defmodule AshReplicant.Destination do
       _non_empty ->
         # A load-carrying notifier MUST implement the participant behaviour —
         # its declaration carries the trust (same model as tenant_mfa).
-        # {:ok, :no_database} / empty refs ADMIT with nothing new: the load
-        # statement's reads are often the resource's own already-admitted
-        # read. Notifier-sourced refs join the WALK (the reads enter the
-        # admitted graph) but NOT the host action's touches_resources
-        # tie-out: a same-resource load read cannot be declared on a
-        # `defaults [:read]` action — the tie-out is the ACTION-participant
-        # contract (Rule 6).
         if participant?(notifier) do
-          case inspect_provider(notifier, [], %Context{
-                 resource: resource,
-                 action: action.name,
-                 kind: :notifier
-               }) do
-            {:ok, refs_from_notifier} ->
-              # Tag the edges so the declared_by guard recognizes a
-              # notifier-sourced entry and skips re-probing the DECLARING
-              # notifier (its load genuinely triggers the resource's own
-              # read — the same logical edge, not a new one). The walk's
-              # cycle rule itself is source-blind: ANY re-entry into an
-              # active action is a cycle.
-              tagged =
-                refs_from_notifier
-                # A notifier declaring the action it was probed ON is a
-                # SELF-EDGE — the action is already in the graph by
-                # construction; the edge records "my load reads this very
-                # action", redundant information, not a cycle of distinct
-                # nodes (a context-insensitive uniform declaration produces
-                # exactly this shape on the read probe).
-                |> Enum.reject(fn {ref, _src} ->
-                  ref.resource == resource and ref.action == action.name
-                end)
-                |> Enum.map(fn {ref, _module} -> {ref, {:notifier, notifier}} end)
-
-              {:cont, {:ok, refs, all_refs ++ tagged}}
-
-            {:error, _reason} = error ->
-              {:halt, error}
-          end
+          admit_notifier_participant(resource, action, notifier, refs, all_refs)
         else
           {:halt, {:error, {:destination_notifier_required, resource, action.name, notifier}}}
         end
@@ -704,6 +668,46 @@ defmodule AshReplicant.Destination do
   catch
     _kind, _reason ->
       {:halt, {:error, {:destination_notifier_required, resource, action.name, notifier}}}
+  end
+
+  # {:ok, :no_database} / empty refs ADMIT with nothing new: the load
+  # statement's reads are often the resource's own already-admitted
+  # read. Notifier-sourced refs join the WALK (the reads enter the
+  # admitted graph) but NOT the host action's touches_resources
+  # tie-out: a same-resource load read cannot be declared on a
+  # `defaults [:read]` action — the tie-out is the ACTION-participant
+  # contract (Rule 6).
+  defp admit_notifier_participant(resource, action, notifier, refs, all_refs) do
+    case inspect_provider(notifier, [], %Context{
+           resource: resource,
+           action: action.name,
+           kind: :notifier
+         }) do
+      {:ok, refs_from_notifier} ->
+        tagged = tag_notifier_refs(resource, action, notifier, refs_from_notifier)
+        {:cont, {:ok, refs, all_refs ++ tagged}}
+
+      {:error, _reason} = error ->
+        {:halt, error}
+    end
+  end
+
+  # Tag the edges so the declared_by guard recognizes a notifier-sourced
+  # entry and skips re-probing the DECLARING notifier (its load genuinely
+  # triggers the resource's own read — the same logical edge, not a new
+  # one). The walk's cycle rule itself is source-blind: ANY re-entry into an
+  # active action is a cycle.
+  defp tag_notifier_refs(resource, action, notifier, refs_from_notifier) do
+    refs_from_notifier
+    # A notifier declaring the action it was probed ON is a SELF-EDGE — the
+    # action is already in the graph by construction; the edge records "my
+    # load reads this very action", redundant information, not a cycle of
+    # distinct nodes (a context-insensitive uniform declaration produces
+    # exactly this shape on the read probe).
+    |> Enum.reject(fn {ref, _src} ->
+      ref.resource == resource and ref.action == action.name
+    end)
+    |> Enum.map(fn {ref, _module} -> {ref, {:notifier, notifier}} end)
   end
 
   # `function_exported?/3` does not load the module — mirror Ash's exact gate.

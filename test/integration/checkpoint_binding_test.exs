@@ -93,6 +93,7 @@ defmodule AshReplicant.CheckpointBindingTest do
   @moduletag :integration
 
   alias AshReplicant.Checkpoint.Identity
+  alias AshReplicant.Sink.Impl
   alias AshReplicant.Test.{AdmittedGeneration, Marquee, PG}
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -546,7 +547,7 @@ defmodule AshReplicant.CheckpointBindingTest do
 
       tasks =
         for _i <- 1..2,
-            do: Task.async(fn -> AshReplicant.Sink.Impl.handle_transaction(config, change) end)
+            do: Task.async(fn -> Impl.handle_transaction(config, change) end)
 
       results = Enum.map(tasks, &Task.await(&1, 15_000))
 

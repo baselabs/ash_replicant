@@ -72,41 +72,11 @@ defmodule AshReplicant.Sink.Impl do
     with :ok <- reconnect_coverage_check(config) do
       result =
         config.repo.transaction(
-          fn ->
-            guard_generation!(config)
-
-            case locked_slot_rows(config) do
-              [] ->
-                insert_bound_row!(config, identity, contract)
-
-              [row] ->
-                verify_and_adapt_row!(config, identity, contract, row)
-
-              _many ->
-                # Multiple rows under one slot cannot occur past the unique slot
-                # index; a read here means the index was dropped. Fail closed.
-                rollback_conflict!(config, :source_identity_rebound)
-            end
-
-            guard_generation!(config)
-            :ok
-          end,
+          fn -> bind_slot_rows!(config, identity, contract) end,
           timeout: @snapshot_transaction_timeout
         )
 
-      case result do
-        {:ok, :ok} ->
-          :ok
-
-        # A Repo.rollback'd %Error{} is host-buildable inside the bind
-        # transaction — scrub it like every other fault shape (the rollback
-        # verb of the forged-struct class; raise/throw already covered).
-        {:error, %Error{} = error} ->
-          {:error, Error.scrub(error, config.checkpoint_resource, :bind)}
-
-        {:error, other} ->
-          {:error, Error.scrub(other, config.checkpoint_resource, :bind)}
-      end
+      scrub_bind_result(result, config)
     end
   rescue
     e -> {:error, Error.scrub(e, config.checkpoint_resource, :bind)}
@@ -122,6 +92,43 @@ defmodule AshReplicant.Sink.Impl do
   # every publication table mapped or ignored. Identity-verified short-lived
   # connection (the same preflight machinery); catalog faults defer to the
   # destination-transaction bind (an unreachable source cannot stream anyway).
+  # The bind's destination-transaction body: admit under the row lock.
+  defp bind_slot_rows!(config, identity, contract) do
+    guard_generation!(config)
+
+    case locked_slot_rows(config) do
+      [] ->
+        insert_bound_row!(config, identity, contract)
+
+      [row] ->
+        verify_and_adapt_row!(config, identity, contract, row)
+
+      _many ->
+        # Multiple rows under one slot cannot occur past the unique slot
+        # index; a read here means the index was dropped. Fail closed.
+        rollback_conflict!(config, :source_identity_rebound)
+    end
+
+    guard_generation!(config)
+    :ok
+  end
+
+  defp scrub_bind_result(result, config) do
+    case result do
+      {:ok, :ok} ->
+        :ok
+
+      # A Repo.rollback'd %Error{} is host-buildable inside the bind
+      # transaction — scrub it like every other fault shape (the rollback
+      # verb of the forged-struct class; raise/throw already covered).
+      {:error, %Error{} = error} ->
+        {:error, Error.scrub(error, config.checkpoint_resource, :bind)}
+
+      {:error, other} ->
+        {:error, Error.scrub(other, config.checkpoint_resource, :bind)}
+    end
+  end
+
   defp reconnect_coverage_check(config) do
     connection = Map.get(config, :source_connection) || []
 
@@ -194,17 +201,7 @@ defmodule AshReplicant.Sink.Impl do
   end
 
   defp classify_and_store_contract!(config, identity, contract, row) do
-    stored_manifest =
-      case row.publication_contract do
-        nil ->
-          nil
-
-        binary ->
-          case Identity.decode(binary) do
-            {:ok, manifest} -> manifest
-            :error -> :error
-          end
-      end
+    stored_manifest = decode_stored_manifest(row.publication_contract)
 
     cond do
       stored_manifest == :error ->
@@ -221,18 +218,33 @@ defmodule AshReplicant.Sink.Impl do
         :ok
 
       true ->
-        case Identity.classify(stored_manifest, contract.manifest) do
-          {:incompatible, reason} ->
-            rollback_conflict!(
-              config,
-              :publication_contract_incompatible,
-              "reason=" <> inspect(reason)
-            )
+        store_classified_contract!(config, identity, contract, stored_manifest)
+    end
+  end
 
-          _compatible_or_equal ->
-            write_bound_contract!(config, identity, contract, %{})
-            :ok
-        end
+  # An undecodable stored contract is the tamper/decode-fault class — never a
+  # silent re-initialization (nil, below, is the only legitimate "no contract").
+  defp decode_stored_manifest(nil), do: nil
+
+  defp decode_stored_manifest(binary) do
+    case Identity.decode(binary) do
+      {:ok, manifest} -> manifest
+      :error -> :error
+    end
+  end
+
+  defp store_classified_contract!(config, identity, contract, stored_manifest) do
+    case Identity.classify(stored_manifest, contract.manifest) do
+      {:incompatible, reason} ->
+        rollback_conflict!(
+          config,
+          :publication_contract_incompatible,
+          "reason=" <> inspect(reason)
+        )
+
+      _compatible_or_equal ->
+        write_bound_contract!(config, identity, contract, %{})
+        :ok
     end
   end
 
@@ -573,6 +585,24 @@ defmodule AshReplicant.Sink.Impl do
 
   def clear_snapshot_ordinals(_slot_name), do: true
 
+  # The snapshot handoff's destination-transaction body: monotonic, guarded.
+  defp complete_snapshot_transaction!(config, snapshot_lsn) do
+    guard_generation!(config)
+
+    case locked_checkpoint!(config) do
+      # Monotonic handoff: a re-delivered/older consistent point never
+      # regresses the durable watermark. No write; the framework acks its
+      # own consistent point, never the sink's return value.
+      cp when is_integer(cp) and snapshot_lsn <= cp ->
+        :ok
+
+      _ ->
+        upsert_checkpoint(config, snapshot_lsn)
+    end
+
+    guard_generation!(config)
+  end
+
   @doc "Durably set `checkpoint := snapshot_lsn` and return it (the snapshot handoff commit)."
   @spec handle_snapshot_complete(map(), Replicant.lsn()) ::
           {:ok, Replicant.lsn()} | {:error, term()}
@@ -583,22 +613,7 @@ defmodule AshReplicant.Sink.Impl do
       {:error, Error.exception(reason: :config_invalid, resource: nil, op: :snapshot_complete)}
     else
       config.repo.transaction(
-        fn ->
-          guard_generation!(config)
-
-          case locked_checkpoint!(config) do
-            # Monotonic handoff: a re-delivered/older consistent point never
-            # regresses the durable watermark. No write; the framework acks its
-            # own consistent point, never the sink's return value.
-            cp when is_integer(cp) and snapshot_lsn <= cp ->
-              :ok
-
-            _ ->
-              upsert_checkpoint(config, snapshot_lsn)
-          end
-
-          guard_generation!(config)
-        end,
+        fn -> complete_snapshot_transaction!(config, snapshot_lsn) end,
         # Same ceiling as every other locked path: the first statement holds
         # FOR UPDATE on the checkpoint row, so a lock wait must not run into
         # the 15s DBConnection default (the deterministic-wedge class).

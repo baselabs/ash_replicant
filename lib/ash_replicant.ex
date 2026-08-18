@@ -15,6 +15,8 @@ defmodule AshReplicant do
 
   @version Mix.Project.config()[:version]
 
+  alias AshReplicant.Checkpoint.Identity
+  alias AshReplicant.Coverage
   alias AshReplicant.Destination.Generation
   alias AshReplicant.Error
   alias AshReplicant.Sink.Impl
@@ -100,14 +102,7 @@ defmodule AshReplicant do
     with {:ok, config} <- operator_sink(sink),
          {:ok, identity} <- validate_identity_fields(source_identity),
          :ok <- validate_watermark(commit_lsn) do
-      activation_lock(config.slot_name, fn ->
-        if :persistent_term.get({AshReplicant, config.slot_name}, :none) == :none do
-          adopt_row(config, identity, commit_lsn)
-        else
-          {:error,
-           Error.exception(reason: :config_invalid, resource: nil, op: :slot_already_active)}
-        end
-      end)
+      offline_slot_operation(config.slot_name, fn -> adopt_row(config, identity, commit_lsn) end)
     end
   end
 
@@ -123,14 +118,7 @@ defmodule AshReplicant do
   def reset_checkpoint(sink, source_identity) do
     with {:ok, config} <- operator_sink(sink),
          {:ok, identity} <- validate_identity_fields(source_identity) do
-      activation_lock(config.slot_name, fn ->
-        if :persistent_term.get({AshReplicant, config.slot_name}, :none) == :none do
-          reset_row(config, identity)
-        else
-          {:error,
-           Error.exception(reason: :config_invalid, resource: nil, op: :slot_already_active)}
-        end
-      end)
+      offline_slot_operation(config.slot_name, fn -> reset_row(config, identity) end)
     end
   end
 
@@ -148,13 +136,8 @@ defmodule AshReplicant do
     with {:ok, config} <- operator_sink(sink),
          {:ok, identity} <- validate_identity_fields(source_identity),
          :ok <- validate_timeline(timeline_id) do
-      activation_lock(config.slot_name, fn ->
-        if :persistent_term.get({AshReplicant, config.slot_name}, :none) == :none do
-          acknowledge_timeline(config, identity, timeline_id)
-        else
-          {:error,
-           Error.exception(reason: :config_invalid, resource: nil, op: :slot_already_active)}
-        end
+      offline_slot_operation(config.slot_name, fn ->
+        acknowledge_timeline(config, identity, timeline_id)
       end)
     end
   end
@@ -168,6 +151,19 @@ defmodule AshReplicant do
       _other ->
         {:error, Error.exception(reason: :checkpoint_adopt_invalid, resource: nil, op: :adopt)}
     end
+  end
+
+  # The operator surfaces run OFFLINE: they refuse while the slot has a live
+  # pipeline generation (the lease/activation state a running sink owns).
+  defp offline_slot_operation(slot_name, operation) do
+    activation_lock(slot_name, fn ->
+      if :persistent_term.get({AshReplicant, slot_name}, :none) == :none do
+        operation.()
+      else
+        {:error,
+         Error.exception(reason: :config_invalid, resource: nil, op: :slot_already_active)}
+      end
+    end)
   end
 
   defp validate_watermark(lsn) when is_integer(lsn) and lsn >= 0, do: :ok
@@ -192,68 +188,74 @@ defmodule AshReplicant do
     result =
       config.repo.transaction(fn ->
         case locked_slot_rows(config) do
-          [] ->
-            Ash.create!(
-              config.checkpoint_resource,
-              Map.merge(filter, %{commit_lsn: commit_lsn}),
-              action: :upsert,
-              upsert?: true,
-              upsert_identity: :source_slot,
-              upsert_fields: [:commit_lsn],
-              authorize?: false,
-              return_notifications?: true
-            )
-
-            :ok
-
-          [row] ->
-            same_triple =
-              row.source_system_id == filter.source_system_id and
-                row.source_database == filter.source_database and
-                row.slot_name == filter.slot_name
-
-            cond do
-              not same_triple ->
-                config.repo.rollback(
-                  Error.exception(
-                    reason: :checkpoint_adopt_conflict,
-                    resource: config.checkpoint_resource,
-                    op: :adopt
-                  )
-                )
-
-              # Idempotence requires the IDENTICAL row: a different watermark
-              # (including a nil argument over a durable one) is a mismatched
-              # adoption — refuse rather than silently keep the first.
-              row.commit_lsn != commit_lsn ->
-                config.repo.rollback(
-                  Error.exception(
-                    reason: :checkpoint_adopt_conflict,
-                    resource: config.checkpoint_resource,
-                    op: :adopt,
-                    shape: "watermark_mismatch"
-                  )
-                )
-
-              true ->
-                :ok
-            end
-
-          _many ->
-            config.repo.rollback(
-              Error.exception(
-                reason: :checkpoint_adopt_conflict,
-                resource: config.checkpoint_resource,
-                op: :adopt
-              )
-            )
+          [] -> insert_adopted_row!(config, filter, commit_lsn)
+          [row] -> verify_adopted_row!(config, filter, row, commit_lsn)
+          _many -> config.repo.rollback(adopt_conflict(config))
         end
       end)
 
+    scrub_transaction_result(result, config.checkpoint_resource, :adopt)
+  end
+
+  # No row under the slot name: the adoption IS the first binding of the
+  # durable watermark (the upsert is the legacy-capture continuation).
+  defp insert_adopted_row!(config, filter, commit_lsn) do
+    Ash.create!(
+      config.checkpoint_resource,
+      Map.merge(filter, %{commit_lsn: commit_lsn}),
+      action: :upsert,
+      upsert?: true,
+      upsert_identity: :source_slot,
+      upsert_fields: [:commit_lsn],
+      authorize?: false,
+      return_notifications?: true
+    )
+
+    :ok
+  end
+
+  defp verify_adopted_row!(config, filter, row, commit_lsn) do
+    same_triple =
+      row.source_system_id == filter.source_system_id and
+        row.source_database == filter.source_database and
+        row.slot_name == filter.slot_name
+
+    cond do
+      not same_triple ->
+        config.repo.rollback(adopt_conflict(config))
+
+      # Idempotence requires the IDENTICAL row: a different watermark
+      # (including a nil argument over a durable one) is a mismatched
+      # adoption — refuse rather than silently keep the first.
+      row.commit_lsn != commit_lsn ->
+        config.repo.rollback(
+          Error.exception(
+            reason: :checkpoint_adopt_conflict,
+            resource: config.checkpoint_resource,
+            op: :adopt,
+            shape: "watermark_mismatch"
+          )
+        )
+
+      true ->
+        :ok
+    end
+  end
+
+  defp adopt_conflict(config),
+    do:
+      Error.exception(
+        reason: :checkpoint_adopt_conflict,
+        resource: config.checkpoint_resource,
+        op: :adopt
+      )
+
+  # Every operator transaction reports through the same value-free funnel.
+  defp scrub_transaction_result(result, resource, op) do
     case result do
       {:ok, :ok} -> :ok
       {:error, %Error{} = error} -> {:error, error}
-      {:error, other} -> {:error, Error.scrub(other, config.checkpoint_resource, :adopt)}
+      {:error, other} -> {:error, Error.scrub(other, resource, op)}
     end
   end
 
@@ -273,11 +275,7 @@ defmodule AshReplicant do
         :ok
       end)
 
-    case result do
-      {:ok, :ok} -> :ok
-      {:error, %Error{} = error} -> {:error, error}
-      {:error, other} -> {:error, Error.scrub(other, config.checkpoint_resource, :reset)}
-    end
+    scrub_transaction_result(result, config.checkpoint_resource, :reset)
   end
 
   defp acknowledge_timeline(config, identity, timeline_id) do
@@ -287,24 +285,7 @@ defmodule AshReplicant do
       config.repo.transaction(fn ->
         case locked_triple_rows(config, filter) do
           [%{source_timeline: stored}] = rows when is_integer(stored) ->
-            if stored == timeline_id do
-              :ok
-            else
-              for row <- rows do
-                Ash.create!(
-                  config.checkpoint_resource,
-                  Map.merge(checkpoint_filter_from(config, row), %{source_timeline: timeline_id}),
-                  action: :upsert,
-                  upsert?: true,
-                  upsert_identity: :source_slot,
-                  upsert_fields: [:source_timeline],
-                  authorize?: false,
-                  return_notifications?: true
-                )
-              end
-
-              :ok
-            end
+            rebind_timeline_rows!(config, rows, stored, timeline_id)
 
           [_row] ->
             # The row exists but has NO recorded timeline yet (adopted, never
@@ -330,15 +311,29 @@ defmodule AshReplicant do
         end
       end)
 
-    case result do
-      {:ok, :ok} ->
-        :ok
+    scrub_transaction_result(result, config.checkpoint_resource, :acknowledge_timeline)
+  end
 
-      {:error, %Error{} = error} ->
-        {:error, error}
+  # Same timeline is the idempotent no-op; a different one re-binds EVERY row
+  # of the triple (the operator asserted WAL-history continuity for them all).
+  defp rebind_timeline_rows!(config, rows, stored, timeline_id) do
+    if stored == timeline_id do
+      :ok
+    else
+      for row <- rows do
+        Ash.create!(
+          config.checkpoint_resource,
+          Map.merge(checkpoint_filter_from(config, row), %{source_timeline: timeline_id}),
+          action: :upsert,
+          upsert?: true,
+          upsert_identity: :source_slot,
+          upsert_fields: [:source_timeline],
+          authorize?: false,
+          return_notifications?: true
+        )
+      end
 
-      {:error, other} ->
-        {:error, Error.scrub(other, config.checkpoint_resource, :acknowledge_timeline)}
+      :ok
     end
   end
 
@@ -456,10 +451,10 @@ defmodule AshReplicant do
        ) do
     with {:ok, manifest} <- AshReplicant.Destination.manifest(sink_config),
          {:ok, source_contract} <-
-           AshReplicant.Checkpoint.Identity.build_contract(sink_config, publication),
+           Identity.build_contract(sink_config, publication),
          {:ok, index} <- AshReplicant.Resolver.build_index(sink_config.domains),
          {:ok, coverage} <-
-           AshReplicant.Coverage.preflight(
+           Coverage.preflight(
              Keyword.get(opts, :connection),
              source_identity,
              publication,

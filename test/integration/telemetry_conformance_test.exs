@@ -61,8 +61,8 @@ defmodule AshReplicant.TelemetryConformanceTest do
 
   @moduletag :integration
 
-  alias AshReplicant.Test.{Marquee, PG}
   alias AshReplicant.Telemetry
+  alias AshReplicant.Test.{Marquee, PG}
   alias Ecto.Adapters.SQL.Sandbox
 
   @slot "conf_telemetry_slot"

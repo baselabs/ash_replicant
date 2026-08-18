@@ -36,5 +36,8 @@ fi
 
 if [[ "$test_exit" -ne 0 || "$result_exit" -ne 0 ]]; then
   echo "structural test run failed" >&2
+  # Surface the result line + tail (the raw capture is trap-deleted; without
+  # this an intermittent failure is undiagnosable when it does not re-reproduce).
+  tail -20 "$raw_output" >&2
   exit 1
 fi

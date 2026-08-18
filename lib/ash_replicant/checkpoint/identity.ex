@@ -12,8 +12,8 @@ defmodule AshReplicant.Checkpoint.Identity do
   line are mechanically detectable because the declared skip set is recorded.
   """
 
+  alias AshReplicant.{Error, Resolver, Resource.Info}
   alias AshReplicant.Sql
-  alias AshReplicant.{Error, Resource.Info, Resolver}
 
   @contract_version 1
   @checkpoint_table "ash_replicant_checkpoints"
@@ -172,20 +172,22 @@ defmodule AshReplicant.Checkpoint.Identity do
 
     removed = MapSet.difference(stored_keys, current_keys)
 
-    cond do
-      MapSet.size(removed) > 0 ->
-        {:incompatible, :relation_removed}
+    if MapSet.size(removed) > 0 do
+      {:incompatible, :relation_removed}
+    else
+      stored_keys
+      |> Enum.sort()
+      |> Enum.reduce_while({:compatible, :relations_added}, fn key, growth ->
+        relation_growth_step(stored_by_key[key], current_by_key[key], growth)
+      end)
+    end
+  end
 
-      true ->
-        stored_keys
-        |> Enum.sort()
-        |> Enum.reduce_while({:compatible, :relations_added}, fn key, growth ->
-          case classify_relation(stored_by_key[key], current_by_key[key]) do
-            :equal -> {:cont, growth}
-            :relation_growth -> {:cont, growth}
-            {:incompatible, reason} -> {:halt, {:incompatible, reason}}
-          end
-        end)
+  defp relation_growth_step(stored, current, growth) do
+    case classify_relation(stored, current) do
+      :equal -> {:cont, growth}
+      :relation_growth -> {:cont, growth}
+      {:incompatible, reason} -> {:halt, {:incompatible, reason}}
     end
   end
 
@@ -235,20 +237,24 @@ defmodule AshReplicant.Checkpoint.Identity do
         survivors
         |> Enum.sort()
         |> Enum.reduce_while(:relation_growth, fn source, growth ->
-          column = Map.get(stored_cols, source)
-          current_column = Map.get(current_cols, source)
-
-          cond do
-            current_column != column ->
-              {:halt, {:incompatible, :column_changed}}
-
-            Map.get(stored.types, column.target) != Map.get(current.types, current_column.target) ->
-              {:halt, {:incompatible, :column_type}}
-
-            true ->
-              {:cont, growth}
-          end
+          survivor_verdict(stored, current, stored_cols, current_cols, source, growth)
         end)
+    end
+  end
+
+  defp survivor_verdict(stored, current, stored_cols, current_cols, source, growth) do
+    column = Map.get(stored_cols, source)
+    current_column = Map.get(current_cols, source)
+
+    cond do
+      current_column != column ->
+        {:halt, {:incompatible, :column_changed}}
+
+      Map.get(stored.types, column.target) != Map.get(current.types, current_column.target) ->
+        {:halt, {:incompatible, :column_type}}
+
+      true ->
+        {:cont, growth}
     end
   end
 

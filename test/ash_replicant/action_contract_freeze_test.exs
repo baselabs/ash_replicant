@@ -13,12 +13,13 @@ defmodule AshReplicant.ActionContractFreezeTest do
 
   use ExUnit.Case, async: true
 
+  alias Ash.Resource.Info
   alias AshReplicant.Apply.Context
   alias AshReplicant.Destination
-  alias AshReplicant.Telemetry
   alias AshReplicant.DestinationParticipant
-  alias AshReplicant.Test.{Order, OrderVersion}
+  alias AshReplicant.Telemetry
   alias AshReplicant.Test.DestinationFixtures
+  alias AshReplicant.Test.{Order, OrderVersion}
 
   @config %{
     repo: AshReplicant.TestRepo,
@@ -36,7 +37,7 @@ defmodule AshReplicant.ActionContractFreezeTest do
          %{
            manifest: manifest
          } do
-      assert %{type: :read} = Ash.Resource.Info.primary_action(Order, :read)
+      assert %{type: :read} = Info.primary_action(Order, :read)
 
       assert Enum.any?(
                manifest.entries,
@@ -44,7 +45,7 @@ defmodule AshReplicant.ActionContractFreezeTest do
              )
 
       for entry <- manifest.entries do
-        action = Ash.Resource.Info.action(entry.resource, entry.action)
+        action = Info.action(entry.resource, entry.action)
         # ValidateActionMultitenancy covers sink-selected actions at compile;
         # the walk's validate_action_tenant_scoping covers declared
         # participants — the freeze row pins the OUTCOME over the whole graph.
@@ -63,7 +64,7 @@ defmodule AshReplicant.ActionContractFreezeTest do
 
   describe "row: primary create (upsert)" do
     test "typed :create, admitted, and the streaming path mints :upsert" do
-      assert %{type: :create} = Ash.Resource.Info.primary_action(Order, :create)
+      assert %{type: :create} = Info.primary_action(Order, :create)
 
       config = %{
         source_identity: %{system_identifier: "system", database: "source"},
@@ -93,7 +94,7 @@ defmodule AshReplicant.ActionContractFreezeTest do
 
   describe "row: primary destroy" do
     test "typed :destroy, admitted, and the relocate/delete paths mint :destroy_prior" do
-      assert %{type: :destroy} = Ash.Resource.Info.primary_action(Order, :destroy)
+      assert %{type: :destroy} = Info.primary_action(Order, :destroy)
 
       config = %{
         source_identity: %{system_identifier: "system", database: "source"},
@@ -118,7 +119,7 @@ defmodule AshReplicant.ActionContractFreezeTest do
 
   describe "row: history_close_action" do
     test "typed :update at compile (ValidateHistory.check_close enforces it — the cited check, not a gap)" do
-      assert %{type: :update} = Ash.Resource.Info.action(OrderVersion, :close_version)
+      assert %{type: :update} = Info.action(OrderVersion, :close_version)
 
       # The compile-time enforcement itself: check_close rejects a close
       # action that is not an update. Source-pin of the enforcement point.

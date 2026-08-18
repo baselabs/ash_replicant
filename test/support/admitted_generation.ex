@@ -1,6 +1,7 @@
 defmodule AshReplicant.Test.AdmittedGeneration do
   @moduledoc false
 
+  alias AshReplicant.Checkpoint.Identity
   alias AshReplicant.Destination
   alias AshReplicant.Destination.Generation
 
@@ -8,7 +9,7 @@ defmodule AshReplicant.Test.AdmittedGeneration do
     config = sink.__ash_replicant_config__()
     publication = Keyword.get(opts, :publication, ["test_publication"])
     {:ok, manifest} = Destination.manifest(config)
-    {:ok, source_contract} = AshReplicant.Checkpoint.Identity.build_contract(config, publication)
+    {:ok, source_contract} = Identity.build_contract(config, publication)
 
     coverage =
       case Keyword.get(opts, :coverage) do

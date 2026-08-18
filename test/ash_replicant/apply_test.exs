@@ -51,6 +51,7 @@ defmodule AshReplicant.ApplyTest do
   alias AshReplicant.Resolver
   alias AshReplicant.Test.Order
   alias AshReplicant.Test.TenantOrder
+  alias Ecto.Adapters.SQL
 
   defmodule MirrorTruncateDomain do
     @moduledoc false
@@ -384,12 +385,12 @@ defmodule AshReplicant.ApplyTest do
 
   describe "identifier quoting drives the raw truncate SQL (U3/D4)" do
     setup do
-      q = &Ecto.Adapters.SQL.query!(AshReplicant.TestRepo, &1, [])
+      q = &SQL.query!(AshReplicant.TestRepo, &1, [])
 
-      q.("DROP TABLE IF EXISTS \"ord\"\"ers\"")
-      q.("CREATE TABLE \"ord\"\"ers\" (id text primary key)")
+      q.(~s(DROP TABLE IF EXISTS "ord""ers"))
+      q.(~s|CREATE TABLE "ord""ers" (id text primary key)|)
 
-      on_exit(fn -> q.("DROP TABLE IF EXISTS \"ord\"\"ers\"") end)
+      on_exit(fn -> q.(~s(DROP TABLE IF EXISTS "ord""ers")) end)
 
       :ok
     end
@@ -398,8 +399,8 @@ defmodule AshReplicant.ApplyTest do
     # `DELETE FROM "public"."ord"ers"` — a Postgres syntax error, the raised
     # error is scrubbed to `{:error, %Error{}}`, and this `assert :ok` fails.
     test "the :mirror truncate DELETE doubles the embedded quote and hits exactly that table" do
-      q = &Ecto.Adapters.SQL.query!(AshReplicant.TestRepo, &1, [])
-      q.("INSERT INTO \"ord\"\"ers\" VALUES ('q1')")
+      q = &SQL.query!(AshReplicant.TestRepo, &1, [])
+      q.(~s|INSERT INTO "ord""ers" VALUES ('q1')|)
 
       cfg = %{
         resolver_index: %{{"public", "embedded_quote_src"} => EmbeddedQuoteTruncate},
@@ -409,7 +410,7 @@ defmodule AshReplicant.ApplyTest do
 
       assert :ok = Apply.apply_change(cfg, change(:truncate, "embedded_quote_src", nil))
 
-      assert q.("SELECT count(*) FROM \"ord\"\"ers\"").rows == [[0]],
+      assert q.(~s|SELECT count(*) FROM "ord""ers"|).rows == [[0]],
              "the embedded-quote table must be wiped by the correctly doubled ident"
     end
   end

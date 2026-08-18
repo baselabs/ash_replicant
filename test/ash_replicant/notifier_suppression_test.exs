@@ -12,6 +12,8 @@ defmodule AshReplicant.NotifierSuppressionTest do
   @moduletag :integration
 
   alias AshReplicant.Apply
+  alias AshReplicant.Sink.Impl
+  alias AshReplicant.Test.{AdmittedGeneration, Marquee}
 
   defmodule EchoNotifier do
     @moduledoc false
@@ -165,7 +167,7 @@ defmodule AshReplicant.NotifierSuppressionTest do
     assert_receive {:notified, :create, "ctl"}, 500
     assert_receive {:spy_calc_ran, _}, 500
 
-    generation = AshReplicant.Test.AdmittedGeneration.put!(SnapshotLoadSink)
+    generation = AdmittedGeneration.put!(SnapshotLoadSink)
 
     identity = %Replicant.SessionIdentity{
       system_identifier: generation.source_identity.system_identifier,
@@ -189,9 +191,9 @@ defmodule AshReplicant.NotifierSuppressionTest do
     ]
 
     on_exit(fn ->
-      AshReplicant.Test.Marquee.q!("DELETE FROM orders WHERE id IN ('ctl', 's1')")
+      Marquee.q!("DELETE FROM orders WHERE id IN ('ctl', 's1')")
       :persistent_term.erase({AshReplicant, "notifier_snapshot_slot"})
-      AshReplicant.Sink.Impl.clear_snapshot_ordinals("notifier_snapshot_slot")
+      Impl.clear_snapshot_ordinals("notifier_snapshot_slot")
     end)
 
     assert :ok =

@@ -8,6 +8,7 @@ defmodule AshReplicant.Coverage do
   # every error is a value-free structural reason (Critical Rule 4).
 
   alias AshReplicant.{Checkpoint.Identity, Error, Resource.Info}
+  alias Replicant.Decoder.OidDatabase
 
   @typedoc "Per-table catalog census: the live column shape + identity flags."
   @type census :: %{
@@ -83,9 +84,8 @@ defmodule AshReplicant.Coverage do
          :ok <- check_missing_expected(census, facts),
          :ok <- check_unignored_publication(census, facts, ignored_keys),
          :ok <- check_columns(census, facts),
-         :ok <- check_types(census, facts),
-         :ok <- check_replica_identity(census, facts) do
-      :ok
+         :ok <- check_types(census, facts) do
+      check_replica_identity(census, facts)
     end
   end
 
@@ -205,23 +205,29 @@ defmodule AshReplicant.Coverage do
       # find_value's default :ok fires only when NO column violates; an
       # allowed/skipped column yields nil so the scan continues.
       Enum.find_value(live, :ok, fn column ->
-        case Map.get(fact.target_types, column.name) do
-          nil ->
-            nil
-
-          target_type ->
-            unless type_allowed?(target_type, column.type) do
-              {:error,
-               Error.exception(
-                 reason: :source_type_invalid,
-                 resource: fact.resource,
-                 op: :preflight,
-                 shape: "#{schema}.#{table}(#{column.name}:#{column.type})"
-               )}
-            end
-        end
+        column_type_error(fact, schema, table, column)
       end)
     end)
+  end
+
+  # nil continues the scan (unmapped columns are rule 5's class); a returned
+  # error tuple halts it.
+  defp column_type_error(fact, schema, table, column) do
+    case Map.get(fact.target_types, column.name) do
+      nil ->
+        nil
+
+      target_type ->
+        unless type_allowed?(target_type, column.type) do
+          {:error,
+           Error.exception(
+             reason: :source_type_invalid,
+             resource: fact.resource,
+             op: :preflight,
+             shape: "#{schema}.#{table}(#{column.name}:#{column.type})"
+           )}
+        end
+    end
   end
 
   defp check_replica_identity(census, facts) do
@@ -337,16 +343,7 @@ defmodule AshReplicant.Coverage do
 
         change.columns
         |> Enum.map(&to_string(&1.name))
-        |> Enum.each(fn name ->
-          unless member_any?(fact.mapped, name) or member_any?(fact.skips, name) do
-            raise Error.exception(
-                    reason: :source_column_unmapped,
-                    resource: fact.resource,
-                    op: :apply,
-                    shape: "#{elem(key, 0)}.#{elem(key, 1)}(#{name})"
-                  )
-          end
-        end)
+        |> Enum.each(&assert_column_mapped!(fact, key, &1, :apply))
 
         :ok
     end
@@ -379,20 +376,21 @@ defmodule AshReplicant.Coverage do
 
         record
         |> Map.keys()
-        |> Enum.each(fn name ->
-          name = to_string(name)
-
-          unless member_any?(fact.mapped, name) or member_any?(fact.skips, name) do
-            raise Error.exception(
-                    reason: :source_column_unmapped,
-                    resource: fact.resource,
-                    op: :snapshot,
-                    shape: "#{elem(key, 0)}.#{elem(key, 1)}(#{name})"
-                  )
-          end
-        end)
+        |> Enum.map(&to_string/1)
+        |> Enum.each(&assert_column_mapped!(fact, key, &1, :snapshot))
 
         :ok
+    end
+  end
+
+  defp assert_column_mapped!(fact, key, name, op) do
+    unless member_any?(fact.mapped, name) or member_any?(fact.skips, name) do
+      raise Error.exception(
+              reason: :source_column_unmapped,
+              resource: fact.resource,
+              op: op,
+              shape: "#{elem(key, 0)}.#{elem(key, 1)}(#{name})"
+            )
     end
   end
 
@@ -480,15 +478,20 @@ defmodule AshReplicant.Coverage do
     |> MapSet.to_list()
     |> Kernel.--(skip)
     |> Kernel.--(window)
-    |> Enum.map(fn attr ->
-      name = Atom.to_string(attr)
-
-      case String.replace_prefix(name, "encrypted_", "") do
-        ^name -> name
-        plain -> if plain in cloak_sources, do: plain, else: name
-      end
-    end)
+    |> Enum.map(&reverse_cloak_name(&1, cloak_sources))
     |> MapSet.new()
+  end
+
+  # `encrypted_<plain>` reverses to the plaintext SOURCE column name only
+  # when the plaintext really is AshCloak-covered; anything else keeps its
+  # own name (an unrelated `encrypted_` prefix is an ordinary column).
+  defp reverse_cloak_name(attr, cloak_sources) do
+    name = Atom.to_string(attr)
+
+    case String.replace_prefix(name, "encrypted_", "") do
+      ^name -> name
+      plain -> if plain in cloak_sources, do: plain, else: name
+    end
   end
 
   # The SCD2 window/current ATTRIBUTE atoms — sink-generated on the
@@ -809,7 +812,7 @@ defmodule AshReplicant.Coverage do
         col_raw
         |> Enum.zip(col_type_oids)
         |> Enum.map(fn {name, oid} ->
-          %{name: name, type: Replicant.Decoder.OidDatabase.name_for_type_id(oid)}
+          %{name: name, type: OidDatabase.name_for_type_id(oid)}
         end)
 
       {{schema, table}, columns}

@@ -198,20 +198,21 @@ defmodule AshReplicant.Telemetry do
   def validate_measurements!(measurements) when is_map(measurements) do
     case Map.keys(measurements) -- @allowed_measurement_keys do
       [] ->
-        Enum.each(measurements, fn {key, value} ->
-          unless finite_non_negative_number?(value) do
-            raise ArgumentError,
-                  "telemetry measurement #{inspect(key)} must be a non-negative finite " <>
-                    "number (closed set #{inspect(@allowed_measurement_keys)})"
-          end
-        end)
-
+        Enum.each(measurements, &validate_measurement!/1)
         :ok
 
       bad ->
         raise ArgumentError,
               "telemetry measurements has #{length(bad)} key(s) outside the closed set " <>
                 "#{inspect(@allowed_measurement_keys)} (byte_size reserved for C1)"
+    end
+  end
+
+  defp validate_measurement!({key, value}) do
+    unless finite_non_negative_number?(value) do
+      raise ArgumentError,
+            "telemetry measurement #{inspect(key)} must be a non-negative finite " <>
+              "number (closed set #{inspect(@allowed_measurement_keys)})"
     end
   end
 
