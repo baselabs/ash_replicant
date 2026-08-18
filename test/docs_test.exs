@@ -58,7 +58,10 @@ defmodule AshReplicant.DocsTest do
     # The C3 snapshot disclaimer and the absent-callbacks enumeration survive
     # VERBATIM (weakening either while amending is the named drift class).
     assert agents =~ "snapshot-wide physical effect-once until C3 proves zero repeats"
-    assert agents =~ "remain absent until C1–C4"
+
+    # C2 moved message (C1) and sink-owned batch (C2) to LIVE; the enumeration
+    # still names what is genuinely absent.
+    assert agents =~ "incremental-progress and\nappend-log callbacks remain absent until C3–C4"
   end
 
   test "published destination participant examples compile against the public API" do

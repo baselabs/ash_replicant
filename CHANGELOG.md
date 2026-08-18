@@ -26,6 +26,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Atomic sink-owned batch delivery (roadmap C2 / ADR-0016).** The generated
+  sink now implements `handle_batch/1` unconditionally, and
+  `AshReplicant.start_link/1` accepts and forwards `:batch_delivery`
+  (`[max_transactions: n, max_delay_ms: ms]`; a malformed value fails closed
+  `{:error, :config_invalid}` at start — previously the option was silently
+  withheld and batching was unreachable). With `batch_delivery` set, delivery
+  routes through one `handle_batch/1` call per flushed batch: the ascending
+  transactions and their transactional messages apply through the same
+  single-pass core as `handle_transaction/1` (lazy spilled streams are never
+  materialized), the checkpoint advances to the batch's highest LSN in the
+  SAME destination transaction after all effects, and any frontier at/below
+  the watermark skips — effect-once (dup = 0) holds across a mid-batch
+  teardown. New telemetry: `[:ash_replicant, :sink, :batch_applied]` (one
+  event per flush) and the typed `txn_count` metadata key; the per-transaction
+  `:applied` event does not fire in batch mode.
 - **Logical-message actions (roadmap C1 / ADR-0015).** `use AshReplicant.Sink`
   accepts `message_routes` (`{"prefix", Resource, :action}` triples routing
   `pg_logical_emit_message` output to host create actions) and

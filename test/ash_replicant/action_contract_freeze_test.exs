@@ -197,7 +197,7 @@ defmodule AshReplicant.ActionContractFreezeTest do
     end
   end
 
-  describe "row: append/message (message PRESENT-when-configured since C1; batch/snapshot/append ABSENT until C2/C3/C4)" do
+  describe "row: append/message/batch (message PRESENT-when-configured since C1; batch PRESENT since C2; snapshot/append ABSENT until C3/C4)" do
     test "the generated sink exposes handle_message/2 ONLY when a routing surface is declared" do
       sink = DestinationFixtures.Sink
 
@@ -211,13 +211,18 @@ defmodule AshReplicant.ActionContractFreezeTest do
       assert Code.ensure_loaded?(message_sink)
       assert function_exported?(message_sink, :handle_transaction, 1)
       assert function_exported?(message_sink, :handle_message, 2)
+    end
 
-      refute function_exported?(sink, :handle_batch, 1)
-      refute function_exported?(sink, :snapshot_progress, 0)
-      refute function_exported?(sink, :append, 2)
-      refute function_exported?(message_sink, :handle_batch, 1)
-      refute function_exported?(message_sink, :snapshot_progress, 0)
-      refute function_exported?(message_sink, :append, 2)
+    test "the generated sink exposes handle_batch/1 ALWAYS (batch semantics need no sink declaration)" do
+      # C2/ADR-0016: handle_batch/1 is generated unconditionally — unlike the
+      # message callback, its body consumes nothing beyond the admitted
+      # generation, and batch_delivery stays a pipeline-level start option.
+      for sink <- [DestinationFixtures.Sink, AshReplicant.Test.Messages.Sink] do
+        assert Code.ensure_loaded?(sink)
+        assert function_exported?(sink, :handle_batch, 1)
+        refute function_exported?(sink, :snapshot_progress, 0)
+        refute function_exported?(sink, :append, 2)
+      end
     end
   end
 

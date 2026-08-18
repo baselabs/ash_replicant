@@ -1006,7 +1006,9 @@ defmodule AshReplicant.DestinationTest do
     assert Code.ensure_loaded?(DestinationFixtures.Sink)
     assert function_exported?(DestinationFixtures.Sink, :handle_transaction, 1)
     refute function_exported?(DestinationFixtures.Sink, :handle_message, 2)
-    refute function_exported?(DestinationFixtures.Sink, :handle_batch, 1)
+    # C2: handle_batch/1 is now generated (ADR-0016) — batch delivery is
+    # current capability, not a future one.
+    assert function_exported?(DestinationFixtures.Sink, :handle_batch, 1)
     refute function_exported?(DestinationFixtures.Sink, :snapshot_progress, 0)
     refute function_exported?(DestinationFixtures.Sink, :append, 2)
   end

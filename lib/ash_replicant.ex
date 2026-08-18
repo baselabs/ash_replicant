@@ -44,6 +44,12 @@ defmodule AshReplicant do
     * `:messages` — passed through to Replicant; a sink with a declared
       message routing surface gets `messages: true` by default (an explicit
       caller value always wins).
+    * `:batch_delivery` — passed through to Replicant (C2/ADR-0016): opts the
+      pipeline into sink-owned batch delivery (`[max_transactions: n,
+      max_delay_ms: ms]`; `max_span` is derived). Delivery routes through the
+      generated sink's `handle_batch/1` — one destination transaction and one
+      watermark write per flushed batch, effect-once preserved. A malformed
+      value fails closed at start (`{:error, :config_invalid}`).
 
   The `slot_name` is NOT a `start_link` option — it is baked into the sink via
   `use AshReplicant.Sink, slot_name: ...` and is the single source of truth for
@@ -445,6 +451,7 @@ defmodule AshReplicant do
     :go_forward_only,
     :snapshot,
     :messages,
+    :batch_delivery,
     :streaming,
     :max_inflight_lag,
     :max_command_retries,

@@ -203,7 +203,7 @@ defmodule AshReplicant.ScrubBoundaryTest do
     end)
   end
 
-  describe "the six boundary bodies, direct drive (mutation matrix)" do
+  describe "the boundary bodies, direct drive (mutation matrix: the six U3/D3 bodies + handle_batch from C2)" do
     test "bind: raise (missing manifest KeyError) and :exit (unreachable source) scrub value-free" do
       # The drivable unit seams (diff-review rounds 2-3): (a) a
       # source_contract without :manifest raises KeyError INSIDE the body —
@@ -310,6 +310,37 @@ defmodule AshReplicant.ScrubBoundaryTest do
 
         assert Enum.any?(telemetry, &match?({[:ash_replicant, :sink, :halted], _, _}, &1)),
                "the sink's own halt event must fire on the fault path"
+      end
+    end
+
+    test "batch (C2): raise/throw/exit all scrub value-free and halt" do
+      # The eighth boundary body (ADR-0016) rides the same FaultyRepo
+      # transaction seam as handle_transaction — a fault inside the batch's
+      # ONE destination transaction must reach the same scrub/halt funnel,
+      # never the framework's mislabeled wrapper class.
+      for shape <- [:raise, :throw, :exit] do
+        set_shape(shape)
+
+        {result, telemetry} =
+          assert_value_free(fn ->
+            Impl.handle_batch(config(), [
+              %Replicant.Transaction{
+                commit_lsn: 10,
+                commit_timestamp: nil,
+                changes: [txn_change(%{"id" => "1"})]
+              },
+              %Replicant.Transaction{
+                commit_lsn: 20,
+                commit_timestamp: nil,
+                changes: [txn_change(%{"id" => "2"})]
+              }
+            ])
+          end)
+
+        assert {:error, %AshReplicant.Error{reason: :sink_failed}} = result
+
+        assert Enum.any?(telemetry, &match?({[:ash_replicant, :sink, :halted], _, _}, &1)),
+               "the sink's own halt event must fire on the batch fault path"
       end
     end
 

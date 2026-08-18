@@ -376,8 +376,10 @@ and incomplete replay identities are rejected.
 A Replicant v1 snapshot batch is atomic, but an incomplete multi-batch restart can
 physically repeat already committed batch effects. The v1 target is cleared and
 rebuilt, so final-state convergence is not proof of zero physical repeats. Roadmap
-C3 owns zero-repeat v1 and incremental restart. Message, sink-owned batch,
-incremental-progress, and append-log callbacks remain absent until C1 through C4.
+C3 owns zero-repeat v1 and incremental restart. Message (C1) and sink-owned batch
+delivery (C2 — `batch_delivery` routes flushes through `handle_batch/1`, one
+destination transaction and one trailing watermark write per batch) are live;
+incremental-progress and append-log callbacks remain absent until C3 through C4.
 
 ## Source-bound checkpoints, binding, and operator recovery
 

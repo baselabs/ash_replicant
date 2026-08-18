@@ -341,7 +341,7 @@ defmodule AshReplicant.Sink.Impl do
   end
 
   # The empty-resolver-index fail-closed guard. Shared by ALL delivery entry
-  # points (transaction, snapshot, snapshot-complete): the same degenerate index
+  # points (transaction, batch, snapshot, snapshot-complete): the same degenerate index
   # that silently drops streaming rows would silently drop a whole backfill AND
   # advance the checkpoint past it (permanent, invisible loss) — the snapshot
   # path must fail closed identically, never "complete" a snapshot that mirrored
@@ -349,6 +349,126 @@ defmodule AshReplicant.Sink.Impl do
   # partial-publication skip, handled per-table below; only the WHOLESALE-empty
   # index is a misconfiguration.)
   defp empty_index?(config), do: map_size(config.resolver_index) == 0
+
+  @doc """
+  Deliver a BATCH of committed transactions as ONE atomic unit (C2/ADR-0016,
+  the eighth sink boundary body). The transactions arrive in ascending
+  `commit_lsn` order; the body applies them and their transactional messages
+  through the SAME single-pass core as `handle_transaction/2`, then persists
+  `checkpoint := the batch's highest commit_lsn` AFTER all effects — one
+  destination transaction, one watermark write, effect-once (dup = 0) across
+  a mid-batch teardown. Any frontier at/below the locked watermark skips (the
+  whole batch when the highest LSN is stale). A fault in ANY transaction rolls
+  back EVERY transaction's effects and advances nothing — fail-closed,
+  value-free (rescue AND catch, like every boundary body). A lazy spilled
+  transaction's `changes` is enumerated exactly once, never materialized.
+  """
+  @spec handle_batch(map(), [Replicant.Transaction.t()]) ::
+          {:ok, Replicant.lsn() | nil} | {:error, term()}
+  def handle_batch(config, transactions) do
+    cond do
+      # The framework never flushes an empty batch (a nil pending_lsn
+      # short-circuits to :empty); the no-op keeps the frozen-arity callback
+      # from crashing on a future caller's shape.
+      transactions == [] ->
+        {:ok, nil}
+
+      empty_index?(config) ->
+        halt(Error.exception(reason: :config_invalid, resource: nil, op: :sink), config)
+
+      true ->
+        run_batch_transaction(config, transactions)
+    end
+  rescue
+    e -> halt(e, config)
+  catch
+    :throw, value -> halt(value, config)
+    :exit, value -> halt(value, config)
+  end
+
+  defp run_batch_transaction(config, transactions) do
+    started = System.monotonic_time()
+    %Replicant.Transaction{commit_lsn: last_lsn} = List.last(transactions)
+
+    # Same ceiling as run_transaction: the per-change generation guards and
+    # the locked admission read hold inside this transaction, and a batch
+    # multiplies the work under one lock hold.
+    result =
+      config.repo.transaction(
+        fn ->
+          guard_generation!(config)
+
+          case locked_checkpoint!(config) do
+            cp when is_integer(cp) and last_lsn <= cp ->
+              guard_generation!(config)
+              :skipped
+
+            cp ->
+              {txn_count, change_count} = apply_batch(config, transactions, cp)
+              guard_generation!(config)
+              # Ascending order + last_lsn > cp here, so the write cannot
+              # regress the locked watermark.
+              upsert_checkpoint(config, last_lsn)
+              guard_generation!(config)
+              {:applied, txn_count, change_count}
+          end
+        end,
+        timeout: @snapshot_transaction_timeout
+      )
+
+    case result do
+      {:ok, {:applied, txn_count, change_count}} ->
+        Telemetry.event(
+          [:ash_replicant, :sink, :batch_applied],
+          %{change_count: change_count, duration: System.monotonic_time() - started},
+          %{commit_lsn: last_lsn, txn_count: txn_count}
+        )
+
+        {:ok, last_lsn}
+
+      {:ok, :skipped} ->
+        Telemetry.event([:ash_replicant, :sink, :skipped], %{}, %{
+          commit_lsn: last_lsn,
+          txn_count: length(transactions)
+        })
+
+        {:ok, last_lsn}
+
+      {:error, reason} ->
+        halt(reason, config)
+    end
+  end
+
+  # One ascending pass over the batch. A transaction at/below the locked
+  # watermark skips individually (the callback contract's belt-and-suspenders
+  # on top of the framework's Commit-time pre-skip); each survivor applies
+  # through the SAME single-pass `apply_all` core — the transactional-message
+  # ordinal interleave carries through unchanged, and a spilled transaction's
+  # lazy `changes` never re-enumerates. `transactions` itself is the
+  # materialized in-memory list the framework hands over. The skip predicate
+  # keys on `is_integer(checkpoint_lsn)` EXACTLY like run_transaction's —
+  # Elixir's total term order sorts every integer BELOW the atom nil, so a
+  # bare `lsn <= checkpoint_lsn` would "skip" every transaction on a
+  # never-persisted (nil) checkpoint.
+  defp apply_batch(config, transactions, checkpoint_lsn) do
+    Enum.reduce(transactions, {0, 0}, fn
+      %Replicant.Transaction{commit_lsn: lsn}, acc
+      when is_integer(checkpoint_lsn) and is_integer(lsn) and lsn <= checkpoint_lsn ->
+        acc
+
+      %Replicant.Transaction{
+        commit_lsn: lsn,
+        commit_timestamp: ts,
+        changes: txn_changes,
+        messages: messages
+      },
+      {txn_count, change_count} ->
+        guard_generation!(config)
+        count = apply_all(config, txn_changes, ts, messages || [], lsn)
+        guard_generation!(config)
+        {txn_count + 1, change_count + count}
+    end)
+  end
 
   @doc """
   Accept or decline a schema change. An `:additive` change auto-applies; a

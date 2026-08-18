@@ -378,7 +378,12 @@ defmodule AshReplicant.StartLinkTest do
           # C1: :messages is now an ADAPTER-recognized forwarded option (a
           # message-capable sink gets `messages: true` by default) — a bad
           # value must reach Replicant's config gate and fail closed.
-          messages: :invalid
+          messages: :invalid,
+          # C2: :batch_delivery is forwarded to Replicant (the generated
+          # sink implements handle_batch/1 unconditionally) — a bad shape
+          # must reach Replicant's normalize_batch gate and fail closed,
+          # never start silently unbatched.
+          batch_delivery: :invalid
         ] do
       assert {:error, :config_invalid} = AshReplicant.start_link(start_opts([{key, bad_value}]))
       assert :persistent_term.get({AshReplicant, "valid_slot"}, :none) == :none
@@ -396,14 +401,6 @@ defmodule AshReplicant.StartLinkTest do
                )
 
       assert :ok = AshReplicant.stop_supervised("valid_slot")
-
-      # These modes are owned by Replicant but unsupported by AshReplicant. Bad
-      # values would be rejected if forwarded, so a successful start proves the
-      # adapter withheld them.
-      assert {:ok, _pid} =
-               AshReplicant.start_link(start_opts(batch_delivery: :invalid))
-
-      assert :ok = AshReplicant.stop_supervised("valid_slot")
     end)
   end
 
@@ -417,7 +414,11 @@ defmodule AshReplicant.StartLinkTest do
     assert {:error, :snapshot_unsupported} = AshReplicant.start_link(opts)
     assert :persistent_term.get({AshReplicant, "valid_slot"}, :none) == :none
 
-    refute function_exported?(ValidSink, :handle_batch, 1)
+    # C2: handle_batch/1 is generated unconditionally (batch semantics need
+    # nothing beyond the admitted generation; batch_delivery stays a
+    # pipeline-level knob), so the sink satisfies Replicant's
+    # supports_batch?/1 start gate for ANY caller that opts in.
+    assert function_exported?(ValidSink, :handle_batch, 1)
     refute function_exported?(ValidSink, :handle_message, 2)
     refute function_exported?(ValidSink, :snapshot_progress, 0)
   end

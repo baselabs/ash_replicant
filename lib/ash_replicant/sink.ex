@@ -21,6 +21,11 @@ defmodule AshReplicant.Sink do
   `handle_message/2` and the pipeline starts with `messages: true`. Every
   routed action must carry the closed AshOnetime message profile (validated at
   activation); an unknown prefix at delivery halts fail-closed.
+
+  `handle_batch/1` is generated on EVERY sink (ADR-0016): batch semantics
+  need nothing beyond the admitted generation, and the pipeline-level
+  `batch_delivery` start option is what opts a pipeline into batched
+  delivery.
   """
 
   alias AshReplicant.Sink.Impl
@@ -29,6 +34,7 @@ defmodule AshReplicant.Sink do
     handle_session_identity: 2,
     checkpoint: 0,
     handle_transaction: 1,
+    handle_batch: 1,
     handle_message: 2,
     sink_kind: 0,
     handle_schema_change: 2,
@@ -242,6 +248,17 @@ defmodule AshReplicant.Sink do
       def handle_transaction(txn) do
         AshReplicant.run_callback(unquote(slot_name), __MODULE__, :mutate, fn config ->
           Impl.handle_transaction(config, txn)
+        end)
+      end
+
+      # Generated UNCONDITIONALLY (ADR-0016): unlike handle_message/2 the
+      # batch body consumes nothing beyond the admitted generation, and
+      # `batch_delivery` stays a pipeline-level start option — so every sink
+      # satisfies Replicant's supports_batch?/1 gate for any caller opting in.
+      @impl Replicant.Sink
+      def handle_batch(transactions) do
+        AshReplicant.run_callback(unquote(slot_name), __MODULE__, :mutate, fn config ->
+          Impl.handle_batch(config, transactions)
         end)
       end
 

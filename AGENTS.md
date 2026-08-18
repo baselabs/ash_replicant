@@ -108,8 +108,8 @@ the halt path.** Assume every value is PII or a secret. Errors are scrubbed to a
 structural reason (operator + field) before Ash inspects them into logs. Column
 names are strings, never atoms. Telemetry metadata is allowlisted AND TYPED
 per key (LSNs, table names, counts, durations, error classes) with a closed
-measurement-key set — never row values (ADR-0009). All seven sink boundary bodies
-(including C1's `handle_message/2`)
+measurement-key set — never row values (ADR-0009). All eight sink boundary bodies
+(including C1's `handle_message/2` and C2's `handle_batch/1`)
 catch `:throw`/`:exit` into the same scrub (the schema-change body fires the
 sink's own `:halted` with the structural reason — never the sibling's
 `:decode_failure` mislabel), and raw-SQL identifiers route through the ONE
@@ -176,8 +176,10 @@ create effects outside the admitted action/transaction boundary.
 
 Current v1 snapshot batches are atomic, but an incomplete multi-batch restart can
 physically repeat committed batch effects before rebuilding the target. Do not claim
-snapshot-wide physical effect-once until C3 proves zero repeats. Message, sink-owned
-batch, incremental-progress, and append-log callbacks remain absent until C1–C4.
+snapshot-wide physical effect-once until C3 proves zero repeats. Message (C1) and
+sink-owned batch (C2, `handle_batch/1` — one destination transaction, one trailing
+watermark write per flushed batch, ADR-0016) are live; incremental-progress and
+append-log callbacks remain absent until C3–C4.
 
 ## Development workflow
 

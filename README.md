@@ -413,9 +413,11 @@ participant scope and replay identity shown above. AshOnetime one-time nonces ar
 rejected for WAL replay. Independent commits and external effects are rejected too.
 
 A Replicant v1 snapshot batch is atomic, but an incomplete multi-batch restart can
-physically repeat already committed batch effects. Message, sink-owned batch,
-incremental snapshot-progress, and append-log callbacks are not exported yet; their
-roadmap rows must compose with this same boundary. See
+physically repeat already committed batch effects. Message (C1) and sink-owned
+batch delivery (C2) are live — `batch_delivery` opts a pipeline into
+`handle_batch/1`, one destination transaction and one watermark write per flushed
+batch (ADR-0016). Incremental snapshot-progress and append-log callbacks are not
+exported yet; their roadmap rows must compose with this same boundary. See
 [ADR-0006](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0006-destination-transaction-boundary.md).
 
 ## Multitenancy & Classification

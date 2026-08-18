@@ -13,7 +13,7 @@ defmodule AshReplicant.Telemetry do
   KEY position renders as a count, never the key itself.
   """
 
-  @typed_meta_keys ~w(commit_lsn resource table change_count tenant? duration reason error_class kind slot_name transactional)a
+  @typed_meta_keys ~w(commit_lsn resource table change_count txn_count tenant? duration reason error_class kind slot_name transactional)a
 
   @doc "The permitted metadata keys."
   @spec allowed_meta_keys() :: [atom()]
@@ -24,6 +24,7 @@ defmodule AshReplicant.Telemetry do
     resource: "nil | atom",
     table: "nil | binary",
     change_count: "nil | non_neg_integer",
+    txn_count: "nil | non_neg_integer",
     tenant?: "boolean",
     duration: "non_neg_integer",
     reason: "nil | atom | {:invalid_destination_config, atom}",
@@ -52,6 +53,7 @@ defmodule AshReplicant.Telemetry do
     [
       [:ash_replicant, :sink, :session_identity_accepted],
       [:ash_replicant, :sink, :applied],
+      [:ash_replicant, :sink, :batch_applied],
       [:ash_replicant, :sink, :skipped],
       [:ash_replicant, :sink, :halted],
       [:ash_replicant, :checkpoint, :conflict],
