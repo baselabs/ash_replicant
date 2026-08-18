@@ -61,6 +61,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Adopt Replicant `>= 1.0.0 and < 2.0.0-0` from Hex, with current 1.1.0 and
   exact-floor 1.0.0 compatibility gates. Generated sinks now require and compare
   the actual replication-session system/database identity before checkpoint lookup.
+- ADR-0011 pins the closed error-reason set and the telemetry event-name
+  inventory as public contract (additive growth only; removal/rename is
+  breaking with migration notes), and ADR-0012 governs the snapshot
+  run-scoped ordinal space — the axis the per-invocation operation keys
+  depend on. Both record shipped, freeze-tested decisions and assign the
+  roadmap ownership the gap list was missing.
 - Add live Replicant 1.1.0 proofs for actual-session ordering, v1 snapshot-to-stream
   convergence, post-handoff restart, and operator-reset retry after an incomplete snapshot.
 - Add AshOnetime 0.6.0 as the governed idempotency dependency for the logical-message

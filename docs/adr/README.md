@@ -23,6 +23,8 @@ the narrative "why"; an ADR is the tracked, per-decision record with code eviden
 | [0008](0008-strict-source-coverage.md) | Preflight publication and mapping coverage against the live source catalog; enforce REPLICA IDENTITY FULL where old-record tenants are required | B3 / B4 / C5 |
 | [0009](0009-classified-boundaries.md) | Complete the value-free boundary (throw/exit catches at all six bodies, schema-change reclassification), typed telemetry, one identifier quoting home with admission-time control-character rejection | B5 |
 | [0010](0010-host-action-contract.md) | Per-invocation operation discriminator closing the intra-change AshOnetime key collision (declarations stay 6-axis); notifier `load/2` manifest admission; the action-contract freeze table | B6 |
+| [0011](0011-frozen-reason-and-event-taxonomy.md) | The closed error-reason set and the telemetry event-name inventory are pinned public contract — additive growth only, removal/rename is breaking with migration notes | B5 / D3 / D8 |
+| [0012](0012-snapshot-run-scoped-ordinal-space.md) | One continuing ordinal axis per snapshot run, keyed by the run's consistent point — the axis ADR-0010's operation keys depend on | B6 / C3 |
 
 ## On-touch gap list (not yet authored — author when a slice next touches the surface)
 
