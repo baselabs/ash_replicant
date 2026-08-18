@@ -48,13 +48,29 @@ defmodule AshReplicant.CoverageTest do
   describe "census connection admission — a database-less opts list never starts a pool" do
     import ExUnit.CaptureLog
 
-    # Postgrex.start_link/1 admits a missing :database only INSIDE the pool's
-    # connect callback (async): the pool starts "healthy", every retry logs
-    # [error], and the census query burns the checkout queue-timeout before
-    # faulting. The admission gate must treat a database-less opts list
-    # (absent, nil, or []) as the unreachable class BEFORE any pool exists —
-    # the same deferred verdict, no wall-clock burn, no uncontrolled [error]
-    # output (the structural battery greps exactly that).
+    # Postgrex.start_link/1 admits an unresolvable :database only INSIDE the
+    # pool's connect callback (async): the pool starts "healthy", every retry
+    # logs [error], and the census query burns the checkout queue-timeout
+    # before faulting. The admission gate must treat a postgrex-UNRESOLVABLE
+    # database as the unreachable class BEFORE any pool exists — the same
+    # deferred verdict, no wall-clock burn, no uncontrolled [error] output
+    # (the structural battery greps exactly that).
+    #
+    # Resolution must mirror postgrex's own (Utils.default_opts/1 — the SAME
+    # resolution the replication stream applies): an absent :database key
+    # falls back to PGDATABASE; an explicit nil is stripped, never rescued.
+    # The scrubbed env pins the absent-key legs on every host.
+    setup do
+      old = System.get_env("PGDATABASE")
+      System.delete_env("PGDATABASE")
+
+      on_exit(fn ->
+        if old, do: System.put_env("PGDATABASE", old), else: System.delete_env("PGDATABASE")
+      end)
+
+      :ok
+    end
+
     @identity %{system_identifier: "741852963", database: "ash_replicant_test"}
 
     test "preflight: opts without :database defer immediately and silently" do
@@ -74,6 +90,24 @@ defmodule AshReplicant.CoverageTest do
         end)
 
       refute log =~ "[error]", "the census must not log against a pool that can never connect"
+    end
+
+    test "preflight: an explicit database: nil is stripped by postgrex — unreachable class, no pool" do
+      log =
+        capture_log(fn ->
+          assert {:ok, :deferred} =
+                   Coverage.preflight(
+                     [hostname: "127.0.0.1", port: 1, database: nil],
+                     @identity,
+                     ["pub"],
+                     %{},
+                     %{},
+                     %{}
+                   )
+        end)
+
+      refute log =~ "[error]",
+             "a nil database is unresolvable (postgrex strips it) — no doomed pool"
     end
 
     test "reconnect_check: opts without :database return :ok immediately and silently" do

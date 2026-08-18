@@ -792,6 +792,36 @@ defmodule AshReplicant.CheckpointBindingTest do
       # The durable row is untouched (no checkpoint regression on a halt).
       assert is_integer(bound_row(@slot).commit_lsn) or is_nil(bound_row(@slot).commit_lsn)
     end
+
+    # Cross-vendor review finding (fail-open regression class): the stream's
+    # own connection resolves an absent :database key from PGDATABASE
+    # (Postgrex.Utils.default_opts/1 — the SAME resolution the replication
+    # connection applies). The census admission gate must resolve the same
+    # way: keying on the raw opts shape would defer a reachable
+    # env-configured source FOREVER — its coverage and replica-identity
+    # checks silently skipped while it streams.
+    test "a PGDATABASE-resolved source is CENSUSED, not deferred" do
+      old = System.get_env("PGDATABASE")
+      System.put_env("PGDATABASE", "ash_replicant_test")
+
+      on_exit(fn ->
+        if old, do: System.put_env("PGDATABASE", old), else: System.delete_env("PGDATABASE")
+      end)
+
+      # No :database key — resolution must come from the env. The sentinel
+      # identity guarantees a mismatch verdict, which PROVES the census probe
+      # ran against the live server: an unreachable-class gate returns
+      # {:ok, :deferred} without ever querying.
+      assert {:error, %AshReplicant.Error{reason: :source_identity_mismatch}} =
+               AshReplicant.Coverage.preflight(
+                 [hostname: "127.0.0.1", port: 5599, username: "postgres"],
+                 %{system_identifier: "sentinel-system", database: "sentinel-database"},
+                 ["ash_replicant_no_such_publication"],
+                 %{},
+                 %{},
+                 %{}
+               )
+    end
   end
 
   # --- helpers ---

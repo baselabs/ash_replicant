@@ -24,7 +24,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `AshReplicant.DestinationParticipant` (`:notifier` kind): its dependency
   pre-load read executes inside the admitted transaction regardless of notify
   gates (ADR-0010).
-
 ### Added
 
 - Completed value-free boundary: `catch :throw`/`:exit` at all six sink bodies;
@@ -44,8 +43,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `AshReplicant.Apply.Context.invocation_labels/0` and
   `AshReplicant.DestinationParticipant.operation_components/0` (the single
   component-list home).
-
-
+- Activation source-catalog preflight (roadmap B3): missing expected tables,
+  unignored publication tables, unmapped columns, missing declared columns,
+  stale skips, invalid source types, and wrong replica identity halt before
+  any checkpoint advance; the check re-runs at every reconnect; an
+  unreachable source defers the verdict. `ignored_sources` declares
+  intentional partial publications. ADR-0008.
+- Tenant reassignment is fail-closed (roadmap B4): both tenants resolve
+  before any write; an absent/blank/false/raising old side — or a missing
+  `old_record` — halts value-free; SCD1 relocates, SCD2 terminally closes
+  under the old tenant. ADR-0001 amended.
+- `AshReplicant.adopt_checkpoint/3`, `AshReplicant.reset_checkpoint/2`, and
+  `AshReplicant.acknowledge_checkpoint_timeline/3` operator recovery surfaces,
+  plus `AshReplicant.Checkpoint.Identity.refuse_ambiguous_legacy_rows!/1` /
+  `legacy_checkpoint_row_count/1` for the slot-only upgrade path.
+- ADR-0007 records the source-bound, serialized checkpoint decision.
+- Adopt Replicant `>= 1.0.0 and < 2.0.0-0` from Hex, with current 1.1.0 and
+  exact-floor 1.0.0 compatibility gates. Generated sinks now require and compare
+  the actual replication-session system/database identity before checkpoint lookup.
+- Add live Replicant 1.1.0 proofs for actual-session ordering, v1 snapshot-to-stream
+  convergence, post-handoff restart, and operator-reset retry after an incomplete snapshot.
+- Add AshOnetime 0.6.0 as the governed idempotency dependency for the logical-message
+  actions planned for 1.0.0 and for admitted local auxiliary actions that need a
+  WAL replay guard. The permanent commit-LSN checkpoint remains the transaction
+  replay and resume authority.
+- Add a deterministic recursive destination manifest covering checkpoint, mapped,
+  framework-reached, SCD2, and declared auxiliary actions. It rejects foreign or
+  dynamic Repos, non-Postgres resources, missing/opaque/cyclic participants, and
+  `touches_resources` mismatches before delivery, then pins one effective Repo and
+  generation through commit or rollback.
+- Add `AshReplicant.DestinationParticipant` and a WAL-safe AshOnetime admission
+  profile for local auxiliary actions: exact source/database/slot/LSN/ordinal/
+  participant identity, private operation key, same-transaction fail-closed store,
+  and explicit rejection of nonce, independent, external, and opaque profiles.
+- Add independent CI paths for no-database tests, exact-floor/current-lock/latest-Ash
+  live PostgreSQL integration, migration drift, Dialyzer, warnings-as-errors docs,
+  and selector-free Hex package inspection. Checked-in assertions reject missing,
+  skipped, invalid, excluded-without-authorization, or failing test evidence.
+- Pin third-party CI actions to immutable commits, assert the executing
+  Elixir/OTP identity, capture raw test failures without publishing values, and
+  mutation-test the release-evidence, workflow, documentation, and migration
+  checkers against masking and constant-accept regressions.
 ### Changed
 
 - **Breaking:** an unmapped publication table now HALTS
@@ -54,10 +92,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unaccounted delivered column halts (`:source_column_unmapped`).
   `:replica_identity_changed` and `:type_changed` schema changes always
   halt regardless of `on_schema_change :ignore`.
-- **Removed:** `AshReplicant.Resolver.writable_target/2` (dead code) and
+- **Removed:** `Resolver.writable_target/2` (dead code) and
   `Resolver.tenant_changed?/2` (its fail-open caveat is the class B4
   closed).
-
 - **Breaking:** the generated checkpoint resource is source-bound — the
   composite primary key is `(source_system_id, source_database, slot_name)`
   from the actual replication session, with `source_timeline`,
@@ -76,25 +113,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   callers produce one effect. An absent row at admission is a permanent
   `:checkpoint_unbound` halt (restart re-binds). The v1 snapshot handoff no
   longer regresses the watermark on a re-delivered consistent point.
-
-### Added
-
-- Activation source-catalog preflight (roadmap B3): missing expected tables,
-  unignored publication tables, unmapped columns, missing declared columns,
-  stale skips, invalid source types, and wrong replica identity halt before
-  any checkpoint advance; the check re-runs at every reconnect; an
-  unreachable source defers the verdict. `ignored_sources` declares
-  intentional partial publications. ADR-0008.
-- Tenant reassignment is fail-closed (roadmap B4): both tenants resolve
-  before any write; an absent/blank/false/raising old side — or a missing
-  `old_record` — halts value-free; SCD1 relocates, SCD2 terminally closes
-  under the old tenant. ADR-0001 amended.
-- `AshReplicant.adopt_checkpoint/3`, `AshReplicant.reset_checkpoint/2`, and
-  `AshReplicant.acknowledge_checkpoint_timeline/3` operator recovery surfaces,
-  plus `AshReplicant.Checkpoint.Identity.refuse_ambiguous_legacy_rows!/1` /
-  `legacy_checkpoint_row_count/1` for the slot-only upgrade path.
-- ADR-0007 records the source-bound, serialized checkpoint decision.
-
+- Serialize resolver activation per slot, generation-check rejected-start cleanup,
+  and forward Replicant's safe `streaming`, `max_inflight_lag`,
+  `max_command_retries`, and `failover` transport options. Incremental snapshots,
+  batch delivery, and logical messages remain capability-gated for their owning rows.
+- Scope the current physical effect-once guarantee to committed streaming
+  transactions and atomic snapshot batches. An incomplete Replicant v1 multi-batch
+  snapshot restart can repeat already committed batch effects before rebuilding the
+  target; C3 must remove those repeats before the stable snapshot-restart claim.
+- Require Elixir 1.20.3/OTP 29 and the AshPostgres 2.11 dependency family for the
+  1.0.0 release line.
 ### Security
 
 - Raise the 1.0.0 dependency floor to audit-clean Ash 3.31.3 and exclude Ash 4
@@ -132,62 +160,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   default at scale, deterministically wedging replication), and a sink callback
   defined BEFORE `use AshReplicant.Sink` now also fails compilation (it would
   win dispatch and skip the generation guard, activation lock, and repo pin).
-
-### Added
-
-- Adopt Replicant `>= 1.0.0 and < 2.0.0-0` from Hex, with current 1.1.0 and
-  exact-floor 1.0.0 compatibility gates. Generated sinks now require and compare
-  the actual replication-session system/database identity before checkpoint lookup.
-- Add live Replicant 1.1.0 proofs for actual-session ordering, v1 snapshot-to-stream
-  convergence, post-handoff restart, and operator-reset retry after an incomplete snapshot.
-- Add AshOnetime 0.6.0 as the governed idempotency dependency for the logical-message
-  actions planned for 1.0.0 and for admitted local auxiliary actions that need a
-  WAL replay guard. The permanent commit-LSN checkpoint remains the transaction
-  replay and resume authority.
-- Add a deterministic recursive destination manifest covering checkpoint, mapped,
-  framework-reached, SCD2, and declared auxiliary actions. It rejects foreign or
-  dynamic Repos, non-Postgres resources, missing/opaque/cyclic participants, and
-  `touches_resources` mismatches before delivery, then pins one effective Repo and
-  generation through commit or rollback.
-- Add `AshReplicant.DestinationParticipant` and a WAL-safe AshOnetime admission
-  profile for local auxiliary actions: exact source/database/slot/LSN/ordinal/
-  participant identity, private operation key, same-transaction fail-closed store,
-  and explicit rejection of nonce, independent, external, and opaque profiles.
-- Add independent CI paths for no-database tests, exact-floor/current-lock/latest-Ash
-  live PostgreSQL integration, migration drift, Dialyzer, warnings-as-errors docs,
-  and selector-free Hex package inspection. Checked-in assertions reject missing,
-  skipped, invalid, excluded-without-authorization, or failing test evidence.
-- Pin third-party CI actions to immutable commits, assert the executing
-  Elixir/OTP identity, capture raw test failures without publishing values, and
-  mutation-test the release-evidence, workflow, documentation, and migration
-  checkers against masking and constant-accept regressions.
-
-### Changed
-
-- Serialize resolver activation per slot, generation-check rejected-start cleanup,
-  and forward Replicant's safe `streaming`, `max_inflight_lag`,
-  `max_command_retries`, and `failover` transport options. Incremental snapshots,
-  batch delivery, and logical messages remain capability-gated for their owning rows.
-- Scope the current physical effect-once guarantee to committed streaming
-  transactions and atomic snapshot batches. An incomplete Replicant v1 multi-batch
-  snapshot restart can repeat already committed batch effects before rebuilding the
-  target; C3 must remove those repeats before the stable snapshot-restart claim.
-- Require Elixir 1.20.3/OTP 29 and the AshPostgres 2.11 dependency family for the
-  1.0.0 release line.
+- Completed the cross-vendor value-free closure over every error-shaped input:
+  `Error.scrub`/`Error.scrub_caught` trust no field of an incoming error
+  struct — a forged `:reason` or `:shape`, via raise, throw, or the rollback
+  verb, survives only as the closed typed reason — and the reason space is
+  pinned to the library's finite set. The telemetry `span/3` is hand-rolled
+  so an exception event carries the class only and no malformed-result path
+  renders a value. `:bulk_create` joins the sink-owned context keys (a host
+  `SetContext` over the framework's per-row snapshot index would alias a
+  whole batch onto ONE operation key — the replay-suppression class), the
+  generation code-fingerprint covers `AshReplicant.Sql`, and the legacy-row
+  count probe routes through the quoting home. Gate-integrity pins: live
+  mint-site label equality, a bidirectional mint-site ↔ frozen-label
+  inventory, strict-walk cycle detection on the destination manifest, and a
+  load-realistic await for the concurrent-start race.
 
 ### Fixed
 
 - Admit the census preflight connection BEFORE starting a pool: a
-  database-less `:connection` opts list (absent, nil, or empty — postgrex
-  discovers a missing `:database` key only inside the pool's async connect)
-  now defers as the unreachable class immediately, instead of starting a
-  pool that can never connect, logging `[error] missing the :database key`
-  on every backoff retry while burning the checkout queue-timeout on every
-  bind. This is what made the live structural battery fail its own no-error
-  gate with every test passing; a host misconfiguring the connection
-  keyword hit the same doomed-pool burn at runtime. Sync-start failures now
-  return the structural `{:error, :unreachable}` (callers defer through
-  their census-fault branch and never query or stop a placeholder
+  postgrex-UNRESOLVABLE `:connection` database (absent key with no
+  `PGDATABASE`, or an explicit nil — postgrex discovers the missing
+  `:database` key only inside the pool's async connect) now defers as the
+  unreachable class immediately, instead of starting a pool that can never
+  connect, logging `[error] missing the :database key` on every backoff
+  retry while burning the checkout queue-timeout on every bind. The gate
+  mirrors postgrex's own resolution (`Utils.default_opts/1` — the same
+  resolution the replication stream applies), so a `PGDATABASE`-configured
+  source is censused, never deferred, and the census and the stream cannot
+  disagree. This is what made the live structural battery fail its own
+  no-error gate with every test passing; a host misconfiguring the
+  connection keyword hit the same doomed-pool burn at runtime. Sync-start
+  failures return the structural `{:error, :unreachable}` (callers defer
+  through their census-fault branch and never query or stop a placeholder
   connection), and the dead-for-pools `sync_connect: true` merge is dropped
   (only the replication connection reads that option).
 - The forced-reconnect marquee captures the replication connection's
@@ -211,6 +215,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bind compatibility selection to its exact unlock/assert block, and validate
   visible non-contradictory runtime documentation. Independent mutations now
   cover every protected release-evidence decision.
+- Reconciled the published docs with shipped code: the tenant-reassignment
+  old-side fail-closed guard is SHIPPED (`:tenant_required` `side=old` /
+  `:tenant_resolution_failed`, fail-closed before any write), not open
+  roadmap work (README, usage-rules, CHARTER now say so); the live
+  integration gate's PostgreSQL statement records the actual split (CI pins
+  16, the local substrate is 18, the support matrix is PG15–18); relative
+  ADR links normalize to the canonical GitHub form; and the cloak-upsert
+  spike's PG16 note reads as the historical proof it is.
+  `AshReplicant.Sql`, `AshReplicant.Apply.Context`, and
+  `AshReplicant.Checkpoint.Identity` carry real moduledocs (their
+  comment-docs, promoted) so the reference-checked docs gate is green over
+  the surfaces the docs already advertised.
 
 ## [0.4.0] - 2026-08-03
 

@@ -727,17 +727,17 @@ defmodule AshReplicant.Coverage do
   # (before any checkpoint read). A REACHABLE source that violates a rule
   # still halts activation fail-closed.
   #
-  # Admission: `Postgrex.start_link/1` only discovers a missing `:database`
-  # inside the pool's connect callback — the start itself returns
+  # Admission: `Postgrex.start_link/1` only discovers an unresolvable
+  # :database inside the pool's connect callback — the start itself returns
   # `{:ok, pool}`, every retry logs `[error] missing the :database key`, and
   # the census query burns the checkout queue-timeout before faulting. A
-  # database-less opts list (absent, nil, or empty) can never connect, so it
-  # is the unreachable class BEFORE any pool exists: same deferred verdict,
-  # no wall-clock burn, no uncontrolled log output. Every non-pool outcome is
-  # the one structural `{:error, :unreachable}` atom — callers route it
-  # through their census-fault branch and never query or stop a placeholder.
+  # database the STREAM could not resolve either is the unreachable class
+  # BEFORE any pool exists: same deferred verdict, no wall-clock burn, no
+  # uncontrolled log output. Every non-pool outcome is the one structural
+  # `{:error, :unreachable}` atom — callers route it through their
+  # census-fault branch and never query or stop a placeholder.
   defp start_preflight_connection(opts) do
-    if Keyword.has_key?(opts, :database) do
+    unless is_nil(resolved_database(opts)) do
       case Postgrex.start_link(opts) do
         {:ok, conn} -> {:ok, conn}
         {:error, _reason} -> {:error, :unreachable}
@@ -747,6 +747,19 @@ defmodule AshReplicant.Coverage do
     end
   rescue
     _ -> {:error, :unreachable}
+  end
+
+  # Postgrex's own database resolution (`Postgrex.Utils.default_opts/1` — the
+  # SAME resolution the replication stream's connection applies, so the census
+  # and the stream can never disagree): an absent :database key falls back to
+  # PGDATABASE; an explicit nil is NOT env-rescued (put_new sees the key) and
+  # is stripped with every other nil. nil here means the stream's own
+  # connection could not resolve a database either.
+  defp resolved_database(opts) do
+    case Keyword.fetch(opts, :database) do
+      {:ok, database} -> database
+      :error -> System.get_env("PGDATABASE")
+    end
   end
 
   # The census: identity probe + the three framework statements + the
