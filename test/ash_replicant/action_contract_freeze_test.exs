@@ -16,7 +16,6 @@ defmodule AshReplicant.ActionContractFreezeTest do
   alias Ash.Resource.Info
   alias AshReplicant.Apply.Context
   alias AshReplicant.Destination
-  alias AshReplicant.DestinationParticipant
   alias AshReplicant.Telemetry
   alias AshReplicant.Test.DestinationFixtures
   alias AshReplicant.Test.{Order, OrderVersion}
@@ -198,16 +197,26 @@ defmodule AshReplicant.ActionContractFreezeTest do
     end
   end
 
-  describe "row: append/message (ABSENT until C1/C4)" do
-    test "the generated sink exposes NO future-capability callbacks" do
+  describe "row: append/message (message PRESENT-when-configured since C1; batch/snapshot/append ABSENT until C2/C3/C4)" do
+    test "the generated sink exposes handle_message/2 ONLY when a routing surface is declared" do
       sink = DestinationFixtures.Sink
 
       assert Code.ensure_loaded?(sink)
       assert function_exported?(sink, :handle_transaction, 1)
-      refute function_exported?(sink, :handle_message, 2)
+      refute function_exported?(sink, :handle_message, 2),
+             "a route-less sink must keep the message callback ABSENT"
+
+      message_sink = AshReplicant.Test.Messages.Sink
+      assert Code.ensure_loaded?(message_sink)
+      assert function_exported?(message_sink, :handle_transaction, 1)
+      assert function_exported?(message_sink, :handle_message, 2)
+
       refute function_exported?(sink, :handle_batch, 1)
       refute function_exported?(sink, :snapshot_progress, 0)
       refute function_exported?(sink, :append, 2)
+      refute function_exported?(message_sink, :handle_batch, 1)
+      refute function_exported?(message_sink, :snapshot_progress, 0)
+      refute function_exported?(message_sink, :append, 2)
     end
   end
 
@@ -247,6 +256,7 @@ defmodule AshReplicant.ActionContractFreezeTest do
       {{:destination_notifier_required, DestinationFixtures.LoadRoot, :read,
         DestinationFixtures.LoadNotifier}, nil},
       {{:destination_participant_cycle, nil, nil}, nil},
+      {{:destination_message_route_invalid, AshReplicant.Test.Messages.NonceOutbox, :record}, nil},
       {{:destination_repo_not_postgres, DestinationFixtures.SimpleRoot}, nil},
       {{:destination_repo_dynamic, DestinationFixtures.ForeignChild}, nil},
       {{:destination_repo_mismatch, DestinationFixtures.ForeignMappedRoot}, nil}
@@ -318,6 +328,12 @@ defmodule AshReplicant.ActionContractFreezeTest do
 
       assert {_, 3, true} =
                Enum.find(enumerated, &match?({:destination_action_tenant_bypass, _, _}, &1))
+
+      assert {_, 3, true} =
+               Enum.find(
+                 enumerated,
+                 &match?({:destination_message_route_invalid, _, _}, &1)
+               )
     end
 
     test "the after-compile RENDERING names the modules (identify-each, first-failure halting)" do

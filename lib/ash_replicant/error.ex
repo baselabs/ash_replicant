@@ -33,6 +33,7 @@ defmodule AshReplicant.Error do
           | :source_table_missing
           | :source_table_unmapped
           | :source_type_invalid
+          | :message_prefix_unmapped
           | :checkpoint_unbound
           | :checkpoint_adopt_conflict
           | :checkpoint_adopt_invalid
@@ -122,6 +123,7 @@ defmodule AshReplicant.Error do
     :source_table_missing,
     :source_table_unmapped,
     :source_type_invalid,
+    :message_prefix_unmapped,
     :checkpoint_unbound,
     :checkpoint_adopt_conflict,
     :checkpoint_adopt_invalid,

@@ -16,6 +16,7 @@ defmodule AshReplicant.Destination do
     AshReplicant.Destination,
     AshReplicant.DestinationParticipant,
     AshReplicant.Error,
+    AshReplicant.Messages,
     AshReplicant.Resolver,
     AshReplicant.Resource.Info,
     AshReplicant.Sink,
@@ -190,12 +191,15 @@ defmodule AshReplicant.Destination do
           | {:destination_participant_mismatch, module(), atom()}
           | {:destination_participant_cycle, module(), atom()}
           | {:destination_notifier_required, module(), atom(), module()}
+          | {:destination_message_route_invalid, module(), atom()}
 
   @spec manifest(map()) :: {:ok, Manifest.t()} | {:error, reason()}
-  def manifest(%{repo: repo, domains: domains, checkpoint_resource: checkpoint})
+  def manifest(%{repo: repo, domains: domains, checkpoint_resource: checkpoint} = config)
       when is_atom(repo) and is_list(domains) and is_atom(checkpoint) do
+    message_routes = Map.get(config, :message_routes, [])
+
     with :ok <- validate_repo_module(repo),
-         {:ok, roots} <- root_actions(domains, checkpoint),
+         {:ok, roots} <- root_actions(domains, checkpoint, message_routes),
          {:ok, entries, onetime_prefixes_by_action} <- walk_roots(roots, repo),
          :ok <- validate_onetime_entries(entries) do
       entries =
@@ -376,7 +380,7 @@ defmodule AshReplicant.Destination do
     end
   end
 
-  defp root_actions(domains, checkpoint) do
+  defp root_actions(domains, checkpoint, message_routes) do
     with {:ok, mapped_roots} <- mapped_root_actions(domains),
          {:ok, checkpoint_read} <- required_primary_action(checkpoint, :read),
          :ok <- required_named_action(checkpoint, :destroy, :operator_reset) do
@@ -386,8 +390,23 @@ defmodule AshReplicant.Destination do
            root_ref(checkpoint, checkpoint_read, :checkpoint),
            root_ref(checkpoint, :upsert, :checkpoint),
            root_ref(checkpoint, :operator_reset, :checkpoint)
-         ]}
+         ] ++ message_root_actions(message_routes)}
     end
+  end
+
+  # C1 (ADR-0015): each message route is a manifest ROOT in its own right —
+  # the sink drives the routed action directly (no declaring change module),
+  # so the route's own trust boundary is this admission. The replay identity
+  # is sink-fixed (the 6-axis identity; `participant` = the routed resource,
+  # `:message` the invocation label) — a host never declares it.
+  defp message_root_actions(message_routes) do
+    Enum.map(message_routes, fn {prefix, resource, action} ->
+      {resource, action, :message, {:message_route, prefix}, :inherit,
+       %ReplayIdentity{
+         participant: resource,
+         components: DestinationParticipant.operation_components() -- [:invocation]
+       }}
+    end)
   end
 
   # The checkpoint's operator-reset destroy is a library-written action in the same
@@ -588,7 +607,7 @@ defmodule AshReplicant.Destination do
              :ok <- validate_resource_identifiers(resource),
              %{} = action <- Ash.Resource.Info.action(resource, action_name),
              :ok <- validate_action_tenant_scoping(resource, action),
-             {:ok, refs} <- inspect_action(resource, action),
+             {:ok, refs} <- inspect_action(resource, action, role == :message),
              {:ok, refs, all_refs} <-
                validate_action_notifiers(resource, action, refs, source),
              :ok <- validate_touches(resource, action, refs),
@@ -746,8 +765,8 @@ defmodule AshReplicant.Destination do
     end)
   end
 
-  defp inspect_action(resource, action) do
-    context = %Context{resource: resource, action: action.name, kind: :manual}
+  defp inspect_action(resource, action, message_root?) do
+    context = %Context{resource: resource, action: action.name, kind: :manual, message_route?: message_root?}
 
     with {:ok, manual_refs} <- inspect_manual(action_implementation(action), context),
          {:ok, callback_refs} <- inspect_action_callbacks(action, context),
@@ -758,12 +777,19 @@ defmodule AshReplicant.Destination do
              resource,
              action,
              Ash.Resource.Info.action_changes(resource, action),
-             :change
+             :change,
+             message_root?
            ),
          {:ok, validation_refs} <-
-           inspect_items(resource, action, action_validations(resource, action), :validation),
+           inspect_items(resource, action, action_validations(resource, action), :validation, message_root?),
          {:ok, preparation_refs} <-
-           inspect_items(resource, action, action_preparations(resource, action), :preparation) do
+           inspect_items(
+             resource,
+             action,
+             action_preparations(resource, action),
+             :preparation,
+             message_root?
+           ) do
       {:ok,
        manual_refs ++
          callback_refs ++ type_refs ++ change_refs ++ validation_refs ++ preparation_refs}
@@ -1002,10 +1028,10 @@ defmodule AshReplicant.Destination do
   defp inspect_manual(_other, context),
     do: {:error, {:destination_participant_required, context.resource, context.action, Function}}
 
-  defp inspect_items(resource, action, items, kind) do
+  defp inspect_items(resource, action, items, kind, message_root?) do
     Enum.reduce_while(items, {:ok, []}, fn item, {:ok, refs} ->
       {module, opts, actual_kind} = item_module_opts(item, kind)
-      context = %Context{resource: resource, action: action.name, kind: actual_kind}
+      context = %Context{resource: resource, action: action.name, kind: actual_kind, message_route?: message_root?}
 
       with {:ok, found} <- inspect_item(module, opts, context),
            {:ok, conditional} <- inspect_raw_items(Map.get(item, :where, []), context) do
@@ -1181,13 +1207,55 @@ defmodule AshReplicant.Destination do
   @spec validate_onetime_entries([Entry.t()]) :: :ok | {:error, reason()}
   def validate_onetime_entries(entries) do
     entries
-    |> Enum.filter(&is_map(&1.protection))
+    # Message-route entries validate regardless of protection presence —
+    # an UNPROTECTED routed action is exactly the rejection the profile
+    # exists to make (the claim is the standalone message's only dedup).
+    |> Enum.filter(&(&1.role == :message or is_map(&1.protection)))
     |> Enum.reduce_while(:ok, fn entry, :ok ->
       case validate_onetime_entry(entry) do
         :ok -> {:cont, :ok}
         {:error, _reason} = error -> {:halt, error}
       end
     end)
+  end
+
+  # C1 (ADR-0015): the message-route profile. Every routed action MUST be
+  # protected — the claim is the standalone message's ONLY dedup — under the
+  # closed shape: idempotency (a nonce gates WAL re-delivery wrongly and is
+  # rejected), fail-closed store, the operation-key argument as the key, the
+  # static message scope, the content digest as the EXACT fingerprint (the
+  # replay-binding: same identity + different content halts, never replays
+  # and never re-executes), a declared positive retention, and — on message
+  # routes only — an optional external peer effect under three-state recovery.
+  defp validate_onetime_entry(
+         %Entry{
+           role: :message,
+           resource: resource,
+           action: action_name,
+           protection: protection
+         }
+       ) do
+    action = Ash.Resource.Info.action(resource, action_name)
+
+    with true <- is_map(protection),
+         true <- action.type == :create,
+         true <- tenant_free_resource?(resource),
+         true <- protection.strategy == :idempotency,
+         true <- protection.on_definite_store_failure == :fail_closed,
+         true <- valid_message_external?(protection),
+         true <- protection.key == [{:argument, :operation_key}],
+         true <- protection.scope == message_scope(resource),
+         true <- message_fingerprint?(protection.fingerprint),
+         true <- is_integer(protection.retention) and protection.retention > 0,
+         true <- private_message_argument?(action, :operation_key),
+         true <- private_message_argument?(action, :content_digest),
+         true <- message_content_attribute?(resource),
+         true <- valid_onetime_response?(protection.response),
+         true <- effect_free_cache?() do
+      :ok
+    else
+      _other -> {:error, {:destination_message_route_invalid, resource, action_name}}
+    end
   end
 
   defp validate_onetime_entry(%Entry{
@@ -1223,6 +1291,56 @@ defmodule AshReplicant.Destination do
       {:static, "ash_replicant:destination-participant:1"},
       {:static, Atom.to_string(participant)}
     ]
+  end
+
+  defp message_scope(resource) do
+    [
+      {:static, "ash_replicant:message-route:1"},
+      {:static, Atom.to_string(resource)}
+    ]
+  end
+
+  # The DSL transformer normalizes the declared fingerprint keyword (an
+  # `attributes: []` default rides along), so the EXACT-binding check reads
+  # the normalized shape: the digest argument is the only fingerprinted
+  # input and no attribute ever enters the replay binding.
+  defp message_fingerprint?(fingerprint) when is_list(fingerprint) do
+    Keyword.get(fingerprint, :arguments) == [:content_digest] and
+      Keyword.get(fingerprint, :attributes, []) == []
+  end
+
+  defp message_fingerprint?(_other), do: false
+
+  # A message carries no tenant and no per-row resolution surface, so a routed
+  # resource must be callable WITHOUT one (no multitenancy, or a global?
+  # block where the tenant is optional).
+  defp tenant_free_resource?(resource) do
+    case Ash.Resource.Info.multitenancy_strategy(resource) do
+      nil -> true
+      _strategy -> Ash.Resource.Info.multitenancy_global?(resource) == true
+    end
+  end
+
+  defp valid_message_external?(%{external_effect: nil}), do: true
+
+  defp valid_message_external?(%{external_effect: module}) when is_atom(module), do: true
+
+  defp valid_message_external?(_other), do: false
+
+  defp private_message_argument?(%{arguments: arguments}, name) do
+    Enum.any?(arguments, fn argument ->
+      argument.name == name and argument.public? == false and
+        argument.allow_nil? == false and Ash.Type.get_type!(argument.type) == Ash.Type.String
+    end)
+  end
+
+  defp private_message_argument?(_action, _name), do: false
+
+  defp message_content_attribute?(resource) do
+    case Ash.Resource.Info.attribute(resource, :content) do
+      %{type: type} -> Ash.Type.get_type!(type) == Ash.Type.String
+      _other -> false
+    end
   end
 
   defp private_operation_key?(%{arguments: arguments}) do
@@ -1535,8 +1653,16 @@ defmodule AshReplicant.Destination do
 
   defp inspect_onetime_protection(context) do
     case AshOnetime.Resource.Info.protection(context.resource, context.action) do
+      # C1: an external peer effect is the message-route class (ADR-0015) —
+      # admitted there and ONLY there; every other context keeps the
+      # rejection (a row-mirror auxiliary must stay local).
       %{external_effect: external_effect} when not is_nil(external_effect) ->
-        {:error, {:destination_participant_invalid, external_effect}}
+        if context.message_route? do
+          protection = AshOnetime.Resource.Info.protection(context.resource, context.action)
+          protection |> onetime_callback_modules() |> inspect_onetime_callbacks(context)
+        else
+          {:error, {:destination_participant_invalid, external_effect}}
+        end
 
       protection when is_map(protection) ->
         protection

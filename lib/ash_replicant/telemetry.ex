@@ -13,7 +13,7 @@ defmodule AshReplicant.Telemetry do
   KEY position renders as a count, never the key itself.
   """
 
-  @typed_meta_keys ~w(commit_lsn resource table change_count tenant? duration reason error_class kind slot_name)a
+  @typed_meta_keys ~w(commit_lsn resource table change_count tenant? duration reason error_class kind slot_name transactional)a
 
   @doc "The permitted metadata keys."
   @spec allowed_meta_keys() :: [atom()]
@@ -29,14 +29,15 @@ defmodule AshReplicant.Telemetry do
     reason: "nil | atom | {:invalid_destination_config, atom}",
     error_class: "nil | atom",
     kind: "nil | atom",
-    slot_name: "nil | binary"
+    slot_name: "nil | binary",
+    transactional: "boolean"
   }
 
-  @allowed_measurement_keys ~w(count change_count duration)a
+  @allowed_measurement_keys ~w(count change_count duration byte_size)a
 
   @doc """
-  The closed measurement key set (`byte_size` is reserved for C1's message
-  claims).
+  The closed measurement key set (`byte_size` carries the C1 message claims'
+  content size — a count, never the content).
   """
   @spec allowed_measurement_keys() :: [atom()]
   def allowed_measurement_keys, do: @allowed_measurement_keys
@@ -54,6 +55,7 @@ defmodule AshReplicant.Telemetry do
       [:ash_replicant, :sink, :skipped],
       [:ash_replicant, :sink, :halted],
       [:ash_replicant, :checkpoint, :conflict],
+      [:ash_replicant, :message, :applied],
       [:ash_replicant, :snapshot, :batch],
       [:ash_replicant, :snapshot, :complete],
       [:ash_replicant, :preflight, :failed]

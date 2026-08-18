@@ -27,6 +27,7 @@ the narrative "why"; an ADR is the tracked, per-decision record with code eviden
 | [0012](0012-snapshot-run-scoped-ordinal-space.md) | One continuing ordinal axis per snapshot run, keyed by the run's consistent point — the axis ADR-0010's operation keys depend on | B6 / C3 |
 | [0013](0013-sensitive-type-shape-classification.md) | Sensitive classification admits only AshCloak cloak attributes, binary-storage attributes, or `skip` — verified by type shape at compile, never ciphertext; the tenant discriminator is never sensitive | Critical Rule 3 |
 | [0014](0014-internal-trust-and-lifecycle-ownership.md) | Generated internal resources are default-deny (policy authorizer, empty policy set); one `PipelineOwner` per live resolver generation monitors its Replicant pipeline, and a dead owner is fail-closed and replaceable | B7 |
+| [0015](0015-logical-message-effects.md) | Logical messages route by prefix to protected create actions; transactional ones ride the transaction, standalone ones dedup through an AshOnetime claim keyed on source+slot+LSN with a versioned host-keyed content digest, and the watermark advances only with (or after) the claim | C1 |
 
 ## On-touch gap list (not yet authored — author when a slice next touches the surface)
 

@@ -41,6 +41,9 @@ defmodule AshReplicant do
       progress and target provenance.
     * `:streaming`, `:max_inflight_lag`, `:max_command_retries`, and `:failover`
       — passed through unchanged to Replicant.
+    * `:messages` — passed through to Replicant; a sink with a declared
+      message routing surface gets `messages: true` by default (an explicit
+      caller value always wins).
 
   The `slot_name` is NOT a `start_link` option — it is baked into the sink via
   `use AshReplicant.Sink, slot_name: ...` and is the single source of truth for
@@ -441,6 +444,7 @@ defmodule AshReplicant do
     :publication,
     :go_forward_only,
     :snapshot,
+    :messages,
     :streaming,
     :max_inflight_lag,
     :max_command_retries,
@@ -544,6 +548,7 @@ defmodule AshReplicant do
          {:ok, dynamic_repo} <-
            AshReplicant.Destination.effective_dynamic_repo(sink_config.repo),
          :ok <- AshReplicant.Destination.preflight_onetime(manifest, dynamic_repo),
+         :ok <- AshReplicant.Messages.preflight_digest(sink_config),
          {:ok, code_modules} <- AshReplicant.Destination.code_modules(sink, manifest),
          {:ok, code_fingerprint} <- AshReplicant.Destination.code_fingerprint(code_modules) do
       reference = make_ref()
@@ -736,11 +741,26 @@ defmodule AshReplicant do
     opts
     |> Keyword.take(@replicant_option_keys)
     |> Keyword.merge(slot_name: slot_name, sink: sink)
+    |> default_messages(sink)
     |> Replicant.start_link()
   rescue
     _error -> {:error, :pipeline_start_failed}
   catch
     _kind, _reason -> {:error, :pipeline_start_failed}
+  end
+
+  # C1: a sink that declares a message routing surface gets `messages: true`
+  # on the Replicant pipeline automatically (the pgoutput option gates BOTH
+  # message kinds at the wire; a routed sink that silently received none would
+  # be a config trap). An explicit caller `messages:` opt always wins —
+  # including `false`, and including `true` on a route-less sink, which
+  # Replicant rejects at start (`:messages_unsupported`) fail-closed.
+  defp default_messages(opts, sink) do
+    if Keyword.has_key?(opts, :messages) do
+      opts
+    else
+      if function_exported?(sink, :handle_message, 2), do: Keyword.put(opts, :messages, true), else: opts
+    end
   end
 
   defp safe_stop(slot_name) do

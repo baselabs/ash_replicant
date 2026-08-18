@@ -21,4 +21,9 @@ config :ash_replicant, AshReplicant.TestRepo,
 
 config :ash_replicant, ecto_repos: [AshReplicant.TestRepo]
 config :ash_replicant, ash_domains: [AshReplicant.Test.Domain, AshReplicant.Test.HistoryDomain]
+
+# C1 message-claim digest baseline (ADR-0015): a fixed non-secret test key.
+# Rotation tests replace this via Application.put_env and restore it.
+config :ash_replicant, message_digest_keys: [{1, "test-message-digest-key-v1"}]
+
 config :logger, level: :warning

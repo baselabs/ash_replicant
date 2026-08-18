@@ -22,7 +22,7 @@ defmodule AshReplicant.Sink.Impl do
   """
 
   alias AshPostgres.DataLayer.Info, as: PGInfo
-  alias AshReplicant.{Apply, Destination, Error, Resolver, Sql, Telemetry}
+  alias AshReplicant.{Apply, Destination, Error, Messages, Resolver, Sql, Telemetry}
   alias AshReplicant.Checkpoint.Identity
   alias AshReplicant.Resource.Info
   alias Ecto.Adapters.SQL
@@ -313,11 +313,15 @@ defmodule AshReplicant.Sink.Impl do
   """
   @spec handle_transaction(map(), Replicant.Transaction.t()) ::
           {:ok, Replicant.lsn()} | {:error, term()}
-  def handle_transaction(config, %Replicant.Transaction{
-        commit_lsn: lsn,
-        commit_timestamp: ts,
-        changes: changes
-      }) do
+  def handle_transaction(
+        config,
+        %Replicant.Transaction{
+          commit_lsn: lsn,
+          commit_timestamp: ts,
+          changes: changes,
+          messages: messages
+        }
+      ) do
     if empty_index?(config) do
       # Fail closed: an absent/empty resolver index (start_link not run, slot
       # mismatch, degenerate config) would resolve every change to `nil` in
@@ -326,7 +330,7 @@ defmodule AshReplicant.Sink.Impl do
       # never advances and the LSN is re-delivered on resume.
       halt(Error.exception(reason: :config_invalid, resource: nil, op: :sink), config)
     else
-      run_transaction(config, lsn, ts, changes)
+      run_transaction(config, lsn, ts, changes, messages || [])
     end
   rescue
     e -> halt(e, config)
@@ -821,7 +825,7 @@ defmodule AshReplicant.Sink.Impl do
     Map.put(config, :onetime_preflighted, preflighted)
   end
 
-  defp run_transaction(config, lsn, ts, changes) do
+  defp run_transaction(config, lsn, ts, changes, messages) do
     started = System.monotonic_time()
 
     # Explicit timeout: the per-change generation guards re-validate the
@@ -841,7 +845,7 @@ defmodule AshReplicant.Sink.Impl do
               :skipped
 
             _ ->
-              count = apply_all(config, changes, ts)
+              count = apply_all(config, changes, ts, messages, lsn)
               guard_generation!(config)
               upsert_checkpoint(config, lsn)
               guard_generation!(config)
@@ -873,13 +877,190 @@ defmodule AshReplicant.Sink.Impl do
   # Single pass over the (possibly lazy, one-shot) change stream — iterate it EXACTLY
   # once, counting DURING the pass so `change_count` needs no second traversal (an
   # `Enum.count`/`length` would re-enumerate and blow up a spilled-txn stream).
-  defp apply_all(config, changes, ts) do
-    Enum.reduce(changes, 0, fn change, n ->
+  # Transactional MESSAGES interleave by ordinal: `txn.messages` is an in-memory
+  # list sharing the changes' ONE ascending numbering space (spec §7.1), so the
+  # messages with ordinal < the next change's ordinal flush ahead of it and the
+  # tail flushes after — source order preserved without materializing the stream.
+  defp apply_all(config, changes, ts, messages, commit_lsn) do
+    {count, remaining} =
+      Enum.reduce(changes, {0, messages}, fn change, {n, msgs} ->
+        {n, msgs} = flush_messages_before(config, msgs, change.ordinal, n, commit_lsn)
+
+        guard_generation!(config)
+        Apply.apply_change(config, change, ts)
+        guard_generation!(config)
+
+        {n + 1, msgs}
+      end)
+
+    {count, _} = flush_messages_before(config, remaining, :infinity, count, commit_lsn)
+    count
+  end
+
+  defp flush_messages_before(config, messages, bound, n, commit_lsn) do
+    {ready, rest} =
+      Enum.split_while(messages, fn
+        %Replicant.Decoder.Messages.Message{ordinal: ordinal} ->
+          is_integer(ordinal) and (bound == :infinity or ordinal < bound)
+
+        _other ->
+          false
+      end)
+
+    Enum.each(ready, fn message ->
       guard_generation!(config)
-      Apply.apply_change(config, change, ts)
+      apply_transactional_message(config, message, commit_lsn)
       guard_generation!(config)
-      n + 1
     end)
+
+    {n + length(ready), rest}
+  end
+
+  # A transactional message routes by prefix inside the transaction: ignored
+  # prefixes are inert, an unmapped prefix RAISES (the raise rolls the whole
+  # transaction back — the fail-closed posture identical to a failing change).
+  defp apply_transactional_message(
+         config,
+         %Replicant.Decoder.Messages.Message{} = message,
+         commit_lsn
+       ) do
+    case Messages.resolve_route(config, message.prefix) do
+      :ignored ->
+        :ok
+
+      {:ok, route} ->
+        Messages.apply(config, message, route, commit_lsn)
+
+      {:error, :unmapped} ->
+        raise Error.exception(
+                reason: :message_prefix_unmapped,
+                resource: nil,
+                op: :message,
+                shape: message.prefix
+              )
+    end
+  end
+
+  @doc """
+  Deliver a NON-TRANSACTIONAL logical-decoding message standalone (the
+  seventh sink boundary body, C1/ADR-0015). Routing is fail-closed: an
+  explicitly ignored prefix acknowledges (watermark advanced, no effect); an
+  unknown prefix halts (`:message_prefix_unmapped`); a database-local route
+  applies effect+claim+watermark in ONE destination transaction; an external
+  peer route applies through AshOnetime's three-state recovery and advances
+  the watermark only after a finalized/replayed success. Value-free on every
+  fault shape (rescue AND catch) with the sink's own `:halted` event.
+  """
+  @spec handle_message(map(), Replicant.Decoder.Messages.Message.t(), map()) ::
+          :ok | {:error, term()}
+  def handle_message(
+        config,
+        %Replicant.Decoder.Messages.Message{prefix: prefix, lsn: lsn} = message,
+        _ctx
+      ) do
+    case Messages.resolve_route(config, prefix) do
+      :ignored ->
+        advance_message_watermark(config, lsn)
+        :ok
+
+      {:ok, route} ->
+        deliver_message(config, message, route, lsn)
+
+      {:error, :unmapped} ->
+        halt_message(
+          Error.exception(
+            reason: :message_prefix_unmapped,
+            resource: nil,
+            op: :message,
+            shape: prefix
+          ),
+          config
+        )
+    end
+  rescue
+    e -> halt_message(e, config)
+  catch
+    :throw, value -> halt_message(value, config)
+    :exit, value -> halt_message(value, config)
+  end
+
+  defp deliver_message(config, message, route, lsn) do
+    if external_route?(route) do
+      # The claim commits and finalizes through AshOnetime's independent
+      # store path — no wrapping destination transaction; the watermark moves
+      # only after finalized/replayed success (ADR-0015).
+      Messages.apply(config, message, route, nil)
+      advance_message_watermark(config, lsn)
+      :ok
+    else
+      result =
+        config.repo.transaction(
+          fn ->
+            guard_generation!(config)
+            Messages.apply(config, message, route, nil)
+            advance_watermark!(config, lsn)
+            guard_generation!(config)
+          end,
+          timeout: @snapshot_transaction_timeout
+        )
+
+      case result do
+        {:ok, :ok} ->
+          :ok
+
+        {:error, reason} ->
+          raise reason
+      end
+    end
+  end
+
+  defp external_route?(route) do
+    case AshOnetime.Resource.Info.protection(route.resource, route.action) do
+      %{external_effect: external_effect} -> not is_nil(external_effect)
+      _other -> false
+    end
+  end
+
+  # Monotonic watermark advance shared by the message paths: the locked read
+  # + skip-if-at-or-below guard (a standalone message's LSN can never regress
+  # the durable frontier; re-delivery re-advances an already-advanced value).
+  defp advance_watermark!(config, lsn) when is_integer(lsn) do
+    case locked_checkpoint!(config) do
+      cp when is_integer(cp) and lsn <= cp -> :ok
+      _other -> upsert_checkpoint(config, lsn)
+    end
+
+    :ok
+  end
+
+  defp advance_message_watermark(config, lsn) when is_integer(lsn) do
+    result =
+      config.repo.transaction(
+        fn ->
+          guard_generation!(config)
+          advance_watermark!(config, lsn)
+          guard_generation!(config)
+        end,
+        timeout: @snapshot_transaction_timeout
+      )
+
+    case result do
+      {:ok, :ok} -> :ok
+      {:error, reason} -> raise reason
+    end
+  end
+
+  # The message-path halt funnel: same scrub as halt/2 (the structural reason
+  # only — never the content) plus the sink's own halted event.
+  defp halt_message(reason, config) do
+    error = Error.scrub(reason, config.checkpoint_resource, :message)
+
+    Telemetry.event([:ash_replicant, :sink, :halted], %{}, %{
+      reason: error.reason,
+      error_class: error.class
+    })
+
+    {:error, error}
   end
 
   defp guard_generation!(config) do

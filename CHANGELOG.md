@@ -26,6 +26,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Logical-message actions (roadmap C1 / ADR-0015).** `use AshReplicant.Sink`
+  accepts `message_routes` (`{"prefix", Resource, :action}` triples routing
+  `pg_logical_emit_message` output to host create actions) and
+  `ignored_message_prefixes`. A sink declaring either exposes
+  `handle_message/2` and the pipeline starts with `messages: true`
+  automatically. Every routed action must carry the closed AshOnetime message
+  profile (idempotency claim keyed on source+slot+LSN with a versioned
+  host-keyed content digest as the fingerprint — configure
+  `:ash_replicant, :message_digest_keys`; an optional `external_effect` module
+  rides AshOnetime's three-state recovery). Transactional messages ride their
+  transaction interleaved with the row changes by ordinal; standalone messages
+  apply effect+claim+watermark atomically (local) or finalize-then-watermark
+  (external). An unknown prefix halts fail-closed
+  (`:message_prefix_unmapped`, a new closed reason); `byte_size` joins the
+  typed telemetry measurement set for `[:ash_replicant, :message, :applied]`
+  and `transactional` joins the typed metadata keys.
 - `AshReplicant.PipelineOwner` (roadmap B7 / ADR-0014): one owner per live
   resolver generation. It runs the full activation chain (same validation,
   preflights, lock, and synchronous error shapes), records itself as the

@@ -14,7 +14,7 @@ defmodule AshReplicant.DestinationParticipant do
   defmodule Context do
     @moduledoc "The selected parent action and declaration kind being inspected."
     @enforce_keys [:resource, :action, :kind]
-    defstruct [:resource, :action, :kind]
+    defstruct [:resource, :action, :kind, message_route?: false]
 
     @type kind ::
             :change
@@ -25,7 +25,12 @@ defmodule AshReplicant.DestinationParticipant do
             | :type
             | :tenant_resolver
             | :notifier
-    @type t :: %__MODULE__{resource: module(), action: atom(), kind: kind()}
+    @type t :: %__MODULE__{
+            resource: module(),
+            action: atom(),
+            kind: kind(),
+            message_route?: boolean()
+          }
   end
 
   defmodule ReplayIdentity do

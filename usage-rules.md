@@ -59,6 +59,41 @@ The `slot_name` is **baked into the sink** and is the single source of truth. It
 **not** a `start_link` option. Every row's mirror action is called with this slot
 name as the index key for tenant/resource resolution.
 
+### Logical-message routing (optional, C1)
+
+`pg_logical_emit_message` output routes by prefix to host create actions
+([ADR-0015](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0015-logical-message-effects.md)):
+
+```elixir
+use AshReplicant.Sink,
+  repo: MyApp.Repo,
+  domains: [MyApp.Shop, MyApp.Messaging],
+  checkpoint_resource: MyApp.ReplicantCheckpoint,
+  slot_name: "shop_orders",
+  message_routes: [{"mail", MyApp.MailOutbox, :record}],
+  ignored_message_prefixes: ["telemetry_noise"]
+```
+
+Rules that are enforced, not advisory:
+
+- Every routed action is a `:create` action carrying the closed AshOnetime
+  message profile: `strategy :idempotency`, `fail_closed` store, the private
+  `operation_key` / `content_digest` arguments, an accepted `content` string
+  attribute, `fingerprint(arguments: [:content_digest])`, and a declared
+  positive `retention`. An optional `external_effect` module (three-state
+  recovery) is admitted on message routes ONLY. A nonce is rejected — it must
+  never gate WAL re-delivery.
+- Set `:ash_replicant, :message_digest_keys` (list of `{version, key}` with
+  unique positive versions and keys ≥ 16 bytes). The active version (highest)
+  mints new digests; RETAIN the old versions through the claim/recovery
+  lifetime — re-delivery replays through them after rotation.
+- A **transactional** message rides its transaction, interleaved with the row
+  changes by ordinal. A **standalone** message applies effect + claim +
+  watermark in one destination transaction (local route) or through recovery
+  with the watermark advancing only after finalized/replayed success (external
+  route). An unknown prefix halts the pipeline fail-closed
+  (`:message_prefix_unmapped`); an ignored prefix acknowledges with no effect.
+
 ### 3. Mark mirror resources with the extension
 
 Every resource that mirrors a source table adds the extension and a `replicant do

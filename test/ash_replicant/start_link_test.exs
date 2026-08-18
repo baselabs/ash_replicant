@@ -374,7 +374,11 @@ defmodule AshReplicant.StartLinkTest do
           streaming: :invalid,
           max_inflight_lag: -1,
           max_command_retries: -1,
-          failover: :invalid
+          failover: :invalid,
+          # C1: :messages is now an ADAPTER-recognized forwarded option (a
+          # message-capable sink gets `messages: true` by default) — a bad
+          # value must reach Replicant's config gate and fail closed.
+          messages: :invalid
         ] do
       assert {:error, :config_invalid} = AshReplicant.start_link(start_opts([{key, bad_value}]))
       assert :persistent_term.get({AshReplicant, "valid_slot"}, :none) == :none
@@ -397,7 +401,7 @@ defmodule AshReplicant.StartLinkTest do
       # values would be rejected if forwarded, so a successful start proves the
       # adapter withheld them.
       assert {:ok, _pid} =
-               AshReplicant.start_link(start_opts(messages: :invalid, batch_delivery: :invalid))
+               AshReplicant.start_link(start_opts(batch_delivery: :invalid))
 
       assert :ok = AshReplicant.stop_supervised("valid_slot")
     end)

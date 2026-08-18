@@ -17,7 +17,9 @@ tenant-blind `replicant` CDC framework. It does **not** own transport, and does
 ## Architecture (realized)
 
 A `Spark.Dsl.Extension` implementing the `Replicant.Sink` behaviour, exposing a
-`replicant do ... end` resource section. The sink carries config (repo/domains/checkpoint);
+`replicant do ... end` resource section. The sink carries config
+(repo/domains/checkpoint plus, since C1, `pg_logical_emit_message` prefix
+`message_routes`/`ignored_message_prefixes` — ADR-0015);
 the resolver index maps `{schema,table}` → resource; effect-once is guaranteed by
 a durable `commit_lsn` watermark checkpointed atomically with the mirrored changes.
 Activation requires the expected PostgreSQL system identifier and database;
@@ -106,7 +108,8 @@ the halt path.** Assume every value is PII or a secret. Errors are scrubbed to a
 structural reason (operator + field) before Ash inspects them into logs. Column
 names are strings, never atoms. Telemetry metadata is allowlisted AND TYPED
 per key (LSNs, table names, counts, durations, error classes) with a closed
-measurement-key set — never row values (ADR-0009). All six sink boundary bodies
+measurement-key set — never row values (ADR-0009). All seven sink boundary bodies
+(including C1's `handle_message/2`)
 catch `:throw`/`:exit` into the same scrub (the schema-change body fires the
 sink's own `:halted` with the structural reason — never the sibling's
 `:decode_failure` mislabel), and raw-SQL identifiers route through the ONE
@@ -147,9 +150,19 @@ AshOnetime is permitted only for an admitted local auxiliary action using
 no external effect, a private non-null `operation_key`, and the exact versioned
 source-system/database/slot/commit-LSN/ordinal/participant identity plus the
 SINK-MINTED per-invocation label (`:close_prior | :close_current | :open |
-:destroy_prior | :upsert` — ADR-0010; declarations stay 6-axis, the label is
-appended at encode). Use `DestinationParticipant.operation_key/2`. Reject nonce,
-independent, external, opaque-store, or incomplete-identity profiles. A
+:destroy_prior | :upsert | :message` — ADR-0010/0015; declarations stay 6-axis,
+the label is appended at encode). Use `DestinationParticipant.operation_key/2`.
+Reject nonce, independent, external, opaque-store, or incomplete-identity
+profiles. **Message-route actions (C1 / ADR-0015)** are the one exception to
+"no external effect": a sink-declared `message_routes` prefix targets a create
+action carrying the closed message profile — idempotency, fail-closed store,
+`key({:argument, :operation_key})`, `fingerprint(arguments: [:content_digest])`
+(a versioned host-keyed HMAC over the content from
+`:ash_replicant, :message_digest_keys`; the claim persists no content in any
+derivable form), declared positive retention, and an OPTIONAL `external_effect`
+module admitted only here (AshOnetime three-state recovery; the watermark
+advances only after finalized/replayed success). A nonce never gates WAL
+re-delivery. An unknown prefix at delivery halts (`:message_prefix_unmapped`). A
 notifier whose `load/2` returns a non-empty statement must declare
 `DestinationParticipant` (the `:notifier` kind) — its dependency pre-load read
 runs inside the admitted transaction; suppression covers dispatch only. Static stores preflight at activation;

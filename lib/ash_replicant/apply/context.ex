@@ -16,7 +16,8 @@ defmodule AshReplicant.Apply.Context do
     :close_current,
     :open,
     :destroy_prior,
-    :upsert
+    :upsert,
+    :message
   ]
 
   @doc "The closed per-invocation label set (the single home is shared with DestinationParticipant)."

@@ -145,6 +145,8 @@ defmodule AshReplicant.DestinationParticipantTest do
       #                     apply_test relocate/delete cells
       #   :upsert        -> apply.ex upsert + snapshot bulk/per-record paths —
       #                     effect_once_test (streaming) + snapshot marquees
+      #   :message       -> messages.ex routed-message apply (both kinds) —
+      #                     message_actions marquees + messages_test
       assert Context.invocation_labels() == DestinationParticipant.invocation_labels()
 
       assert Context.invocation_labels() == [
@@ -152,7 +154,8 @@ defmodule AshReplicant.DestinationParticipantTest do
                :close_current,
                :open,
                :destroy_prior,
-               :upsert
+               :upsert,
+               :message
              ]
     end
 

@@ -67,10 +67,12 @@ The current 1.0.0 hardening baseline is built and tested with:
 
 The Ash lower bound excludes known-vulnerable patches, and the upper bound
 excludes Ash 4 prereleases. AshOnetime protects admitted local auxiliary actions
-that need a WAL replay guard and is also the governed mechanism for the
-logical-message idempotency contract tracked for 1.0.0; no message action is
-shipped yet. It does not replace the durable commit-LSN checkpoint used for
-transaction replay and resume.
+that need a WAL replay guard and is also the dedup mechanism for logical
+messages (C1 / [ADR-0015](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0015-logical-message-effects.md)):
+a standalone `pg_logical_emit_message` routes by prefix to a protected create
+action whose claim is keyed on source+slot+LSN with a versioned host-keyed
+content digest as the fingerprint. It does not replace the durable commit-LSN
+checkpoint used for transaction replay and resume.
 
 See [ADR-0002](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0002-supported-runtime-and-dependencies.md)
 for the dependency decision and
@@ -148,6 +150,26 @@ end
 **Key:** `slot_name` is **baked into the sink** — it is the single source of truth
 for the replication slot name and is used to key the resolved index. It is **NOT** a
 `start_link` option.
+
+The sink also carries the optional logical-message routing surface (C1 /
+[ADR-0015](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0015-logical-message-effects.md)):
+
+```elixir
+use AshReplicant.Sink,
+  repo: MyApp.Repo,
+  domains: [MyApp.Shop, MyApp.Messaging],
+  checkpoint_resource: MyApp.ReplicantCheckpoint,
+  slot_name: "shop_orders",
+  message_routes: [{"mail", MyApp.MailOutbox, :record}],
+  ignored_message_prefixes: ["telemetry_noise"]
+```
+
+A routed action is a create action protected by the closed AshOnetime message
+profile (its claim dedups standalone re-delivery; a transactional message rides
+its transaction and interleaves with the row changes by ordinal). The pipeline
+starts with `messages: true` automatically; an unknown prefix halts fail-closed.
+Set `Application.put_env(:ash_replicant, :message_digest_keys, [{1, "<32-byte secret>"}])`
+(host-keyed content digests; retain old versions when rotating).
 
 ### 3. Mark source resources with the extension
 

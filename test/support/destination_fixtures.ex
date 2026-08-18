@@ -2687,6 +2687,143 @@ defmodule AshReplicant.Test.DestinationFixtures do
     end
   end
 
+  # C1: an external-effect protection on a row-mirror AUXILIARY stays the
+  # rejected class — `external_effect` admits on message routes only (ADR-0015).
+  defmodule PeerEffectStub do
+    @moduledoc false
+    @behaviour AshOnetime.ExternalEffect
+
+    @impl AshOnetime.ExternalEffect
+    def execute(_operation_key, _subject, _context), do: {:ok, %{}}
+
+    @impl AshOnetime.ExternalEffect
+    def recover(_operation_key, _subject, _context), do: :absent
+  end
+
+  defmodule ExternalAuxiliary do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.Test.DestinationFixtures.ExternalAuxiliaryDomain,
+      data_layer: AshPostgres.DataLayer,
+      extensions: [AshOnetime.Resource]
+
+    postgres do
+      table "destination_external_auxiliaries"
+      repo AshReplicant.TestRepo
+    end
+
+    attributes do
+      uuid_primary_key :id
+    end
+
+    actions do
+      defaults [:read]
+
+      create :record do
+        transaction? true
+        argument :operation_key, :string, allow_nil?: false, public?: false
+        accept []
+      end
+    end
+
+    onetime do
+      protect :record do
+        strategy :idempotency
+        external_effect(AshReplicant.Test.DestinationFixtures.PeerEffectStub)
+
+        scope([
+          {:static, "ash_replicant:destination-participant:1"},
+          {:static, "external_auxiliary"}
+        ])
+
+        key({:argument, :operation_key})
+        fingerprint(arguments: [:operation_key])
+
+        response(AshOnetime.Codec.Resource,
+          fields: [:id],
+          classify: AshReplicant.Test.Marquee.StoreResponse
+        )
+
+        retention({1, :day})
+      end
+    end
+  end
+
+  defmodule ExternalAuxiliaryChange do
+    @moduledoc false
+    use Ash.Resource.Change
+    @behaviour AshReplicant.DestinationParticipant
+
+    @impl Ash.Resource.Change
+    def change(changeset, _opts, _context), do: changeset
+
+    @impl AshReplicant.DestinationParticipant
+    def destination_participants(_opts, %Context{}) do
+      {:ok,
+       {:actions,
+        [
+          %ActionRef{
+            resource: AshReplicant.Test.DestinationFixtures.ExternalAuxiliary,
+            action: :record,
+            replay_identity: %ReplayIdentity{
+              participant: :external_auxiliary,
+              components: [
+                :source_system_identifier,
+                :source_database,
+                :slot_name,
+                :commit_lsn,
+                :ordinal,
+                :participant
+              ]
+            }
+          }
+        ]}}
+    end
+  end
+
+  defmodule ExternalAuxiliaryRoot do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshReplicant.Test.DestinationFixtures.ExternalAuxiliaryDomain,
+      data_layer: AshPostgres.DataLayer,
+      extensions: [AshReplicant.Resource]
+
+    postgres do
+      table "destination_external_aux_roots"
+      repo AshReplicant.TestRepo
+    end
+
+    replicant do
+      source_table("destination_external_aux_source")
+    end
+
+    attributes do
+      uuid_primary_key :id
+    end
+
+    actions do
+      defaults [:read, :destroy]
+
+      create :create do
+        primary? true
+        accept []
+        touches_resources [AshReplicant.Test.DestinationFixtures.ExternalAuxiliary]
+        change AshReplicant.Test.DestinationFixtures.ExternalAuxiliaryChange
+      end
+    end
+  end
+
+  defmodule ExternalAuxiliaryDomain do
+    @moduledoc false
+    use Ash.Domain, validate_config_inclusion?: false
+
+    resources do
+      resource AshReplicant.Test.DestinationFixtures.ExternalAuxiliaryRoot
+      resource AshReplicant.Test.DestinationFixtures.ExternalAuxiliary
+      resource AshReplicant.Test.Checkpoint
+    end
+  end
+
   defmodule ContextOnetimeDomain do
     @moduledoc false
     use Ash.Domain, validate_config_inclusion?: false
