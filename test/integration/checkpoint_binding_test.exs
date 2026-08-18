@@ -762,6 +762,12 @@ defmodule AshReplicant.CheckpointBindingTest do
   end
 
   describe "reconnect coverage re-check (task 4)" do
+    # The forced reconnect (kill_walsender) deliberately lets the replication
+    # connection die under the pipeline — Replicant.Connection logs its
+    # protocol-level [error] "is reconnecting" line as expected test behavior
+    # (the start_link_test.exs precedent), but that line matches the structural
+    # battery's no-error grep. Capture it (shown only on failure).
+    @tag capture_log: true
     test "a mapped table dropped from the publication mid-run halts at the forced reconnect" do
       ref = attach_events()
 

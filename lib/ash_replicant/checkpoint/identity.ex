@@ -262,7 +262,8 @@ defmodule AshReplicant.Checkpoint.Identity do
   a fixed-table-name, parameterless information-schema probe + count — never
   a row value.
   """
-  @spec legacy_checkpoint_row_count(module(), String.t()) :: {:ok, non_neg_integer()}
+  @spec legacy_checkpoint_row_count(module(), String.t()) ::
+          {:ok, non_neg_integer()} | {:error, :checkpoint_probe_failed}
   def legacy_checkpoint_row_count(repo, table \\ @checkpoint_table) when is_atom(repo) do
     case repo.query(
            "SELECT count(*) FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1 AND column_name = 'source_system_id'",

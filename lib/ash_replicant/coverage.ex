@@ -579,7 +579,7 @@ defmodule AshReplicant.Coverage do
   @spec reconnect_check(keyword(), map(), [String.t()], map(), Identity.manifest()) ::
           :ok | {:error, Error.t()}
   def reconnect_check(connection_opts, source_identity, publication, index, contract) do
-    opts = Keyword.merge(connection_opts, pool_size: 1, sync_connect: true)
+    opts = Keyword.merge(connection_opts || [], pool_size: 1)
     conn = start_preflight_connection(opts)
 
     result =
@@ -673,7 +673,7 @@ defmodule AshReplicant.Coverage do
         ) ::
           {:ok, %{facts: relation_facts(), ignored: MapSet.t()}} | {:error, Error.t()}
   def preflight(connection_opts, source_identity, publication, _sink_config, index, contract) do
-    opts = Keyword.merge(connection_opts, pool_size: 1, sync_connect: true)
+    opts = Keyword.merge(connection_opts || [], pool_size: 1)
 
     conn = start_preflight_connection(opts)
 
@@ -716,31 +716,37 @@ defmodule AshReplicant.Coverage do
       {:error, %Error{} = error} ->
         emit_preflight_failed(error)
         {:error, error}
-
-      other ->
-        error = Error.scrub(other, nil, :preflight)
-        emit_preflight_failed(error)
-        {:error, error}
     end
   end
 
   # Boot-resilience rule (design amendment, task-2 RED finding): an
   # UNREACHABLE source at activation defers the coverage verdict rather than
   # crashing the host. This cannot skip data — an unreachable source delivers
-  # nothing, so no checkpoint can advance — and the bind re-check completes
-  # the FULL preflight on the first connection that can actually stream
+  # nothing, so no checkpoint can advance — and the bind re-check completes the
+  # FULL preflight on the first connection that can actually stream
   # (before any checkpoint read). A REACHABLE source that violates a rule
   # still halts activation fail-closed.
+  #
+  # Admission: `Postgrex.start_link/1` only discovers a missing `:database`
+  # inside the pool's connect callback — the start itself returns
+  # `{:ok, pool}`, every retry logs `[error] missing the :database key`, and
+  # the census query burns the checkout queue-timeout before faulting. A
+  # database-less opts list (absent, nil, or empty) can never connect, so it
+  # is the unreachable class BEFORE any pool exists: same deferred verdict,
+  # no wall-clock burn, no uncontrolled log output. Every non-pool outcome is
+  # the one structural `{:error, :unreachable}` atom — callers route it
+  # through their census-fault branch and never query or stop a placeholder.
   defp start_preflight_connection(opts) do
-    case Postgrex.start_link(opts) do
-      {:ok, conn} ->
-        {:ok, conn}
-
-      {:error, _reason} ->
-        {:ok, :unreachable}
+    if Keyword.has_key?(opts, :database) do
+      case Postgrex.start_link(opts) do
+        {:ok, conn} -> {:ok, conn}
+        {:error, _reason} -> {:error, :unreachable}
+      end
+    else
+      {:error, :unreachable}
     end
   rescue
-    _ -> {:ok, :unreachable}
+    _ -> {:error, :unreachable}
   end
 
   # The census: identity probe + the three framework statements + the

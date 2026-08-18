@@ -43,7 +43,6 @@ defmodule AshReplicant.ScrubBoundaryTest do
 
   import ExUnit.CaptureLog
   alias AshReplicant.Sink.Impl
-  alias AshReplicant.Telemetry
   alias AshReplicant.Test.Checkpoint
 
   @sentinel_raise "SENTINEL-RIDGE-RAISE-4f2a"
@@ -208,12 +207,11 @@ defmodule AshReplicant.ScrubBoundaryTest do
     test "bind: raise (missing manifest KeyError) and :exit (unreachable source) scrub value-free" do
       # The drivable unit seams (diff-review rounds 2-3): (a) a
       # source_contract without :manifest raises KeyError INSIDE the body —
-      # scrubbed by the rescue; (b) an EMPTY source_connection makes the
-      # reconnect gate's census checkout exit noproc — the census's first
-      # query runs Postgrex.query against the :unreachable placeholder and
-      # DBConnection's checkout exits {:noproc, ...} (the gate's later
-      # GenServer.stop is dead on this path) — a REAL :exit caught by the
-      # catch clause with a structural reason.
+      # scrubbed by the rescue; (b) an EMPTY source_connection is admitted
+      # as unreachable BEFORE any pool starts (census admission), so the
+      # reconnect gate defers (:ok) without querying and bind proceeds to
+      # repo.transaction — where the FaultyRepo's :exit carries the sentinel
+      # INTO the catch clause as a REAL :exit with a structural reason.
       cfg_raise = config(extra: [source_contract: %{}])
 
       {{:error, %AshReplicant.Error{reason: :sink_failed}}, _} =

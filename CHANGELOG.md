@@ -177,6 +177,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Admit the census preflight connection BEFORE starting a pool: a
+  database-less `:connection` opts list (absent, nil, or empty — postgrex
+  discovers a missing `:database` key only inside the pool's async connect)
+  now defers as the unreachable class immediately, instead of starting a
+  pool that can never connect, logging `[error] missing the :database key`
+  on every backoff retry while burning the checkout queue-timeout on every
+  bind. This is what made the live structural battery fail its own no-error
+  gate with every test passing; a host misconfiguring the connection
+  keyword hit the same doomed-pool burn at runtime. Sync-start failures now
+  return the structural `{:error, :unreachable}` (callers defer through
+  their census-fault branch and never query or stop a placeholder
+  connection), and the dead-for-pools `sync_connect: true` merge is dropped
+  (only the replication connection reads that option).
+- The forced-reconnect marquee captures the replication connection's
+  expected `[error]` reconnect line (the `start_link_test` precedent), which
+  otherwise order-dependently trips the same battery gate.
+- Dialyzer green again: `legacy_checkpoint_row_count/2`'s spec now admits
+  the `{:error, :checkpoint_probe_failed}` probe-failure leg its body
+  already returns (the caller handled it), and the census preflight's
+  catch-all scrub — unreachable once admission returns error-tagged
+  connections — is removed (the closed-case shape `reconnect_check/5`
+  already uses).
 - Reconcile public policy, snapshot, tenancy, notifier, and release-history
   documentation with live code. Host policies are not re-gated, the current
   adapter supports v1 snapshots only, and tenant reassignment requires the old

@@ -45,6 +45,47 @@ defmodule AshReplicant.CoverageTest do
     Enum.into(overrides, base)
   end
 
+  describe "census connection admission — a database-less opts list never starts a pool" do
+    import ExUnit.CaptureLog
+
+    # Postgrex.start_link/1 admits a missing :database only INSIDE the pool's
+    # connect callback (async): the pool starts "healthy", every retry logs
+    # [error], and the census query burns the checkout queue-timeout before
+    # faulting. The admission gate must treat a database-less opts list
+    # (absent, nil, or []) as the unreachable class BEFORE any pool exists —
+    # the same deferred verdict, no wall-clock burn, no uncontrolled [error]
+    # output (the structural battery greps exactly that).
+    @identity %{system_identifier: "741852963", database: "ash_replicant_test"}
+
+    test "preflight: opts without :database defer immediately and silently" do
+      log =
+        capture_log(fn ->
+          assert {:ok, :deferred} =
+                   Coverage.preflight([], @identity, ["pub"], %{}, %{}, %{})
+        end)
+
+      refute log =~ "[error]", "the census must not log against a pool that can never connect"
+    end
+
+    test "preflight: a nil opts list (host omitted :connection) defers the same way" do
+      log =
+        capture_log(fn ->
+          assert {:ok, :deferred} = Coverage.preflight(nil, @identity, ["pub"], %{}, %{}, %{})
+        end)
+
+      refute log =~ "[error]", "the census must not log against a pool that can never connect"
+    end
+
+    test "reconnect_check: opts without :database return :ok immediately and silently" do
+      log =
+        capture_log(fn ->
+          assert :ok = Coverage.reconnect_check([], @identity, ["pub"], %{}, %{})
+        end)
+
+      refute log =~ "[error]", "the census must not log against a pool that can never connect"
+    end
+  end
+
   describe "evaluate/3 — the rule matrix" do
     test "a fully covered topology is :ok" do
       assert :ok = Coverage.evaluate(census(), facts(), [])
