@@ -651,28 +651,44 @@ defmodule AshReplicant.BatchPipelineTest do
 
     PG.wait_until(fn -> length(mirror_notes()) == 4 end, 2_000)
 
+    # The rows are visible the moment flush #2's transaction commits, but the
+    # framework's batch_committed event fires only AFTER handle_batch returns
+    # — drain until the stream goes idle instead of assuming a strict event
+    # interleaving (the race is real under load).
+    events = collect_events(batch_ref)
+
     # Two count-cap flushes of two transactions each — never a per-transaction
     # delivery — and the adapter's event counts ONE pass per flush.
-    assert_received {[:replicant, :sink, :batch_committed], ^batch_ref, _, framework_meta_a}
-    assert framework_meta_a.change_count == 2
-    assert framework_meta_a.reason == :max_transactions
+    committed =
+      for {[:replicant, :sink, :batch_committed], ^batch_ref, _, meta} <- events, do: meta
 
-    assert_received {[:ash_replicant, :sink, :batch_applied], ^batch_ref, measurements, meta}
-    assert measurements.change_count == 2
-    assert meta.txn_count == 2
+    assert length(committed) == 2
+    assert Enum.map(committed, & &1.change_count) == [2, 2]
+    assert Enum.all?(committed, &(&1.reason == :max_transactions))
 
-    assert_received {[:replicant, :sink, :batch_committed], ^batch_ref, _, framework_meta_b}
-    assert framework_meta_b.change_count == 2
+    applied =
+      for {[:ash_replicant, :sink, :batch_applied], ^batch_ref, measurements, meta} <- events do
+        {measurements, meta}
+      end
 
-    assert_received {[:ash_replicant, :sink, :batch_applied], ^batch_ref, _, adapter_meta_b}
-    assert adapter_meta_b.txn_count == 2
+    assert length(applied) == 2
+    assert Enum.all?(applied, fn {measurements, _meta} -> measurements.change_count == 2 end)
+    assert Enum.all?(applied, fn {_measurements, meta} -> meta.txn_count == 2 end)
 
-    refute_received {[:replicant, :sink, :batch_committed], ^batch_ref, _, _}
-    refute_received {[:ash_replicant, :sink, :batch_applied], ^batch_ref, _, _}
     :telemetry.detach(batch_ref)
 
     assert mirror_notes() == ["v1", "v2", "v3", "v4"]
     assert is_integer(checkpoint_value()) and checkpoint_value() > 0
+  end
+
+  # Drain the attached telemetry stream until it goes idle: each event set is
+  # asserted as a whole, never in a strict arrival order.
+  defp collect_events(ref, acc \\ []) do
+    receive do
+      event when elem(event, 1) == ref -> collect_events(ref, [event | acc])
+    after
+      2_000 -> Enum.reverse(acc)
+    end
   end
 
   test "a standalone message arriving mid-batch flushes the batch before it delivers (§8.4)" do
