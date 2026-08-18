@@ -1070,8 +1070,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     end
 
     # The B5 ledger gate scans lib/ for the removed `apply_ledger` option and
-    # pins its two allowlisted fail-closed occurrences at sink.ex lines 63 and
-    # 73. The fixture ships a SYNTHETIC sink.ex carrying the allowlisted lines
+    # pins its two allowlisted fail-closed occurrences at sink.ex lines 85 and
+    # 104. The fixture ships a SYNTHETIC sink.ex carrying the allowlisted lines
     # at those positions: the self-test exercises the checker's logic without
     # depending on live-code line drift (the real-repo pin runs in the
     # release-contract assert itself).
@@ -1079,8 +1079,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     File.mkdir_p!(sink_dir)
 
     sink_fixture =
-      Enum.map(1..80, fn ix ->
-        if ix in [63, 73],
+      Enum.map(1..110, fn ix ->
+        if ix in [85, 104],
           do: "  # apply_ledger (allowlisted line)",
           else: "  # fixture line #{ix}"
       end)
