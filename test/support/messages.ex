@@ -114,11 +114,13 @@ defmodule AshReplicant.Test.Messages do
     @moduledoc false
     @behaviour AshOnetime.ExternalEffect
 
+    alias AshReplicant.Test.Messages
+
     @impl AshOnetime.ExternalEffect
     def execute(_operation_key, _subject, _context) do
       record(:execute)
 
-      case :persistent_term.get(AshReplicant.Test.Messages.peer_mode_key(), :ok) do
+      case :persistent_term.get(Messages.peer_mode_key(), :ok) do
         :ok -> {:ok, %{peer_id: "peer-" <> Integer.to_string(record_count())}}
         :unknown -> {:error, :outcome_unknown}
       end
@@ -128,7 +130,7 @@ defmodule AshReplicant.Test.Messages do
     def recover(_operation_key, _subject, _context) do
       record(:recover)
 
-      case :persistent_term.get(AshReplicant.Test.Messages.peer_recover_mode_key(), :ok) do
+      case :persistent_term.get(Messages.peer_recover_mode_key(), :ok) do
         :ok -> {:ok, %{peer_id: "peer-" <> Integer.to_string(record_count())}}
         :absent -> :absent
         :unknown -> :unknown
@@ -136,12 +138,12 @@ defmodule AshReplicant.Test.Messages do
     end
 
     defp record(kind) do
-      calls = :persistent_term.get(AshReplicant.Test.Messages.peer_calls_key(), [])
-      :persistent_term.put(AshReplicant.Test.Messages.peer_calls_key(), calls ++ [kind])
+      calls = :persistent_term.get(Messages.peer_calls_key(), [])
+      :persistent_term.put(Messages.peer_calls_key(), calls ++ [kind])
     end
 
     defp record_count,
-      do: :persistent_term.get(AshReplicant.Test.Messages.peer_calls_key(), []) |> length()
+      do: :persistent_term.get(Messages.peer_calls_key(), []) |> length()
   end
 
   defmodule Outbox do

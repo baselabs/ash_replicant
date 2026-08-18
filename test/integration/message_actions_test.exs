@@ -311,7 +311,8 @@ defmodule AshReplicant.MessagePipelineTest do
   use ExUnit.Case, async: false
   @moduletag :integration
 
-  alias AshReplicant.Test.{DestinationObserver, Marquee, Messages, PG}
+  alias AshOnetime.Store.Postgres, as: OnetimeStore
+  alias AshReplicant.Test.{AdmittedGeneration, DestinationObserver, Marquee, Messages, PG}
   alias Ecto.Adapters.SQL
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -468,7 +469,7 @@ defmodule AshReplicant.MessagePipelineTest do
   # Direct-drive admission for the external-peer recovery cells (the committed
   # claim worker needs a real, non-sandboxed connection — hence this tier).
   defp admit_direct! do
-    generation = AshReplicant.Test.AdmittedGeneration.put!(Messages.MarqueeSink)
+    generation = AdmittedGeneration.put!(Messages.MarqueeSink)
 
     identity = %Replicant.SessionIdentity{
       system_identifier: generation.source_identity.system_identifier,
@@ -549,7 +550,7 @@ defmodule AshReplicant.MessagePipelineTest do
 
     # Retention is enforced by the reaper, not the claim path: the operator's
     # cleanup pass deletes the expired claim, and the next delivery re-executes.
-    {:ok, target} = AshOnetime.Store.Postgres.target(Messages.TransientOutbox, [])
+    {:ok, target} = OnetimeStore.target(Messages.TransientOutbox, [])
 
     assert {:ok, %{idempotency: deleted}} = AshOnetime.Store.cleanup(target, 100)
     assert deleted >= 1
