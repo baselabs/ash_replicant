@@ -73,10 +73,12 @@ minimum transport-lifecycle touch needed to own it, and it observes only.
    clears the snapshot ordinals, and exits `:normal`. Replicant retains
    transport ownership: the owner never holds, restarts, or reconfigures
    the connection; it observes process death and cleans up admission
-   state. The owner traps exits so a host-tree shutdown stops its
-   pipeline first (previously a pipeline outlived its starter); a linked
-   caller's `:normal` exit is ignored so a bare `start_link/1` caller
-   finishing does not stop the pipeline.
+   state. The owner links to NOBODY: a bare caller finishing — or being
+   shut down by its own test runner — must not take a live pipeline down
+   mid-transaction (the pre-B7 pipeline likewise outlived its starter),
+   while a host supervisor needs no link — it monitors the child and
+   delivers tree shutdown as a direct `:shutdown` exit signal, which the
+   trapping owner receives and honors by stopping its pipeline first.
 3. **A dead owner is fail-closed and replaceable.** Callback admission
    (`run_admitted_callback`) checks owner liveness at entry: a generation
    whose owner is dead fails closed (`:config_invalid`, op `:callback`),
@@ -108,10 +110,14 @@ minimum transport-lifecycle touch needed to own it, and it observes only.
 - An owner crash stops mirroring promptly BY DESIGN (callbacks fail
   closed, the pipeline halts itself): mirroring continues only under a
   live owner. An operator or host restarts explicitly.
+- A host-tree shutdown now stops pipelines owned by that tree (the
+  supervisor's shutdown signal reaches the owner directly) — previously a
+  pipeline outlived its starter process.
 - `AshReplicant.start_link/1` now returns the owner's pid (not the
-  pipeline's) and links the caller; both are opaque handles and
-  `stop_supervised/1` is unchanged. A host-tree shutdown now also stops
-  pipelines owned by that tree.
+  pipeline's); both are opaque handles and `stop_supervised/1` is
+  unchanged. The owner is not linked to the caller, so an owner crash is
+  NOT propagated as a caller exit — it surfaces as the generation's
+  fail-closed admission instead.
 - Hosts relying on the unguarded checkpoint shape must pass
   `authorizers: []` or declare policies — a breaking, fail-safe default
   change recorded in the CHANGELOG.

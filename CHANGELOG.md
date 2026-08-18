@@ -18,8 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   do` block granting that access, or pass `authorizers: []` to reproduce
   the earlier unguarded shape.
 - `AshReplicant.start_link/1` now returns the `AshReplicant.PipelineOwner`
-  pid (previously the Replicant pipeline pid) and links it to the caller;
-  both are opaque handles and `stop_supervised/1` is unchanged. A
+  pid (previously the Replicant pipeline pid); both are opaque handles and
+  `stop_supervised/1` is unchanged. The owner is not linked to the caller
+  (a caller finishing never takes a live pipeline down), but a
   host-supervision-tree shutdown now also stops the pipelines owned by
   that tree.
 
