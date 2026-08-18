@@ -7,9 +7,11 @@ trap 'rm -f "$raw_output"' EXIT
 # Failure diagnosis stays VALUE-FREE: raw captured output may carry unscrubbed
 # values (that is what the gate exists to catch), so a trip PRESERVES the
 # capture to a local file and reports structural facts only — counts, the
-# Result line, the preserved path. Never dump raw lines into CI logs.
+# Result line, authored test names (the formatter's FAILED: lines), the
+# preserved path. Never dump raw lines into CI logs.
 preserve_failure() {
   preserved="${TMPDIR:-/tmp}/ash-replicant-structural-failure.$$.log"
+  grep '^FAILED: ' "$raw_output" >&2 || true
   mv "$raw_output" "$preserved"
   echo "raw output preserved at: $preserved" >&2
 }
