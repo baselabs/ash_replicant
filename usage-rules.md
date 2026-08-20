@@ -446,6 +446,129 @@ delivery (C2 — `batch_delivery` routes flushes through `handle_batch/1`, one
 destination transaction and one trailing watermark write per batch) are live;
 incremental-progress and append-log callbacks remain absent until C3 through C4.
 
+## Snapshot provenance and retirement (the row contract)
+
+A snapshot retry must not repeat a host business effect for a row that did not
+change. Converging to the same final state is not enough: a create, destroy, or
+SCD2 close can carry an append-only local effect even when a later upsert
+converges. So a snapshot-managed resource stores a keyed fingerprint of the
+values its host action was given, plus a marker for the attempt that last saw
+the row ([ADR-0017](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0017-snapshot-provenance-and-restart.md)).
+
+This release installs the **contract**: the schema, the fingerprint, the
+protected-input guards, and the private action declarations. The retry
+protocol that reads them — attempt state, completion, and retirement — is
+roadmap C3 work and is not implemented yet. Opting in today is safe and inert.
+
+### Opting a resource in
+
+```elixir
+replicant do
+  source_table "orders"
+  snapshot_provenance true
+end
+
+attributes do
+  # ... your mirrored columns ...
+  attribute :replica_fingerprint, :binary, public?: false, writable?: false
+  attribute :replica_seen_attempt, :binary, public?: false, writable?: false
+end
+
+actions do
+  defaults [:read, :destroy, create: :*, update: :*]
+
+  update :replicant_mark_seen do
+    public? false
+    accept []
+    require_atomic? false
+    change AshReplicant.Snapshot.MarkSeen
+  end
+
+  destroy :replicant_retire_unseen do
+    public? false
+  end
+end
+```
+
+`snapshot_provenance` defaults to `false`, so a resource that does not back a
+snapshot needs no change at all.
+
+Under `history_strategy :scd2` the retirement action is an `:update` (it closes
+the open version) rather than a `:destroy` — closed history stays immutable:
+
+```elixir
+update :replicant_retire_unseen do
+  public? false
+  accept [:valid_to_lsn]
+end
+```
+
+Both action names are configurable via `snapshot_mark_action` and
+`snapshot_retire_action`.
+
+### What the compile-time verifier enforces
+
+`AshReplicant.Resource.Verifiers.ValidateSnapshotProvenance` fails the build
+(a Spark diagnostic, build-blocking under `--warnings-as-errors`) unless:
+
+- both protected attributes exist, are binary-storage, `public?: false`,
+  `writable?: false`, and are not classified sensitive (they carry no row
+  value — never list them in `sensitive`);
+- **no action accepts either one**, and no action declares an argument named
+  for either one. Both are input paths, and either would let a host forge
+  membership so a changed row looks "already seen";
+- the mark action exists, is a private (`public? false`) `:update`, and carries
+  `change AshReplicant.Snapshot.MarkSeen` **on the action itself** — a global
+  `changes` entry does not count, because it would also stamp your ordinary
+  business updates;
+- the retirement action exists, is private, and is a `:destroy` under `:scd1`
+  or an `:update` under `:scd2`.
+
+On a multitenant resource, both actions are treated as sink-selected actions by
+`ValidateActionMultitenancy`, so neither may declare `multitenancy :bypass` or
+`:bypass_all`.
+
+`AshReplicant.Snapshot.MarkSeen` is the only write path to the two attributes.
+It reads them from the sink-supplied changeset context and writes through
+`Ash.Changeset.force_change_attribute/3`; an absent or malformed context fails
+the changeset closed rather than silently marking nothing.
+
+### Provenance keys
+
+The fingerprint is an HMAC-SHA-256 under host-managed keys, tagged with both
+the canonical encoding version and the key version:
+
+```elixir
+config :ash_replicant,
+  snapshot_provenance_keys: [{1, System.fetch_env!("ASH_REPLICANT_PROVENANCE_KEY_V1")}]
+```
+
+Same shape as `:message_digest_keys`: a non-empty list of
+`{positive_integer_version, binary_key}` with unique versions and keys of at
+least 16 bytes. The highest version is ACTIVE; lower versions are RETAINED.
+
+**Rotate by adding, never by replacing.** Keep an old version as long as any
+row or incomplete attempt still names it. Dropping a key that rows still name
+fails closed — comparison returns an error rather than reporting every row as
+changed, because reporting "changed" would re-run every host business action.
+
+If any mapped resource declares `snapshot_provenance true`, activation
+preflights this configuration and refuses to start without it.
+
+### Migration path
+
+The two attributes are ordinary `bytea` columns, so generate migrations the
+normal way after adding them:
+
+```bash
+mix ash_postgres.generate_migrations --name add_snapshot_provenance
+```
+
+Both are nullable by design: existing rows carry `NULL` until an attempt first
+stamps them, and a `NULL` fingerprint simply means "no provenance recorded
+yet". Nothing backfills them, and no existing behavior changes — an upgrade
+that adds neither the option nor the attributes is a no-op.
+
 ## Source-bound checkpoints, binding, and operator recovery
 
 The durable checkpoint row is keyed by the ACTUAL replication session's

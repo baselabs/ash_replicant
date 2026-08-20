@@ -26,4 +26,9 @@ config :ash_replicant, ash_domains: [AshReplicant.Test.Domain, AshReplicant.Test
 # Rotation tests replace this via Application.put_env and restore it.
 config :ash_replicant, message_digest_keys: [{1, "test-message-digest-key-v1"}]
 
+# S01 snapshot-provenance fingerprint baseline (ADR-0017): a fixed non-secret
+# test key. Rotation and key-loss tests replace this via Application.put_env
+# and restore it (`AshReplicant.Test.Provenance`).
+config :ash_replicant, snapshot_provenance_keys: [{1, "test-snapshot-provenance-key-v1"}]
+
 config :logger, level: :warning

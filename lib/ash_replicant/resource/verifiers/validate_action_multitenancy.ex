@@ -19,7 +19,8 @@ defmodule AshReplicant.Resource.Verifiers.ValidateActionMultitenancy do
     lets a `bulk_update`/`bulk_destroy` match and mutate ANOTHER tenant's rows.
 
   So this verifier rejects `:bypass` / `:bypass_all` on any sink-selected action (primary
-  read/create/destroy + SCD2 close) of a multitenant resource. It fires only when the resource
+  read/create/destroy, the SCD2 close, and — when `snapshot_provenance true` — the private
+  snapshot mark and retire actions) of a multitenant resource. It fires only when the resource
   declares multitenancy (a non-multitenant resource has no tenant to bypass). A non-sink action's
   mode is the host's business and is not checked. Messages are value-free — they name the action
   and its declared mode, never a row value.
@@ -57,6 +58,7 @@ defmodule AshReplicant.Resource.Verifiers.ValidateActionMultitenancy do
       AshInfo.primary_action(dsl_state, :destroy)
     ]
     |> maybe_add_close_action(dsl_state)
+    |> maybe_add_provenance_actions(dsl_state)
     |> Enum.reject(&is_nil/1)
   end
 
@@ -64,6 +66,22 @@ defmodule AshReplicant.Resource.Verifiers.ValidateActionMultitenancy do
     if Verifier.get_option(dsl_state, [:replicant], :history_strategy) == :scd2 do
       close = Verifier.get_option(dsl_state, [:replicant], :history_close_action)
       [close && AshInfo.action(dsl_state, close) | actions]
+    else
+      actions
+    end
+  end
+
+  # S01 (ADR-0017): the private mark and retire actions are sink-driven writes
+  # like any other. A bypassing retire action would delete or close ANOTHER
+  # tenant's identically-keyed rows during completion — the same fail-open
+  # isolation this verifier already rejects on the mirror path, so it belongs
+  # in the same set rather than in a second check.
+  defp maybe_add_provenance_actions(actions, dsl_state) do
+    if Verifier.get_option(dsl_state, [:replicant], :snapshot_provenance) == true do
+      [:snapshot_mark_action, :snapshot_retire_action]
+      |> Enum.map(&Verifier.get_option(dsl_state, [:replicant], &1))
+      |> Enum.map(fn name -> name && AshInfo.action(dsl_state, name) end)
+      |> Enum.concat(actions)
     else
       actions
     end

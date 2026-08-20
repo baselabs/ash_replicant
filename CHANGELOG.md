@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Snapshot provenance and retirement contract** (ADR-0017, roadmap S01). A
+  mirror resource can opt in with `snapshot_provenance true`, declaring two
+  protected internal attributes — `replica_fingerprint` and
+  `replica_seen_attempt` — plus a private mark action and a private retirement
+  action. A snapshot retry can then tell an unchanged row from a changed one
+  and skip repeating the host's append-only business effects.
+  - `AshReplicant.Snapshot.Provenance` computes the fingerprint: an
+    HMAC-SHA-256 over a canonical, type-tagged, length-prefixed encoding of the
+    mapped action inputs plus the resolved tenant and resource identity, tagged
+    with both the encoding version and the key version. Keys come from
+    `:ash_replicant, :snapshot_provenance_keys` (same validated shape as
+    `:message_digest_keys`). Rotation retains old versions; a missing key,
+    unknown encoding version, or non-deterministic value fails CLOSED rather
+    than reporting the row as changed.
+  - `AshReplicant.Snapshot.MarkSeen` is the only write path to the two
+    attributes, stamping them from the sink-supplied changeset context via
+    `Ash.Changeset.force_change_attribute/3`. A missing or malformed context
+    fails the changeset closed.
+  - `AshReplicant.Resource.Verifiers.ValidateSnapshotProvenance` moves the whole
+    contract to build time: attribute shape, and the guarantee that NO action
+    accepts either attribute or declares an argument named for one.
+    `ValidateActionMultitenancy` now also rejects `multitenancy :bypass` /
+    `:bypass_all` on the two provenance actions.
+  - Activation preflights the key configuration whenever a mapped resource opts
+    in, and refuses to start without it.
+  - `snapshot_provenance` defaults to `false`: an existing resource compiles and
+    behaves exactly as before. This slice installs the contract only — the
+    retry protocol that reads it (attempt state, completion, retirement) remains
+    roadmap C3 work.
+
 ### Documented
 
 - Record the approved 1.0 release design as proposed ADRs 0017-0021 and pending
