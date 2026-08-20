@@ -105,8 +105,9 @@ watermark.
 - B3 verifies the stored manifest against the live source catalog and extends
   the recorded ignore set; C5 reuses the same classifier and stored manifest
   for runtime schema-change classification; C1–C3 compose their frontiers on
-  the same row (`snapshot_progress`/`snapshot_generation` columns are
-  reserved). D1 templates the capture/delete/migrate/adopt runbook into
+  the same row. C3 retains the exact `snapshot_progress` token and replaces the
+  reserved `snapshot_generation` placeholder with ADR-0017's versioned
+  `snapshot_state` envelope. D1 templates the capture/delete/migrate/adopt runbook into
   generated upgrade paths; D4/D6 own live fault-injection and the PG15–18
   standby/failover matrix cells.
 

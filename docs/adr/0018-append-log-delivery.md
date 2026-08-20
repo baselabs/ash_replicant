@@ -29,7 +29,8 @@ represented by the transport callback.
    transaction. Distinct same-transaction effects never overwrite one another.
 4. Insert, update, delete, truncate, logical-message, snapshot, and batch shapes
    are explicit. Deletes use admitted old-record data; truncate is a structural
-   event; snapshot rows carry snapshot origin/generation; standalone message
+   event; snapshot rows carry their structural mode and checkpoint-owned attempt
+   identity without reusing state-mirror row provenance fields; standalone message
    recovery retains ADR-0015's claim rules; a batch remains one transaction.
 5. A fresh append sink declares exactly one initial-state intent: snapshot or
    go-forward. Go-forward consumes Replicant's typed slot-origin callback. On
