@@ -25,8 +25,11 @@ defmodule AshReplicant.Resource do
   own `:attribute` is plaintext (`ValidateMultitenancy`); that a **non-global
   multitenant** resource declares a tenant source — `tenant_attribute` or `tenant_mfa`
   (`ValidateTenantSource`); that no sink-selected action bypasses tenancy
-  (`ValidateActionMultitenancy`); and that an SCD2 resource's version-table shape is
-  valid (`ValidateHistory`).
+  (`ValidateActionMultitenancy`); that an SCD2 resource's version-table shape is
+  valid (`ValidateHistory`); and that a resource opting into `snapshot_provenance`
+  declares the two protected attributes and the private mark/retire actions, with
+  NO action able to accept those attributes as input
+  (`ValidateSnapshotProvenance`, ADR-0017).
   """
 
   @replicant %Spark.Dsl.Section{
@@ -142,6 +145,34 @@ defmodule AshReplicant.Resource do
         default: :close_version,
         doc:
           "SCD2 only: the host `:update` action that sets the window columns to close a version."
+      ],
+      snapshot_provenance: [
+        type: :boolean,
+        default: false,
+        doc:
+          "Opt the resource into the snapshot provenance and retirement contract (ADR-0017). " <>
+            "When true the resource must declare the two protected attributes " <>
+            "`replica_fingerprint` and `replica_seen_attempt` (binary, non-sensitive, " <>
+            "`public?: false`, `writable?: false`, accepted by NO action) plus the private " <>
+            "mark and retire actions below. Defaults to `false` so a resource that does not " <>
+            "back a snapshot keeps compiling unchanged."
+      ],
+      snapshot_mark_action: [
+        type: :atom,
+        default: :replicant_mark_seen,
+        doc:
+          "The host's PRIVATE (`public? false`) `:update` action that records snapshot-attempt " <>
+            "membership. It must carry the `AshReplicant.Snapshot.MarkSeen` change, which " <>
+            "force-changes the protected attributes from the sink-supplied changeset context — " <>
+            "the attributes are never an action input."
+      ],
+      snapshot_retire_action: [
+        type: :atom,
+        default: :replicant_retire_unseen,
+        doc:
+          "The host's PRIVATE (`public? false`) retirement action for rows unseen by a completed " <>
+            "snapshot attempt: a `:destroy` under `history_strategy :scd1`, or the version-closing " <>
+            "`:update` under `:scd2`."
       ]
     ]
   }
@@ -153,6 +184,7 @@ defmodule AshReplicant.Resource do
       AshReplicant.Resource.Verifiers.ValidateMultitenancy,
       AshReplicant.Resource.Verifiers.ValidateTenantSource,
       AshReplicant.Resource.Verifiers.ValidateActionMultitenancy,
-      AshReplicant.Resource.Verifiers.ValidateHistory
+      AshReplicant.Resource.Verifiers.ValidateHistory,
+      AshReplicant.Resource.Verifiers.ValidateSnapshotProvenance
     ]
 end

@@ -252,6 +252,11 @@ end
   Default `:halt_destructive`.
 - **`upsert_identity`** — identity name used for the upsert mirror write. Defaults to
   primary-key upsert when omitted; set an identity name to upsert by that identity instead.
+- **`snapshot_provenance`** — opt the resource into the snapshot provenance and
+  retirement contract (ADR-0017). Default `false`. See "Snapshot provenance" below.
+- **`snapshot_mark_action`** / **`snapshot_retire_action`** — names of the private
+  actions that contract requires. Default `:replicant_mark_seen` /
+  `:replicant_retire_unseen`.
 
 **History (SCD2).** By default a resource mirrors **current state** (`history_strategy
 :scd1` — upsert / destroy). Opt a resource into **validity-windowed SCD2 history**
@@ -271,6 +276,47 @@ See [`usage-rules.md`](usage-rules.md) (“SCD2 history mode”) for the full ve
 contract: the surrogate PK, the `valid_from_lsn` / `valid_to_lsn` window columns, the
 `:close_version` action, the partial-unique-open index, `on_truncate :close`, and the
 `REPLICA IDENTITY FULL` precondition for a non-PK business key.
+
+**Snapshot provenance.** A snapshot retry must not repeat a host business effect for
+a row that did not change — converging to the same final state is not enough when a
+create, destroy, or SCD2 close carries an append-only effect. Opt a resource in with
+`snapshot_provenance true` and it stores a keyed fingerprint of the values its host
+action was given, plus a marker for the attempt that last saw it:
+
+```elixir
+replicant do
+  source_table "orders"
+  snapshot_provenance true
+end
+
+attributes do
+  attribute :replica_fingerprint, :binary, public?: false, writable?: false
+  attribute :replica_seen_attempt, :binary, public?: false, writable?: false
+end
+
+actions do
+  update :replicant_mark_seen do
+    public? false
+    accept []
+    require_atomic? false
+    change AshReplicant.Snapshot.MarkSeen
+  end
+
+  destroy :replicant_retire_unseen do
+    public? false
+  end
+end
+```
+
+A compile-time verifier rejects any action that accepts either attribute or declares
+an argument named for one, and rejects `MarkSeen` globally or on any action other
+than the configured private mark action, so provenance cannot be forged;
+fingerprint keys come from
+`:ash_replicant, :snapshot_provenance_keys` and are preflighted at activation. This
+release installs the **contract** — the retry protocol that reads it (attempt state,
+completion, retirement) is roadmap C3 work. See
+[`usage-rules.md`](usage-rules.md) (“Snapshot provenance and retirement”) for the
+full contract, key rotation, and the migration path.
 
 ### 4. Start the pipeline
 
