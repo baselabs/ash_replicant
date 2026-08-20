@@ -77,13 +77,20 @@ defmodule AshReplicant.Destination.NotifierLoads do
   consecutive probes disagree, or `:error` when the statement source or the
   participant declaration raised, threw, or exited.
   """
-  @spec probe(module(), map(), module()) :: {:ok, list(), binding()} | :unstable | :error
+  @spec probe(module(), map(), module()) ::
+          {:ok, list(), binding(), boolean()} | :unstable | :error
   def probe(resource, action, notifier) do
-    statement = statement(notifier, resource, action)
+    {statement, first_routed?} = AshReplicant.Notifier.probe_load(notifier, resource, action)
     first = binding_of(notifier, resource, action, statement)
-    second = binding_of(notifier, resource, action, statement(notifier, resource, action))
 
-    if first == second, do: {:ok, statement, first}, else: :unstable
+    {second_statement, second_routed?} =
+      AshReplicant.Notifier.probe_load(notifier, resource, action)
+
+    second = binding_of(notifier, resource, action, second_statement)
+
+    if first == second,
+      do: {:ok, statement, first, first_routed? and second_routed?},
+      else: :unstable
   rescue
     _error -> :error
   catch
@@ -94,7 +101,8 @@ defmodule AshReplicant.Destination.NotifierLoads do
   The bindings `action` on `resource` produces RIGHT NOW — every notifier the
   action carries, including the ones whose statement is empty.
   """
-  @spec bindings(module(), atom()) :: {:ok, bindings()} | {:error, :unstable | :probe_failed}
+  @spec bindings(module(), atom()) ::
+          {:ok, bindings()} | {:error, :unstable | :unwrapped | :probe_failed}
   def bindings(resource, action_name) when is_atom(resource) and is_atom(action_name) do
     case AshInfo.action(resource, action_name) do
       %{} = action -> bindings_for(resource, action)
@@ -111,18 +119,30 @@ defmodule AshReplicant.Destination.NotifierLoads do
   manifest walk so the fingerprint comes from the SAME probe the walk validates
   with — a second probe would itself be a statefulness window.
   """
-  @spec bindings_for(module(), map()) :: {:ok, bindings()} | {:error, :unstable | :probe_failed}
+  @spec bindings_for(module(), map()) ::
+          {:ok, bindings()} | {:error, :unstable | :unwrapped | :probe_failed}
   def bindings_for(resource, action) do
     resource
     |> notifiers(action)
     |> Enum.reduce_while({:ok, %{}}, fn notifier, {:ok, acc} ->
       case probe(resource, action, notifier) do
-        {:ok, _statement, binding} -> {:cont, {:ok, Map.put(acc, notifier, binding)}}
-        :unstable -> {:halt, {:error, :unstable}}
-        :error -> {:halt, {:error, :probe_failed}}
+        {:ok, statement, binding, routed?} ->
+          accumulate_binding(acc, notifier, statement, binding, routed?)
+
+        :unstable ->
+          {:halt, {:error, :unstable}}
+
+        :error ->
+          {:halt, {:error, :probe_failed}}
       end
     end)
   end
+
+  defp accumulate_binding(_acc, _notifier, statement, _binding, false) when statement != [],
+    do: {:halt, {:error, :unwrapped}}
+
+  defp accumulate_binding(acc, notifier, _statement, binding, _routed?),
+    do: {:cont, {:ok, Map.put(acc, notifier, binding)}}
 
   @doc """
   The notifier list Ash itself will use for this action — the resource's own
@@ -139,11 +159,8 @@ defmodule AshReplicant.Destination.NotifierLoads do
   # `Code.ensure_loaded?/1` is what makes the check honest.
   @spec statement(module(), module(), map()) :: list()
   def statement(notifier, resource, action) do
-    if Code.ensure_loaded?(notifier) and function_exported?(notifier, :load, 2) do
-      List.wrap(Ash.Notifier.load(notifier, resource, action))
-    else
-      []
-    end
+    {statement, _routed?} = AshReplicant.Notifier.probe_load(notifier, resource, action)
+    statement
   end
 
   @doc """
@@ -220,6 +237,9 @@ defmodule AshReplicant.Destination.NotifierLoads do
       # A statement that will not reproduce itself between two consecutive
       # probes cannot BE the admitted one, whatever it returns next.
       {:error, :unstable} ->
+        {:error, {:invalid_destination_config, :notifier_load_drift}}
+
+      {:error, :unwrapped} ->
         {:error, {:invalid_destination_config, :notifier_load_drift}}
 
       {:error, :probe_failed} ->

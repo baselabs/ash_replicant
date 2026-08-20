@@ -167,7 +167,9 @@ notifier whose load statement is non-empty must declare
 `DestinationParticipant` (the `:notifier` kind) AND route the statement through
 `AshReplicant.Notifier` (`preload/2`; the wrapper owns `load/2`) — its
 dependency pre-load read runs inside the admitted transaction; suppression
-covers dispatch only. Ash re-derives that statement at delivery, so admission
+covers dispatch only. Admission behaviorally verifies both stability probes
+entered the live wrapper; retaining its behaviour marker while overriding
+`load/2` is rejected. Ash re-derives that statement at delivery, so admission
 BINDS it: the manifest carries each notifier's statement digest and declared
 action-closure digest, the wrapper compares both before handing Ash the
 statement, and the sink re-checks before each admitted action for what the

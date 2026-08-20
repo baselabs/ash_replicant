@@ -81,7 +81,7 @@ defmodule AshReplicant.DocsTest do
     end
   end
 
-  test "the published notifier wrapper example compiles AND reads as wrapped" do
+  test "the published notifier wrapper example compiles AND routes through verification" do
     source = extract_example!("usage-rules.md", @wrapper_example_start, @wrapper_example_end)
     compiled = Code.compile_string(source, "usage-rules.md")
 
@@ -90,9 +90,11 @@ defmodule AshReplicant.DocsTest do
     Enum.each(compiled, fn {module, _binary} ->
       # A published example that would itself fail admission is worse than no
       # example: it must satisfy both halves of the contract it documents.
-      assert AshReplicant.Notifier.wrapped?(module)
       assert function_exported?(module, :load, 2), "the wrapper must define load/2"
       assert function_exported?(module, :destination_participants, 2)
+
+      assert {[:total], true} =
+               AshReplicant.Notifier.probe_load(module, __MODULE__, %{name: :create})
 
       :code.purge(module)
       :code.delete(module)

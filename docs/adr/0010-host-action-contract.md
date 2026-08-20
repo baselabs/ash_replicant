@@ -130,8 +130,11 @@ statement and the notifier's declared action closure (its
 context), records BOTH digests on `Manifest.notifier_loads`, and rejects an
 unwrapped preload notifier
 (`{:destination_notifier_unwrapped, resource, action, notifier}`).
+That decision is behavioral, not a module-marker check: both stability probes
+must observe the live `load/2` enter the wrapper. A module that retains the
+wrapper behaviour attribute but overrides the generated callback is unwrapped.
 
-Ash calls the wrapper, so the wrapper is IN the derivation path: it obtains the
+Ash calls the verified live callback, so the wrapper is IN the derivation path: it obtains the
 runtime statement, compares it and the closure with the admitted digests, and
 only then returns that exact statement to Ash. For a wrapped notifier there is
 no probe-to-use window at all. The manifest is reached through a process-scoped

@@ -20,7 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   non-empty must now route it through the new `AshReplicant.Notifier`
   wrapper in addition to declaring `AshReplicant.DestinationParticipant`.
   Replace `load/2` with `preload/2` and add `use AshReplicant.Notifier`
-  after `use Ash.Notifier`; the wrapper defines `load/2`. Admission rejects
+  after `use Ash.Notifier`; the wrapper defines `load/2`. Admission proves the
+  live callback actually enters that wrapper on both stability probes — a
+  retained behaviour marker cannot hide an overridden `load/2`. It rejects
   an unwrapped one with
   `{:destination_notifier_unwrapped, resource, action, notifier}`, and a
   statement or declaration that will not reproduce itself between two
@@ -50,7 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   destination manifest now carries, for every admitted action, each
   notifier's load-statement digest and declared action-closure digest
   (`Manifest.notifier_loads`, inside `Manifest.digest`). `AshReplicant.Notifier`
-  compares both before handing Ash the statement, and
+  compares both before handing Ash the statement; admission and delivery also
+  verify the live `load/2` still routes through that comparison, and
   `AshReplicant.Apply.Context.verify_notifier_loads!/4` re-checks immediately
   before every sink-driven host action — mirror upsert and destroy, SCD2
   close and open, snapshot `bulk_create`, and message routes — for what the

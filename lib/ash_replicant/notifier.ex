@@ -80,6 +80,8 @@ defmodule AshReplicant.Notifier do
   alias AshReplicant.Destination.NotifierLoads
   alias AshReplicant.Error
 
+  @route_probe_key {__MODULE__, :route_probe}
+
   @doc """
   The load statement this notifier depends on — everything `Ash.Query.load/2`
   accepts. Replaces `c:Ash.Notifier.load/2`, which the wrapper owns.
@@ -100,26 +102,34 @@ defmodule AshReplicant.Notifier do
     end
   end
 
-  @doc "True when `notifier` routes its load statement through this wrapper."
-  @spec wrapped?(module()) :: boolean()
-  def wrapped?(notifier) when is_atom(notifier) do
-    # `module_info(:attributes)` repeats the `behaviour` KEY once per
-    # declaration, so `Keyword.get/2` would see only the first one — a module
-    # that declares `Ash.Notifier` before this one would read as unwrapped.
-    Code.ensure_loaded?(notifier) and
-      notifier.module_info(:attributes)
-      |> Keyword.get_values(:behaviour)
-      |> List.flatten()
-      |> Enum.member?(__MODULE__)
-  rescue
-    _error -> false
-  catch
-    _kind, _reason -> false
+  @doc false
+  @spec probe_load(module(), module(), map()) :: {list(), boolean()}
+  def probe_load(notifier, resource, action) do
+    token = make_ref()
+    previous = Process.put(@route_probe_key, {token, false})
+
+    try do
+      statement =
+        if Code.ensure_loaded?(notifier) and function_exported?(notifier, :load, 2) do
+          List.wrap(Ash.Notifier.load(notifier, resource, action))
+        else
+          []
+        end
+
+      {statement, Process.get(@route_probe_key) == {token, true}}
+    after
+      if previous do
+        Process.put(@route_probe_key, previous)
+      else
+        Process.delete(@route_probe_key)
+      end
+    end
   end
 
   @doc false
   @spec verified_load(module(), module(), map()) :: term()
   def verified_load(notifier, resource, action) do
+    mark_route_probe!()
     statement = List.wrap(notifier.preload(resource, action))
 
     case DeliveryContext.admitted_manifest() do
@@ -139,6 +149,13 @@ defmodule AshReplicant.Notifier do
             # dependency query is built. The sink's boundary scrubs it.
             raise Error.exception(reason: reason, resource: resource, op: :notifier_load)
         end
+    end
+  end
+
+  defp mark_route_probe! do
+    case Process.get(@route_probe_key) do
+      {token, false} -> Process.put(@route_probe_key, {token, true})
+      _other -> :ok
     end
   end
 end

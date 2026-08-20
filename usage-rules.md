@@ -404,7 +404,10 @@ end
 `load/2` compares the statement — and the participant declaration's action
 closure — against what the live generation admitted, and only then hands that
 exact statement to Ash; drift halts before the dependency query runs. On the
-host's own writes it is an ordinary Ash notifier.
+host's own writes it is an ordinary Ash notifier. Admission verifies the live
+callback entered that wrapper on both stability probes; do not make the
+generated `load/2` overridable, because a replacement is rejected even if the
+module still carries the wrapper behaviour marker.
 
 Admission rejects the ways this can be wrong, naming resource, action, and
 notifier: `:destination_notifier_required` (no declaration),

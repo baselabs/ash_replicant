@@ -716,15 +716,14 @@ defmodule AshReplicant.Destination do
     |> NotifierLoads.notifiers(action)
     |> Enum.reduce_while({:ok, refs, refs, %{}}, fn notifier, {:ok, refs, all_refs, loads} ->
       case NotifierLoads.probe(resource, action, notifier) do
-        {:ok, statement, fingerprint} ->
+        {:ok, statement, fingerprint, routed?} ->
           validate_notifier(
             resource,
             action,
             refs,
             all_refs,
             Map.put(loads, notifier, fingerprint),
-            notifier,
-            statement,
+            %{notifier: notifier, statement: statement, routed?: routed?},
             declared_by
           )
 
@@ -749,8 +748,7 @@ defmodule AshReplicant.Destination do
          refs,
          all_refs,
          loads,
-         notifier,
-         statement,
+         %{notifier: notifier, statement: statement, routed?: routed?},
          declared_by
        ) do
     cond do
@@ -772,11 +770,10 @@ defmodule AshReplicant.Destination do
       not participant?(notifier) ->
         {:halt, {:error, {:destination_notifier_required, resource, action.name, notifier}}}
 
-      # ...and it must route that statement through the verified wrapper
-      # (ADR-0010's 1.0 amendment). A declaration alone binds nothing: Ash
-      # calls `load/2` again at delivery, and only the wrapper is in that call
-      # path to compare what it is about to hand over.
-      not AshReplicant.Notifier.wrapped?(notifier) ->
+      # A behaviour attribute is not enough: a host can make the generated
+      # callback overridable and replace it. The probe records whether BOTH
+      # live `load/2` calls actually entered `verified_load/3`.
+      not routed? ->
         {:halt, {:error, {:destination_notifier_unwrapped, resource, action.name, notifier}}}
 
       true ->

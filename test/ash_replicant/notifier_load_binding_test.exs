@@ -163,8 +163,41 @@ defmodule AshReplicant.NotifierLoadBindingTest do
                Destination.manifest(config_for(DestinationFixtures.UnwrappedLoadDomain))
 
       assert is_atom(action)
-      refute AshReplicant.Notifier.wrapped?(DestinationFixtures.UnwrappedLoadNotifier)
-      assert AshReplicant.Notifier.wrapped?(DestinationFixtures.DeclaredLoadNotifier)
+
+      assert {[:some_calculation], false} =
+               AshReplicant.Notifier.probe_load(
+                 DestinationFixtures.UnwrappedLoadNotifier,
+                 DestinationFixtures.UnwrappedLoadRoot,
+                 %{name: :create}
+               )
+
+      assert {[:some_calculation], true} =
+               AshReplicant.Notifier.probe_load(
+                 DestinationFixtures.DeclaredLoadNotifier,
+                 DestinationFixtures.DeclaredLoadRoot,
+                 %{name: :create}
+               )
+    end
+
+    test "a retained wrapper marker cannot admit an overridden load/2" do
+      assert DestinationFixtures.OverriddenLoadNotifier.module_info(:attributes)
+             |> Keyword.get_values(:behaviour)
+             |> List.flatten()
+             |> Enum.member?(AshReplicant.Notifier)
+
+      assert {[:some_calculation], false} =
+               AshReplicant.Notifier.probe_load(
+                 DestinationFixtures.OverriddenLoadNotifier,
+                 DestinationFixtures.OverriddenLoadRoot,
+                 %{name: :create}
+               )
+
+      assert {:error,
+              {:destination_notifier_unwrapped, DestinationFixtures.OverriddenLoadRoot, action,
+               DestinationFixtures.OverriddenLoadNotifier}} =
+               Destination.manifest(config_for(DestinationFixtures.OverriddenLoadDomain))
+
+      assert is_atom(action)
     end
 
     test "an UNDECLARED non-empty load still names the missing declaration first" do

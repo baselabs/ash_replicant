@@ -3436,6 +3436,87 @@ defmodule AshReplicant.Test.DestinationFixtures.DeclaredLoadDomain do
   end
 end
 
+defmodule AshReplicant.Test.DestinationFixtures.OverriddenLoadNotifier do
+  @moduledoc false
+  use Ash.Notifier
+  use AshReplicant.Notifier
+
+  @behaviour AshReplicant.DestinationParticipant
+
+  alias AshReplicant.DestinationParticipant.{ActionRef, Context}
+
+  @impl Ash.Notifier
+  def notify(_notification), do: :ok
+
+  @impl AshReplicant.Notifier
+  def preload(_resource, _action), do: [:some_calculation]
+
+  # A host can explicitly make the generated callback overridable. The
+  # retained behaviour attribute is not proof that Ash still enters the
+  # wrapper at delivery.
+  defoverridable load: 2
+
+  @impl Ash.Notifier
+  def load(_resource, _action), do: [:some_calculation]
+
+  @impl AshReplicant.DestinationParticipant
+  def destination_participants(_opts, %Context{resource: resource, action: action})
+      when action != :read do
+    {:ok,
+     {:actions,
+      [
+        %ActionRef{
+          resource: resource,
+          action: :read,
+          tenant_mode: :inherit
+        }
+      ]}}
+  end
+
+  def destination_participants(_opts, _context), do: {:ok, :no_database}
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.OverriddenLoadRoot do
+  @moduledoc false
+  use Ash.Resource,
+    domain: AshReplicant.Test.DestinationFixtures.OverriddenLoadDomain,
+    data_layer: AshPostgres.DataLayer,
+    notifiers: [AshReplicant.Test.DestinationFixtures.OverriddenLoadNotifier],
+    extensions: [AshReplicant.Resource]
+
+  postgres do
+    table "overridden_load_roots"
+    repo AshReplicant.TestRepo
+  end
+
+  replicant do
+    source_table("overridden_load_source")
+  end
+
+  attributes do
+    uuid_primary_key :id
+  end
+
+  actions do
+    defaults [:read, :destroy]
+
+    create :create do
+      primary? true
+      accept []
+    end
+  end
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.OverriddenLoadDomain do
+  @moduledoc false
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource AshReplicant.Test.DestinationFixtures.OverriddenLoadRoot
+    resource AshReplicant.Test.Checkpoint
+  end
+end
+
 defmodule AshReplicant.Test.DestinationFixtures.EmptyDeclarationLoadNotifier do
   @moduledoc false
   # Implements the participant behaviour and declares NOTHING ({:ok,
