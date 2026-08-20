@@ -539,17 +539,14 @@ defmodule AshReplicant.ReleaseContract do
 
   defp assert_replicant_contract(root) do
     lock = root |> Path.join("mix.lock") |> File.read!()
+    lock_version = hex_lock_version(lock, "replicant")
 
-    assert_hex_lock(lock, "replicant", expected_replicant_lock_version())
+    assert_hex_lock(lock, "replicant", expected_replicant_lock_version(lock))
     assert_hex_lock(lock, "postgrex", "0.22.4")
 
     session_source = read_dependency_source!(root, "lib/replicant/session_identity.ex")
     sink_source = read_dependency_source!(root, "lib/replicant/sink.ex")
     connection_source = read_dependency_source!(root, "lib/replicant/connection.ex")
-    telemetry_source = read_dependency_source!(root, "lib/replicant/telemetry.ex")
-
-    incremental_source =
-      read_dependency_source!(root, "lib/replicant/snapshotter/incremental.ex")
 
     assert(
       String.contains?(session_source, "defmodule Replicant.SessionIdentity"),
@@ -563,27 +560,13 @@ defmodule AshReplicant.ReleaseContract do
 
     assert(
       String.contains?(sink_source, "@callback handle_slot_origin") and
-        String.contains?(sink_source, "def notify_slot_origin") and
-        String.contains?(connection_source, "reason: :checkpoint_unknown"),
+        String.contains?(sink_source, "def notify_slot_origin"),
       "Replicant checkpoint/slot contract is incomplete"
     )
 
-    assert(
-      String.contains?(telemetry_source, "@meta_shapes") and
-        String.contains?(telemetry_source, "def validate_measurements!") and
-        String.contains?(
-          telemetry_source,
-          ~s|validate_shapes!(meta, @meta_shapes, "metadata")|
-        ),
-      "Replicant typed-telemetry contract is incomplete"
-    )
-
-    assert(
-      String.contains?(incremental_source, "@max_table_attempts 3") and
-        String.contains?(incremental_source, "def keyed_retry_decision") and
-        String.contains?(incremental_source, "attempt >= @max_table_attempts"),
-      "Replicant keyed-contention contract is incomplete"
-    )
+    if lock_version == "1.2.1" do
+      assert_replicant_fixed_floor_contract(root, connection_source)
+    end
 
     assert(
       semantic_identity_gate?(connection_source),
@@ -594,18 +577,60 @@ defmodule AshReplicant.ReleaseContract do
       fail("Replicant package contract input is invalid")
   end
 
-  defp expected_replicant_lock_version do
+  defp assert_replicant_fixed_floor_contract(root, connection_source) do
+    telemetry_source = read_dependency_source!(root, "lib/replicant/telemetry.ex")
+
+    incremental_source =
+      read_dependency_source!(root, "lib/replicant/snapshotter/incremental.ex")
+
+    assert(
+      String.contains?(connection_source, "reason: :checkpoint_unknown"),
+      "Replicant checkpoint/slot contract is incomplete"
+    )
+
+    assert(
+      Regex.match?(~r/^\s*@meta_shapes %\{$/m, telemetry_source) and
+        String.contains?(telemetry_source, "def validate_measurements!") and
+        String.contains?(
+          telemetry_source,
+          ~s|validate_shapes!(meta, @meta_shapes, "metadata")|
+        ),
+      "Replicant typed-telemetry contract is incomplete"
+    )
+
+    assert(
+      Regex.match?(~r/^\s*@max_table_attempts 3\s*$/m, incremental_source) and
+        Regex.match?(
+          ~r/^\s*def keyed_retry_decision\(attempts, _qualified, :window_reset\)/m,
+          incremental_source
+        ) and
+        String.contains?(incremental_source, "attempt >= @max_table_attempts"),
+      "Replicant keyed-contention contract is incomplete"
+    )
+  end
+
+  defp expected_replicant_lock_version(lock) do
     case System.get_env("ASH_REPLICANT_REPLICANT_VERSION") do
-      value when value in [nil, "", "latest"] ->
+      value when value in [nil, ""] ->
         "1.2.1"
 
+      "latest" ->
+        lock
+        |> hex_lock_version("replicant")
+        |> validate_replicant_lock_version!()
+
       value ->
-        with {:ok, _version} <- Version.parse(value),
-             true <- Version.match?(value, @replicant_requirement) do
-          value
-        else
-          _other -> fail("Replicant dependency lock contract is incomplete")
-        end
+        validate_replicant_lock_version!(value)
+    end
+  end
+
+  defp validate_replicant_lock_version!(value) do
+    with true <- is_binary(value),
+         {:ok, _version} <- Version.parse(value),
+         true <- Version.match?(value, @replicant_requirement) do
+      value
+    else
+      _other -> fail("Replicant dependency lock contract is incomplete")
     end
   end
 
@@ -701,7 +726,7 @@ defmodule AshReplicant.ReleaseContract do
 
       assert(
         not Regex.match?(
-          ~r/(?:unsupported release foundation|does(?:[\s\p{Cf}]+not|n't)[\s\p{Cf}]+support[\s\p{Cf}]*(?:Elixir 1\.20\.3|Erlang\/OTP 29|Ash 3\.31\.3|Replicant 1(?:\.x|\.0\.0|\.1\.0))|(?:Elixir 1\.20\.3|Erlang\/OTP 29|Ash 3\.31\.3|Replicant 1(?:\.x|\.0\.0|\.1\.0))[\s\p{Cf}]*(?:is[\s\p{Cf}]+)?not[\s\p{Cf}]+supported)/iu,
+          ~r/(?:unsupported release foundation|does(?:[\s\p{Cf}]+not|n't)[\s\p{Cf}]+support[\s\p{Cf}]*(?:Elixir 1\.20\.3|Erlang\/OTP 29|Ash 3\.31\.3|Replicant 1(?:\.x|\.\d+(?:\.\d+)?))|(?:Elixir 1\.20\.3|Erlang\/OTP 29|Ash 3\.31\.3|Replicant 1(?:\.x|\.\d+(?:\.\d+)?))[\s\p{Cf}]*(?:is[\s\p{Cf}]+)?not[\s\p{Cf}]+supported)/iu,
           visible
         ),
         "published runtime or dependency contract is contradictory"

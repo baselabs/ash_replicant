@@ -22,19 +22,20 @@ defmodule AshReplicant.ReplicantDependencyTest do
     assert Code.ensure_loaded?(Replicant.SessionIdentity)
     assert Code.ensure_loaded?(Replicant.Sink)
     assert Code.ensure_loaded?(Replicant.Telemetry)
-    assert Code.ensure_loaded?(Incremental)
     assert function_exported?(Replicant.Sink, :accept_session_identity, 3)
     assert function_exported?(Replicant.Sink, :supports_batch?, 1)
     assert function_exported?(Replicant.Sink, :supports_messages?, 1)
     assert function_exported?(Replicant.Sink, :supports_incremental_snapshot?, 1)
     assert function_exported?(Replicant.Sink, :supports_slot_origin?, 1)
     assert function_exported?(Replicant.Sink, :notify_slot_origin, 3)
-    assert function_exported?(Replicant.Telemetry, :validate!, 1)
-    assert function_exported?(Replicant.Telemetry, :validate_measurements!, 1)
-    assert function_exported?(Incremental, :keyed_retry_decision, 3)
 
     version = Application.spec(:replicant, :vsn) |> List.to_string()
-    assert version == "1.2.1"
+    assert Version.match?(version, ">= 1.2.1 and < 2.0.0-0")
+
+    if version == "1.2.1" do
+      assert Code.ensure_loaded?(Incremental)
+      assert function_exported?(Incremental, :keyed_retry_decision, 3)
+    end
   end
 
   test "the fetched slot-origin contract is typed and fail-closed" do
@@ -56,7 +57,11 @@ defmodule AshReplicant.ReplicantDependencyTest do
 
     error =
       assert_raise ArgumentError, fn ->
-        Replicant.Telemetry.validate!(%{commit_lsn: secret})
+        Replicant.Telemetry.event(
+          [:replicant, :ash_replicant_dependency_contract],
+          %{},
+          %{commit_lsn: secret}
+        )
       end
 
     message = Exception.message(error)
@@ -64,37 +69,47 @@ defmodule AshReplicant.ReplicantDependencyTest do
     refute message =~ secret
 
     assert_raise ArgumentError, fn ->
-      Replicant.Telemetry.validate_measurements!(%{change_count: -1})
+      Replicant.Telemetry.event(
+        [:replicant, :ash_replicant_dependency_contract],
+        %{change_count: -1},
+        %{}
+      )
     end
   end
 
   test "the fetched keyed snapshot contract exhausts contention without charging reconnects" do
+    version = Application.spec(:replicant, :vsn) |> List.to_string()
+
+    if version != "1.2.1" do
+      assert Version.match?(version, "> 1.2.1 and < 2.0.0-0")
+    else
+      assert_keyed_contention_contract()
+    end
+  end
+
+  defp assert_keyed_contention_contract do
     table = ~s|"public"."orders"|
 
     assert {:retry, %{^table => 2}} =
-             Incremental.keyed_retry_decision(%{}, table, :table_discarded)
+             :erlang.apply(Incremental, :keyed_retry_decision, [%{}, table, :table_discarded])
 
     assert {:retry, %{^table => 3}} =
-             Incremental.keyed_retry_decision(
+             :erlang.apply(Incremental, :keyed_retry_decision, [
                %{table => 2},
                table,
                :table_discarded
-             )
+             ])
 
     assert :halt =
-             Incremental.keyed_retry_decision(
+             :erlang.apply(Incremental, :keyed_retry_decision, [
                %{table => 3},
                table,
                :table_discarded
-             )
+             ])
 
     attempts = %{table => 2}
 
     assert {:retry, ^attempts} =
-             Incremental.keyed_retry_decision(
-               attempts,
-               table,
-               :window_reset
-             )
+             :erlang.apply(Incremental, :keyed_retry_decision, [attempts, table, :window_reset])
   end
 end

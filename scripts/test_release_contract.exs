@@ -232,17 +232,27 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   defp replicant_selector_probes do
     prepare_fixture()
 
-    with_env("ASH_REPLICANT_REPLICANT_VERSION", "1.2.1", &assert_valid!/0)
+    replace_once!(
+      "mix.lock",
+      ~s("replicant": {:hex, :replicant, "1.2.1"),
+      ~s("replicant": {:hex, :replicant, "1.2.2")
+    )
+
+    with_env("ASH_REPLICANT_REPLICANT_VERSION", "1.2.2", &assert_valid!/0)
+
+    prepare_fixture()
+
+    with_env("ASH_REPLICANT_REPLICANT_VERSION", "1.2.2", &assert_invalid!/0)
 
     prepare_fixture()
 
     replace_once!(
       "mix.lock",
       ~s("replicant": {:hex, :replicant, "1.2.1"),
-      ~s("replicant": {:hex, :replicant, "1.1.0")
+      ~s("replicant": {:hex, :replicant, "1.2.2")
     )
 
-    with_env("ASH_REPLICANT_REPLICANT_VERSION", "1.2.1", &assert_invalid!/0)
+    with_env("ASH_REPLICANT_REPLICANT_VERSION", "latest", &assert_valid!/0)
   end
 
   defp valid_fixture_probes do
@@ -1013,6 +1023,16 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     prepare_fixture()
 
     replace_once!(
+      "deps/replicant/lib/replicant/sink.ex",
+      "def notify_slot_origin",
+      "def removed_slot_origin_notification"
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
+    replace_once!(
       "deps/replicant/lib/replicant/connection.ex",
       "Replicant.Sink.accept_session_identity",
       "Replicant.Sink.removed_session_identity"
@@ -1054,8 +1074,48 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       "deps/replicant/lib/replicant/telemetry.ex",
+      "@meta_shapes %{",
+      "@removed_meta_shapes %{"
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
+    replace_once!(
+      "deps/replicant/lib/replicant/telemetry.ex",
+      "def validate_measurements!",
+      "def removed_measurement_validation!"
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
+    replace_once!(
+      "deps/replicant/lib/replicant/telemetry.ex",
       ~s|validate_shapes!(meta, @meta_shapes, "metadata")|,
       ~s|removed_shape_guard!(meta, @meta_shapes, "metadata")|
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
+    replace_once!(
+      "deps/replicant/lib/replicant/snapshotter/incremental.ex",
+      "@max_table_attempts 3",
+      "@max_table_attempts 30"
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
+    replace_once!(
+      "deps/replicant/lib/replicant/snapshotter/incremental.ex",
+      "def keyed_retry_decision(attempts, _qualified, :window_reset)",
+      "def removed_keyed_retry_decision(attempts, _qualified, :window_reset)"
     )
 
     assert_invalid!()
@@ -1074,7 +1134,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     File.write!(
       fixture_path("README.md"),
-      File.read!(fixture_path("README.md")) <> "\nThis project does not support Replicant 1.x.\n"
+      File.read!(fixture_path("README.md")) <>
+        "\nThis project does not support Replicant 1.2.1.\n"
     )
 
     assert_invalid!()
