@@ -31,7 +31,11 @@ backfill row and must always win the collision.
    `snapshot_generation` is an opaque logical backfill generation that survives
    incomplete retries and changes only after durable completion or explicit
    reset. `snapshot_progress` is an opaque confidential token persisted in the
-   same destination transaction as its chunk and never rendered.
+   same destination transaction as its chunk and never rendered. Before
+   Replicant transport starts, the owned activation mints a fresh physical
+   attempt marker and installs it in the live resolver generation. An owner
+   restart mints a new attempt marker while preserving an incomplete logical
+   generation; the one-live-owner rule prevents overlapping attempts.
 3. Every snapshot-capable state mirror declares four non-sensitive writable
    provenance attributes: a closed origin (`snapshot | stream`), logical
    generation, host-keyed canonical row fingerprint, and physical attempt
@@ -42,12 +46,20 @@ backfill row and must always win the collision.
    The attempt marker records membership in the current physical attempt, not
    permanent ownership by snapshot or stream. An unchanged snapshot row runs
    only mark-seen; a new or changed row runs the ordinary host business action.
-   A stream write marks the current attempt only when its commit LSN is at or
-   beyond that attempt's exported snapshot floor, so a newer stream write wins without
-   protecting an old stream-origin row forever. Completion retires every
-   snapshot-managed row in scope that lacks the completing attempt's marker,
-   regardless of its prior origin or generation. SCD2 records provenance per
-   version and retires through the host close action.
+   Every stream write admitted while an attempt is live stamps that attempt's
+   marker, including a write delivered before the first snapshot chunk. The
+   fetched Replicant incremental contract opens collision tracking before each
+   chunk's low watermark, drops keyed rows touched by a later stream insert,
+   update, delete, or key change, and discards and re-reads a table when the
+   collision cannot be filtered. A write delivered before that window is
+   reflected by the subsequent current-state chunk read. AshReplicant pins and
+   proves that transport contract instead of reconstructing collision ordering
+   from `snapshot_lsn`. Consequently a stream write wins and a stream delete
+   cannot be resurrected by a stale chunk. Completion retires every row in the
+   declared snapshot-managed resource and tenant scope that lacks the completing
+   attempt's marker, regardless of prior origin or generation. This includes a
+   stale stream-origin row deleted while delivery was offline. SCD2 records
+   provenance per version and retires through the host close action.
 5. The normal create/destroy/SCD2-close actions, private provenance actions,
    checkpoint/progress writes, and every declared participant remain in the one
    admitted Repo/action graph. Internal provenance bookkeeping is reported
@@ -72,8 +84,10 @@ backfill row and must always win the collision.
 ## Required proof before acceptance
 
 - Red-before-green v1 and incremental crash/retry marquees for SCD1, SCD2,
-  tenancy, empty/keyed/PK-less tables, stream collision, batch/backpressure, key
-  rotation, stale attempt cleanup, a source row deleted while delivery was
-  offline, and a fingerprint/attempt bypass mutation.
+  tenancy, empty/keyed/PK-less tables, an insert/update/delete or key change
+  delivered before the first chunk and during an open window,
+  batch/backpressure, key rotation, stale attempt cleanup, a stale stream-origin
+  row deleted while delivery was offline, and fingerprint/attempt and transport
+  collision-gate bypass mutations.
 - Append-only observers on host business actions prove no repeated effect while
   provenance/checkpoint rows demonstrate durable progress.
