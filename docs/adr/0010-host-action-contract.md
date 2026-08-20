@@ -117,3 +117,24 @@ twice within one host action invocation must key itself, e.g. by its own
 ordinal argument); the admission trust boundary absorbs it as a named
 obligation. The enumeration test pins the sink-side inventory and cannot see
 host-side fanout.
+
+## Approved 1.0 hardening amendment — implementation pending
+
+The 1.0 release design closes the probe-to-use residual above rather than
+shipping it as accepted risk. Any notifier that implements a dependency
+`load/2` must both declare `DestinationParticipant` unconditionally and use
+the AshReplicant notifier wrapper. Admission canonicalizes the notifier's
+load statement, records its digest and declared action closure in the live
+generation, and rejects an unwrapped preload notifier.
+
+For each sink-driven host action, the wrapper obtains the runtime statement,
+compares it with the admitted digest and closure, and only then returns that
+exact statement to Ash. Empty-to-nonempty, resource/action drift, a callback
+fault, or a missing live generation halts before the dependency query runs.
+Notifiers without a preload callback retain the ordinary Ash contract. This
+amendment does not authorize notification dispatch or widen `notify/1` into
+the admitted effect graph.
+
+Until the wrapper and its stateful mutation tests land, the residual section
+above describes current code and this amendment is a proposed release gate,
+not a claim about shipped behavior.

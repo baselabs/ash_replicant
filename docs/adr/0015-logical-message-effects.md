@@ -64,11 +64,9 @@ mirror-resource semantics:
   ROOT with the same repo/data-layer/identifier/notifier/`touches_resources`/
   participant admission as every other root. It needs no
   `AshReplicant.Resource` extension (nothing about it is table-mapped).
-- Unknown prefix at delivery **halts** fail-closed (`:message_prefix_unmapped`,
-  the prefix rendered as the structural `shape` — it is an operator-chosen
-  router label, the same class as a table name, never column data). An
-  explicitly ignored prefix is acknowledged (watermark advanced) with no
-  effect.
+- Unknown prefix at delivery **halts** fail-closed
+  (`:message_prefix_unmapped`). An explicitly ignored prefix is acknowledged
+  (watermark advanced) with no effect.
 - `handle_message/2` is generated ONLY on sinks that declare routes or
   ignores; `AshReplicant.start_link/1` then passes `messages: true` to
   Replicant automatically (an explicit `messages: false` from the caller
@@ -199,3 +197,20 @@ New telemetry: `[:ash_replicant, :message, :applied]` with the
   effect at-least-once (never exactly-once) — the honest ceiling for any
   non-transactional peer and the reason the external-effect module's
   `recover/3` must be able to prove absence.
+
+## Approved 1.0 hardening amendment — implementation pending
+
+Message prefix and content are runtime user bytes, not structural identifiers.
+The current implementation still places an unknown prefix in the error shape;
+1.0 must remove it from errors, logs, telemetry, doctor, status, and machine
+output. The only public classification is `:message_prefix_unmapped`.
+
+A sink with message routes declares a positive
+`message_recovery_horizon`. Activation requires every route's AshOnetime
+retention and every retained digest-key version to cover that horizon.
+Doctor/status warn before cleanup, reap, partition maintenance, or key removal
+can cross it. The horizon is the supported outage/replay window; it is not a
+promise that an external peer is exactly-once.
+
+The unknown-prefix value-free mutation and the retention/horizon negative
+matrix must land before this amendment is marked implemented.

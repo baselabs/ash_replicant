@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documented
+
+- Record the approved 1.0 release design as proposed ADRs 0017-0021 and pending
+  hardening amendments to ADR-0010/0015. These records define release gates;
+  they do not claim snapshot restart, append-log, continuous assurance,
+  install/doctor, expanded support, or publication behavior is implemented.
+
 ### Breaking
 
 - The generated checkpoint resource is now **default-deny** (roadmap B7 /
