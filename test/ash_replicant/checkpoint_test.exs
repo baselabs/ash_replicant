@@ -40,9 +40,20 @@ defmodule AshReplicant.CheckpointTest do
         assert attrs[name].allow_nil? == true
       end
 
-      # C3-reserved, inert at B2.
+      # `snapshot_progress` stays reserved for S03 incremental mode.
       assert attrs[:snapshot_progress].allow_nil? == true
-      assert attrs[:snapshot_generation].allow_nil? == true
+
+      # S02 (ADR-0017): the inert `snapshot_generation` placeholder became the
+      # LIVE `snapshot_state` envelope column. The old name must be GONE — a
+      # host left holding it would be carrying a column the sink never writes.
+      assert attrs[:snapshot_state].allow_nil? == true
+      refute Map.has_key?(attrs, :snapshot_generation)
+
+      # The sink writes the envelope under the checkpoint lock, so the upsert
+      # action has to accept it.
+      upsert = Enum.find(Info.actions(Checkpoint), &(&1.name == :upsert))
+      assert :snapshot_state in upsert.accept
+
       assert attrs[:inserted_at] && attrs[:updated_at]
     end
   end

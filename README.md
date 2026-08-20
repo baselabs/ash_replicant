@@ -312,11 +312,26 @@ A compile-time verifier rejects any action that accepts either attribute or decl
 an argument named for one, and rejects `MarkSeen` globally or on any action other
 than the configured private mark action, so provenance cannot be forged;
 fingerprint keys come from
-`:ash_replicant, :snapshot_provenance_keys` and are preflighted at activation. This
-release installs the **contract** — the retry protocol that reads it (attempt state,
-completion, retirement) is roadmap C3 work. See
+`:ash_replicant, :snapshot_provenance_keys` and are preflighted at activation.
+
+On a **whole-table (V1) retry** the adapter binds one random attempt to the pipeline
+owner's delivery run, marks unchanged rows instead of re-running the host action, and
+at fenced completion retires only the managed open rows the attempt never saw — per
+tenant scope, through your own retire action. A completion redelivered after its reply
+was lost returns at a permanent replay fence before scanning, so it cannot retire a
+later stream write. Incremental snapshot mode is roadmap S03.
+
+> **No snapshot callback clears a resource.** The pre-1.0 whole-resource `DELETE` on
+> `first_for_table?` is gone: it repeated every committed host business effect on a
+> retry. A snapshot-backed resource that does not opt into `snapshot_provenance` now
+> keeps rows the source has dropped — opting in is what restores retirement.
+
+Under `strategy :context` multitenancy the resource must also declare
+`snapshot_tenant_scope_action`, a private generic action returning the retained tenant
+contexts — there is no discriminator column to enumerate, and a partial enumeration
+would silently under-retire. See
 [`usage-rules.md`](usage-rules.md) (“Snapshot provenance and retirement”) for the
-full contract, key rotation, and the migration path.
+full contract, how a V1 retry behaves, key rotation, and the migration path.
 
 ### 4. Start the pipeline
 
@@ -359,9 +374,10 @@ AshReplicant.start_link(
 - Rows arrive from the source's CDC stream and are upserted into the mirrors.
 - `streaming`, `max_inflight_lag`, `max_command_retries`, and `failover` are passed
   through to Replicant 1.x.
-- `snapshot: false` and Replicant's v1 snapshot (`snapshot: true`) are supported.
-  Incremental snapshot configuration is rejected until roadmap C3 adds durable
-  progress and target provenance.
+- `snapshot: false` and Replicant's v1 snapshot (`snapshot: true`) are supported;
+  a V1 retry is physically effect-once for a resource declaring
+  `snapshot_provenance true`. Incremental snapshot configuration is rejected until
+  roadmap S03 adds the durable progress token.
 
 ## Strict source coverage
 

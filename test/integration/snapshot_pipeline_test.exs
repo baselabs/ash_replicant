@@ -130,7 +130,19 @@ defmodule AshReplicant.SnapshotPipelineTest do
     assert DestinationObserver.effect_count(run_id, "auxiliary", "INSERT") == 27
   end
 
-  test "an incomplete v1 snapshot halts until operator reset and retry exposes every repeated effect",
+  # S02 (ADR-0017) changed what a retry costs a resource that has NOT opted into
+  # `snapshot_provenance`. No snapshot callback clears a resource any more, so
+  # the retry is 1100 upserts over the surviving rows instead of 1000 deletes
+  # followed by 1100 re-inserts — strictly less destructive, and the mixed-case
+  # decoy class can no longer be wiped by a snapshot at all.
+  #
+  # The host business action still runs again for every row here, because this
+  # fixture does not carry the provenance contract. Skipping the unchanged rows
+  # is exactly what that opt-in buys, and `AshReplicant.SnapshotV1RetryTest`
+  # proves it row-by-row against an append-only observer. This test pins the
+  # retry cost of the resource that does NOT opt in — the default a 1.0 host
+  # inherits.
+  test "an incomplete v1 snapshot halts until operator reset; retry re-applies without clearing",
        %{run_id: run_id} do
     Marquee.q!("""
     INSERT INTO #{Marquee.src()} (id, note)
@@ -179,16 +191,27 @@ defmodule AshReplicant.SnapshotPipelineTest do
       Marquee.drop_slot!(@retry_slot)
       start_snapshot!(@retry_slot, RetrySnapshotSink)
 
-      # The re-snapshot re-applies every row (clear + 1100 upserts + auxiliary
-      # claims): ~8-12s idle, 55s observed under concurrent host load. 2400
-      # polls (~60s + eval) bounds a wedged restart while tolerating load.
+      # The re-snapshot re-applies every row (1100 upserts + auxiliary claims):
+      # ~8-12s idle, 55s observed under concurrent host load. 2400 polls
+      # (~60s + eval) bounds a wedged restart while tolerating load.
       PG.wait_until(fn -> length(Marquee.mirror_rows()) == 1100 end, 2_400)
 
       # The handoff write trails the last batch by a committed transaction
       # under load; default 400 (~10s) is boundary-exact there.
       PG.wait_until(fn -> observer_checkpoint_count(run_id) == 2 end, 800)
-      assert DestinationObserver.effect_count(run_id, "mapped", "INSERT") == 2100
-      assert DestinationObserver.effect_count(run_id, "mapped", "DELETE") == 1000
+
+      # 1100 inserts: the 1000 from batch 1 SURVIVE the retry (they upsert in
+      # place) and the remaining 100 are new. Pre-S02 this read 2100 inserts
+      # plus 1000 deletes — the whole-resource clear, re-doing every row.
+      assert DestinationObserver.effect_count(run_id, "mapped", "INSERT") == 1100
+      assert DestinationObserver.effect_count(run_id, "mapped", "DELETE") == 0
+
+      # The 1000 re-delivered rows land as UPDATEs rather than DELETE+INSERT.
+      assert DestinationObserver.effect_count(run_id, "mapped", "UPDATE") == 1000
+
+      # The host business action DOES still run for every re-delivered row —
+      # the auxiliary participant's append-only claim fires 2100 times. That is
+      # the cost `snapshot_provenance` removes.
       assert DestinationObserver.effect_count(run_id, "auxiliary", "INSERT") == 2100
     end)
   end

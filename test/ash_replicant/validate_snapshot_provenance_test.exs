@@ -27,6 +27,21 @@ defmodule AshReplicant.ValidateSnapshotProvenanceTest do
     end
   end
 
+  defmodule Scopes do
+    @moduledoc false
+    use Ash.Resource.Actions.Implementation
+    @behaviour AshReplicant.DestinationParticipant
+
+    @impl AshReplicant.DestinationParticipant
+    def destination_participants(_opts, _context), do: {:ok, :no_database}
+
+    @impl Ash.Resource.Actions.Implementation
+    def run(_input, _opts, _context), do: {:ok, ["tenant_a"]}
+
+    @doc false
+    def resolve(record), do: Map.get(record, "org_schema")
+  end
+
   describe "the conforming shape (green controls)" do
     test "a fully conforming SCD1 resource compiles clean" do
       refute_dsl_errors do
@@ -1088,6 +1103,257 @@ defmodule AshReplicant.ValidateSnapshotProvenanceTest do
         end
 
       assert err.message =~ "multitenancy"
+    end
+  end
+
+  describe "the CONTEXT-tenant retained-scope enumerator (S02, ADR-0017)" do
+    test "a context-multitenant provenance resource with NO scope action fails closed" do
+      err =
+        assert_dsl_error %Spark.Error.DslError{
+          path: [:replicant, :snapshot_tenant_scope_action]
+        } do
+          defmodule Elixir.AshReplicant.ValidateSnapshotProvenanceTest.CtxNoScope do
+            use Ash.Resource,
+              domain: AshReplicant.ValidateSnapshotProvenanceTest.Domain,
+              validate_domain_inclusion?: false,
+              data_layer: Ash.DataLayer.Ets,
+              extensions: [AshReplicant.Resource]
+
+            replicant do
+              source_table("orders")
+              snapshot_provenance(true)
+              tenant_mfa({AshReplicant.ValidateSnapshotProvenanceTest.Scopes, :resolve, []})
+            end
+
+            attributes do
+              uuid_primary_key :id
+              attribute :note, :string, public?: true
+              attribute :replica_fingerprint, :binary, public?: false, writable?: false
+              attribute :replica_seen_attempt, :binary, public?: false, writable?: false
+            end
+
+            multitenancy do
+              strategy :context
+            end
+
+            actions do
+              defaults [:read, :destroy, create: :*, update: :*]
+
+              update :replicant_mark_seen do
+                public? false
+                accept []
+                require_atomic? false
+                change AshReplicant.Snapshot.MarkSeen
+              end
+
+              destroy :replicant_retire_unseen do
+                public? false
+              end
+            end
+          end
+        end
+
+      assert err.message =~ "enumerate"
+    end
+
+    test "a scope action that is not a generic array-returning action fails closed" do
+      err =
+        assert_dsl_error %Spark.Error.DslError{
+          path: [:replicant, :snapshot_tenant_scope_action]
+        } do
+          defmodule Elixir.AshReplicant.ValidateSnapshotProvenanceTest.CtxBadScope do
+            use Ash.Resource,
+              domain: AshReplicant.ValidateSnapshotProvenanceTest.Domain,
+              validate_domain_inclusion?: false,
+              data_layer: Ash.DataLayer.Ets,
+              extensions: [AshReplicant.Resource]
+
+            replicant do
+              source_table("orders")
+              snapshot_provenance(true)
+              tenant_mfa({AshReplicant.ValidateSnapshotProvenanceTest.Scopes, :resolve, []})
+              snapshot_tenant_scope_action(:read)
+            end
+
+            attributes do
+              uuid_primary_key :id
+              attribute :note, :string, public?: true
+              attribute :replica_fingerprint, :binary, public?: false, writable?: false
+              attribute :replica_seen_attempt, :binary, public?: false, writable?: false
+            end
+
+            multitenancy do
+              strategy :context
+            end
+
+            actions do
+              defaults [:read, :destroy, create: :*, update: :*]
+
+              update :replicant_mark_seen do
+                public? false
+                accept []
+                require_atomic? false
+                change AshReplicant.Snapshot.MarkSeen
+              end
+
+              destroy :replicant_retire_unseen do
+                public? false
+              end
+            end
+          end
+        end
+
+      assert err.message =~ "generic"
+    end
+
+    test "a PUBLIC scope action fails closed" do
+      err =
+        assert_dsl_error %Spark.Error.DslError{
+          path: [:replicant, :snapshot_tenant_scope_action]
+        } do
+          defmodule Elixir.AshReplicant.ValidateSnapshotProvenanceTest.CtxPublicScope do
+            use Ash.Resource,
+              domain: AshReplicant.ValidateSnapshotProvenanceTest.Domain,
+              validate_domain_inclusion?: false,
+              data_layer: Ash.DataLayer.Ets,
+              extensions: [AshReplicant.Resource]
+
+            replicant do
+              source_table("orders")
+              snapshot_provenance(true)
+              tenant_mfa({AshReplicant.ValidateSnapshotProvenanceTest.Scopes, :resolve, []})
+              snapshot_tenant_scope_action(:retained_scopes)
+            end
+
+            attributes do
+              uuid_primary_key :id
+              attribute :note, :string, public?: true
+              attribute :replica_fingerprint, :binary, public?: false, writable?: false
+              attribute :replica_seen_attempt, :binary, public?: false, writable?: false
+            end
+
+            multitenancy do
+              strategy :context
+            end
+
+            actions do
+              defaults [:read, :destroy, create: :*, update: :*]
+
+              action :retained_scopes, {:array, :string} do
+                run AshReplicant.ValidateSnapshotProvenanceTest.Scopes
+              end
+
+              update :replicant_mark_seen do
+                public? false
+                accept []
+                require_atomic? false
+                change AshReplicant.Snapshot.MarkSeen
+              end
+
+              destroy :replicant_retire_unseen do
+                public? false
+              end
+            end
+          end
+        end
+
+      assert err.message =~ "private"
+    end
+
+    test "a conforming context-multitenant resource compiles clean" do
+      refute_dsl_errors do
+        defmodule Elixir.AshReplicant.ValidateSnapshotProvenanceTest.GoodCtx do
+          use Ash.Resource,
+            domain: AshReplicant.ValidateSnapshotProvenanceTest.Domain,
+            validate_domain_inclusion?: false,
+            data_layer: Ash.DataLayer.Ets,
+            extensions: [AshReplicant.Resource]
+
+          replicant do
+            source_table("orders")
+            snapshot_provenance(true)
+            tenant_mfa({AshReplicant.ValidateSnapshotProvenanceTest.Scopes, :resolve, []})
+            snapshot_tenant_scope_action(:retained_scopes)
+          end
+
+          attributes do
+            uuid_primary_key :id
+            attribute :note, :string, public?: true
+            attribute :replica_fingerprint, :binary, public?: false, writable?: false
+            attribute :replica_seen_attempt, :binary, public?: false, writable?: false
+          end
+
+          multitenancy do
+            strategy :context
+          end
+
+          actions do
+            defaults [:read, :destroy, create: :*, update: :*]
+
+            action :retained_scopes, {:array, :string} do
+              public? false
+              run AshReplicant.ValidateSnapshotProvenanceTest.Scopes
+            end
+
+            update :replicant_mark_seen do
+              public? false
+              accept []
+              require_atomic? false
+              change AshReplicant.Snapshot.MarkSeen
+            end
+
+            destroy :replicant_retire_unseen do
+              public? false
+            end
+          end
+        end
+      end
+    end
+
+    test "an ATTRIBUTE-multitenant provenance resource needs no scope action (DISTINCT covers it)" do
+      refute_dsl_errors do
+        defmodule Elixir.AshReplicant.ValidateSnapshotProvenanceTest.GoodAttrTenant do
+          use Ash.Resource,
+            domain: AshReplicant.ValidateSnapshotProvenanceTest.Domain,
+            validate_domain_inclusion?: false,
+            data_layer: Ash.DataLayer.Ets,
+            extensions: [AshReplicant.Resource]
+
+          replicant do
+            source_table("orders")
+            snapshot_provenance(true)
+            tenant_attribute(:org_id)
+          end
+
+          attributes do
+            uuid_primary_key :id
+            attribute :org_id, :string, public?: true, allow_nil?: false
+            attribute :note, :string, public?: true
+            attribute :replica_fingerprint, :binary, public?: false, writable?: false
+            attribute :replica_seen_attempt, :binary, public?: false, writable?: false
+          end
+
+          multitenancy do
+            strategy :attribute
+            attribute :org_id
+          end
+
+          actions do
+            defaults [:read, :destroy, create: :*, update: :*]
+
+            update :replicant_mark_seen do
+              public? false
+              accept []
+              require_atomic? false
+              change AshReplicant.Snapshot.MarkSeen
+            end
+
+            destroy :replicant_retire_unseen do
+              public? false
+            end
+          end
+        end
+      end
     end
   end
 end

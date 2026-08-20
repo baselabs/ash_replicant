@@ -19,12 +19,19 @@ defmodule AshReplicant.Checkpoint do
 
   The generated shape CHANGED: the slot-only primary key became the source-bound
   triple, and new attributes landed (`source_timeline`, `publication_contract`,
-  `publication_fingerprint`, `snapshot_progress`, `snapshot_generation`,
+  `publication_fingerprint`, `snapshot_progress`, `snapshot_state`,
   timestamps). Hosts regenerate their migration (`mix ash.codegen`) and — when
   slot-only rows exist — follow the capture/delete/migrate/adopt runbook in
   `usage-rules.md` before migrating: the structural migration itself refuses
   ambiguous legacy rows (the NOT NULL identity columns abort `ecto.migrate` on
   any surviving row).
+
+  ## Upgrading from `snapshot_generation` (pre-S02)
+
+  The reserved-but-inert `snapshot_generation` column is REPLACED by
+  `snapshot_state` (ADR-0017). Nothing ever wrote `snapshot_generation`, so the
+  regenerated migration drops an always-NULL column and adds an always-NULL one:
+  run `mix ash.codegen` and migrate. No data capture is required.
 
   ## Default-deny trust posture (B7 / ADR-0014)
 
@@ -136,12 +143,19 @@ defmodule AshReplicant.Checkpoint do
           allow_nil? true
         end
 
-        # Incremental-snapshot frontier columns (roadmap C3); inert until then.
+        # The exact opaque Replicant incremental progress token. Still inert:
+        # incremental mode lands with `snapshot_progress/0` (roadmap C3, S03).
         attribute :snapshot_progress, :binary do
           allow_nil? true
         end
 
-        attribute :snapshot_generation, :binary do
+        # The snapshot state envelope (ADR-0017): one versioned, authenticated,
+        # strictly decoded `AshReplicant.Snapshot.State` — mode, status, the
+        # random attempt id, the V1 delivery run, the bound contract digest,
+        # the provenance key version, and the completion replay fence. The sink
+        # reads and writes it under the checkpoint row lock, which is what
+        # serializes chunks, completion and retirement against each other.
+        attribute :snapshot_state, :binary do
           allow_nil? true
         end
 
@@ -166,7 +180,8 @@ defmodule AshReplicant.Checkpoint do
             :source_timeline,
             :publication_contract,
             :publication_fingerprint,
-            :commit_lsn
+            :commit_lsn,
+            :snapshot_state
           ]
         end
 

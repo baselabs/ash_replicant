@@ -21,11 +21,10 @@ defmodule AshReplicant.Sink.Impl do
   reads into the graph — the same trust model as `tenant_mfa`.
   """
 
-  alias AshPostgres.DataLayer.Info, as: PGInfo
-  alias AshReplicant.{Apply, Destination, Error, Messages, Resolver, Sql, Telemetry}
+  alias AshReplicant.{Apply, Destination, Error, Messages, Resolver, Snapshot, Telemetry}
   alias AshReplicant.Checkpoint.Identity
   alias AshReplicant.Resource.Info
-  alias Ecto.Adapters.SQL
+  alias AshReplicant.Snapshot.{Provenance, Retirement, State}
 
   @snapshot_transaction_timeout 120_000
 
@@ -533,29 +532,31 @@ defmodule AshReplicant.Sink.Impl do
   end
 
   @doc """
-  Persist a snapshot batch for `ctx.table`, upserting by PK. On
-  `first_for_table?`, clear the resource's mirror rows in-txn first (redo-safety).
-  Plain SCD1 non-tenant, non-sensitive resources use a bulk upsert; the
-  load-bearing fail-closed guard is the `case result.status` check — anything
-  other than `:success` (including the default-options `:partial_success`) rolls
-  the snapshot transaction back, so a failing row is never silently dropped.
+  Persist a snapshot batch for `ctx.table`. Does not advance the checkpoint.
+
+  **No callback clears a resource** (S02 / ADR-0017). The pre-S02 code wiped
+  the whole mirror on `first_for_table?` for redo-safety; that repeated every
+  committed host business effect on any retry and could erase a stream-applied
+  row. Stale rows are now retired at fenced completion instead, per tenant
+  scope, through the host's own retire action — and only for a resource that
+  opted into `snapshot_provenance`. `first_for_table?` authorizes no deletion
+  and carries no attempt identity.
+
+  A `snapshot_provenance true` resource routes to
+  `AshReplicant.Snapshot.Rows`: the batch's rows are compared against their
+  stored fingerprints under the run's bound attempt, and an unchanged row is
+  marked rather than re-run. Everything else keeps the pre-S02 apply. Plain
+  SCD1 non-tenant, non-sensitive resources use a bulk upsert; the load-bearing
+  fail-closed guard is the `case result.status` check — anything other than
+  `:success` (including the default-options `:partial_success`) rolls the
+  snapshot transaction back, so a failing row is never silently dropped.
   `stop_on_error?: true` is a defensible early-stop on top of that, not the loss
   guard. Sensitive, tenant-scoped, OR SCD2 resources apply per-record — SCD2
   stamps the batch's snapshot LSN onto each change so each version opens at
-  `valid_from_lsn = snapshot_lsn`. Does not advance the checkpoint.
+  `valid_from_lsn = snapshot_lsn`.
 
   This sink implements replicant's v1 snapshot only (no `snapshot_progress/0`
-  callback). The whole-resource `first_for_table?` clear is correct under v1
-  because the snapshot runs as a separate phase before the stream starts
-  (EXPORT_SNAPSHOT -> COPY -> START_REPLICATION at the consistent_point), so
-  there are no concurrent `handle_transaction` rows to wipe when the clear
-  runs. If/when this sink adopts replicant's incremental snapshot mode
-  (`snapshot: [mode: :incremental]`, which requires implementing
-  `snapshot_progress/0` and interleaves snapshot chunks with the live stream),
-  this clear must change to preserve stream-applied rows (clear only
-  snapshot-origin rows) — otherwise a stream update that lands before the
-  first chunk closes is lost (replicant incremental "Bug C", proven by the
-  replicant marquee 2026-07-10).
+  callback); incremental mode is S03.
   """
   @spec handle_snapshot(map(), [Replicant.Change.t()], map()) :: :ok | {:error, term()}
   def handle_snapshot(config, changes, %{table: qualified, first_for_table?: first?} = ctx) do
@@ -608,14 +609,14 @@ defmodule AshReplicant.Sink.Impl do
   defp run_snapshot(config, resource, changes, first?, snapshot_lsn) do
     case snapshot_ordinal_base(config, snapshot_lsn, first?) do
       {:ok, ordinal_base} ->
-        run_snapshot_transaction(config, resource, changes, first?, snapshot_lsn, ordinal_base)
+        run_snapshot_transaction(config, resource, changes, snapshot_lsn, ordinal_base)
 
       :error ->
         {:error, Error.exception(reason: :config_invalid, resource: resource, op: :snapshot)}
     end
   end
 
-  defp run_snapshot_transaction(config, resource, changes, first?, snapshot_lsn, ordinal_base) do
+  defp run_snapshot_transaction(config, resource, changes, snapshot_lsn, ordinal_base) do
     result =
       config.repo.transaction(
         fn ->
@@ -623,7 +624,6 @@ defmodule AshReplicant.Sink.Impl do
             config,
             resource,
             changes,
-            first?,
             snapshot_lsn,
             ordinal_base
           )
@@ -646,19 +646,110 @@ defmodule AshReplicant.Sink.Impl do
     end
   end
 
-  defp apply_snapshot_transaction!(config, resource, changes, first?, snapshot_lsn, ordinal_base) do
+  defp apply_snapshot_transaction!(config, resource, changes, snapshot_lsn, ordinal_base) do
     guard_generation!(config)
     config = preflight_snapshot_onetime!(config, resource, changes)
-    maybe_clear_snapshot(resource, config, first?)
-    apply_snapshot_batch(config, resource, changes, snapshot_lsn, ordinal_base)
+
+    # The attempt binds under the checkpoint row lock BEFORE any row effect, so
+    # chunks, completion and retirement serialize against each other across
+    # nodes. It binds even for an EMPTY batch: Replicant dispatches one empty
+    # `first_for_table?` chunk for a table with no rows, and that is the only
+    # signal an empty source's snapshot phase ever started.
+    if Retirement.provenance_sink?(config) do
+      attempt = bind_attempt!(config)
+
+      if Info.replicant_snapshot_provenance!(resource) do
+        Snapshot.Rows.apply_batch!(config, resource, changes, snapshot_lsn, ordinal_base, attempt)
+      else
+        apply_snapshot_batch(config, resource, changes, snapshot_lsn, ordinal_base)
+      end
+    else
+      apply_snapshot_batch(config, resource, changes, snapshot_lsn, ordinal_base)
+    end
+
     guard_generation!(config)
   end
 
-  defp maybe_clear_snapshot(_resource, _config, false), do: :ok
+  # ADR-0017: the first ACTUAL `handle_snapshot/2` callback of a run binds that
+  # owner's private delivery-run id to a fresh durable attempt; later callbacks
+  # in the same run reuse it. `first_for_table?` has no attempt-identity role —
+  # it is per-table, and it is false for the first callback observed after an
+  # incremental resume.
+  defp bind_attempt!(config) do
+    keys = provenance_keys!(config)
+    digest = contract_digest!(config)
+    row = locked_checkpoint_row!(config)
 
-  defp maybe_clear_snapshot(resource, config, true) do
-    clear_mirror(resource, config)
-    guard_generation!(config)
+    case decode_snapshot_state(row, keys) do
+      :absent ->
+        mint_attempt!(config, keys, digest)
+
+      {:ok, %State{mode: :v1, status: status, delivery_run: run, contract_digest: bound} = state}
+      when status in [:armed, :active] ->
+        cond do
+          run != config.delivery_run ->
+            # A LATER owner re-exporting after a crash. The consistent point can
+            # be identical, so only the per-activation run distinguishes them:
+            # rotate rather than resume, or the previous attempt's markers would
+            # make this attempt's rows look already-seen.
+            mint_attempt!(config, keys, digest)
+
+          bound != digest ->
+            # Same run, different admitted contract: the manifest, config, or
+            # bytecode moved under an in-flight attempt. Never guess it is safe.
+            rollback_conflict!(config, :snapshot_state_invalid)
+
+          true ->
+            attempt(state, keys)
+        end
+
+      {:ok, %State{mode: :v1, status: :complete, delivery_run: run}}
+      when run != config.delivery_run ->
+        mint_attempt!(config, keys, digest)
+
+      _invalid ->
+        rollback_conflict!(config, :snapshot_state_invalid)
+    end
+  end
+
+  defp mint_attempt!(config, keys, digest) do
+    state = State.mint_v1(config.delivery_run, digest, State.active_key_version(keys))
+    store_snapshot_state!(config, state, keys)
+    attempt(state, keys)
+  end
+
+  # The per-batch attempt handle: the membership marker plus the key material
+  # the row fingerprints are computed and compared under.
+  defp attempt(%State{} = state, keys) do
+    %{attempt: state.attempt, keys: keys, key_version: State.active_key_version(keys)}
+  end
+
+  defp decode_snapshot_state(%{snapshot_state: nil}, _keys), do: :absent
+
+  defp decode_snapshot_state(%{snapshot_state: encoded}, keys) when is_binary(encoded),
+    do: State.decode(encoded, keys)
+
+  defp decode_snapshot_state(_row, _keys), do: {:error, :undecodable}
+
+  defp provenance_keys!(config) do
+    case Provenance.keys() do
+      {:ok, keys} -> keys
+      :error -> rollback_conflict!(config, :config_invalid)
+    end
+  end
+
+  defp contract_digest!(config) do
+    case State.contract_digest(config) do
+      {:ok, digest} -> digest
+      :error -> rollback_conflict!(config, :config_invalid)
+    end
+  end
+
+  defp store_snapshot_state!(config, %State{} = state, keys) do
+    case State.encode(state, keys) do
+      {:ok, encoded} -> upsert_checkpoint_fields(config, %{snapshot_state: encoded})
+      {:error, _reason} -> rollback_conflict!(config, :snapshot_state_invalid)
+    end
   end
 
   # ONE continuing ordinal space per snapshot RUN. A v1 snapshot shares ONE
@@ -710,10 +801,18 @@ defmodule AshReplicant.Sink.Impl do
   def clear_snapshot_ordinals(_slot_name), do: true
 
   # The snapshot handoff's destination-transaction body: monotonic, guarded.
+  # Under the checkpoint row lock, so retirement, the replay fence, the
+  # watermark advance and the state commit are ONE atomic step.
   defp complete_snapshot_transaction!(config, snapshot_lsn) do
     guard_generation!(config)
 
-    case locked_checkpoint!(config) do
+    row = locked_checkpoint_row!(config)
+
+    if Retirement.provenance_sink?(config) do
+      complete_attempt!(config, row, snapshot_lsn)
+    end
+
+    case row.commit_lsn do
       # Monotonic handoff: a re-delivered/older consistent point never
       # regresses the durable watermark. No write; the framework acks its
       # own consistent point, never the sink's return value.
@@ -725,6 +824,46 @@ defmodule AshReplicant.Sink.Impl do
     end
 
     guard_generation!(config)
+  end
+
+  # ADR-0017's completion protocol. The permanent replay fence is checked FIRST,
+  # BEFORE any row scan: incremental completion is an at-least-once callback, so
+  # a completion whose reply was lost can be redelivered after a later stream
+  # write has landed. That newer row carries no marker from the completed
+  # attempt, and rescanning would misclassify it as unseen and retire it. An
+  # idempotent final state is not enough — the fence is what makes redelivery a
+  # genuine no-op.
+  defp complete_attempt!(config, row, snapshot_lsn) do
+    keys = provenance_keys!(config)
+    digest = contract_digest!(config)
+
+    case decode_snapshot_state(row, keys) do
+      {:ok,
+       %State{
+         mode: :v1,
+         status: :complete,
+         delivery_run: run,
+         completed_lsn: completed
+       }}
+      when run == config.delivery_run and completed == snapshot_lsn ->
+        :fenced
+
+      {:ok, %State{mode: :v1, status: status, delivery_run: run, contract_digest: bound} = state}
+      when status in [:armed, :active] and run == config.delivery_run and bound == digest ->
+        Retirement.retire_unseen!(config, state.attempt, snapshot_lsn)
+
+        store_snapshot_state!(
+          config,
+          %State{state | status: :complete, completed_lsn: snapshot_lsn},
+          keys
+        )
+
+      _no_matching_attempt ->
+        # No armed or active attempt for this run and contract. Completion has
+        # nothing to fence and nothing to complete; retiring under a fabricated
+        # attempt would delete every managed row.
+        rollback_conflict!(config, :snapshot_state_invalid)
+    end
   end
 
   @doc "Durably set `checkpoint := snapshot_lsn` and return it (the snapshot handoff commit)."
@@ -812,24 +951,6 @@ defmodule AshReplicant.Sink.Impl do
           )
         end)
     end
-  end
-
-  defp clear_mirror(resource, config) do
-    # Redo-safety: wipe ALL mirror rows for this resource before re-applying the
-    # snapshot dump. A tenant-scoped Ash.bulk_destroy! cannot clear a NON-GLOBAL
-    # attribute-multitenant table (raises TenantRequired), so delete tenant-blind
-    # on the mirror's own table, inside the snapshot transaction. Works uniformly
-    # for non-tenant, global-tenant, and non-global-tenant resources. The table /
-    # schema come from the resource DSL at the admitted destination boundary,
-    # never from a row value.
-    schema = PGInfo.schema(resource) || "public"
-    table = PGInfo.table(resource)
-
-    SQL.query!(
-      config.repo,
-      "DELETE FROM " <> Sql.quote_identifier(schema) <> "." <> Sql.quote_identifier(table),
-      []
-    )
   end
 
   defp apply_snapshot_batch(_config, _resource, [], _snapshot_lsn, _ordinal_base), do: :ok
@@ -1256,7 +1377,13 @@ defmodule AshReplicant.Sink.Impl do
   # :temporary supervisor never restarts — an operator/host restart re-runs the
   # identity gate and re-binds (the [:ash_replicant, :checkpoint, :conflict]
   # event is the signal meanwhile).
-  defp locked_checkpoint!(config) do
+  defp locked_checkpoint!(config), do: locked_checkpoint_row!(config).commit_lsn
+
+  # The same locked admission read, returning the WHOLE row: the snapshot
+  # protocol needs `snapshot_state` under the same `FOR UPDATE` that guards the
+  # watermark, or the state and the frontier could be read from different
+  # serialization points.
+  defp locked_checkpoint_row!(config) do
     case Ash.get!(config.checkpoint_resource, checkpoint_filter(config),
            lock: :for_update,
            authorize?: false,
@@ -1264,18 +1391,22 @@ defmodule AshReplicant.Sink.Impl do
            error?: false
          ) do
       nil -> rollback_conflict!(config, :checkpoint_unbound)
-      %{commit_lsn: lsn} -> lsn
+      row -> row
     end
   end
 
-  defp upsert_checkpoint(config, lsn) do
+  defp upsert_checkpoint(config, lsn), do: upsert_checkpoint_fields(config, %{commit_lsn: lsn})
+
+  # `upsert_fields` names exactly the supplied columns, so writing the snapshot
+  # state never disturbs the watermark and vice versa.
+  defp upsert_checkpoint_fields(config, fields) when is_map(fields) do
     Ash.create!(
       config.checkpoint_resource,
-      Map.merge(checkpoint_filter(config), %{commit_lsn: lsn}),
+      Map.merge(checkpoint_filter(config), fields),
       action: :upsert,
       upsert?: true,
       upsert_identity: :source_slot,
-      upsert_fields: [:commit_lsn],
+      upsert_fields: Map.keys(fields),
       authorize?: false,
       context: action_context(config),
       return_notifications?: true

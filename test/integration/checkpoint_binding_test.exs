@@ -562,28 +562,17 @@ defmodule AshReplicant.CheckpointBindingTest do
 
   # The runtime config the seeded generation would thread through run_callback,
   # WITHOUT the activation lease — the lease-escaping writer shape.
+  # The runtime config the sink actually delivers under. Built by the LIBRARY
+  # (`AshReplicant.runtime_config/1`), never hand-rolled here: a local copy
+  # silently lags every field activation later binds into it — which is exactly
+  # what happened when the S02 delivery-run identity landed.
   defp seeded_runtime_config(sink) do
     config = sink.__ash_replicant_config__()
 
-    generation =
-      :persistent_term.get({AshReplicant, config.slot_name})
-      |> case do
-        %AshReplicant.Destination.Generation{} = gen -> gen
-      end
+    %AshReplicant.Destination.Generation{} =
+      generation = :persistent_term.get({AshReplicant, config.slot_name})
 
-    Map.merge(config, %{
-      sink: sink,
-      resolver_index: generation.resolver_index,
-      destination_manifest: generation.manifest,
-      source_contract: generation.source_contract,
-      coverage: generation.coverage,
-      source_identity: generation.source_identity,
-      publication: generation.publication,
-      generation: generation.reference,
-      dynamic_repo: generation.dynamic_repo,
-      data_layer_context: %{repo: generation.dynamic_repo},
-      authorize?: false
-    })
+    AshReplicant.runtime_config(generation)
   end
 
   # Terminate the pipeline's walsender so Replicant reconnects in-process

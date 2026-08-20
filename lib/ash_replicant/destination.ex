@@ -93,6 +93,7 @@ defmodule AshReplicant.Destination do
       :source_identity,
       :publication,
       :dynamic_repo,
+      :delivery_run,
       :owner
     ]
     defstruct @enforce_keys
@@ -113,12 +114,18 @@ defmodule AshReplicant.Destination do
             source_identity: map(),
             publication: [String.t()],
             dynamic_repo: atom() | pid(),
+            delivery_run: binary(),
             owner: pid()
           }
   end
 
   @safe_changes [
     AshCloak.Changes.Encrypt,
+    # Package-owned (S02 / ADR-0017): force-changes the two protected provenance
+    # attributes from the sink-supplied changeset context and reaches no
+    # database. The compile verifier already proves it can sit on exactly one
+    # private action per resource.
+    AshReplicant.Snapshot.MarkSeen,
     Ash.Resource.Change.Atomic,
     Ash.Resource.Change.AtomicSet,
     Ash.Resource.Change.Filter,
@@ -552,15 +559,42 @@ defmodule AshReplicant.Destination do
          {:ok, destroy} <- required_primary_action(resource, :destroy) do
       base = Enum.map([read, create, destroy], &root_ref(resource, &1, :mapped))
 
-      if Info.history_scd2?(resource) do
-        {:ok,
-         [
-           root_ref(resource, Info.replicant_history_close_action!(resource), :history_close)
-           | base
-         ]}
-      else
-        {:ok, base}
-      end
+      base =
+        if Info.history_scd2?(resource) do
+          [
+            root_ref(resource, Info.replicant_history_close_action!(resource), :history_close)
+            | base
+          ]
+        else
+          base
+        end
+
+      {:ok, base ++ provenance_roots(resource)}
+    end
+  end
+
+  # S02 (ADR-0017): the snapshot mark, retire, and context-tenant scope actions
+  # are sink-driven effect and admission sites like every other mapped action —
+  # they must be in the admitted graph, tie out `touches_resources`, and be
+  # walked for participants, or the protocol would reach the destination through
+  # actions activation never inspected.
+  defp provenance_roots(resource) do
+    if Info.replicant_snapshot_provenance!(resource) do
+      [
+        {Info.replicant_snapshot_mark_action!(resource), :snapshot_mark},
+        {Info.replicant_snapshot_retire_action!(resource), :snapshot_retire}
+      ]
+      |> Kernel.++(scope_root(resource))
+      |> Enum.map(fn {name, source} -> root_ref(resource, name, source) end)
+    else
+      []
+    end
+  end
+
+  defp scope_root(resource) do
+    case Info.replicant_snapshot_tenant_scope_action(resource) do
+      {:ok, name} when is_atom(name) and not is_nil(name) -> [{name, :snapshot_tenant_scope}]
+      _absent -> []
     end
   end
 

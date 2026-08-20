@@ -52,19 +52,27 @@ defmodule AshReplicant.DocsTest do
     assert adr =~ "unchanged out-of-line"
   end
 
-  test "AGENTS Critical Rule 6 carries the source-bound clause AND the surviving snapshot disclaimer" do
+  test "AGENTS carries the source-bound clause, the S02 opt-in cost, and what is still absent" do
     agents = File.read!("AGENTS.md")
 
     # The amended watermark sentence (pinned by the B2 design note).
     assert agents =~ "of the source-bound checkpoint row"
 
-    # The C3 snapshot disclaimer and the absent-callbacks enumeration survive
-    # VERBATIM (weakening either while amending is the named drift class).
-    assert agents =~ "snapshot-wide physical effect-once until C3 proves zero repeats"
+    # S02 replaced the C3 disclaimer: whole-table retry IS effect-once now — but
+    # only for a resource that OPTS IN. The cost of not opting in must stay
+    # stated, because a reader who skips it inherits stale rows silently. This
+    # pin is the successor to "do not claim snapshot-wide physical effect-once
+    # until C3 proves zero repeats"; weakening it while amending is the named
+    # drift class.
+    assert agents =~ "Whole-table snapshot retry is effect-once for a resource that opts in"
 
-    # C2 moved message (C1) and sink-owned batch (C2) to LIVE; the enumeration
-    # still names what is genuinely absent.
-    assert agents =~ "incremental-progress and\nappend-log callbacks remain absent until C3–C4"
+    assert agents =~
+             "A snapshot-backed resource that does NOT opt into `snapshot_provenance` keeps\nrows the source has dropped"
+
+    # The enumeration still names what is genuinely absent: S02 landed V1 retry;
+    # incremental progress and the append log did not.
+    assert agents =~
+             "Incremental snapshot progress (`snapshot_progress/0`) and append-log callbacks\nremain absent until S03–C4"
   end
 
   test "published destination participant examples compile against the public API" do

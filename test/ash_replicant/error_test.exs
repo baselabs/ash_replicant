@@ -106,7 +106,11 @@ defmodule AshReplicant.ErrorTest do
           :checkpoint_unbound,
           :checkpoint_adopt_conflict,
           :checkpoint_adopt_invalid,
-          :checkpoint_legacy_rows_present
+          :checkpoint_legacy_rows_present,
+          # S02 (ADR-0017), additive growth per ADR-0011.
+          :snapshot_state_invalid,
+          :snapshot_provenance_unavailable,
+          :snapshot_scope_incomplete
         ],
         &[Atom.to_string(&1)]
       )

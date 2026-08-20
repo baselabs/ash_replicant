@@ -42,6 +42,13 @@ defmodule AshReplicant.Resource.Verifiers.ValidateSnapshotProvenance do
      `:destroy` under `history_strategy :scd1` or an `:update` under `:scd2`
      — SCD2 retirement closes the open version, because closed history is
      immutable.
+  8. **A non-global `strategy :context` resource declares a retained-scope
+     enumerator** (`snapshot_tenant_scope_action`): a private generic action
+     returning `{:array, _}`. Completion retires per tenant scope and never
+     tenant-blind; attribute multitenancy enumerates itself from its
+     discriminator column, but context multitenancy has none, so the host is
+     the only authority on which scopes exist — including one wholly absent
+     from the source attempt.
 
   Tenant scoping for both actions is enforced by
   `AshReplicant.Resource.Verifiers.ValidateActionMultitenancy`, which treats
@@ -84,7 +91,8 @@ defmodule AshReplicant.Resource.Verifiers.ValidateSnapshotProvenance do
         &verify_mark_change_ownership/1,
         &verify_attributes/1,
         &verify_mark_action/1,
-        &verify_retire_action/1
+        &verify_retire_action/1,
+        &verify_tenant_scope_action/1
       ],
       :ok,
       fn check, :ok ->
@@ -324,7 +332,87 @@ defmodule AshReplicant.Resource.Verifiers.ValidateSnapshotProvenance do
       "got #{inspect(actual)}"
   end
 
+  # --- 8: the context-tenant retained-scope enumerator (S02) ---
+
+  # Completion retires PER SCOPE and never tenant-blind. Attribute multitenancy
+  # enumerates itself — the discriminator is a column, so `SELECT DISTINCT` over
+  # the admitted Repo is authoritative. Context multitenancy has no such column:
+  # the retained scopes live wherever the host keeps them (a registry table, the
+  # schema catalog, a config), so the host must name the action that reports
+  # them. Without it completion could only retire the scopes the SOURCE attempt
+  # happened to mention, silently leaving a destination-only tenant's stale rows
+  # open forever.
+  defp verify_tenant_scope_action(dsl_state) do
+    if context_scoped?(dsl_state) do
+      name = Verifier.get_option(dsl_state, [:replicant], :snapshot_tenant_scope_action)
+      scope_action_problem(dsl_state, name, name && AshInfo.action(dsl_state, name))
+    else
+      :ok
+    end
+  end
+
+  # `global?` resources take one scoped pass, so they need no enumeration.
+  defp context_scoped?(dsl_state) do
+    AshInfo.multitenancy_strategy(dsl_state) == :context and
+      AshInfo.multitenancy_global?(dsl_state) != true
+  end
+
+  defp scope_action_problem(dsl_state, nil, _action) do
+    scope_error(
+      dsl_state,
+      "declares `strategy :context` multitenancy, so it must also declare " <>
+        "`snapshot_tenant_scope_action` — a private generic action returning the array of " <>
+        "retained tenant contexts. Completion has to enumerate every destination scope, and " <>
+        "context multitenancy carries no discriminator column to enumerate from"
+    )
+  end
+
+  defp scope_action_problem(dsl_state, name, nil) do
+    scope_error(
+      dsl_state,
+      "names #{inspect(name)} as the retained-scope enumerator, but the resource declares no " <>
+        "such action"
+    )
+  end
+
+  defp scope_action_problem(dsl_state, name, action) do
+    cond do
+      action.type != :action ->
+        scope_error(
+          dsl_state,
+          "the retained-scope enumerator #{inspect(name)} must be a generic action returning " <>
+            "`{:array, _}` (a read action returns mirror RECORDS, and a context-multitenant " <>
+            "read cannot span tenants to enumerate them), got #{inspect(action.type)}"
+        )
+
+      not array_return?(Map.get(action, :returns)) ->
+        scope_error(
+          dsl_state,
+          "the retained-scope enumerator #{inspect(name)} must be a generic action declaring " <>
+            "`{:array, _}` as its return type — completion reads the list of retained tenant " <>
+            "contexts from it"
+        )
+
+      action.public? ->
+        scope_error(
+          dsl_state,
+          "the retained-scope enumerator #{inspect(name)} must be private (`public? false`) — " <>
+            "it is a sink-driven admission read, not a host API surface"
+        )
+
+      true ->
+        :ok
+    end
+  end
+
+  defp array_return?({:array, _inner}), do: true
+  defp array_return?(_other), do: false
+
   # --- errors ---
+
+  defp scope_error(dsl_state, message) do
+    {:error, dsl_error(dsl_state, [:replicant, :snapshot_tenant_scope_action], message)}
+  end
 
   defp provenance_error(dsl_state, message) do
     dsl_error(dsl_state, [:replicant, :snapshot_provenance], message)
