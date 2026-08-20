@@ -585,6 +585,103 @@ defmodule AshReplicant.ValidateSnapshotProvenanceTest do
       assert err.message =~ "private"
     end
 
+    test "TRIPWIRE: another public action carrying MarkSeen fails closed" do
+      err =
+        assert_dsl_error %Spark.Error.DslError{path: [:actions, :host_update, :changes]} do
+          defmodule Elixir.AshReplicant.ValidateSnapshotProvenanceTest.PublicAlternateMarkAction do
+            use Ash.Resource,
+              domain: AshReplicant.ValidateSnapshotProvenanceTest.Domain,
+              validate_domain_inclusion?: false,
+              data_layer: Ash.DataLayer.Ets,
+              extensions: [AshReplicant.Resource]
+
+            replicant do
+              source_table("orders")
+              snapshot_provenance(true)
+            end
+
+            attributes do
+              uuid_primary_key :id
+              attribute :replica_fingerprint, :binary, public?: false, writable?: false
+              attribute :replica_seen_attempt, :binary, public?: false, writable?: false
+            end
+
+            actions do
+              defaults [:read, :destroy, create: :*]
+
+              update :host_update do
+                public? true
+                accept []
+                require_atomic? false
+                change AshReplicant.Snapshot.MarkSeen
+              end
+
+              update :replicant_mark_seen do
+                public? false
+                accept []
+                require_atomic? false
+                change AshReplicant.Snapshot.MarkSeen
+              end
+
+              destroy :replicant_retire_unseen do
+                public? false
+              end
+            end
+          end
+        end
+
+      assert err.message =~ "host_update"
+      assert err.message =~ "Only"
+      assert err.message =~ "replicant_mark_seen"
+    end
+
+    test "TRIPWIRE: a global MarkSeen change fails closed even when the private action is valid" do
+      err =
+        assert_dsl_error %Spark.Error.DslError{path: [:changes]} do
+          defmodule Elixir.AshReplicant.ValidateSnapshotProvenanceTest.GlobalAndPrivateMarkChange do
+            use Ash.Resource,
+              domain: AshReplicant.ValidateSnapshotProvenanceTest.Domain,
+              validate_domain_inclusion?: false,
+              data_layer: Ash.DataLayer.Ets,
+              extensions: [AshReplicant.Resource]
+
+            replicant do
+              source_table("orders")
+              snapshot_provenance(true)
+            end
+
+            attributes do
+              uuid_primary_key :id
+              attribute :replica_fingerprint, :binary, public?: false, writable?: false
+              attribute :replica_seen_attempt, :binary, public?: false, writable?: false
+            end
+
+            changes do
+              change AshReplicant.Snapshot.MarkSeen, on: [:update]
+            end
+
+            actions do
+              defaults [:read, :destroy, create: :*, update: :*]
+
+              update :replicant_mark_seen do
+                public? false
+                accept []
+                require_atomic? false
+                change AshReplicant.Snapshot.MarkSeen
+              end
+
+              destroy :replicant_retire_unseen do
+                public? false
+              end
+            end
+          end
+        end
+
+      assert err.message =~ "global"
+      assert err.message =~ "Only"
+      assert err.message =~ "replicant_mark_seen"
+    end
+
     test "TRIPWIRE: a mark action that does NOT carry the package change fails closed (vacuous mark)" do
       err =
         assert_dsl_error %Spark.Error.DslError{path: [:replicant, :snapshot_mark_action]} do
@@ -626,7 +723,7 @@ defmodule AshReplicant.ValidateSnapshotProvenanceTest do
 
     test "TRIPWIRE: a GLOBAL change does not satisfy the mark action (it would stamp business updates too)" do
       err =
-        assert_dsl_error %Spark.Error.DslError{path: [:replicant, :snapshot_mark_action]} do
+        assert_dsl_error %Spark.Error.DslError{path: [:changes]} do
           defmodule Elixir.AshReplicant.ValidateSnapshotProvenanceTest.GlobalMarkChange do
             use Ash.Resource,
               domain: AshReplicant.ValidateSnapshotProvenanceTest.Domain,
@@ -672,6 +769,7 @@ defmodule AshReplicant.ValidateSnapshotProvenanceTest do
         end
 
       assert err.message =~ "AshReplicant.Snapshot.MarkSeen"
+      assert err.message =~ "global"
     end
 
     test "TRIPWIRE: a mark action of the wrong TYPE fails closed" do

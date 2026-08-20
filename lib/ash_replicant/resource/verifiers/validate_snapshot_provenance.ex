@@ -29,13 +29,14 @@ defmodule AshReplicant.Resource.Verifiers.ValidateSnapshotProvenance do
      post-expansion list and would also catch a future change to `:*`.
   5. **No action declares an argument named for either one** — an argument is
      an action input path just as much as an accept entry.
-  6. **The mark action** (`snapshot_mark_action`, default
-     `:replicant_mark_seen`) exists, is an `:update`, is `public? false`, and
-     carries the `AshReplicant.Snapshot.MarkSeen` change **on the action
-     itself**. A global `changes` entry does not satisfy it: a global change
-     would also stamp the host's ordinary business updates. A mark action that
-     does not stamp is vacuous, and a vacuous mark makes completion retire rows
-     it just saw.
+  6. **The mark change has one owner.** `AshReplicant.Snapshot.MarkSeen` may
+     appear only on the configured mark action — never as a global change or on
+     another public or private action. The mark action (`snapshot_mark_action`,
+     default `:replicant_mark_seen`) exists, is an `:update`, is `public? false`,
+     and carries the change **on the action itself**. A global change would also
+     stamp the host's ordinary business updates; another action would create a
+     second, host-callable provenance path. A mark action that does not stamp is
+     vacuous, and a vacuous mark makes completion retire rows it just saw.
   7. **The retire action** (`snapshot_retire_action`, default
      `:replicant_retire_unseen`) exists, is `public? false`, and is a
      `:destroy` under `history_strategy :scd1` or an `:update` under `:scd2`
@@ -80,6 +81,7 @@ defmodule AshReplicant.Resource.Verifiers.ValidateSnapshotProvenance do
       # actually went wrong.
       [
         &verify_no_action_input/1,
+        &verify_mark_change_ownership/1,
         &verify_attributes/1,
         &verify_mark_action/1,
         &verify_retire_action/1
@@ -186,7 +188,46 @@ defmodule AshReplicant.Resource.Verifiers.ValidateSnapshotProvenance do
 
   defp argument_names(action), do: action |> Map.get(:arguments, []) |> Enum.map(& &1.name)
 
-  # --- 6: the mark action ---
+  # --- 6: the mark change has exactly one action owner ---
+
+  defp verify_mark_change_ownership(dsl_state) do
+    mark_action = Verifier.get_option(dsl_state, [:replicant], :snapshot_mark_action)
+
+    other_action =
+      dsl_state
+      |> Verifier.get_entities([:actions])
+      |> Enum.find(fn action ->
+        action.name != mark_action and carries_mark_change?(action)
+      end)
+
+    cond do
+      Enum.any?(AshInfo.changes(dsl_state), &mark_change?/1) ->
+        {:error,
+         dsl_error(
+           dsl_state,
+           [:changes],
+           "the global `changes` block carries `change #{inspect(MarkSeen)}`. Only the " <>
+             "configured private mark action #{inspect(mark_action)} may carry that change; " <>
+             "a global change also stamps ordinary host business updates"
+         )}
+
+      other_action ->
+        {:error,
+         action_error(
+           dsl_state,
+           other_action.name,
+           :changes,
+           "the action #{inspect(other_action.name)} carries `change #{inspect(MarkSeen)}`. " <>
+             "Only the configured private mark action #{inspect(mark_action)} may carry that " <>
+             "change; another action creates a forgeable provenance-write path"
+         )}
+
+      true ->
+        :ok
+    end
+  end
+
+  # --- 6: the configured mark action ---
 
   defp verify_mark_action(dsl_state) do
     name = Verifier.get_option(dsl_state, [:replicant], :snapshot_mark_action)
@@ -232,12 +273,12 @@ defmodule AshReplicant.Resource.Verifiers.ValidateSnapshotProvenance do
   defp carries_mark_change?(action) do
     action
     |> Map.get(:changes, [])
-    |> Enum.any?(fn
-      %{change: {MarkSeen, _opts}} -> true
-      %{change: MarkSeen} -> true
-      _other -> false
-    end)
+    |> Enum.any?(&mark_change?/1)
   end
+
+  defp mark_change?(%{change: {MarkSeen, _opts}}), do: true
+  defp mark_change?(%{change: MarkSeen}), do: true
+  defp mark_change?(_other), do: false
 
   # --- 7: the retire action ---
 

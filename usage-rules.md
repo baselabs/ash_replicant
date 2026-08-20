@@ -517,10 +517,10 @@ Both action names are configurable via `snapshot_mark_action` and
 - **no action accepts either one**, and no action declares an argument named
   for either one. Both are input paths, and either would let a host forge
   membership so a changed row looks "already seen";
-- the mark action exists, is a private (`public? false`) `:update`, and carries
-  `change AshReplicant.Snapshot.MarkSeen` **on the action itself** — a global
-  `changes` entry does not count, because it would also stamp your ordinary
-  business updates;
+- the mark action exists, is a private (`public? false`) `:update`, and is the
+  **only** owner of `change AshReplicant.Snapshot.MarkSeen`; the verifier rejects
+  that change on every other action and in the global `changes` block, because
+  either path could stamp ordinary host business updates;
 - the retirement action exists, is private, and is a `:destroy` under `:scd1`
   or an `:update` under `:scd2`.
 

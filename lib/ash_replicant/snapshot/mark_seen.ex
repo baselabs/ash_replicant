@@ -7,10 +7,11 @@ defmodule AshReplicant.Snapshot.MarkSeen do
   `replica_seen_attempt`. Both attributes are `public?: false` and
   `writable?: false`, and
   `AshReplicant.Resource.Verifiers.ValidateSnapshotProvenance` rejects any
-  action that would accept them as input or declare an argument named for
-  them — so a host caller cannot forge provenance. The values reach this
-  change through the sink-supplied **changeset context**, the same channel the
-  operation identity already rides on, and land via
+  action that would accept them as input or declare an argument named for them.
+  It also rejects this change globally or on any action other than the configured
+  private mark action — so a host caller cannot forge provenance. The values
+  reach this change through the sink-supplied **changeset context**, the same
+  channel the operation identity already rides on, and land via
   `Ash.Changeset.force_change_attribute/3` (documented in Ash as *"Changes an
   attribute even if it isn't writable"*).
 

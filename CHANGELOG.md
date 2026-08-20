@@ -29,7 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     fails the changeset closed.
   - `AshReplicant.Resource.Verifiers.ValidateSnapshotProvenance` moves the whole
     contract to build time: attribute shape, and the guarantee that NO action
-    accepts either attribute or declares an argument named for one.
+    accepts either attribute or declares an argument named for one. It also
+    rejects `MarkSeen` in the global `changes` block or on any action other than
+    the configured private mark action, leaving one provenance-write owner.
     `ValidateActionMultitenancy` now also rejects `multitenancy :bypass` /
     `:bypass_all` on the two provenance actions.
   - Activation preflights the key configuration whenever a mapped resource opts

@@ -309,7 +309,9 @@ end
 ```
 
 A compile-time verifier rejects any action that accepts either attribute or declares
-an argument named for one, so provenance cannot be forged; fingerprint keys come from
+an argument named for one, and rejects `MarkSeen` globally or on any action other
+than the configured private mark action, so provenance cannot be forged;
+fingerprint keys come from
 `:ash_replicant, :snapshot_provenance_keys` and are preflighted at activation. This
 release installs the **contract** — the retry protocol that reads it (attempt state,
 completion, retirement) is roadmap C3 work. See
