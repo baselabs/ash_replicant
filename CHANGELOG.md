@@ -33,6 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Require fetched Replicant `>= 1.2.1 and < 2.0.0-0` and pin the release lock to
+  public Hex 1.2.1. The dependency contract now proves slot-origin rejection,
+  typed telemetry value-shape enforcement without value leakage, and bounded
+  keyed-snapshot contention; CI's exact floor and rollback guidance use 1.2.1.
+
 - **Atomic sink-owned batch delivery (roadmap C2 / ADR-0016).** The generated
   sink now implements `handle_batch/1` unconditionally, and
   `AshReplicant.start_link/1` accepts and forwards `:batch_delivery`

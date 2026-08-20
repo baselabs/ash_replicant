@@ -63,23 +63,23 @@ jobs:
             ash_selector: "3.31.3"
             ash_unlock: true
             ash_requirement: "== 3.31.3"
-            replicant_selector: "1.0.0"
+            replicant_selector: "1.2.1"
             replicant_unlock: true
-            replicant_requirement: "== 1.0.0"
+            replicant_requirement: "== 1.2.1"
           - label: current-lock
             ash_selector: ""
             ash_unlock: false
             ash_requirement: ">= 3.31.3 and < 4.0.0-0"
             replicant_selector: ""
             replicant_unlock: false
-            replicant_requirement: ">= 1.0.0 and < 2.0.0-0"
+            replicant_requirement: ">= 1.2.1 and < 2.0.0-0"
           - label: latest-compatible
             ash_selector: latest
             ash_unlock: true
             ash_requirement: ">= 3.31.3 and < 4.0.0-0"
             replicant_selector: latest
             replicant_unlock: true
-            replicant_requirement: ">= 1.0.0 and < 2.0.0-0"
+            replicant_requirement: ">= 1.2.1 and < 2.0.0-0"
     env:
       MIX_ENV: test
       ASH_REPLICANT_ASH_VERSION: ${{ matrix.ash_selector }}
@@ -191,7 +191,7 @@ jobs:
 
           expected = %{
             ash: ">= 3.31.3 and < 4.0.0-0",
-            replicant: ">= 1.0.0 and < 2.0.0-0"
+            replicant: ">= 1.2.1 and < 2.0.0-0"
           }
 
           Enum.each(expected, fn {dependency, requirement} ->

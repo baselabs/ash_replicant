@@ -6,7 +6,7 @@ Thank you for your interest in contributing to AshReplicant!
 
 - **Elixir 1.20.3** and **Erlang/OTP 29** (run `asdf install` from the repository root)
 - Ash `>= 3.31.3 and < 4.0.0-0`; selector-free development uses this public range
-- Replicant `>= 1.0.0 and < 2.0.0-0` from Hex; the release-candidate lock is 1.1.0.
+- Replicant `>= 1.2.1 and < 2.0.0-0` from Hex; the release-candidate lock is 1.2.1.
   No sibling checkout is required to build or test. A local checkout at
   `../replicant` is only needed for cross-repo design work and is never release evidence.
 - **PostgreSQL** with `wal_level=logical` for the live integration gate; the
@@ -120,17 +120,17 @@ affected tests in the same change, and record the Ash version contract delta in 
   These live-suite and migration-drift commands are mandatory parts of the
   pre-PR release battery, in addition to the checks in step 3.
 
-  CI also resolves the exact Replicant 1.0.0 floor independently of the current
-  1.1.0 lock. To reproduce that selector in an isolated instrument worktree:
+  CI also resolves the exact Replicant 1.2.1 floor independently of the current
+  1.2.1 lock. To reproduce that selector in an isolated instrument worktree:
 
   ```bash
-  ASH_REPLICANT_REPLICANT_VERSION=1.0.0 \
+  ASH_REPLICANT_REPLICANT_VERSION=1.2.1 \
     scripts/with-release-runtime.sh mix deps.unlock replicant
-  ASH_REPLICANT_REPLICANT_VERSION=1.0.0 \
+  ASH_REPLICANT_REPLICANT_VERSION=1.2.1 \
     scripts/with-release-runtime.sh mix deps.get
-  ASH_REPLICANT_REPLICANT_VERSION=1.0.0 \
+  ASH_REPLICANT_REPLICANT_VERSION=1.2.1 \
     scripts/with-release-runtime.sh \
-      scripts/assert-dependency-version.sh replicant '== 1.0.0'
+      scripts/assert-dependency-version.sh replicant '== 1.2.1'
   ```
 
   The full release battery is intentionally not represented by `mix quality`;

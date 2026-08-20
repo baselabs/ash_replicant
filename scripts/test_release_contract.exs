@@ -36,7 +36,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
   expected = %{
     ash: ">= 3.31.3 and < 4.0.0-0",
-    replicant: ">= 1.0.0 and < 2.0.0-0"
+    replicant: ">= 1.2.1 and < 2.0.0-0"
   }
 
   Enum.each(expected, fn {dependency, requirement} ->
@@ -121,19 +121,19 @@ defmodule AshReplicant.ReleaseContractSelfTest do
      [
        "- Elixir 1.20.3 on Erlang/OTP 29;",
        "- Ash `>= 3.31.3 and < 4.0.0-0` and AshPostgres 2.11.x;",
-       "- Replicant `>= 1.0.0 and < 2.0.0-0` (current release-candidate lock 1.1.0)"
+       "- Replicant `>= 1.2.1 and < 2.0.0-0` (current release-candidate lock 1.2.1)"
      ]},
     {"CONTRIBUTING.md", "## Prerequisites",
      [
        "- **Elixir 1.20.3** and **Erlang/OTP 29**",
        "- Ash `>= 3.31.3 and < 4.0.0-0`; selector-free development uses this public range",
-       "- Replicant `>= 1.0.0 and < 2.0.0-0` from Hex; the release-candidate lock is 1.1.0."
+       "- Replicant `>= 1.2.1 and < 2.0.0-0` from Hex; the release-candidate lock is 1.2.1."
      ]},
     {"AGENTS.md", "## Development workflow",
      [
        "The supported release foundation is Elixir 1.20.3 on Erlang/OTP 29 with Ash\n" <>
          "`>= 3.31.3 and < 4.0.0-0` and Replicant\n" <>
-         "`>= 1.0.0 and < 2.0.0-0` (current release-candidate lock 1.1.0)."
+         "`>= 1.2.1 and < 2.0.0-0` (current release-candidate lock 1.2.1)."
      ]}
   ]
 
@@ -183,7 +183,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   )
   @mix_contracts [
     ~s(@ash_requirement ">= 3.31.3 and < 4.0.0-0"),
-    ~s(@replicant_requirement ">= 1.0.0 and < 2.0.0-0"),
+    ~s(@replicant_requirement ">= 1.2.1 and < 2.0.0-0"),
     ~s(elixir: "~> 1.20.3")
   ]
 
@@ -232,16 +232,17 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   defp replicant_selector_probes do
     prepare_fixture()
 
-    replace_once!(
-      "mix.lock",
-      ~s("replicant": {:hex, :replicant, "1.1.0"),
-      ~s("replicant": {:hex, :replicant, "1.0.0")
-    )
-
-    with_env("ASH_REPLICANT_REPLICANT_VERSION", "1.0.0", &assert_valid!/0)
+    with_env("ASH_REPLICANT_REPLICANT_VERSION", "1.2.1", &assert_valid!/0)
 
     prepare_fixture()
-    with_env("ASH_REPLICANT_REPLICANT_VERSION", "1.0.0", &assert_invalid!/0)
+
+    replace_once!(
+      "mix.lock",
+      ~s("replicant": {:hex, :replicant, "1.2.1"),
+      ~s("replicant": {:hex, :replicant, "1.1.0")
+    )
+
+    with_env("ASH_REPLICANT_REPLICANT_VERSION", "1.2.1", &assert_invalid!/0)
   end
 
   defp valid_fixture_probes do
@@ -625,8 +626,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     mutate_job!(
       "compatibility",
-      "            replicant_requirement: \"== 1.0.0\"\n",
-      "            replicant_requirement: \">= 1.0.0\"\n"
+      "            replicant_requirement: \"== 1.2.1\"\n",
+      "            replicant_requirement: \">= 1.2.1\"\n"
     )
 
     assert_invalid!()
@@ -953,7 +954,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       "mix.exs",
-      ~s(@replicant_requirement ">= 1.0.0 and < 2.0.0-0"),
+      ~s(@replicant_requirement ">= 1.2.1 and < 2.0.0-0"),
       ~s(@replicant_requirement ">= 0.3.0 and < 2.0.0-0")
     )
 
@@ -973,7 +974,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       "mix.lock",
-      ~s("replicant": {:hex, :replicant, "1.1.0"),
+      ~s("replicant": {:hex, :replicant, "1.2.1"),
       ~s("replicant": {:hex, :replicant, "0.3.1")
     )
 
@@ -983,8 +984,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       "mix.lock",
-      ~s("replicant": {:hex, :replicant, "1.1.0"),
-      ~s("replicant": {:hex, :replicant, "1.0.0")
+      ~s("replicant": {:hex, :replicant, "1.2.1"),
+      ~s("replicant": {:hex, :replicant, "1.1.0")
     )
 
     assert_invalid!()
@@ -1031,6 +1032,46 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     prepare_fixture()
 
+    replace_once!(
+      "deps/replicant/lib/replicant/sink.ex",
+      "@callback handle_slot_origin",
+      "@callback removed_slot_origin"
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
+    replace_once!(
+      "deps/replicant/lib/replicant/connection.ex",
+      "reason: :checkpoint_unknown",
+      "reason: :data_gap"
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
+    replace_once!(
+      "deps/replicant/lib/replicant/telemetry.ex",
+      ~s|validate_shapes!(meta, @meta_shapes, "metadata")|,
+      ~s|removed_shape_guard!(meta, @meta_shapes, "metadata")|
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
+    replace_once!(
+      "deps/replicant/lib/replicant/snapshotter/incremental.ex",
+      "attempt >= @max_table_attempts",
+      "attempt > @max_table_attempts"
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
     File.write!(
       fixture_path("README.md"),
       File.read!(fixture_path("README.md")) <> "\nThis project does not support Replicant 1.x.\n"
@@ -1062,7 +1103,9 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     for path <- [
           "lib/replicant/session_identity.ex",
           "lib/replicant/sink.ex",
-          "lib/replicant/connection.ex"
+          "lib/replicant/connection.ex",
+          "lib/replicant/telemetry.ex",
+          "lib/replicant/snapshotter/incremental.ex"
         ] do
       destination = fixture_path(Path.join("deps/replicant", path))
       File.mkdir_p!(Path.dirname(destination))

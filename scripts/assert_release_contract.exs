@@ -6,7 +6,7 @@ defmodule AshReplicant.ReleaseContract do
   @immutable_action ~r/\A[^@\s]+@[0-9a-f]{40}\z/
   @postgres_image "postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b"
   @ash_requirement ">= 3.31.3 and < 4.0.0-0"
-  @replicant_requirement ">= 1.0.0 and < 2.0.0-0"
+  @replicant_requirement ">= 1.2.1 and < 2.0.0-0"
   @checkout "actions/checkout@11d5960a326750d5838078e36cf38b85af677262"
   @setup_beam "erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236"
   @cache "actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830"
@@ -56,7 +56,7 @@ defmodule AshReplicant.ReleaseContract do
 
   expected = %{
     ash: ">= 3.31.3 and < 4.0.0-0",
-    replicant: ">= 1.0.0 and < 2.0.0-0"
+    replicant: ">= 1.2.1 and < 2.0.0-0"
   }
 
   Enum.each(expected, fn {dependency, requirement} ->
@@ -111,9 +111,9 @@ defmodule AshReplicant.ReleaseContract do
       "ash_selector" => "3.31.3",
       "ash_unlock" => true,
       "ash_requirement" => "== 3.31.3",
-      "replicant_selector" => "1.0.0",
+      "replicant_selector" => "1.2.1",
       "replicant_unlock" => true,
-      "replicant_requirement" => "== 1.0.0"
+      "replicant_requirement" => "== 1.2.1"
     },
     %{
       "label" => "current-lock",
@@ -221,19 +221,19 @@ defmodule AshReplicant.ReleaseContract do
      [
        "- Elixir 1.20.3 on Erlang/OTP 29;",
        "- Ash `#{@ash_requirement}` and AshPostgres 2.11.x;",
-       "- Replicant `#{@replicant_requirement}` (current release-candidate lock 1.1.0)"
+       "- Replicant `#{@replicant_requirement}` (current release-candidate lock 1.2.1)"
      ]},
     {"CONTRIBUTING.md", "## Prerequisites",
      [
        "- **Elixir 1.20.3** and **Erlang/OTP 29**",
        "- Ash `#{@ash_requirement}`; selector-free development uses this public range",
-       "- Replicant `#{@replicant_requirement}` from Hex; the release-candidate lock is 1.1.0."
+       "- Replicant `#{@replicant_requirement}` from Hex; the release-candidate lock is 1.2.1."
      ]},
     {"AGENTS.md", "## Development workflow",
      [
        "The supported release foundation is Elixir 1.20.3 on Erlang/OTP 29 with Ash\n" <>
          "`#{@ash_requirement}` and Replicant\n" <>
-         "`#{@replicant_requirement}` (current release-candidate lock 1.1.0)."
+         "`#{@replicant_requirement}` (current release-candidate lock 1.2.1)."
      ]}
   ]
 
@@ -546,6 +546,10 @@ defmodule AshReplicant.ReleaseContract do
     session_source = read_dependency_source!(root, "lib/replicant/session_identity.ex")
     sink_source = read_dependency_source!(root, "lib/replicant/sink.ex")
     connection_source = read_dependency_source!(root, "lib/replicant/connection.ex")
+    telemetry_source = read_dependency_source!(root, "lib/replicant/telemetry.ex")
+
+    incremental_source =
+      read_dependency_source!(root, "lib/replicant/snapshotter/incremental.ex")
 
     assert(
       String.contains?(session_source, "defmodule Replicant.SessionIdentity"),
@@ -555,6 +559,30 @@ defmodule AshReplicant.ReleaseContract do
     assert(
       String.contains?(sink_source, "@callback handle_session_identity"),
       "Replicant package contract is incomplete"
+    )
+
+    assert(
+      String.contains?(sink_source, "@callback handle_slot_origin") and
+        String.contains?(sink_source, "def notify_slot_origin") and
+        String.contains?(connection_source, "reason: :checkpoint_unknown"),
+      "Replicant checkpoint/slot contract is incomplete"
+    )
+
+    assert(
+      String.contains?(telemetry_source, "@meta_shapes") and
+        String.contains?(telemetry_source, "def validate_measurements!") and
+        String.contains?(
+          telemetry_source,
+          ~s|validate_shapes!(meta, @meta_shapes, "metadata")|
+        ),
+      "Replicant typed-telemetry contract is incomplete"
+    )
+
+    assert(
+      String.contains?(incremental_source, "@max_table_attempts 3") and
+        String.contains?(incremental_source, "def keyed_retry_decision") and
+        String.contains?(incremental_source, "attempt >= @max_table_attempts"),
+      "Replicant keyed-contention contract is incomplete"
     )
 
     assert(
@@ -569,7 +597,7 @@ defmodule AshReplicant.ReleaseContract do
   defp expected_replicant_lock_version do
     case System.get_env("ASH_REPLICANT_REPLICANT_VERSION") do
       value when value in [nil, "", "latest"] ->
-        "1.1.0"
+        "1.2.1"
 
       value ->
         with {:ok, _version} <- Version.parse(value),

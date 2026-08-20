@@ -58,7 +58,7 @@ The current 1.0.0 hardening baseline is built and tested with:
 
 - Elixir 1.20.3 on Erlang/OTP 29;
 - Ash `>= 3.31.3 and < 4.0.0-0` and AshPostgres 2.11.x;
-- Replicant `>= 1.0.0 and < 2.0.0-0` (current release-candidate lock 1.1.0) and
+- Replicant `>= 1.2.1 and < 2.0.0-0` (current release-candidate lock 1.2.1) and
   AshOnetime 0.6.x;
 - PostgreSQL with `wal_level=logical` for the live integration gate: CI pins
   PostgreSQL 16, the local gate runs whatever instance `ASH_REPLICANT_TEST_URL`

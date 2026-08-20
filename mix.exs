@@ -4,7 +4,7 @@ defmodule AshReplicant.MixProject do
   @version "0.4.0"
   @source_url "https://github.com/baselabs/ash_replicant"
   @ash_requirement ">= 3.31.3 and < 4.0.0-0"
-  @replicant_requirement ">= 1.0.0 and < 2.0.0-0"
+  @replicant_requirement ">= 1.2.1 and < 2.0.0-0"
 
   def project do
     [
