@@ -32,9 +32,14 @@ represented by the transport callback.
    event; snapshot rows carry snapshot origin/generation; standalone message
    recovery retains ADR-0015's claim rules; a batch remains one transaction.
 5. A fresh append sink declares exactly one initial-state intent: snapshot or
-   go-forward. Go-forward persists PostgreSQL's slot `consistent_point` as an
-   immutable origin floor before readiness. No completeness claim covers data
-   before that floor.
+   go-forward. Go-forward consumes Replicant's typed slot-origin callback. On
+   the first admitted activation it persists the callback origin as the
+   immutable floor: a new slot supplies its `CREATE_REPLICATION_SLOT`
+   `consistent_point`; a reused slot supplies its effective
+   `START_REPLICATION` origin. Later reconnect origins are moving resume facts,
+   never replacement floors; each must tie to the durable append checkpoint and
+   last appended identity, and an origin ahead of that frontier halts as a gap
+   before readiness. No completeness claim covers data before the floor.
 6. Append payloads use the same tenant and sensitive-type rules as state mirrors.
    Unknown/unmapped values halt before insert; no row value enters structural
    diagnostics or default telemetry labels.
@@ -52,4 +57,5 @@ represented by the transport callback.
 
 - Live insert/update/delete/truncate/message/snapshot/batch/replay tests,
   tenant/classification failures, same-LSN ordinal uniqueness, origin-floor
-  persistence, and a dedup-bypass mutation whose observer count goes red.
+  persistence for new and reused slots, reconnect-gap rejection, and a
+  dedup-bypass mutation whose observer count goes red.

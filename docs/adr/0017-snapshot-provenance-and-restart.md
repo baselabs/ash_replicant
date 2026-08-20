@@ -39,12 +39,15 @@ backfill row and must always win the collision.
    record using host-managed `:ash_replicant, :snapshot_provenance_keys`; no row
    value or guessable bare digest is stored or emitted.
 4. The host declares private tenant-scoped mark-seen and retire-unseen actions.
-   On retry, an admitted read compares provenance: an unchanged snapshot row
-   runs only mark-seen; a new or changed row runs the ordinary host business
-   action; a stream-origin row wins and is never reset by snapshot cleanup.
-   Completion retires only snapshot-origin rows in the logical generation that
-   were not seen in the completing physical attempt. SCD2 records provenance
-   per version and retires through the host close action.
+   The attempt marker records membership in the current physical attempt, not
+   permanent ownership by snapshot or stream. An unchanged snapshot row runs
+   only mark-seen; a new or changed row runs the ordinary host business action.
+   A stream write marks the current attempt only when its commit LSN is at or
+   beyond that attempt's exported snapshot floor, so a newer stream write wins without
+   protecting an old stream-origin row forever. Completion retires every
+   snapshot-managed row in scope that lacks the completing attempt's marker,
+   regardless of its prior origin or generation. SCD2 records provenance per
+   version and retires through the host close action.
 5. The normal create/destroy/SCD2-close actions, private provenance actions,
    checkpoint/progress writes, and every declared participant remain in the one
    admitted Repo/action graph. Internal provenance bookkeeping is reported
@@ -70,6 +73,7 @@ backfill row and must always win the collision.
 
 - Red-before-green v1 and incremental crash/retry marquees for SCD1, SCD2,
   tenancy, empty/keyed/PK-less tables, stream collision, batch/backpressure, key
-  rotation, stale attempt cleanup, and a fingerprint/attempt bypass mutation.
+  rotation, stale attempt cleanup, a source row deleted while delivery was
+  offline, and a fingerprint/attempt bypass mutation.
 - Append-only observers on host business actions prove no repeated effect while
   provenance/checkpoint rows demonstrate durable progress.

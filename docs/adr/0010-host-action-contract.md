@@ -120,8 +120,8 @@ host-side fanout.
 
 ## Approved 1.0 hardening amendment — implementation pending
 
-The 1.0 release design closes the probe-to-use residual above rather than
-shipping it as accepted risk. Any notifier that implements a dependency
+The 1.0 release design closes the notifier probe-to-use residual above rather
+than shipping it as accepted risk. Any notifier that implements a dependency
 `load/2` must both declare `DestinationParticipant` unconditionally and use
 the AshReplicant notifier wrapper. Admission canonicalizes the notifier's
 load statement, records its digest and declared action closure in the live
@@ -135,6 +135,8 @@ Notifiers without a preload callback retain the ordinary Ash contract. This
 amendment does not authorize notification dispatch or widen `notify/1` into
 the admitted effect graph.
 
-Until the wrapper and its stateful mutation tests land, the residual section
-above describes current code and this amendment is a proposed release gate,
-not a claim about shipped behavior.
+Until the wrapper and its stateful mutation tests land, the notifier residuals
+above describe current code and this amendment is a proposed release gate, not
+a claim about shipped behavior. The separate obligation on a host change module
+that invokes one protected auxiliary more than once is unaffected by the
+wrapper and remains a named trust limit after this amendment lands.
