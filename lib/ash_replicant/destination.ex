@@ -1,6 +1,7 @@
 defmodule AshReplicant.Destination do
   @moduledoc false
 
+  alias AshReplicant.Destination.NotifierLoads
   alias AshReplicant.DestinationParticipant
   alias AshReplicant.DestinationParticipant.{ActionRef, Context, ReplayIdentity}
   alias AshReplicant.Resource.Info
@@ -14,6 +15,7 @@ defmodule AshReplicant.Destination do
     AshReplicant.Apply.Context,
     AshReplicant.Apply.Scd2,
     AshReplicant.Destination,
+    AshReplicant.Destination.NotifierLoads,
     AshReplicant.DestinationParticipant,
     AshReplicant.Error,
     AshReplicant.Messages,
@@ -51,8 +53,8 @@ defmodule AshReplicant.Destination do
 
   defmodule Manifest do
     @moduledoc false
-    @enforce_keys [:repo, :entries, :onetime_prefixes_by_action, :digest]
-    defstruct [:repo, :entries, :onetime_prefixes_by_action, :digest]
+    @enforce_keys [:repo, :entries, :onetime_prefixes_by_action, :notifier_loads, :digest]
+    defstruct [:repo, :entries, :onetime_prefixes_by_action, :notifier_loads, :digest]
 
     @type prefix :: nil | String.t() | :context_tenant
     @type action_key :: {module(), atom()}
@@ -60,6 +62,15 @@ defmodule AshReplicant.Destination do
             repo: module(),
             entries: [Entry.t()],
             onetime_prefixes_by_action: %{optional(action_key()) => [prefix()]},
+            # Every admitted action's notifier `load/2` fingerprints — the
+            # binding delivery re-checks before it runs the action, and (via
+            # the digest) the generation revalidation re-checks at every
+            # callback entry.
+            notifier_loads: %{
+              optional(action_key()) => %{
+                optional(module()) => AshReplicant.Destination.NotifierLoads.binding()
+              }
+            },
             digest: binary()
           }
   end
@@ -191,6 +202,8 @@ defmodule AshReplicant.Destination do
           | {:destination_participant_mismatch, module(), atom()}
           | {:destination_participant_cycle, module(), atom()}
           | {:destination_notifier_required, module(), atom(), module()}
+          | {:destination_notifier_unstable, module(), atom(), module()}
+          | {:destination_notifier_unwrapped, module(), atom(), module()}
           | {:destination_message_route_invalid, module(), atom()}
 
   @spec manifest(map()) :: {:ok, Manifest.t()} | {:error, reason()}
@@ -200,7 +213,7 @@ defmodule AshReplicant.Destination do
 
     with :ok <- validate_repo_module(repo),
          {:ok, roots} <- root_actions(domains, checkpoint, message_routes),
-         {:ok, entries, onetime_prefixes_by_action} <- walk_roots(roots, repo),
+         {:ok, entries, onetime_prefixes_by_action, notifier_loads} <- walk_roots(roots, repo),
          :ok <- validate_onetime_entries(entries) do
       entries =
         entries
@@ -210,7 +223,10 @@ defmodule AshReplicant.Destination do
       digest =
         :crypto.hash(
           :sha256,
-          :erlang.term_to_binary({repo, entries, onetime_prefixes_by_action}, [:deterministic])
+          :erlang.term_to_binary(
+            {repo, entries, onetime_prefixes_by_action, notifier_loads},
+            [:deterministic]
+          )
         )
 
       {:ok,
@@ -218,6 +234,7 @@ defmodule AshReplicant.Destination do
          repo: repo,
          entries: entries,
          onetime_prefixes_by_action: onetime_prefixes_by_action,
+         notifier_loads: notifier_loads,
          digest: digest
        }}
     end
@@ -421,32 +438,72 @@ defmodule AshReplicant.Destination do
   end
 
   defp walk_roots(roots, repo) do
-    Enum.reduce_while(roots, {:ok, [], %{}}, fn root, {:ok, all_entries, prefixes_by_action} ->
-      case walk([root], repo, %{}, %{}, []) do
-        {:ok, _completed, entries} ->
-          {resource, action, _role, _source, _tenant_mode, _replay_identity} = root
-
-          prefixes =
-            entries
-            |> Enum.filter(&is_map(&1.protection))
-            |> Enum.map(&onetime_static_prefix/1)
-            |> Enum.uniq()
-            |> Enum.sort_by(&prefix_sort_key/1)
-
-          prefixes_by_action =
-            Map.update(
-              prefixes_by_action,
-              {resource, action},
-              prefixes,
-              &merge_prefixes(&1, prefixes)
-            )
-
-          {:cont, {:ok, entries ++ all_entries, prefixes_by_action}}
+    Enum.reduce_while(roots, {:ok, [], %{}, %{}}, fn root,
+                                                     {:ok, all_entries, prefixes_by_action,
+                                                      all_loads} ->
+      case walk([root], repo, %{}, %{}, [], %{}) do
+        {:ok, _completed, entries, loads} ->
+          accumulate_root(root, entries, loads, all_entries, prefixes_by_action, all_loads)
 
         {:error, _reason} = error ->
           {:halt, error}
       end
     end)
+  end
+
+  defp accumulate_root(root, entries, loads, all_entries, prefixes_by_action, all_loads) do
+    {resource, action, _role, _source, _tenant_mode, _replay_identity} = root
+
+    prefixes =
+      entries
+      |> Enum.filter(&is_map(&1.protection))
+      |> Enum.map(&onetime_static_prefix/1)
+      |> Enum.uniq()
+      |> Enum.sort_by(&prefix_sort_key/1)
+
+    prefixes_by_action =
+      Map.update(
+        prefixes_by_action,
+        {resource, action},
+        prefixes,
+        &merge_prefixes(&1, prefixes)
+      )
+
+    case merge_notifier_loads(all_loads, loads) do
+      {:ok, all_loads} -> {:cont, {:ok, entries ++ all_entries, prefixes_by_action, all_loads}}
+      {:error, _reason} = error -> {:halt, error}
+    end
+  end
+
+  # Each root walks with a fresh `completed` map, so an action reachable from
+  # two roots is probed twice. Two probes that disagree prove the statement is
+  # not reproducible even though each probe pair agreed with itself — a
+  # slower-moving statefulness than `probe/3` can see, and the same fail-closed
+  # verdict.
+  defp merge_notifier_loads(existing, additional) do
+    Enum.reduce_while(additional, {:ok, existing}, fn {key, bindings}, {:ok, acc} ->
+      case Map.fetch(acc, key) do
+        :error ->
+          {:cont, {:ok, Map.put(acc, key, bindings)}}
+
+        {:ok, ^bindings} ->
+          {:cont, {:ok, acc}}
+
+        {:ok, admitted} ->
+          {resource, action} = key
+
+          {:halt,
+           {:error,
+            {:destination_notifier_unstable, resource, action, divergent(admitted, bindings)}}}
+      end
+    end)
+  end
+
+  defp divergent(admitted, current) do
+    (Map.keys(admitted) ++ Map.keys(current))
+    |> Enum.uniq()
+    |> Enum.sort_by(&Atom.to_string/1)
+    |> Enum.find(&(Map.get(admitted, &1) != Map.get(current, &1)))
   end
 
   defp merge_active_source(active, key, source),
@@ -563,7 +620,8 @@ defmodule AshReplicant.Destination do
     end
   end
 
-  defp walk([], _repo, _active, completed, entries), do: {:ok, completed, entries}
+  defp walk([], _repo, _active, completed, entries, loads),
+    do: {:ok, completed, entries, loads}
 
   defp walk(
          [
@@ -573,7 +631,8 @@ defmodule AshReplicant.Destination do
          repo,
          active,
          completed,
-         entries
+         entries,
+         loads
        ) do
     key = {resource, action_name}
     protection = normalized_protection(resource, action_name)
@@ -600,7 +659,7 @@ defmodule AshReplicant.Destination do
         {:error, {:destination_participant_cycle, resource, action_name}}
 
       Map.has_key?(completed, key) ->
-        walk(rest, repo, active, completed, [entry | entries])
+        walk(rest, repo, active, completed, [entry | entries], loads)
 
       true ->
         with :ok <- validate_resource_repo(resource, repo),
@@ -608,18 +667,19 @@ defmodule AshReplicant.Destination do
              %{} = action <- Ash.Resource.Info.action(resource, action_name),
              :ok <- validate_action_tenant_scoping(resource, action),
              {:ok, refs} <- inspect_action(resource, action, role == :message),
-             {:ok, refs, all_refs} <-
+             {:ok, refs, all_refs, action_loads} <-
                validate_action_notifiers(resource, action, refs, source),
              :ok <- validate_touches(resource, action, refs),
-             {:ok, completed, entries} <-
+             {:ok, completed, entries, loads} <-
                walk(
                  participant_roots(all_refs),
                  repo,
                  merge_active_source(active, key, source),
                  completed,
-                 [entry | entries]
+                 [entry | entries],
+                 Map.put(loads, key, action_loads)
                ) do
-          walk(rest, repo, active, Map.put(completed, key, true), entries)
+          walk(rest, repo, active, Map.put(completed, key, true), entries, loads)
         else
           nil -> {:error, {:destination_action_missing, resource, action_name}}
           {:error, _reason} = error -> error
@@ -634,28 +694,48 @@ defmodule AshReplicant.Destination do
   # alive even under return_records?: false). A notifier whose load/2 returns
   # a non-empty statement triggers host reads INSIDE the sink's delivery
   # transaction, so it must declare a DestinationParticipant for the new
-  # :notifier kind — the same trust model as tenant_mfa. The probe replicates
-  # ASH'S OWN gate exactly: implements_load? first (a notifier implementing
-  # the behaviour WITHOUT load/2 — the optional callback — imposes nothing),
-  # then Ash.Notifier.load/2 with non-empty = List.wrap(statement) != [].
+  # :notifier kind — the same trust model as tenant_mfa. The probe
+  # (`AshReplicant.Destination.NotifierLoads.probe/3`) replicates ASH'S OWN
+  # gate exactly: the optional-callback check first (a notifier implementing
+  # the behaviour WITHOUT load/2 imposes nothing), then Ash.Notifier.load/2
+  # with non-empty = List.wrap(statement) != [].
   # `declared_by` is the module whose DestinationParticipant declaration
   # admitted THIS action into the walk: when that same module is a
   # load-carrying notifier, its declaration already covers the reads its
   # load statement triggers here — re-demanding on the referenced action
   # would regress infinitely (declare :read → visit :read → demand again).
+  #
+  # The statement is also BOUND here (issue #3): the fingerprint the manifest
+  # carries comes from the SAME probe this validation uses, for EVERY notifier
+  # — the empty-statement ones included, which is what makes a later
+  # empty-to-non-empty flip visible at delivery. A notifier skipped by the
+  # `declared_by` guard is still probed and bound: skipping the binding would
+  # leave delivery seeing a notifier the manifest never recorded.
   defp validate_action_notifiers(resource, action, refs, declared_by) do
-    notifiers = Ash.Resource.Info.notifiers(resource) ++ List.wrap(Map.get(action, :notifiers))
+    resource
+    |> NotifierLoads.notifiers(action)
+    |> Enum.reduce_while({:ok, refs, refs, %{}}, fn notifier, {:ok, refs, all_refs, loads} ->
+      case NotifierLoads.probe(resource, action, notifier) do
+        {:ok, statement, fingerprint} ->
+          validate_notifier(
+            resource,
+            action,
+            refs,
+            all_refs,
+            Map.put(loads, notifier, fingerprint),
+            notifier,
+            statement,
+            declared_by
+          )
 
-    Enum.reduce_while(notifiers, {:ok, refs, refs}, fn notifier, {:ok, refs, all_refs} ->
-      # Unwrap the {:notifier, module} tag: a notifier-sourced entry's
-      # declaration of the action it was probed on is the same logical edge
-      # (the load genuinely triggers the resource's own read) — re-probing it
-      # would false-cycle for a context-INSENSITIVE uniform declaration
-      # (diff-review F2). Everything else re-validates.
-      if declared_by in [notifier, {:notifier, notifier}] do
-        {:cont, {:ok, refs, all_refs}}
-      else
-        validate_notifier(resource, action, refs, all_refs, notifier)
+        # A load/2 that will not reproduce its own statement pins nothing:
+        # whatever the manifest recorded, delivery could be handed something
+        # else. Rejected at admission rather than left to the delivery gate.
+        :unstable ->
+          {:halt, {:error, {:destination_notifier_unstable, resource, action.name, notifier}}}
+
+        :error ->
+          {:halt, {:error, {:destination_notifier_required, resource, action.name, notifier}}}
       end
     end)
   end
@@ -663,25 +743,46 @@ defmodule AshReplicant.Destination do
   # The probe faults name the FAULTING notifier (a raising load/2 or
   # destination_participants callback is this module's defect), never the
   # whole notifier list (cross-vendor finding).
-  defp validate_notifier(resource, action, refs, all_refs, notifier) do
-    statement =
-      if implements_load?(notifier) do
-        Ash.Notifier.load(notifier, resource, action)
-      else
-        []
-      end
+  defp validate_notifier(
+         resource,
+         action,
+         refs,
+         all_refs,
+         loads,
+         notifier,
+         statement,
+         declared_by
+       ) do
+    cond do
+      # Unwrap the {:notifier, module} tag: a notifier-sourced entry's
+      # declaration of the action it was probed on is the same logical edge
+      # (the load genuinely triggers the resource's own read) — re-demanding it
+      # would false-cycle for a context-INSENSITIVE uniform declaration
+      # (diff-review F2). Everything else re-validates.
+      declared_by in [notifier, {:notifier, notifier}] ->
+        {:cont, {:ok, refs, all_refs, loads}}
 
-    case List.wrap(statement) do
-      [] ->
-        {:cont, {:ok, refs, all_refs}}
+      statement == [] ->
+        {:cont, {:ok, refs, all_refs, loads}}
 
-      _non_empty ->
-        # A load-carrying notifier MUST implement the participant behaviour —
-        # its declaration carries the trust (same model as tenant_mfa).
-        if participant?(notifier) do
-          admit_notifier_participant(resource, action, notifier, refs, all_refs)
-        else
-          {:halt, {:error, {:destination_notifier_required, resource, action.name, notifier}}}
+      # A load-carrying notifier MUST implement the participant behaviour —
+      # its declaration carries the trust (same model as tenant_mfa). Checked
+      # BEFORE the wrapper so an undeclared notifier keeps naming the missing
+      # declaration, which is the more useful diagnostic of the two.
+      not participant?(notifier) ->
+        {:halt, {:error, {:destination_notifier_required, resource, action.name, notifier}}}
+
+      # ...and it must route that statement through the verified wrapper
+      # (ADR-0010's 1.0 amendment). A declaration alone binds nothing: Ash
+      # calls `load/2` again at delivery, and only the wrapper is in that call
+      # path to compare what it is about to hand over.
+      not AshReplicant.Notifier.wrapped?(notifier) ->
+        {:halt, {:error, {:destination_notifier_unwrapped, resource, action.name, notifier}}}
+
+      true ->
+        case admit_notifier_participant(resource, action, notifier, refs, all_refs) do
+          {:cont, {:ok, refs, all_refs}} -> {:cont, {:ok, refs, all_refs, loads}}
+          {:halt, _error} = halt -> halt
         end
     end
   rescue
@@ -729,11 +830,6 @@ defmodule AshReplicant.Destination do
       ref.resource == resource and ref.action == action.name
     end)
     |> Enum.map(fn {ref, _module} -> {ref, {:notifier, notifier}} end)
-  end
-
-  # `function_exported?/3` does not load the module — mirror Ash's exact gate.
-  defp implements_load?(notifier) do
-    Code.ensure_loaded?(notifier) and function_exported?(notifier, :load, 2)
   end
 
   # EVERY admitted action — mapped roots, checkpoint, SCD2 close, and declared

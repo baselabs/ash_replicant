@@ -356,6 +356,68 @@ end
 ```
 <!-- ash-replicant-destination-participant-example:end -->
 
+### Notifiers with a dependency pre-load
+
+The sink suppresses notification DISPATCH for mirrored changes, but not the
+dependency pre-load: Ash runs a notifier's load statement after every
+successful create/destroy regardless. A non-empty statement therefore executes
+host reads *inside* the sink's delivery transaction.
+
+Ash re-derives that statement by calling `load/2` again at delivery, so an
+admission-time probe binds nothing on its own — a `load/2` that reads
+application config, process state, or the clock can be empty when the manifest
+is built and non-empty when the sink delivers. A notifier attached to a
+mirrored resource whose statement is non-empty must therefore do BOTH:
+
+1. declare `AshReplicant.DestinationParticipant` (the `:notifier` kind), and
+2. route its statement through `AshReplicant.Notifier` — replace `load/2` with
+   `preload/2` and let the wrapper define `load/2`:
+
+<!-- ash-replicant-notifier-wrapper-example:start -->
+```elixir
+defmodule MyApp.UsageRulesOrderNotifier do
+  use Ash.Notifier
+  use AshReplicant.Notifier
+
+  @behaviour AshReplicant.DestinationParticipant
+
+  alias AshReplicant.DestinationParticipant.{ActionRef, Context}
+
+  @impl Ash.Notifier
+  def notify(_notification), do: :ok
+
+  @impl AshReplicant.Notifier
+  def preload(_resource, _action), do: [:total]
+
+  @impl AshReplicant.DestinationParticipant
+  def destination_participants(_opts, %Context{resource: resource, action: action})
+      when action != :read do
+    {:ok, {:actions, [%ActionRef{resource: resource, action: :read}]}}
+  end
+
+  def destination_participants(_opts, _context), do: {:ok, :no_database}
+end
+```
+<!-- ash-replicant-notifier-wrapper-example:end -->
+
+`use Ash.Notifier` must come first. Inside a sink delivery the generated
+`load/2` compares the statement — and the participant declaration's action
+closure — against what the live generation admitted, and only then hands that
+exact statement to Ash; drift halts before the dependency query runs. On the
+host's own writes it is an ordinary Ash notifier.
+
+Admission rejects the ways this can be wrong, naming resource, action, and
+notifier: `:destination_notifier_required` (no declaration),
+`:destination_notifier_unwrapped` (declared, but raw `load/2`), and
+`:destination_notifier_unstable` (a statement or declaration that will not
+reproduce itself between two consecutive calls). At delivery the sink's own
+check adds `{:invalid_destination_config, :notifier_load_drift |
+:notifier_load_unadmitted | :notifier_load_probe_failed}` for what the wrapper
+cannot see — chiefly a notifier whose statement was empty at admission and is
+not any more.
+
+A notifier with no load statement needs none of this and is unchanged.
+
 Declarations are trusted metadata; they do not prove an arbitrary Elixir body.
 Never conceal raw SQL, another Repo, asynchronous work, or an external effect
 behind one. The containing action's `touches_resources` must exactly equal the

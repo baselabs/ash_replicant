@@ -876,19 +876,31 @@ defmodule AshReplicant.Sink.Impl do
 
       guard_generation!(config)
 
+      # The bulk upsert runs the notifier dependency pre-load exactly as the
+      # per-record path does (`return_notifications?: true` keeps it alive
+      # under `return_records?: false`), so it takes the same binding check.
+      Apply.Context.verify_notifier_loads!(
+        config,
+        resource,
+        Resolver.upsert_action(resource),
+        :snapshot
+      )
+
       result =
-        Ash.bulk_create(inputs, resource, Resolver.upsert_action(resource),
-          upsert?: true,
-          upsert_identity: Resolver.upsert_identity(resource),
-          upsert_fields: upsert_fields,
-          stop_on_error?: true,
-          return_errors?: true,
-          return_records?: false,
-          return_notifications?: true,
-          authorize?: config.authorize?,
-          context: snapshot_action_context(config, snapshot_lsn, ordinal_base),
-          transaction: false
-        )
+        Apply.Context.with_admitted_manifest(config, fn ->
+          Ash.bulk_create(inputs, resource, Resolver.upsert_action(resource),
+            upsert?: true,
+            upsert_identity: Resolver.upsert_identity(resource),
+            upsert_fields: upsert_fields,
+            stop_on_error?: true,
+            return_errors?: true,
+            return_records?: false,
+            return_notifications?: true,
+            authorize?: config.authorize?,
+            context: snapshot_action_context(config, snapshot_lsn, ordinal_base),
+            transaction: false
+          )
+        end)
 
       guard_generation!(config)
 

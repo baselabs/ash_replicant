@@ -4,6 +4,9 @@ defmodule AshReplicant.DocsTest do
   @participant_example_start "<!-- ash-replicant-destination-participant-example:start -->"
   @participant_example_end "<!-- ash-replicant-destination-participant-example:end -->"
 
+  @wrapper_example_start "<!-- ash-replicant-notifier-wrapper-example:start -->"
+  @wrapper_example_end "<!-- ash-replicant-notifier-wrapper-example:end -->"
+
   test "the tracked family docs exist and carry the binding rules" do
     for f <-
           ~w(CLAUDE.md AGENTS.md README.md CHANGELOG.md usage-rules.md CONTRIBUTING.md LICENSE NOTICE) do
@@ -75,6 +78,50 @@ defmodule AshReplicant.DocsTest do
         :code.purge(module)
         :code.delete(module)
       end)
+    end
+  end
+
+  test "the published notifier wrapper example compiles AND reads as wrapped" do
+    source = extract_example!("usage-rules.md", @wrapper_example_start, @wrapper_example_end)
+    compiled = Code.compile_string(source, "usage-rules.md")
+
+    assert compiled != [], "notifier wrapper example compiled no modules"
+
+    Enum.each(compiled, fn {module, _binary} ->
+      # A published example that would itself fail admission is worse than no
+      # example: it must satisfy both halves of the contract it documents.
+      assert AshReplicant.Notifier.wrapped?(module)
+      assert function_exported?(module, :load, 2), "the wrapper must define load/2"
+      assert function_exported?(module, :destination_participants, 2)
+
+      :code.purge(module)
+      :code.delete(module)
+    end)
+  end
+
+  test "ADR-0010 states the notifier wrapper amendment LANDED (no stale 'pending')" do
+    adr = File.read!("docs/adr/0010-host-action-contract.md")
+
+    refute adr =~ "implementation pending"
+    refute adr =~ "not\na claim about shipped behavior"
+    assert adr =~ "AshReplicant.Notifier"
+    assert adr =~ "destination_notifier_unwrapped"
+    assert adr =~ "notifier_load_drift"
+
+    agents = File.read!("AGENTS.md")
+    assert agents =~ "AshReplicant.Notifier"
+    assert agents =~ "destination_notifier_unwrapped"
+  end
+
+  defp extract_example!(path, start_marker, end_marker) do
+    content = File.read!(path)
+
+    pattern =
+      ~r/#{Regex.escape(start_marker)}\s*```elixir\s*\n(?<source>.*?)\n```\s*#{Regex.escape(end_marker)}/s
+
+    case Regex.scan(pattern, content, capture: :all_names) do
+      [[source]] -> source
+      matches -> flunk("expected one example in #{path}, got #{length(matches)}")
     end
   end
 

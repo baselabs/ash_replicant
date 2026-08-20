@@ -880,3 +880,21 @@ defmodule SnapshotLoadSink do
     checkpoint_resource: AshReplicant.Test.Checkpoint,
     slot_name: "notifier_snapshot_slot"
 end
+
+defmodule DriftLoadSink do
+  @moduledoc false
+  use AshReplicant.Sink,
+    repo: AshReplicant.TestRepo,
+    domains: [AshReplicant.Test.DestinationFixtures.DriftLoadDomain],
+    checkpoint_resource: AshReplicant.Test.Checkpoint,
+    slot_name: "notifier_drift_slot"
+end
+
+defmodule InbandDriftSink do
+  @moduledoc false
+  use AshReplicant.Sink,
+    repo: AshReplicant.TestRepo,
+    domains: [AshReplicant.Test.DestinationFixtures.InbandDriftDomain],
+    checkpoint_resource: AshReplicant.Test.Checkpoint,
+    slot_name: "notifier_inband_drift_slot"
+end

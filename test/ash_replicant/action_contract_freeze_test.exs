@@ -261,6 +261,10 @@ defmodule AshReplicant.ActionContractFreezeTest do
       {{:destination_action_tenant_bypass, nil, nil}, nil},
       {{:destination_notifier_required, DestinationFixtures.LoadRoot, :read,
         DestinationFixtures.LoadNotifier}, nil},
+      {{:destination_notifier_unstable, DestinationFixtures.UnstableLoadRoot, :read,
+        DestinationFixtures.UnstableLoadNotifier}, nil},
+      {{:destination_notifier_unwrapped, DestinationFixtures.UnwrappedLoadRoot, :read,
+        DestinationFixtures.UnwrappedLoadNotifier}, nil},
       {{:destination_participant_cycle, nil, nil}, nil},
       {{:destination_message_route_invalid, AshReplicant.Test.Messages.NonceOutbox, :record},
        nil},
@@ -324,6 +328,12 @@ defmodule AshReplicant.ActionContractFreezeTest do
 
       assert {_, 4, true} =
                Enum.find(enumerated, &match?({:destination_notifier_required, 4, true}, &1))
+
+      assert {_, 4, true} =
+               Enum.find(enumerated, &match?({:destination_notifier_unstable, 4, true}, &1))
+
+      assert {_, 4, true} =
+               Enum.find(enumerated, &match?({:destination_notifier_unwrapped, 4, true}, &1))
 
       assert {_, 2, true} =
                Enum.find(enumerated, &match?({:destination_repo_not_postgres, _, _}, &1))

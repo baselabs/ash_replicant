@@ -134,8 +134,18 @@ defmodule AshReplicant.Error do
     defp typed_reason(unquote(reason)), do: unquote(reason)
   end
 
-  defp typed_reason({:invalid_destination_config, :onetime_store}),
-    do: {:invalid_destination_config, :onetime_store}
+  # The destination tuple's own closed sub-reason set (ADR-0011 additive
+  # growth). Each is minted by a runtime admission check on the delivery path
+  # and has to survive the scrub, or an operator loses the branch.
+  @closed_destination_tags [
+    :onetime_store,
+    :notifier_load_drift,
+    :notifier_load_unadmitted,
+    :notifier_load_probe_failed
+  ]
+
+  defp typed_reason({:invalid_destination_config, tag}) when tag in @closed_destination_tags,
+    do: {:invalid_destination_config, tag}
 
   defp typed_reason(_other), do: :sink_failed
 end

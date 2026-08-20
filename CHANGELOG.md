@@ -16,6 +16,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
+- A notifier attached to a mirrored resource whose load statement is
+  non-empty must now route it through the new `AshReplicant.Notifier`
+  wrapper in addition to declaring `AshReplicant.DestinationParticipant`.
+  Replace `load/2` with `preload/2` and add `use AshReplicant.Notifier`
+  after `use Ash.Notifier`; the wrapper defines `load/2`. Admission rejects
+  an unwrapped one with
+  `{:destination_notifier_unwrapped, resource, action, notifier}`, and a
+  statement or declaration that will not reproduce itself between two
+  consecutive calls with
+  `{:destination_notifier_unstable, resource, action, notifier}`. Notifiers
+  with no load statement are unchanged and need nothing. Ash re-derives the
+  statement at delivery, so the declaration alone bound nothing: only the
+  wrapper sits in that call path (ADR-0010's 1.0 amendment, now landed).
 - The generated checkpoint resource is now **default-deny** (roadmap B7 /
   ADR-0014): `use AshReplicant.Checkpoint` generates `Ash.Policy.Authorizer`
   with an empty policy set, forbidding every external actor on every action.
@@ -32,6 +45,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that tree.
 
 ### Added
+
+- **Bound notifier load statements (ADR-0010 1.0 amendment).** The
+  destination manifest now carries, for every admitted action, each
+  notifier's load-statement digest and declared action-closure digest
+  (`Manifest.notifier_loads`, inside `Manifest.digest`). `AshReplicant.Notifier`
+  compares both before handing Ash the statement, and
+  `AshReplicant.Apply.Context.verify_notifier_loads!/4` re-checks immediately
+  before every sink-driven host action — mirror upsert and destroy, SCD2
+  close and open, snapshot `bulk_create`, and message routes — for what the
+  wrapper cannot see. Three additive reasons join the frozen taxonomy
+  (ADR-0011) under the existing destination tuple:
+  `{:invalid_destination_config, :notifier_load_drift}`,
+  `{:invalid_destination_config, :notifier_load_unadmitted}`, and
+  `{:invalid_destination_config, :notifier_load_probe_failed}`. All are
+  value-free and survive the sink's scrub, so operators can branch on them.
 
 - Require fetched Replicant `>= 1.2.1 and < 2.0.0-0` and pin the release lock to
   public Hex 1.2.1. The dependency contract now proves slot-origin rejection,

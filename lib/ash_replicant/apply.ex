@@ -37,11 +37,20 @@ defmodule AshReplicant.Apply do
         :ok
 
       resource ->
-        if Info.history_scd2?(resource) do
-          Scd2.apply(config, resource, change, commit_timestamp)
-        else
-          apply_to(config, resource, change, commit_timestamp)
-        end
+        # Bind the admitted manifest for the whole change: a wrapped notifier's
+        # `load/2` runs deep inside Ash's own call stack, and this
+        # process-scoped binding is the only channel Ash leaves open to it.
+        Context.with_admitted_manifest(config, fn ->
+          dispatch(config, resource, change, commit_timestamp)
+        end)
+    end
+  end
+
+  defp dispatch(config, resource, change, commit_timestamp) do
+    if Info.history_scd2?(resource) do
+      Scd2.apply(config, resource, change, commit_timestamp)
+    else
+      apply_to(config, resource, change, commit_timestamp)
     end
   end
 
@@ -160,6 +169,7 @@ defmodule AshReplicant.Apply do
     tenant = Resolver.resolve_tenant!(resource, change.record, :upsert)
     action = Resolver.upsert_action(resource)
     Context.preflight_onetime!(config, tenant, resource, action, :upsert)
+    Context.verify_notifier_loads!(config, resource, action, :upsert)
 
     Ash.create!(resource, inputs,
       action: action,
@@ -199,6 +209,7 @@ defmodule AshReplicant.Apply do
     tenant = Resolver.resolve_tenant!(resource, old_record, :destroy)
     action = Resolver.destroy_action(resource)
     Context.preflight_onetime!(config, tenant, resource, action, :destroy)
+    Context.verify_notifier_loads!(config, resource, action, :destroy)
 
     query =
       resource
