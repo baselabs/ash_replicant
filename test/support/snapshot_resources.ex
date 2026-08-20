@@ -10,6 +10,7 @@ defmodule AshReplicant.Test.SnapshotDomain do
 
   resources do
     resource AshReplicant.Test.SnapOrder
+    resource AshReplicant.Test.SnapIdentityOrder
     resource AshReplicant.Test.SnapTenantOrder
     resource AshReplicant.Test.SnapVersion
   end
@@ -46,6 +47,56 @@ defmodule AshReplicant.Test.SnapOrder do
 
     attribute :replica_fingerprint, :binary, public?: false, writable?: false
     attribute :replica_seen_attempt, :binary, public?: false, writable?: false
+  end
+
+  actions do
+    defaults [:read, :destroy, create: :*, update: :*]
+
+    update :replicant_mark_seen do
+      public? false
+      accept []
+      require_atomic? false
+      change AshReplicant.Snapshot.MarkSeen
+    end
+
+    destroy :replicant_retire_unseen do
+      public? false
+    end
+  end
+end
+
+defmodule AshReplicant.Test.SnapIdentityOrder do
+  @moduledoc """
+  SCD1 provenance fixture whose target primary key is generated and whose mirror
+  upserts by a declared natural identity. Snapshot lookup and marking must use
+  that same identity; the incoming source row deliberately carries no target id.
+  """
+  use Ash.Resource,
+    domain: AshReplicant.Test.SnapshotDomain,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshReplicant.Resource]
+
+  postgres do
+    table "snap_identity_orders"
+    repo AshReplicant.TestRepo
+  end
+
+  replicant do
+    source_table("snap_identity_orders")
+    upsert_identity(:external_ref)
+    snapshot_provenance(true)
+  end
+
+  attributes do
+    uuid_primary_key :id
+    attribute :external_id, :string, allow_nil?: false, public?: true
+    attribute :note, :string, public?: true
+    attribute :replica_fingerprint, :binary, public?: false, writable?: false
+    attribute :replica_seen_attempt, :binary, public?: false, writable?: false
+  end
+
+  identities do
+    identity :external_ref, [:external_id]
   end
 
   actions do

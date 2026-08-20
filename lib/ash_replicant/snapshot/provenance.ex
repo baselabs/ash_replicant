@@ -108,7 +108,7 @@ defmodule AshReplicant.Snapshot.Provenance do
   end
 
   defp valid_key?({version, key})
-       when is_integer(version) and version >= 1 and is_binary(key) and
+       when is_integer(version) and version >= 1 and version <= 0xFFFFFFFF and is_binary(key) and
               byte_size(key) >= @min_key_bytes,
        do: true
 

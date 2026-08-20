@@ -15,7 +15,14 @@ defmodule AshReplicant.SnapshotV1RetryTest do
 
   alias AshReplicant.Sink.Impl
   alias AshReplicant.Snapshot.{Provenance, State}
-  alias AshReplicant.Test.{AdmittedGeneration, SnapOrder, SnapshotEffects, SnapTenantOrder}
+
+  alias AshReplicant.Test.{
+    AdmittedGeneration,
+    SnapIdentityOrder,
+    SnapOrder,
+    SnapshotEffects,
+    SnapTenantOrder
+  }
 
   @slot "snap_v1_slot"
   @lsn 5_000
@@ -69,6 +76,14 @@ defmodule AshReplicant.SnapshotV1RetryTest do
       schema: "public",
       table: "snap_tenant_orders",
       record: %{"id" => id, "org_id" => org, "note" => note}
+    }
+
+  defp identity_order(external_id, note),
+    do: %Replicant.Change{
+      op: :snapshot,
+      schema: "public",
+      table: "snap_identity_orders",
+      record: %{"external_id" => external_id, "note" => note}
     }
 
   defp ctx(table, first?, lsn \\ @lsn),
@@ -246,6 +261,20 @@ defmodule AshReplicant.SnapshotV1RetryTest do
 
       assert SnapshotEffects.business_ops("ghost") == ["DELETE"]
     end
+
+    test "SCD1 lookup and marking use the declared upsert identity when the target PK is generated" do
+      rows = [{"snap_identity_orders", [identity_order("external-1", "a")]}]
+
+      assert {:ok, _} = run_snapshot!(rows)
+      assert %SnapIdentityOrder{} = Ash.read_one!(SnapIdentityOrder, authorize?: false)
+
+      SnapshotEffects.reset!()
+      activate!()
+
+      assert {:ok, _} = run_snapshot!(rows)
+
+      refute Enum.any?(SnapshotEffects.business(), &(&1.table == "snap_identity_orders"))
+    end
   end
 
   describe "provenance key rotation and key loss" do
@@ -346,6 +375,29 @@ defmodule AshReplicant.SnapshotV1RetryTest do
 
       assert %SnapOrder{} = Ash.get!(SnapOrder, "later", authorize?: false)
       assert SnapshotEffects.all() == []
+    end
+
+    test "an older later-owner completion is rejected before retiring a row beyond the watermark" do
+      assert {:ok, @lsn} = run_snapshot!([{"snap_orders", [order("1", "a")]}])
+
+      Ash.create!(SnapOrder, %{id: "later", note: "streamed"},
+        action: :create,
+        authorize?: false
+      )
+
+      TestRepo.query!(
+        "UPDATE ash_replicant_checkpoints SET commit_lsn = $1 WHERE slot_name = $2",
+        [@lsn + 100, @slot]
+      )
+
+      SnapshotEffects.reset!()
+      activate!()
+
+      assert :ok = Sink.handle_snapshot([order("1", "a")], ctx("snap_orders", true, @lsn))
+      assert {:ok, @lsn} = Sink.handle_snapshot_complete(@lsn)
+
+      assert %SnapOrder{} = Ash.get!(SnapOrder, "later", authorize?: false)
+      refute Enum.any?(SnapshotEffects.business(), &(&1.row_key == "later"))
     end
 
     test "completion enumerates a destination tenant the source attempt never mentioned" do

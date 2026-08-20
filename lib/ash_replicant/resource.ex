@@ -96,7 +96,7 @@ defmodule AshReplicant.Resource do
       ],
       upsert_identity: [
         type: :atom,
-        doc: "Identity name used for the upsert-by-PK mirror write."
+        doc: "Identity name used for the mirror upsert and its matching SCD1 provenance lookup."
       ],
       history_strategy: [
         type: {:one_of, [:scd1, :scd2]},

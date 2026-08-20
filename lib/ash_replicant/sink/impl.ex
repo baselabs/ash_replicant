@@ -808,18 +808,22 @@ defmodule AshReplicant.Sink.Impl do
 
     row = locked_checkpoint_row!(config)
 
-    if Retirement.provenance_sink?(config) do
-      complete_attempt!(config, row, snapshot_lsn)
-    end
-
     case row.commit_lsn do
-      # Monotonic handoff: a re-delivered/older consistent point never
-      # regresses the durable watermark. No write; the framework acks its
-      # own consistent point, never the sink's return value.
-      cp when is_integer(cp) and snapshot_lsn <= cp ->
+      # Monotonic handoff is also a RETIREMENT fence. A stream row committed
+      # beyond this snapshot point carries no marker from this attempt; scanning
+      # before this comparison could delete it and the higher checkpoint would
+      # then prevent replay. Return before every row scan and state write.
+      # Equality is a legitimate operator-authorized re-export at the same
+      # consistent point under a later owner; only a STRICTLY newer durable
+      # frontier proves this completion is stale.
+      cp when is_integer(cp) and snapshot_lsn < cp ->
         :ok
 
       _ ->
+        if Retirement.provenance_sink?(config) do
+          complete_attempt!(config, row, snapshot_lsn)
+        end
+
         upsert_checkpoint(config, snapshot_lsn)
     end
 

@@ -63,6 +63,7 @@ defmodule AshReplicant.Snapshot.Rows do
     record = change.record
     tenant = Resolver.resolve_tenant!(resource, record, :snapshot)
     {inputs, _upsert_fields} = Resolver.upsert_input(reflection, record)
+    lookup = %{record: record, inputs: inputs}
 
     fingerprint =
       case Provenance.fingerprint(resource, tenant, inputs, attempt.key_version, attempt.keys) do
@@ -70,14 +71,33 @@ defmodule AshReplicant.Snapshot.Rows do
         {:error, _reason} -> raise provenance_unavailable(resource)
       end
 
-    case verdict(config, resource, record, tenant, inputs, snapshot_lsn, attempt) do
+    case verdict(config, resource, lookup, tenant, snapshot_lsn, attempt) do
       :match ->
         # Bookkeeping only. The host business action does NOT run.
-        mark!(config, resource, record, tenant, change, snapshot_lsn, attempt, fingerprint)
+        mark!(
+          config,
+          resource,
+          lookup,
+          tenant,
+          change,
+          snapshot_lsn,
+          attempt,
+          fingerprint
+        )
 
       :changed ->
         Apply.apply_change(config, change)
-        mark!(config, resource, record, tenant, change, snapshot_lsn, attempt, fingerprint)
+
+        mark!(
+          config,
+          resource,
+          lookup,
+          tenant,
+          change,
+          snapshot_lsn,
+          attempt,
+          fingerprint
+        )
 
       {:error, _reason} ->
         raise provenance_unavailable(resource)
@@ -86,8 +106,8 @@ defmodule AshReplicant.Snapshot.Rows do
 
   # An absent target, or one carrying no fingerprint at all, is `:changed`: the
   # host action has to run. Only a stored fingerprint that MATCHES may skip it.
-  defp verdict(config, resource, record, tenant, inputs, snapshot_lsn, attempt) do
-    case current_target(config, resource, record, tenant, snapshot_lsn) do
+  defp verdict(config, resource, lookup, tenant, snapshot_lsn, attempt) do
+    case current_target(config, resource, lookup, tenant, snapshot_lsn) do
       nil ->
         :changed
 
@@ -95,45 +115,36 @@ defmodule AshReplicant.Snapshot.Rows do
         :changed
 
       %{replica_fingerprint: stored} ->
-        Provenance.compare(stored, resource, tenant, inputs, attempt.keys)
+        Provenance.compare(stored, resource, tenant, lookup.inputs, attempt.keys)
     end
   end
 
-  defp current_target(config, resource, record, tenant, snapshot_lsn) do
+  defp current_target(config, resource, lookup, tenant, snapshot_lsn) do
     config
-    |> target_query(resource, record, snapshot_lsn)
+    |> target_query(resource, lookup, snapshot_lsn)
     |> Ash.read_one!(tenant: tenant, authorize?: config.authorize?)
   rescue
     e in AshReplicant.Error -> reraise e, __STACKTRACE__
     e -> reraise Error.scrub(e, resource, :snapshot), __STACKTRACE__
   end
 
-  # SCD1 targets the mirrored row by primary key; SCD2 targets the CURRENT OPEN
-  # version by business key. `inclusive?: true` is required for the post-apply
-  # mark: the version this run just opened carries `valid_from_lsn == lsn`, and
-  # the exclusive predicate would miss it.
-  defp target_query(config, resource, record, snapshot_lsn) do
+  # SCD1 targets the mirrored row by the SAME configured identity used by its
+  # upsert (the PK only when no alternate identity is declared); SCD2 targets
+  # the CURRENT OPEN version by business key. `inclusive?: true` is required for
+  # the post-apply mark: the version this run just opened carries
+  # `valid_from_lsn == lsn`, and the exclusive predicate would miss it.
+  defp target_query(config, resource, lookup, snapshot_lsn) do
     query =
       if Info.history_scd2?(resource) do
-        Resolver.open_version_query(resource, record, snapshot_lsn, inclusive?: true)
+        Resolver.open_version_query(resource, lookup.record, snapshot_lsn, inclusive?: true)
       else
-        Ash.Query.do_filter(resource, present_pk!(resource, record))
+        case Resolver.upsert_lookup_query(resource, lookup.inputs) do
+          {:ok, query} -> query
+          :error -> raise Error.exception(reason: :sink_failed, resource: resource, op: :snapshot)
+        end
       end
 
     Ash.Query.set_context(query, Context.action_context(config))
-  end
-
-  # A nil PK would filter `id IS NULL`, match nothing, and make the row look
-  # absent — so it would run the host action and then fail the mark. Fail on the
-  # real cause instead. Mirrors `Apply.destroy_by_pk`'s guard.
-  defp present_pk!(resource, record) do
-    pk = Resolver.pk_values(resource, record)
-
-    if Enum.any?(pk, fn {_key, value} -> is_nil(value) end) do
-      raise Error.exception(reason: :sink_failed, resource: resource, op: :snapshot)
-    end
-
-    pk
   end
 
   # The ONE write path to the two protected attributes. The values ride the
@@ -143,7 +154,16 @@ defmodule AshReplicant.Snapshot.Rows do
   # The fingerprint is always supplied, even on a `:match`: it is recomputed
   # under the ACTIVE key version, so a rotation sweep re-stamps rows minted
   # under a retained key and the old key can eventually be dropped.
-  defp mark!(config, resource, record, tenant, change, snapshot_lsn, attempt, fingerprint) do
+  defp mark!(
+         config,
+         resource,
+         lookup,
+         tenant,
+         change,
+         snapshot_lsn,
+         attempt,
+         fingerprint
+       ) do
     action = Info.replicant_snapshot_mark_action!(resource)
     Context.preflight_onetime!(config, tenant, resource, action, :snapshot_mark)
     Context.verify_notifier_loads!(config, resource, action, :snapshot_mark)
@@ -157,7 +177,7 @@ defmodule AshReplicant.Snapshot.Rows do
 
     result =
       config
-      |> target_query(resource, record, snapshot_lsn)
+      |> target_query(resource, lookup, snapshot_lsn)
       |> Ash.Query.set_context(context)
       |> Ash.bulk_update!(action, %{},
         strategy: [:atomic, :stream],

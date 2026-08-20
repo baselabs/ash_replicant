@@ -204,5 +204,14 @@ defmodule AshReplicant.SnapshotStateTest do
         assert State.active_key_version(keys) == 2
       end)
     end
+
+    test "rejects a version outside the state envelope's unsigned 32-bit field" do
+      Provenance.with_provenance_keys!(
+        [{0x1_0000_0000, "test-snapshot-provenance-key-v-too-large"}],
+        fn ->
+          assert :error = AshReplicant.Snapshot.Provenance.keys()
+        end
+      )
+    end
   end
 end

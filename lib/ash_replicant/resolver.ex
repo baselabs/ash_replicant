@@ -266,6 +266,29 @@ defmodule AshReplicant.Resolver do
   end
 
   @doc """
+  Build the SCD1 lookup query that selects the same row the configured upsert
+  identity selects. With no declared identity this is the primary key; with a
+  named identity it is that identity's complete key set plus its optional
+  predicate. Missing, nil, or unknown identity input fails closed.
+  """
+  @spec upsert_lookup_query(module(), map()) :: {:ok, Ash.Query.t()} | :error
+  def upsert_lookup_query(resource, inputs) when is_atom(resource) and is_map(inputs) do
+    case upsert_identity(resource) do
+      nil ->
+        build_upsert_lookup_query(resource, primary_key(resource), nil, inputs)
+
+      identity_name ->
+        case Ash.Resource.Info.identity(resource, identity_name) do
+          %Ash.Resource.Identity{keys: keys, where: where} ->
+            build_upsert_lookup_query(resource, keys, where, inputs)
+
+          _missing ->
+            :error
+        end
+    end
+  end
+
+  @doc """
   A query over `resource` selecting the CURRENT open version of the business key in
   `record`, whose `valid_from_lsn` is strictly less than `lsn` (open-path close) or at
   most `lsn` (delete/terminal close, `inclusive?: true`). Uses dynamic `^ref/1` because
@@ -359,6 +382,25 @@ defmodule AshReplicant.Resolver do
 
   defp maybe_put(list, nil, _value), do: list
   defp maybe_put(list, key, value), do: [{key, value} | list]
+
+  defp build_upsert_lookup_query(resource, keys, where, inputs)
+       when is_list(keys) and keys != [] do
+    with {:ok, values} <- fetch_present_values(keys, inputs) do
+      query = Ash.Query.do_filter(resource, values)
+      {:ok, if(is_nil(where), do: query, else: Ash.Query.do_filter(query, where))}
+    end
+  end
+
+  defp build_upsert_lookup_query(_resource, _keys, _where, _inputs), do: :error
+
+  defp fetch_present_values(keys, inputs) do
+    Enum.reduce_while(keys, {:ok, %{}}, fn key, {:ok, values} ->
+      case Map.fetch(inputs, key) do
+        {:ok, value} when not is_nil(value) -> {:cont, {:ok, Map.put(values, key, value)}}
+        _missing_or_nil -> {:halt, :error}
+      end
+    end)
+  end
 
   defp opt({:ok, value}), do: value
   defp opt(_), do: nil
