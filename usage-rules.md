@@ -209,8 +209,10 @@ AshReplicant.start_link(
   rejects the session before checkpoint lookup with a value-free structural error.
 - `:go_forward_only` — passed to `Replicant.start_link/1`.
 - `:snapshot` — `false` disables snapshots and `true` selects Replicant's v1
-  snapshot. Incremental snapshot options are not supported by this adapter until
-  roadmap C3 adds `snapshot_progress/0` and target provenance.
+  snapshot, whose retry is physically effect-once for a resource declaring
+  `snapshot_provenance true` (ADR-0017). Incremental snapshot options are not
+  supported by this adapter until roadmap S03 adds `snapshot_progress/0` and its
+  durable progress token.
 - `:streaming`, `:max_inflight_lag`, `:max_command_retries`, and `:failover` —
   passed through unchanged to Replicant 1.x.
 
@@ -444,7 +446,8 @@ rebuilt, so final-state convergence is not proof of zero physical repeats. Roadm
 C3 owns zero-repeat v1 and incremental restart. Message (C1) and sink-owned batch
 delivery (C2 — `batch_delivery` routes flushes through `handle_batch/1`, one
 destination transaction and one trailing watermark write per batch) are live;
-incremental-progress and append-log callbacks remain absent until C3 through C4.
+incremental snapshot progress and append-log callbacks remain absent until S03
+through C4.
 
 ## Snapshot provenance and retirement (the row contract)
 
@@ -455,10 +458,17 @@ converges. So a snapshot-managed resource stores a keyed fingerprint of the
 values its host action was given, plus a marker for the attempt that last saw
 the row ([ADR-0017](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0017-snapshot-provenance-and-restart.md)).
 
-This release installs the **contract**: the schema, the fingerprint, the
-protected-input guards, and the private action declarations. The retry
-protocol that reads them — attempt state, completion, and retirement — is
-roadmap C3 work and is not implemented yet. Opting in today is safe and inert.
+The **whole-table (V1) retry protocol that reads this contract is live**: one
+checkpoint-owned attempt per delivery run, fingerprint-gated row effects, and
+tenant-scoped retirement at fenced completion (see "How a V1 retry behaves"
+below). Incremental snapshot mode — `snapshot_progress/0` and its progress
+token — remains roadmap S03.
+
+> **Opting in is what buys you retirement.** No snapshot callback clears a
+> resource any more (see the migration note at the end of this section). A
+> snapshot-backed resource that does NOT declare `snapshot_provenance true`
+> keeps rows the source has dropped, because there is no membership marker to
+> retire them by.
 
 ### Opting a resource in
 
@@ -505,6 +515,35 @@ end
 
 Both action names are configurable via `snapshot_mark_action` and
 `snapshot_retire_action`.
+
+Under **`strategy :context` multitenancy** (non-global) you must also declare a
+retained-scope enumerator. Completion retires per tenant scope and never
+tenant-blind; attribute multitenancy enumerates itself from its discriminator
+column, but context multitenancy has none, so your application is the only
+authority on which scopes exist — including a tenant wholly absent from the
+source snapshot:
+
+```elixir
+replicant do
+  # ...
+  snapshot_provenance true
+  snapshot_tenant_scope_action :replicant_retained_scopes
+end
+
+actions do
+  action :replicant_retained_scopes, {:array, :string} do
+    public? false
+    run MyApp.RetainedTenants
+  end
+end
+```
+
+It is a private generic action returning `{:array, _}`. Because it is custom
+code the adapter cannot inspect, its `run` module declares
+`AshReplicant.DestinationParticipant` like any other. A missing, raising, or
+malformed enumeration — including one carrying a blank scope, which Ash would
+treat as NO tenant — fails completion closed with
+`:snapshot_scope_incomplete`.
 
 ### What the compile-time verifier enforces
 
@@ -555,6 +594,37 @@ changed, because reporting "changed" would re-run every host business action.
 If any mapped resource declares `snapshot_provenance true`, activation
 preflights this configuration and refuses to start without it.
 
+### How a V1 retry behaves
+
+The checkpoint row carries one versioned, HMAC-authenticated `snapshot_state`
+envelope: the attempt id, the delivery run that owns it, the admitted contract
+digest, and the completion replay fence. Everything below happens under that
+row's `FOR UPDATE` lock, so chunks, completion and retirement serialize against
+each other across nodes.
+
+1. **Binding.** Each `AshReplicant.PipelineOwner` activation mints a random
+   256-bit delivery run. The first actual `handle_snapshot/2` callback of a run
+   binds it to a fresh random attempt; later callbacks reuse it. An
+   operator-authorized re-export under a LATER owner rotates the attempt even
+   when PostgreSQL hands back the same consistent point — `first_for_table?`
+   plays no part in attempt identity, and authorizes no deletion.
+2. **Per row.** Resolve the tenant and the current open target, recompute the
+   fingerprint, and on a match invoke ONLY the private mark action. A changed or
+   new row runs the normal host business action and is then stamped. Marking is
+   an internal effect and is reported as one; it is not a host business effect.
+3. **Completion.** Check the replay fence first — a completion already recorded
+   for this delivery run and LSN returns BEFORE any row scan, so a redelivered
+   completion cannot retire a stream write that landed after the original.
+   Otherwise enumerate every destination tenant scope, retire the managed open
+   rows whose marker differs through your retire action with `tenant:` set,
+   advance the watermark, and commit `complete` state — one transaction.
+
+An attempt is bound to the admitted contract (sink config, destination
+manifest, code identity, source contract). Resuming under drift fails closed
+with `:snapshot_state_invalid`; so does a tampered or undecodable envelope.
+Under SCD2, retirement CLOSES the unseen open version and never touches closed
+history.
+
 ### Migration path
 
 The two attributes are ordinary `bytea` columns, so generate migrations the
@@ -566,8 +636,23 @@ mix ash_postgres.generate_migrations --name add_snapshot_provenance
 
 Both are nullable by design: existing rows carry `NULL` until an attempt first
 stamps them, and a `NULL` fingerprint simply means "no provenance recorded
-yet". Nothing backfills them, and no existing behavior changes — an upgrade
-that adds neither the option nor the attributes is a no-op.
+yet". Nothing backfills them. A row carrying a `NULL` marker is treated as
+unseen and IS retired by a completed attempt — that is what makes retirement
+total within the managed scope.
+
+The generated checkpoint resource also changed: the reserved-but-inert
+`snapshot_generation` column is replaced by `snapshot_state`. Nothing ever wrote
+it, so `mix ash.codegen` produces a drop of an always-NULL column and an add of
+another; migrate normally, no data capture required.
+
+**If you rely on the old first-chunk clear.** Before this release,
+`handle_snapshot/2` deleted every row of a resource on `first_for_table?`. It no
+longer does — that wipe repeated every committed host business effect on a retry
+and could erase a stream-applied row. Nothing is deleted that was not deleted
+before, so the change is strictly less destructive, but a resource that relied
+on it for redo-safety now keeps rows the source has dropped. Declare
+`snapshot_provenance true` with the two attributes and the private mark/retire
+actions to get retirement back, on the fenced completion path described above.
 
 ## Source-bound checkpoints, binding, and operator recovery
 
@@ -704,7 +789,10 @@ halts — do not TOAST your tenant column).
   streaming transaction applies in a single `Repo.transaction`: skip any change
   whose `commit_lsn <= checkpoint`, apply rows, upsert checkpoint atomically. On
   failure, the transaction rolls back; on resume, un-acked WAL re-streams and
-  dedups. The snapshot restart limitation above remains explicit until C3.
+  dedups. Whole-table snapshot RETRY is effect-once by a separate mechanism —
+  the checkpoint-owned attempt and the row fingerprint (see "Snapshot provenance
+  and retirement"), which is what an LSN watermark cannot give a COPY-based
+  snapshot; incremental snapshot progress remains S03.
 
 ## Relationship to `replicant`
 

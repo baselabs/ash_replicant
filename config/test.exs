@@ -20,7 +20,16 @@ config :ash_replicant, AshReplicant.TestRepo,
   priv: "priv/repo"
 
 config :ash_replicant, ecto_repos: [AshReplicant.TestRepo]
-config :ash_replicant, ash_domains: [AshReplicant.Test.Domain, AshReplicant.Test.HistoryDomain]
+
+config :ash_replicant,
+  ash_domains: [
+    AshReplicant.Test.Domain,
+    AshReplicant.Test.HistoryDomain,
+    # S02 snapshot-provenance fixtures. `AshReplicant.Test.SnapshotContextDomain`
+    # is deliberately ABSENT: its tables live in per-tenant Postgres schemas
+    # created by a hand-authored migration, not by `mix ash.codegen`.
+    AshReplicant.Test.SnapshotDomain
+  ]
 
 # C1 message-claim digest baseline (ADR-0015): a fixed non-secret test key.
 # Rotation tests replace this via Application.put_env and restore it.

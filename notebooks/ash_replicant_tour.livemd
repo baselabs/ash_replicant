@@ -691,10 +691,14 @@ nothing. A failure rolls the whole transaction back; on resume the un-acked WAL
 re-streams and dedups against the durable checkpoint. For committed streaming
 transactions, append-only fault probes prove zero physical duplicates and zero loss.
 
-Replicant v1 snapshot batches are individually atomic. An incomplete multi-batch
-snapshot restart can physically repeat committed batch effects before clearing and
-rebuilding the target. Roadmap C3 must prove zero physical repeats for v1 and
-incremental restart before that claim extends to snapshot recovery.
+Replicant v1 snapshot batches are individually atomic, and a **whole-table (V1)
+retry is physically effect-once for a resource that declares
+`snapshot_provenance true`**: one checkpoint-owned attempt per pipeline-owner
+delivery run, a keyed fingerprint per row, and tenant-scoped retirement at fenced
+completion (ADR-0017). Crash injection at every batch boundary shows exactly one
+host business effect per source row across all retries. No snapshot callback
+clears a resource any more — a resource that does NOT opt in simply keeps rows the
+source has dropped. Incremental snapshot restart is roadmap S03.
 
 ```mermaid
 flowchart TD

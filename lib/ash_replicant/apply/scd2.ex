@@ -226,7 +226,14 @@ defmodule AshReplicant.Apply.Scd2 do
     :ok
   end
 
-  defp close_input(resource, lsn, ts) do
+  @doc """
+  The window-column input that CLOSES a version at `lsn` (and `ts`, when the
+  resource declares the optional timestamp columns). Shared with completion-time
+  retirement (`AshReplicant.Snapshot.Retirement`), so an unseen version closes
+  through exactly the same columns as a streamed close.
+  """
+  @spec close_input(module(), integer(), DateTime.t() | nil) :: map()
+  def close_input(resource, lsn, ts) do
     to_lsn = Info.replicant_history_valid_to_lsn_attribute!(resource)
     to_ts = opt(Info.replicant_history_valid_to_timestamp_attribute(resource))
     current = opt(Info.replicant_history_current_attribute(resource))

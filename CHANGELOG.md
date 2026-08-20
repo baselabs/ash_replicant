@@ -9,6 +9,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Whole-table (V1) snapshot retry is now physically effect-once** (ADR-0017,
+  roadmap S02). A retry no longer repeats a committed host business effect for
+  a row that did not change. Converging to the same final state was never proof
+  of this: a create, destroy, or SCD2 close can carry an append-only local
+  effect even when a later upsert converges to identical bytes.
+  - **One checkpoint-owned attempt.** The checkpoint row carries a versioned,
+    HMAC-authenticated, strictly decoded `AshReplicant.Snapshot.State` envelope:
+    mode, status (armed/active/complete), a cryptographically random 256-bit
+    attempt id, the V1 delivery-run id, the bound contract digest, the
+    provenance key version, and the completion replay fence. It is read and
+    written under the checkpoint row lock, which serializes chunks, completion
+    and retirement against each other across nodes. Undecodable, tampered,
+    impossible, or contract-drifted state fails CLOSED
+    (`:snapshot_state_invalid`) — never a silently fresh attempt.
+  - **One delivery run per activation.** `AshReplicant.PipelineOwner` activation
+    mints a 256-bit `delivery_run`. The first actual `handle_snapshot/2`
+    callback of a run binds it to a fresh attempt; later callbacks in that run
+    reuse it; an operator-authorized re-export under a LATER owner rotates the
+    attempt even when PostgreSQL returns the same consistent point.
+    `first_for_table?` carries no attempt identity.
+  - **Fingerprint-gated row effects.** For a `snapshot_provenance true`
+    resource, each row resolves its tenant and current open target, recomputes
+    the canonical fingerprint, and — on a match — invokes ONLY the private mark
+    action. A changed or absent row goes through the normal host business action
+    and is then stamped. An UNKNOWN comparison answer (dropped key, unknown
+    encoding version, non-deterministic value) halts
+    (`:snapshot_provenance_unavailable`) rather than degrading to "changed".
+    Key rotation re-stamps unchanged rows under the active version.
+  - **Fenced completion and tenant-scoped retirement.** Completion locks the
+    checkpoint, checks the permanent V1 replay fence BEFORE any row scan (same
+    delivery run and LSN → no-op, so a redelivered completion cannot retire a
+    later stream write), then enumerates every destination tenant scope and
+    retires only managed open rows whose marker differs, through the host's own
+    retire action with `tenant:` set. Attribute multitenancy enumerates the
+    verifier-approved discriminator with `SELECT DISTINCT` through the admitted
+    Repo; global and non-multitenant resources take one scoped pass. SCD2
+    retirement closes the open version and never touches closed history.
+  - **`snapshot_tenant_scope_action`** (new DSL option) is REQUIRED for a
+    non-global `strategy :context` multitenant resource with
+    `snapshot_provenance true`: a private generic action returning the array of
+    retained tenant contexts. Context multitenancy has no discriminator column,
+    so the host is the only authority on which scopes exist — including one
+    wholly absent from the source attempt. A missing, raising, or malformed
+    enumeration fails CLOSED (`:snapshot_scope_incomplete`).
+  - The snapshot mark, retire, and tenant-scope actions are now admitted
+    manifest roots, walked for participants and tied out like every other mapped
+    action. Two new invocation labels (`:mark_seen`, `:retire_unseen`) give them
+    their own operation identity.
+  - Three new reasons join the frozen taxonomy (additive per ADR-0011):
+    `:snapshot_state_invalid`, `:snapshot_provenance_unavailable`,
+    `:snapshot_scope_incomplete`.
+  - Incremental mode (`snapshot_progress/0`, the progress token and its
+    token-hash fence) remains roadmap S03; the envelope is shaped for it.
+
+### Changed
+
+- **No snapshot callback clears a resource any more** (ADR-0017). Pre-S02,
+  `handle_snapshot/2` issued a whole-resource `DELETE` on `first_for_table?` for
+  redo-safety. That repeated every committed host business effect on a retry and
+  could erase a stream-applied row, so it is gone — `first_for_table?`
+  authorizes no deletion.
+  - For a resource with `snapshot_provenance true`, stale rows are retired at
+    fenced completion instead, per tenant scope, through the host retire action.
+  - **A snapshot-backed resource that does NOT opt into `snapshot_provenance`
+    now keeps rows the source has dropped.** There is no membership marker to
+    retire them by. Nothing is deleted that was not deleted before — the change
+    is strictly less destructive — but a host relying on the old wipe for
+    redo-safety must declare `snapshot_provenance true` (plus the two protected
+    attributes and the private mark/retire actions) to get retirement back. See
+    `usage-rules.md`.
+- **Checkpoint schema: `snapshot_generation` is replaced by `snapshot_state`.**
+  Nothing ever wrote `snapshot_generation` (it was reserved and inert), so the
+  regenerated migration drops an always-NULL column and adds an always-NULL one.
+  Hosts run `mix ash.codegen` and migrate; no data capture is required.
+  `snapshot_progress` stays reserved for S03.
+
 - **Snapshot provenance and retirement contract** (ADR-0017, roadmap S01). A
   mirror resource can opt in with `snapshot_provenance true`, declaring two
   protected internal attributes — `replica_fingerprint` and

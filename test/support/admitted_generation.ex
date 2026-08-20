@@ -4,6 +4,7 @@ defmodule AshReplicant.Test.AdmittedGeneration do
   alias AshReplicant.Checkpoint.Identity
   alias AshReplicant.Destination
   alias AshReplicant.Destination.Generation
+  alias AshReplicant.Snapshot.State
 
   def put!(sink, opts \\ []) when is_atom(sink) do
     config = sink.__ash_replicant_config__()
@@ -46,6 +47,10 @@ defmodule AshReplicant.Test.AdmittedGeneration do
         }),
       publication: publication,
       dynamic_repo: dynamic_repo,
+      delivery_run:
+        Keyword.get_lazy(opts, :delivery_run, fn ->
+          :crypto.strong_rand_bytes(State.id_bytes())
+        end),
       owner: Keyword.get(opts, :owner, placeholder_owner())
     }
 

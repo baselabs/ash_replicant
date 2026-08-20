@@ -18,7 +18,14 @@ defmodule AshReplicant.Apply.Context do
     :open,
     :destroy_prior,
     :upsert,
-    :message
+    :message,
+    # S02 (ADR-0017): the two snapshot-protocol effect sites. `:mark_seen` is
+    # the package's own bookkeeping stamp; `:retire_unseen` is the completion
+    # sweep. Both drive host actions, so both need their own identity label —
+    # sharing `:upsert`/`:destroy_prior` would alias a bookkeeping mark onto a
+    # business row's operation key.
+    :mark_seen,
+    :retire_unseen
   ]
 
   @doc "The closed per-invocation label set (the single home is shared with DestinationParticipant)."

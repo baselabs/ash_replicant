@@ -5,9 +5,11 @@ defmodule AshReplicant do
   effect-once semantics, resolving resource, tenant, and classification in the
   Ash layer while keeping `replicant` tenant-blind.
 
-  Replicant v1 snapshot batches are atomic. An incomplete multi-batch snapshot
-  restart can physically repeat committed batch effects while rebuilding the
-  target; zero-repeat snapshot restart remains roadmap C3 work.
+  Whole-table (V1) snapshot retry is physically effect-once for a resource that
+  declares `snapshot_provenance true`: a retry marks unchanged rows instead of
+  re-running the host business action, and retires only the rows a completed
+  attempt never saw (ADR-0017). Incremental snapshot mode — `snapshot_progress/0`
+  and its durable progress token — remains roadmap S03.
 
   This is the `ash_postgres`-of-`replicant`: `replicant` is the tenant-blind CDC
   transport; multitenancy and classification live here, one layer up.
@@ -21,6 +23,7 @@ defmodule AshReplicant do
   alias AshReplicant.Error
   alias AshReplicant.Sink.Impl
   alias AshReplicant.Snapshot.Provenance
+  alias AshReplicant.Snapshot.State
 
   @doc "The library version string."
   @spec version() :: String.t()
@@ -578,6 +581,12 @@ defmodule AshReplicant do
         source_identity: source_identity,
         publication: publication,
         dynamic_repo: dynamic_repo,
+        # The V1 delivery-run id (S02 / ADR-0017): minted PER ACTIVATION, from
+        # nothing. A newly exported, operator-authorized snapshot retry under a
+        # later owner must rotate the durable attempt even when PostgreSQL
+        # returns the same consistent point — deriving this from the slot, the
+        # sink, or the LSN would defeat exactly that.
+        delivery_run: :crypto.strong_rand_bytes(State.id_bytes()),
         owner: owner_pid
       }
 
@@ -691,12 +700,25 @@ defmodule AshReplicant do
          true <- config.coverage == generation.coverage,
          true <- config.dynamic_repo == generation.dynamic_repo,
          true <- config.data_layer_context == %{repo: generation.dynamic_repo},
+         # S02: the three identities the snapshot attempt binds itself to. A
+         # config whose delivery run, code fingerprint, or config digest has
+         # drifted from the live generation would mint or resume an attempt
+         # against a contract this generation never admitted. `Map.get` (not
+         # `config.key`): a config MISSING them must fail closed with this
+         # function's structural error, not a KeyError the caller has to scrub.
+         true <- Map.get(config, :delivery_run) == generation.delivery_run,
+         true <- Map.get(config, :code_fingerprint) == generation.code_fingerprint,
+         true <- Map.get(config, :sink_config_digest) == generation.sink_config_digest,
          true <- config.authorize? == false do
       :ok
     else
       _other -> generation_error(:runtime_config)
     end
   end
+
+  @doc false
+  @spec runtime_config(Generation.t()) :: map()
+  def runtime_config(%Generation{} = generation), do: generation_config(generation)
 
   defp generation_config(%Generation{} = generation) do
     generation.sink_config
@@ -712,6 +734,13 @@ defmodule AshReplicant do
       generation: generation.reference,
       dynamic_repo: generation.dynamic_repo,
       data_layer_context: %{repo: generation.dynamic_repo},
+      # S02 (ADR-0017): the snapshot attempt binds itself to the admitted
+      # contract, so the delivery run and the two remaining identity digests
+      # ride the runtime config beside the manifest and source contract that
+      # were already here.
+      delivery_run: generation.delivery_run,
+      code_fingerprint: generation.code_fingerprint,
+      sink_config_digest: generation.sink_config_digest,
       authorize?: false
     })
   end

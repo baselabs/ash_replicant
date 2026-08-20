@@ -96,7 +96,7 @@ defmodule AshReplicant.Resource do
       ],
       upsert_identity: [
         type: :atom,
-        doc: "Identity name used for the upsert-by-PK mirror write."
+        doc: "Identity name used for the mirror upsert and its matching SCD1 provenance lookup."
       ],
       history_strategy: [
         type: {:one_of, [:scd1, :scd2]},
@@ -173,6 +173,17 @@ defmodule AshReplicant.Resource do
           "The host's PRIVATE (`public? false`) retirement action for rows unseen by a completed " <>
             "snapshot attempt: a `:destroy` under `history_strategy :scd1`, or the version-closing " <>
             "`:update` under `:scd2`."
+      ],
+      snapshot_tenant_scope_action: [
+        type: :atom,
+        doc:
+          "REQUIRED for a non-global `strategy :context` multitenant resource with " <>
+            "`snapshot_provenance true`: the host's PRIVATE generic action returning the array of " <>
+            "retained tenant contexts. Completion retires per scope, and context multitenancy has " <>
+            "no discriminator column to take DISTINCT over, so the host is the only authority on " <>
+            "which scopes exist — including one wholly absent from the source attempt. Ignored " <>
+            "under attribute multitenancy (the discriminator enumerates itself) and for global or " <>
+            "non-multitenant resources (one scoped pass)."
       ]
     ]
   }

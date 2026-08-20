@@ -147,6 +147,10 @@ defmodule AshReplicant.DestinationParticipantTest do
       #                     effect_once_test (streaming) + snapshot marquees
       #   :message       -> messages.ex routed-message apply (both kinds) —
       #                     message_actions marquees + messages_test
+      #   :mark_seen     -> snapshot/rows.ex provenance mark —
+      #                     snapshot_v1_retry_test (bookkeeping-only legs)
+      #   :retire_unseen -> snapshot/retirement.ex completion sweep —
+      #                     snapshot_v1_retry_test (retirement legs)
       assert Context.invocation_labels() == DestinationParticipant.invocation_labels()
 
       assert Context.invocation_labels() == [
@@ -155,7 +159,9 @@ defmodule AshReplicant.DestinationParticipantTest do
                :open,
                :destroy_prior,
                :upsert,
-               :message
+               :message,
+               :mark_seen,
+               :retire_unseen
              ]
     end
 

@@ -147,19 +147,25 @@ defmodule AshReplicant.IdentifierQuotingTest do
     Marquee.q!("SELECT id, note FROM quoteorders ORDER BY id").rows
   end
 
-  test "the snapshot clears and fills exactly the mixed-case mirror table — the decoy survives" do
+  # S02 (ADR-0017): the snapshot no longer clears anything, so the mixed-case
+  # mirror is FILLED, not wiped-and-filled. The quoting property this test
+  # exists for is unchanged and now strictly stronger — the snapshot must write
+  # only the mixed-case table, and the lower-case decoy is untouched by a path
+  # that no longer issues an unqualified DELETE at all.
+  test "the snapshot fills exactly the mixed-case mirror table, clearing nothing — the decoy survives" do
     ref = attach()
 
-    # A pre-existing decoy row and a pre-existing mirror row: the snapshot's
-    # clear_mirror DELETE must wipe the MIXED-CASE table only.
     Marquee.q!("INSERT INTO quoteorders VALUES ('decoy-seed', 'must-survive-snapshot')")
-    Marquee.q!("INSERT INTO \"QuoteOrders\" VALUES ('stale', 'wiped-by-clear-mirror')")
+    Marquee.q!("INSERT INTO \"QuoteOrders\" VALUES ('stale', 'survives-absent-clear')")
     Marquee.q!("INSERT INTO #{@src} VALUES ('1', 'fresh')")
 
     assert {:ok, _pid} = start()
     assert_receive {:telemetry, ^ref, [:replicant, :connection, :slot_active], %{}}, 15_000
 
-    PG.wait_until(fn -> mirror() == [["1", "fresh"]] end)
+    PG.wait_until(fn ->
+      mirror() == [["1", "fresh"], ["stale", "survives-absent-clear"]]
+    end)
+
     assert decoy() == [["decoy-seed", "must-survive-snapshot"]]
 
     refute_receive {:telemetry, ^ref, [:ash_replicant, :sink, :halted], _}, 0

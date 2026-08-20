@@ -69,10 +69,15 @@ defmodule AshReplicant.SnapshotTest do
 
   defp ctx(first?), do: %{snapshot_lsn: 500, table: "public.orders", first_for_table?: first?}
 
-  test "first_for_table? clears stale mirror rows before applying (redo-safety)" do
+  # S02 (ADR-0017): `first_for_table?` authorizes NO deletion. The pre-S02
+  # whole-resource clear repeated every committed host business effect on a
+  # retry and could erase a stream-applied row; stale rows are retired at fenced
+  # completion instead, and only for a resource that opted into
+  # `snapshot_provenance` (this fixture has not).
+  test "first_for_table? clears NOTHING — a stale mirror row survives the first chunk" do
     Ash.create!(Order, %{id: "ghost", note: "old"}, action: :create, authorize?: false)
     assert :ok = Sink.handle_snapshot([snap("1"), snap("2")], ctx(true))
-    assert Ash.get!(Order, "ghost", authorize?: false, error?: false) == nil
+    assert %Order{note: "old"} = Ash.get!(Order, "ghost", authorize?: false)
     assert %Order{} = Ash.get!(Order, "1", authorize?: false)
   end
 
@@ -198,9 +203,11 @@ defmodule AshReplicant.SnapshotTest do
              "4111111111111111"
   end
 
-  test "a non-global multitenant snapshot clears across tenants and applies each row under its own tenant (redo-safe)" do
+  test "a non-global multitenant snapshot applies each row under its own tenant, clearing nothing" do
     alias AshReplicant.Test.TenantOrder
-    # stale ghost in org_1 that upstream no longer has
+    # A stale row upstream no longer has. Without provenance there is no
+    # membership marker to retire it by, so it survives — the documented cost of
+    # not opting in, and strictly safer than the tenant-blind wipe it replaces.
     Ash.create!(TenantOrder, %{id: "ghost", org_id: "org_1", note: "old"},
       action: :create,
       tenant: "org_1",
@@ -226,8 +233,8 @@ defmodule AshReplicant.SnapshotTest do
 
     assert :ok = Sink.handle_snapshot(changes, tctx)
 
-    assert Ash.get!(TenantOrder, "ghost", tenant: "org_1", authorize?: false, error?: false) ==
-             nil
+    assert %TenantOrder{note: "old"} =
+             Ash.get!(TenantOrder, "ghost", tenant: "org_1", authorize?: false)
 
     assert %TenantOrder{} = Ash.get!(TenantOrder, "t1", tenant: "org_1", authorize?: false)
     assert %TenantOrder{} = Ash.get!(TenantOrder, "t2", tenant: "org_2", authorize?: false)

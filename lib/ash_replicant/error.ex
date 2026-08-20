@@ -38,6 +38,9 @@ defmodule AshReplicant.Error do
           | :checkpoint_adopt_conflict
           | :checkpoint_adopt_invalid
           | :checkpoint_legacy_rows_present
+          | :snapshot_state_invalid
+          | :snapshot_provenance_unavailable
+          | :snapshot_scope_incomplete
           # Destination admission re-uses this tuple shape with its own
           # structural sub-reasons; their closed set is enumerated in
           # `AshReplicant.Destination`'s own @type.
@@ -127,7 +130,15 @@ defmodule AshReplicant.Error do
     :checkpoint_unbound,
     :checkpoint_adopt_conflict,
     :checkpoint_adopt_invalid,
-    :checkpoint_legacy_rows_present
+    :checkpoint_legacy_rows_present,
+    # S02 (ADR-0017), additive per ADR-0011: the snapshot retry protocol's three
+    # halt classes — an undecodable, tampered, drifted, or absent state envelope;
+    # a fingerprint comparison whose answer is unknown (never degraded to
+    # "changed", which would repeat every host business effect); and a tenant
+    # scope enumeration that is missing, faulting, or malformed.
+    :snapshot_state_invalid,
+    :snapshot_provenance_unavailable,
+    :snapshot_scope_incomplete
   ]
 
   for reason <- @closed_reasons do

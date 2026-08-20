@@ -188,12 +188,36 @@ host-overridable effect hook. Reject `SetContext` changes/preparations that repl
 `DestinationParticipant`), and require `AshOnetime.Cache.None`; both otherwise
 create effects outside the admitted action/transaction boundary.
 
-Current v1 snapshot batches are atomic, but an incomplete multi-batch restart can
-physically repeat committed batch effects before rebuilding the target. Do not claim
-snapshot-wide physical effect-once until C3 proves zero repeats. Message (C1) and
-sink-owned batch (C2, `handle_batch/1` — one destination transaction, one trailing
-watermark write per flushed batch, ADR-0016) are live; incremental-progress and
-append-log callbacks remain absent until C3–C4.
+**7. Whole-table snapshot retry is effect-once for a resource that opts in
+(S02, ADR-0017).** No snapshot callback clears a resource — the pre-S02
+whole-resource `DELETE` on `first_for_table?` repeated every committed host
+business effect on a retry and could erase a stream-applied row. Instead, each
+`PipelineOwner` activation mints a 256-bit delivery run; the first actual
+`handle_snapshot/2` of that run binds it to a fresh random attempt in the
+checkpoint's authenticated `snapshot_state` envelope, under the checkpoint row
+lock. A `snapshot_provenance true` resource compares each row's stored
+fingerprint and, on a match, invokes ONLY the private mark action — the host
+business action does not re-run. Completion checks a permanent replay fence
+(same delivery run + LSN) BEFORE any scan, then enumerates every destination
+tenant scope and retires the managed open rows whose marker differs, through the
+host retire action with `tenant:` set. Attribute tenancy enumerates its
+discriminator with `SELECT DISTINCT`; `strategy :context` requires the declared
+`snapshot_tenant_scope_action`; global and non-tenant resources take one scoped
+pass. SCD2 retirement closes the open version only. Undecodable, tampered,
+impossible, or contract-drifted state, an unknown fingerprint answer, and a
+missing or malformed scope enumeration each fail CLOSED. Attempt ids, delivery
+runs, fingerprints, and tenants are data-plane values: never in an error, log,
+or telemetry event.
+
+A snapshot-backed resource that does NOT opt into `snapshot_provenance` keeps
+rows the source has dropped — there is no marker to retire them by. That is the
+documented cost of not opting in, and it is strictly less destructive than the
+wipe it replaces.
+
+Message (C1) and sink-owned batch (C2, `handle_batch/1` — one destination
+transaction, one trailing watermark write per flushed batch, ADR-0016) are live.
+Incremental snapshot progress (`snapshot_progress/0`) and append-log callbacks
+remain absent until S03–C4.
 
 ## Development workflow
 
