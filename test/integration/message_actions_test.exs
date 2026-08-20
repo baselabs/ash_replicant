@@ -487,6 +487,16 @@ defmodule AshReplicant.MessagePipelineTest do
     generation
   end
 
+  # Local repeated runs share this test database. The output fixture tables are
+  # rebuilt per test, but AshOnetime's durable claims intentionally survive;
+  # without draining already-expired test claims, the bounded cleanup below can
+  # spend its whole batch on older rows and never reach the claim under test.
+  defp drain_expired_claims!(target) do
+    assert {:ok, %{idempotency: deleted}} = AshOnetime.Store.cleanup(target, 10_000)
+
+    if deleted == 10_000, do: drain_expired_claims!(target), else: :ok
+  end
+
   defp msg(prefix, content, lsn) do
     %Replicant.Decoder.Messages.Message{
       transactional?: false,
@@ -541,6 +551,9 @@ defmodule AshReplicant.MessagePipelineTest do
   # the committed-claim worker needs a real (non-sandbox) connection.
   test "a claim past retention re-executes after the cleanup reaper (the operator-sized replay window)" do
     admit_direct!()
+    {:ok, target} = OnetimeStore.target(Messages.TransientOutbox, [])
+    drain_expired_claims!(target)
+
     lsn = System.unique_integer([:positive]) * 10_000 + 7
 
     assert :ok =
@@ -550,8 +563,6 @@ defmodule AshReplicant.MessagePipelineTest do
 
     # Retention is enforced by the reaper, not the claim path: the operator's
     # cleanup pass deletes the expired claim, and the next delivery re-executes.
-    {:ok, target} = OnetimeStore.target(Messages.TransientOutbox, [])
-
     assert {:ok, %{idempotency: deleted}} = AshOnetime.Store.cleanup(target, 100)
     assert deleted >= 1
 

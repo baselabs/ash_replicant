@@ -163,9 +163,23 @@ derivable form), declared positive retention, and an OPTIONAL `external_effect`
 module admitted only here (AshOnetime three-state recovery; the watermark
 advances only after finalized/replayed success). A nonce never gates WAL
 re-delivery. An unknown prefix at delivery halts (`:message_prefix_unmapped`). A
-notifier whose `load/2` returns a non-empty statement must declare
-`DestinationParticipant` (the `:notifier` kind) — its dependency pre-load read
-runs inside the admitted transaction; suppression covers dispatch only. Static stores preflight at activation;
+notifier whose load statement is non-empty must declare
+`DestinationParticipant` (the `:notifier` kind) AND route the statement through
+`AshReplicant.Notifier` (`preload/2`; the wrapper owns `load/2`) — its
+dependency pre-load read runs inside the admitted transaction; suppression
+covers dispatch only. Admission behaviorally verifies both stability probes
+entered the live wrapper; retaining its behaviour marker while overriding
+`load/2` is rejected. Ash re-derives that statement at delivery, so admission
+BINDS it: the manifest carries each notifier's statement digest and declared
+action-closure digest, the wrapper compares both before handing Ash the
+statement, and the sink re-checks before each admitted action for what the
+wrapper cannot see (an empty-at-admission statement turning non-empty, a
+changed notifier list, a faulting load). Unwrapped, undeclared, or
+irreproducible statements fail admission
+(`:destination_notifier_unwrapped` / `:destination_notifier_required` /
+`:destination_notifier_unstable`); drift at delivery halts value-free
+(`{:invalid_destination_config, :notifier_load_drift |
+:notifier_load_unadmitted | :notifier_load_probe_failed}`). Static stores preflight at activation;
 context-tenant stores preflight inside the outer transaction.
 
 Generated delivery callbacks are final and call `Sink.Impl` directly. Never add a

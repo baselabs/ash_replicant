@@ -6,6 +6,7 @@ defmodule AshReplicant.Apply.Context do
   applied to one copy silently diverged the other's preflight semantics.
   """
 
+  alias AshReplicant.Destination.NotifierLoads
   alias AshReplicant.Error
 
   # The CLOSED mint set — one label per sink call site, the complete inventory
@@ -94,6 +95,110 @@ defmodule AshReplicant.Apply.Context do
         end
 
       {false, _other} ->
+        :ok
+    end
+  end
+
+  @delivery_manifest_key {__MODULE__, :admitted_manifest}
+
+  @doc """
+  Run `fun` with the admitted manifest bound to THIS process, so
+  `AshReplicant.Notifier`'s generated `load/2` can compare the statement it is
+  about to hand Ash against what the live generation admitted.
+
+  Ash gives `load/2` only `(resource, action)` — no context to thread a
+  manifest through — so a process-scoped binding is the only channel, and the
+  sink's delivery is synchronous in this process. The binding is removed on the
+  way out (restoring any outer one), so a wrapped notifier firing on the host's
+  OWN write later in the same process is never verified against a stale
+  generation.
+
+  A config with no `:destination_manifest` binds nothing: bare unit configs
+  carry no manifest, and the wrapper then behaves as an ordinary Ash notifier.
+  """
+  @spec with_admitted_manifest(map(), (-> result)) :: result when result: term()
+  def with_admitted_manifest(config, fun) when is_function(fun, 0) do
+    case Map.get(config, :destination_manifest) do
+      %AshReplicant.Destination.Manifest{} = manifest ->
+        previous = Process.put(@delivery_manifest_key, manifest)
+
+        try do
+          fun.()
+        after
+          if previous do
+            Process.put(@delivery_manifest_key, previous)
+          else
+            Process.delete(@delivery_manifest_key)
+          end
+        end
+
+      _other ->
+        fun.()
+    end
+  end
+
+  @doc "The manifest bound for the delivery running in this process, if any."
+  @spec admitted_manifest() :: struct() | nil
+  def admitted_manifest, do: Process.get(@delivery_manifest_key)
+
+  @doc """
+  Run `fun` with the delivery binding SUSPENDED.
+
+  The out-of-band check probes `load/2` to see what Ash would derive. For a
+  wrapped notifier that call re-enters `AshReplicant.Notifier`, which would
+  verify and raise on the very drift this check exists to report — turning a
+  clean `:notifier_load_drift` into an opaque `:notifier_load_probe_failed`.
+  Suspending the binding makes the probe observe the raw statement, which is
+  what it needs to compare.
+  """
+  @spec without_admitted_manifest((-> result)) :: result when result: term()
+  def without_admitted_manifest(fun) when is_function(fun, 0) do
+    case Process.delete(@delivery_manifest_key) do
+      nil ->
+        fun.()
+
+      manifest ->
+        try do
+          fun.()
+        after
+          Process.put(@delivery_manifest_key, manifest)
+        end
+    end
+  end
+
+  @doc """
+  Prove the notifier `load/2` statements this action will run still match the
+  ones the manifest admitted — BEFORE the action runs.
+
+  This is the OUT-OF-BAND layer. `AshReplicant.Notifier`'s generated `load/2`
+  is the in-band one and has no probe-to-use window at all; this check exists
+  for what the wrapper structurally cannot cover — a notifier that carries no
+  wrapper because its admitted statement was EMPTY, a notifier that appeared in
+  or vanished from the action's notifier list, and a `load/2` that faults.
+  Sited immediately before each Ash call the sink drives.
+
+  A config with no `:destination_manifest` is inert, matching
+  `preflight_onetime!/5`: bare unit configs carry no manifest, while every
+  runtime config the sink delivers under is built from the live generation and
+  re-checked against it at every callback entry, so the fallback is unreachable
+  in production.
+  """
+  @spec verify_notifier_loads!(map(), module(), atom(), atom()) :: :ok
+  def verify_notifier_loads!(config, resource, action, operation) do
+    case Map.get(config, :destination_manifest) do
+      %AshReplicant.Destination.Manifest{} = manifest ->
+        verdict =
+          without_admitted_manifest(fn -> NotifierLoads.verify(manifest, resource, action) end)
+
+        case verdict do
+          :ok ->
+            :ok
+
+          {:error, reason} ->
+            raise Error.exception(reason: reason, resource: resource, op: operation)
+        end
+
+      _other ->
         :ok
     end
   end

@@ -3363,6 +3363,7 @@ defmodule AshReplicant.Test.DestinationFixtures.DeclaredLoadNotifier do
   # Same load/2 imposition, but DECLARES its destination participation: the
   # reads its load statement can trigger are admitted into the manifest.
   use Ash.Notifier
+  use AshReplicant.Notifier
 
   @behaviour AshReplicant.DestinationParticipant
 
@@ -3371,8 +3372,8 @@ defmodule AshReplicant.Test.DestinationFixtures.DeclaredLoadNotifier do
   @impl Ash.Notifier
   def notify(_notification), do: :ok
 
-  @impl Ash.Notifier
-  def load(_resource, _action), do: [:some_calculation]
+  @impl AshReplicant.Notifier
+  def preload(_resource, _action), do: [:some_calculation]
 
   @impl AshReplicant.DestinationParticipant
   # The load statement reads the resource itself: on the WRITE actions that
@@ -3435,20 +3436,102 @@ defmodule AshReplicant.Test.DestinationFixtures.DeclaredLoadDomain do
   end
 end
 
+defmodule AshReplicant.Test.DestinationFixtures.OverriddenLoadNotifier do
+  @moduledoc false
+  use Ash.Notifier
+  use AshReplicant.Notifier
+
+  @behaviour AshReplicant.DestinationParticipant
+
+  alias AshReplicant.DestinationParticipant.{ActionRef, Context}
+
+  @impl Ash.Notifier
+  def notify(_notification), do: :ok
+
+  @impl AshReplicant.Notifier
+  def preload(_resource, _action), do: [:some_calculation]
+
+  # A host can explicitly make the generated callback overridable. The
+  # retained behaviour attribute is not proof that Ash still enters the
+  # wrapper at delivery.
+  defoverridable load: 2
+
+  @impl Ash.Notifier
+  def load(_resource, _action), do: [:some_calculation]
+
+  @impl AshReplicant.DestinationParticipant
+  def destination_participants(_opts, %Context{resource: resource, action: action})
+      when action != :read do
+    {:ok,
+     {:actions,
+      [
+        %ActionRef{
+          resource: resource,
+          action: :read,
+          tenant_mode: :inherit
+        }
+      ]}}
+  end
+
+  def destination_participants(_opts, _context), do: {:ok, :no_database}
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.OverriddenLoadRoot do
+  @moduledoc false
+  use Ash.Resource,
+    domain: AshReplicant.Test.DestinationFixtures.OverriddenLoadDomain,
+    data_layer: AshPostgres.DataLayer,
+    notifiers: [AshReplicant.Test.DestinationFixtures.OverriddenLoadNotifier],
+    extensions: [AshReplicant.Resource]
+
+  postgres do
+    table "overridden_load_roots"
+    repo AshReplicant.TestRepo
+  end
+
+  replicant do
+    source_table("overridden_load_source")
+  end
+
+  attributes do
+    uuid_primary_key :id
+  end
+
+  actions do
+    defaults [:read, :destroy]
+
+    create :create do
+      primary? true
+      accept []
+    end
+  end
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.OverriddenLoadDomain do
+  @moduledoc false
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource AshReplicant.Test.DestinationFixtures.OverriddenLoadRoot
+    resource AshReplicant.Test.Checkpoint
+  end
+end
+
 defmodule AshReplicant.Test.DestinationFixtures.EmptyDeclarationLoadNotifier do
   @moduledoc false
   # Implements the participant behaviour and declares NOTHING ({:ok,
   # :no_database}): the walk ADMITS — the load statement's reads are the
   # resource's own already-admitted actions; nothing new needs a declaration.
   use Ash.Notifier
+  use AshReplicant.Notifier
 
   @behaviour AshReplicant.DestinationParticipant
 
   @impl Ash.Notifier
   def notify(_notification), do: :ok
 
-  @impl Ash.Notifier
-  def load(_resource, _action), do: [:some_calculation]
+  @impl AshReplicant.Notifier
+  def preload(_resource, _action), do: [:some_calculation]
 
   @impl AshReplicant.DestinationParticipant
   def destination_participants(_opts, _context), do: {:ok, :no_database}
@@ -3506,6 +3589,7 @@ defmodule AshReplicant.Test.DestinationFixtures.SpyLoadNotifier do
   # on the snapshot path, that the dependency pre-load EXECUTES while
   # notification DISPATCH stays suppressed.
   use Ash.Notifier
+  use AshReplicant.Notifier
 
   @behaviour AshReplicant.DestinationParticipant
 
@@ -3519,8 +3603,8 @@ defmodule AshReplicant.Test.DestinationFixtures.SpyLoadNotifier do
     end
   end
 
-  @impl Ash.Notifier
-  def load(_resource, _action), do: [:spy_probe]
+  @impl AshReplicant.Notifier
+  def preload(_resource, _action), do: [:spy_probe]
 
   @impl AshReplicant.DestinationParticipant
   def destination_participants(_opts, %Context{resource: resource, action: action})
@@ -3595,6 +3679,7 @@ defmodule AshReplicant.Test.DestinationFixtures.SecondLoadNotifier do
   # declare the resource's own read — redundant metadata edges, never a walk
   # cycle (cross-vendor finding).
   use Ash.Notifier
+  use AshReplicant.Notifier
 
   @behaviour AshReplicant.DestinationParticipant
 
@@ -3603,8 +3688,8 @@ defmodule AshReplicant.Test.DestinationFixtures.SecondLoadNotifier do
   @impl Ash.Notifier
   def notify(_notification), do: :ok
 
-  @impl Ash.Notifier
-  def load(_resource, _action), do: [:other_calculation]
+  @impl AshReplicant.Notifier
+  def preload(_resource, _action), do: [:other_calculation]
 
   @impl AshReplicant.DestinationParticipant
   def destination_participants(_opts, %Context{resource: resource, action: action})
@@ -3676,6 +3761,7 @@ defmodule AshReplicant.Test.DestinationFixtures.UniformLoadNotifier do
   # (redundant information, not a cycle); without the drop this shape is
   # rejected at the read root.
   use Ash.Notifier
+  use AshReplicant.Notifier
 
   @behaviour AshReplicant.DestinationParticipant
 
@@ -3684,8 +3770,8 @@ defmodule AshReplicant.Test.DestinationFixtures.UniformLoadNotifier do
   @impl Ash.Notifier
   def notify(_notification), do: :ok
 
-  @impl Ash.Notifier
-  def load(_resource, _action), do: [:uniform_calc]
+  @impl AshReplicant.Notifier
+  def preload(_resource, _action), do: [:uniform_calc]
 
   @impl AshReplicant.DestinationParticipant
   def destination_participants(_opts, %Context{resource: resource}) do
@@ -3750,6 +3836,7 @@ defmodule AshReplicant.Test.DestinationFixtures.LoopAuxYNotifier do
   # back-edge (the aux reads are never domain roots, so the loop closes
   # inside one DFS instead of memoizing at completed).
   use Ash.Notifier
+  use AshReplicant.Notifier
 
   @behaviour AshReplicant.DestinationParticipant
 
@@ -3758,8 +3845,8 @@ defmodule AshReplicant.Test.DestinationFixtures.LoopAuxYNotifier do
   @impl Ash.Notifier
   def notify(_notification), do: :ok
 
-  @impl Ash.Notifier
-  def load(_resource, _action), do: [:loop_calc]
+  @impl AshReplicant.Notifier
+  def preload(_resource, _action), do: [:loop_calc]
 
   @impl AshReplicant.DestinationParticipant
   def destination_participants(_opts, %Context{}) do
@@ -3778,6 +3865,7 @@ end
 defmodule AshReplicant.Test.DestinationFixtures.LoopAuxXNotifier do
   @moduledoc false
   use Ash.Notifier
+  use AshReplicant.Notifier
 
   @behaviour AshReplicant.DestinationParticipant
 
@@ -3786,8 +3874,8 @@ defmodule AshReplicant.Test.DestinationFixtures.LoopAuxXNotifier do
   @impl Ash.Notifier
   def notify(_notification), do: :ok
 
-  @impl Ash.Notifier
-  def load(_resource, _action), do: [:loop_calc]
+  @impl AshReplicant.Notifier
+  def preload(_resource, _action), do: [:loop_calc]
 
   @impl AshReplicant.DestinationParticipant
   def destination_participants(_opts, %Context{}) do
@@ -3860,6 +3948,7 @@ end
 defmodule AshReplicant.Test.DestinationFixtures.LoopRootNotifier do
   @moduledoc false
   use Ash.Notifier
+  use AshReplicant.Notifier
 
   @behaviour AshReplicant.DestinationParticipant
 
@@ -3868,8 +3957,8 @@ defmodule AshReplicant.Test.DestinationFixtures.LoopRootNotifier do
   @impl Ash.Notifier
   def notify(_notification), do: :ok
 
-  @impl Ash.Notifier
-  def load(_resource, _action), do: [:loop_calc]
+  @impl AshReplicant.Notifier
+  def preload(_resource, _action), do: [:loop_calc]
 
   @impl AshReplicant.DestinationParticipant
   def destination_participants(_opts, %Context{action: action}) when action != :read do
@@ -3972,6 +4061,544 @@ defmodule AshReplicant.Test.DestinationFixtures.ForgedBulkIndexDomain do
 
   resources do
     resource AshReplicant.Test.DestinationFixtures.ForgedBulkIndexRoot
+    resource AshReplicant.Test.Checkpoint
+  end
+end
+
+# --- Notifier load/2 binding fixtures (issue #3) ---
+#
+# The admission probe pins the load STATEMENT (and its closures); delivery
+# re-derives and compares. These fixtures supply the four shapes the binding
+# has to tell apart: an unstable statement, a notifier with no `load/2` at
+# all, a statement steered from application config (the drift substrate), and
+# a `load/2` that raises.
+
+defmodule AshReplicant.Test.DestinationFixtures.UnstableLoadNotifier do
+  @moduledoc false
+  # A genuinely STATEFUL load/2: successive calls return different
+  # statements. Admission probes twice and rejects the resource — the
+  # statement it would pin is not a promise about anything.
+  use Ash.Notifier
+  use AshReplicant.Notifier
+
+  @behaviour AshReplicant.DestinationParticipant
+
+  @impl Ash.Notifier
+  def notify(_notification), do: :ok
+
+  @impl AshReplicant.Notifier
+  def preload(_resource, _action) do
+    calls = (Process.get(__MODULE__) || 0) + 1
+    Process.put(__MODULE__, calls)
+    if rem(calls, 2) == 0, do: [:even_calculation], else: [:odd_calculation]
+  end
+
+  @impl AshReplicant.DestinationParticipant
+  def destination_participants(_opts, _context), do: {:ok, :no_database}
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.UnstableLoadRoot do
+  @moduledoc false
+  use Ash.Resource,
+    domain: AshReplicant.Test.DestinationFixtures.UnstableLoadDomain,
+    data_layer: AshPostgres.DataLayer,
+    notifiers: [AshReplicant.Test.DestinationFixtures.UnstableLoadNotifier],
+    extensions: [AshReplicant.Resource]
+
+  postgres do
+    table "unstable_load_roots"
+    repo AshReplicant.TestRepo
+  end
+
+  replicant do
+    source_table("unstable_load_source")
+  end
+
+  attributes do
+    uuid_primary_key :id
+  end
+
+  actions do
+    defaults [:read, :destroy]
+
+    create :create do
+      primary? true
+      accept []
+    end
+  end
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.UnstableLoadDomain do
+  @moduledoc false
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource AshReplicant.Test.DestinationFixtures.UnstableLoadRoot
+    resource AshReplicant.Test.Checkpoint
+  end
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.SilentNotifier do
+  @moduledoc false
+  # Implements the notifier behaviour WITHOUT the optional load/2 — the
+  # "no-load notifier remains unchanged" case. Its binding is the empty
+  # statement's fingerprint, which is what makes a later empty-to-non-empty
+  # flip visible.
+  use Ash.Notifier
+
+  @impl Ash.Notifier
+  def notify(_notification), do: :ok
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.SilentNotifierRoot do
+  @moduledoc false
+  use Ash.Resource,
+    domain: AshReplicant.Test.DestinationFixtures.SilentNotifierDomain,
+    data_layer: AshPostgres.DataLayer,
+    notifiers: [AshReplicant.Test.DestinationFixtures.SilentNotifier],
+    extensions: [AshReplicant.Resource]
+
+  postgres do
+    table "silent_notifier_roots"
+    repo AshReplicant.TestRepo
+  end
+
+  replicant do
+    source_table("silent_notifier_source")
+  end
+
+  attributes do
+    uuid_primary_key :id
+  end
+
+  actions do
+    defaults [:read, :destroy]
+
+    create :create do
+      primary? true
+      accept []
+    end
+  end
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.SilentNotifierDomain do
+  @moduledoc false
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource AshReplicant.Test.DestinationFixtures.SilentNotifierRoot
+    resource AshReplicant.Test.Checkpoint
+  end
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.RaisingLoadNotifier do
+  @moduledoc false
+  # load/2 raises. At admission that is a rejected resource; at delivery it is
+  # a probe fault, and either way nothing may proceed.
+  use Ash.Notifier
+  use AshReplicant.Notifier
+
+  @impl Ash.Notifier
+  def notify(_notification), do: :ok
+
+  @impl AshReplicant.Notifier
+  def preload(_resource, _action), do: raise("notifier load boom")
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.RaisingLoadRoot do
+  @moduledoc false
+  # Deliberately NOT reachable from any admitted domain: admission would
+  # reject it, and the delivery-side probe fault is what this fixture is for.
+  use Ash.Resource,
+    domain: AshReplicant.Test.DestinationFixtures.RaisingLoadDomain,
+    data_layer: AshPostgres.DataLayer,
+    notifiers: [AshReplicant.Test.DestinationFixtures.RaisingLoadNotifier],
+    extensions: [AshReplicant.Resource]
+
+  postgres do
+    table "raising_load_roots"
+    repo AshReplicant.TestRepo
+  end
+
+  replicant do
+    source_table("raising_load_source")
+  end
+
+  attributes do
+    uuid_primary_key :id
+  end
+
+  actions do
+    defaults [:read, :destroy]
+
+    create :create do
+      primary? true
+      accept []
+    end
+  end
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.RaisingLoadDomain do
+  @moduledoc false
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource AshReplicant.Test.DestinationFixtures.RaisingLoadRoot
+    resource AshReplicant.Test.Checkpoint
+  end
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.DriftLoadNotifier do
+  @moduledoc false
+  # The drift substrate: the statement comes from application config, so a
+  # test can admit one statement and then serve a different one at delivery —
+  # exactly what a load/2 reading runtime state does by accident. The
+  # DEFAULT is the resource's own spy calculation, so the fixture admits at
+  # compile time.
+  use Ash.Notifier
+  use AshReplicant.Notifier
+
+  @behaviour AshReplicant.DestinationParticipant
+
+  @statement_key :notifier_load_statement
+
+  @impl Ash.Notifier
+  def notify(_notification), do: :ok
+
+  @impl AshReplicant.Notifier
+  def preload(_resource, _action),
+    do: Application.get_env(:ash_replicant, @statement_key, [:spy_probe])
+
+  @impl AshReplicant.DestinationParticipant
+  # The statement reads the resource's own already-admitted actions.
+  def destination_participants(_opts, _context), do: {:ok, :no_database}
+
+  @doc false
+  def statement_key, do: @statement_key
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.DriftLoadOrder do
+  @moduledoc false
+  # Mirrors the existing `orders` table (no migration), the same fixture
+  # pattern as SnapshotLoadOrder.
+  use Ash.Resource,
+    domain: AshReplicant.Test.DestinationFixtures.DriftLoadDomain,
+    data_layer: AshPostgres.DataLayer,
+    notifiers: [AshReplicant.Test.DestinationFixtures.DriftLoadNotifier],
+    extensions: [AshReplicant.Resource]
+
+  alias AshReplicant.Test.DestinationFixtures.DriftLoadNotifier
+
+  postgres do
+    table "orders"
+    repo AshReplicant.TestRepo
+  end
+
+  replicant do
+    source_table("orders")
+  end
+
+  attributes do
+    attribute :id, :string, primary_key?: true, allow_nil?: false, public?: true
+    attribute :note, :string, public?: true
+  end
+
+  calculations do
+    calculate :spy_probe, :boolean do
+      calculation fn records, _ctx ->
+        case Application.get_env(:ash_replicant, :notifier_probe_pid) do
+          nil -> :ok
+          pid -> send(pid, {:spy_calc_ran, length(records)})
+        end
+
+        # MID-DELIVERY drift: the admitted pre-load itself moves the statement,
+        # so the next change in the same delivery is handed a different one.
+        # The generation gate at callback entry cannot see this — it ran
+        # before the delivery started.
+        case Application.get_env(:ash_replicant, :notifier_load_flip_to) do
+          nil ->
+            :ok
+
+          statement ->
+            Application.delete_env(:ash_replicant, :notifier_load_flip_to)
+
+            Application.put_env(
+              :ash_replicant,
+              DriftLoadNotifier.statement_key(),
+              statement
+            )
+        end
+
+        Enum.map(records, fn _ -> true end)
+      end
+    end
+
+    # A SECOND runnable calculation. Drift is proved by swapping to a load
+    # statement Ash would happily EXECUTE — a malformed statement would blow
+    # up on its own, making the guard's red indistinguishable from Ash's.
+    calculate :other_probe, :boolean do
+      calculation fn records, _ctx ->
+        case Application.get_env(:ash_replicant, :notifier_probe_pid) do
+          nil -> :ok
+          pid -> send(pid, {:other_calc_ran, length(records)})
+        end
+
+        Enum.map(records, fn _ -> true end)
+      end
+    end
+  end
+
+  actions do
+    defaults [:read, :destroy, create: :*, update: :*]
+  end
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.DriftLoadDomain do
+  @moduledoc false
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource AshReplicant.Test.DestinationFixtures.DriftLoadOrder
+    resource AshReplicant.Test.Checkpoint
+  end
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.UnwrappedLoadNotifier do
+  @moduledoc false
+  # DECLARES participation but carries a raw `load/2` instead of the verified
+  # wrapper. The declaration alone binds nothing — Ash calls `load/2` again at
+  # delivery and only the wrapper sits in that call path — so admission
+  # rejects it (ADR-0010's 1.0 amendment).
+  use Ash.Notifier
+
+  @behaviour AshReplicant.DestinationParticipant
+
+  @impl Ash.Notifier
+  def notify(_notification), do: :ok
+
+  @impl Ash.Notifier
+  def load(_resource, _action), do: [:some_calculation]
+
+  @impl AshReplicant.DestinationParticipant
+  def destination_participants(_opts, _context), do: {:ok, :no_database}
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.UnwrappedLoadRoot do
+  @moduledoc false
+  use Ash.Resource,
+    domain: AshReplicant.Test.DestinationFixtures.UnwrappedLoadDomain,
+    data_layer: AshPostgres.DataLayer,
+    notifiers: [AshReplicant.Test.DestinationFixtures.UnwrappedLoadNotifier],
+    extensions: [AshReplicant.Resource]
+
+  postgres do
+    table "unwrapped_load_roots"
+    repo AshReplicant.TestRepo
+  end
+
+  replicant do
+    source_table("unwrapped_load_source")
+  end
+
+  attributes do
+    uuid_primary_key :id
+  end
+
+  actions do
+    defaults [:read, :destroy]
+
+    create :create do
+      primary? true
+      accept []
+    end
+  end
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.UnwrappedLoadDomain do
+  @moduledoc false
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource AshReplicant.Test.DestinationFixtures.UnwrappedLoadRoot
+    resource AshReplicant.Test.Checkpoint
+  end
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.ClosureDriftNotifier do
+  @moduledoc false
+  # A stable STATEMENT with a steerable DECLARED ACTION CLOSURE: the
+  # participant declaration comes from application config, so a test can admit
+  # one closure and serve a wider one at delivery. The default is
+  # `{:ok, :no_database}`, so the fixture admits at compile time.
+  use Ash.Notifier
+  use AshReplicant.Notifier
+
+  @behaviour AshReplicant.DestinationParticipant
+
+  @closure_key :notifier_declared_closure
+
+  @impl Ash.Notifier
+  def notify(_notification), do: :ok
+
+  @impl AshReplicant.Notifier
+  def preload(_resource, _action), do: [:spy_probe]
+
+  @impl AshReplicant.DestinationParticipant
+  def destination_participants(_opts, _context),
+    do: Application.get_env(:ash_replicant, @closure_key, {:ok, :no_database})
+
+  @doc false
+  def closure_key, do: @closure_key
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.ClosureDriftOrder do
+  @moduledoc false
+  use Ash.Resource,
+    domain: AshReplicant.Test.DestinationFixtures.ClosureDriftDomain,
+    data_layer: AshPostgres.DataLayer,
+    notifiers: [AshReplicant.Test.DestinationFixtures.ClosureDriftNotifier],
+    extensions: [AshReplicant.Resource]
+
+  postgres do
+    table "orders"
+    repo AshReplicant.TestRepo
+  end
+
+  replicant do
+    source_table("orders")
+  end
+
+  attributes do
+    attribute :id, :string, primary_key?: true, allow_nil?: false, public?: true
+    attribute :note, :string, public?: true
+  end
+
+  calculations do
+    calculate :spy_probe, :boolean do
+      calculation fn records, _ctx -> Enum.map(records, fn _ -> true end) end
+    end
+  end
+
+  actions do
+    defaults [:read, :destroy, create: :*, update: :*]
+  end
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.ClosureDriftDomain do
+  @moduledoc false
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource AshReplicant.Test.DestinationFixtures.ClosureDriftOrder
+    resource AshReplicant.Test.Checkpoint
+  end
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.PreloadFlipNotifier do
+  @moduledoc false
+  # Its OWN statement is empty and stable. Its job is to move a SIBLING
+  # notifier's statement from inside Ash's own derivation loop
+  # (`Ash.Notifier.notifier_calculation_query/3` calls every notifier's
+  # `load/2` in turn) — the one window the sink's out-of-band check cannot
+  # see, because that check already passed.
+  use Ash.Notifier
+  use AshReplicant.Notifier
+
+  alias AshReplicant.Apply.Context, as: DeliveryContext
+  alias AshReplicant.Test.DestinationFixtures.DriftLoadNotifier
+
+  @flip_key :notifier_preload_flip_to
+
+  @impl Ash.Notifier
+  def notify(_notification), do: :ok
+
+  @impl AshReplicant.Notifier
+  def preload(_resource, _action) do
+    # Fire ONLY while a delivery manifest is bound — that is ASH'S OWN
+    # derivation. The sink's out-of-band probe suspends the binding, so the
+    # flip never lands before that check; without the distinction this fixture
+    # would exercise the wrong layer and the wrapper's red would be vacuous.
+    flip = Application.get_env(:ash_replicant, @flip_key)
+
+    if flip && DeliveryContext.admitted_manifest() do
+      Application.delete_env(:ash_replicant, @flip_key)
+
+      Application.put_env(
+        :ash_replicant,
+        DriftLoadNotifier.statement_key(),
+        flip
+      )
+    end
+
+    []
+  end
+
+  @doc false
+  def flip_key, do: @flip_key
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.InbandDriftOrder do
+  @moduledoc false
+  # Notifier ORDER matters: the flipper runs first, so the drift lands before
+  # Ash asks the wrapped `DriftLoadNotifier` for its statement.
+  use Ash.Resource,
+    domain: AshReplicant.Test.DestinationFixtures.InbandDriftDomain,
+    data_layer: AshPostgres.DataLayer,
+    notifiers: [
+      AshReplicant.Test.DestinationFixtures.PreloadFlipNotifier,
+      AshReplicant.Test.DestinationFixtures.DriftLoadNotifier
+    ],
+    extensions: [AshReplicant.Resource]
+
+  postgres do
+    table "orders"
+    repo AshReplicant.TestRepo
+  end
+
+  replicant do
+    source_table("orders")
+  end
+
+  attributes do
+    attribute :id, :string, primary_key?: true, allow_nil?: false, public?: true
+    attribute :note, :string, public?: true
+  end
+
+  calculations do
+    calculate :spy_probe, :boolean do
+      calculation fn records, _ctx ->
+        case Application.get_env(:ash_replicant, :notifier_probe_pid) do
+          nil -> :ok
+          pid -> send(pid, {:spy_calc_ran, length(records)})
+        end
+
+        Enum.map(records, fn _ -> true end)
+      end
+    end
+
+    calculate :other_probe, :boolean do
+      calculation fn records, _ctx ->
+        case Application.get_env(:ash_replicant, :notifier_probe_pid) do
+          nil -> :ok
+          pid -> send(pid, {:other_calc_ran, length(records)})
+        end
+
+        Enum.map(records, fn _ -> true end)
+      end
+    end
+  end
+
+  actions do
+    defaults [:read, :destroy, create: :*, update: :*]
+  end
+end
+
+defmodule AshReplicant.Test.DestinationFixtures.InbandDriftDomain do
+  @moduledoc false
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource AshReplicant.Test.DestinationFixtures.InbandDriftOrder
     resource AshReplicant.Test.Checkpoint
   end
 end

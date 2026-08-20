@@ -170,6 +170,7 @@ defmodule AshReplicant.Apply.Scd2 do
     lsn = change.commit_lsn
     action = Info.replicant_history_close_action!(resource)
     Context.preflight_onetime!(config, tenant, resource, action, :upsert)
+    Context.verify_notifier_loads!(config, resource, action, :upsert)
     # Fail closed on a nil business key BEFORE building the close query: a nil value
     # would produce `bk IS NULL and ...`, match 0 rows, and SILENTLY close nothing —
     # losing the no-silent-lost-delete contract on the terminal (delete) path (unlike
@@ -207,6 +208,7 @@ defmodule AshReplicant.Apply.Scd2 do
     lsn = change.commit_lsn
     action = Resolver.upsert_action(resource)
     Context.preflight_onetime!(config, tenant, resource, action, :upsert)
+    Context.verify_notifier_loads!(config, resource, action, :upsert)
     {inputs, upsert_fields} = Resolver.version_open_input(resource, record, %{lsn: lsn, ts: ts})
 
     Ash.create!(resource, inputs,

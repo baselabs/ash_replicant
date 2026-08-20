@@ -18,6 +18,7 @@ defmodule AshReplicant.Messages do
   `handle_message/2` with NO framework dedup — the claim is the dedup.
   """
 
+  alias AshReplicant.Apply.Context, as: DeliveryContext
   alias AshReplicant.{DestinationParticipant, Error, Telemetry}
 
   @digest_min_key_bytes 16
@@ -269,17 +270,28 @@ defmodule AshReplicant.Messages do
   end
 
   defp drive(config, message, route, operation, operation_key, digest) do
+    # A routed create runs its notifiers' dependency pre-load like any other
+    # host create, so it takes the same admitted-binding check first.
+    DeliveryContext.verify_notifier_loads!(
+      config,
+      route.resource,
+      route.action,
+      :message
+    )
+
     # The sink-fed arguments are PRIVATE (the public action surface accepts
     # only the content payload); they ride the `private_arguments:` option —
     # the same convention the auxiliary fixtures use.
-    Ash.create!(route.resource, %{content: message.content || ""},
-      action: route.action,
-      authorize?: config_authorize(config),
-      transaction?: false,
-      return_notifications?: true,
-      private_arguments: %{operation_key: operation_key, content_digest: digest},
-      context: action_context(config, operation)
-    )
+    DeliveryContext.with_admitted_manifest(config, fn ->
+      Ash.create!(route.resource, %{content: message.content || ""},
+        action: route.action,
+        authorize?: config_authorize(config),
+        transaction?: false,
+        return_notifications?: true,
+        private_arguments: %{operation_key: operation_key, content_digest: digest},
+        context: action_context(config, operation)
+      )
+    end)
 
     :ok
   rescue

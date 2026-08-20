@@ -118,25 +118,57 @@ ordinal argument); the admission trust boundary absorbs it as a named
 obligation. The enumeration test pins the sink-side inventory and cannot see
 host-side fanout.
 
-## Approved 1.0 hardening amendment — implementation pending
+## 1.0 hardening amendment — LANDED
 
-The 1.0 release design closes the notifier probe-to-use residual above rather
-than shipping it as accepted risk. Any notifier that implements a dependency
-`load/2` must both declare `DestinationParticipant` unconditionally and use
-the AshReplicant notifier wrapper. Admission canonicalizes the notifier's
-load statement, records its digest and declared action closure in the live
-generation, and rejects an unwrapped preload notifier.
+The probe-to-use residual above is closed. A notifier attached to a mirrored
+resource whose load statement is non-empty must both declare
+`DestinationParticipant` unconditionally and route that statement through the
+wrapper `AshReplicant.Notifier` — the host implements `preload/2` and
+`use AshReplicant.Notifier` defines `load/2`. Admission canonicalizes the
+statement and the notifier's declared action closure (its
+`destination_participants/2` return for that exact `(resource, action, :notifier)`
+context), records BOTH digests on `Manifest.notifier_loads`, and rejects an
+unwrapped preload notifier
+(`{:destination_notifier_unwrapped, resource, action, notifier}`).
+That decision is behavioral, not a module-marker check: both stability probes
+must observe the live `load/2` enter the wrapper. A module that retains the
+wrapper behaviour attribute but overrides the generated callback is unwrapped.
 
-For each sink-driven host action, the wrapper obtains the runtime statement,
-compares it with the admitted digest and closure, and only then returns that
-exact statement to Ash. Empty-to-nonempty, resource/action drift, a callback
-fault, or a missing live generation halts before the dependency query runs.
-Notifiers without a preload callback retain the ordinary Ash contract. This
-amendment does not authorize notification dispatch or widen `notify/1` into
-the admitted effect graph.
+Ash calls the verified live callback, so the wrapper is IN the derivation path: it obtains the
+runtime statement, compares it and the closure with the admitted digests, and
+only then returns that exact statement to Ash. For a wrapped notifier there is
+no probe-to-use window at all. The manifest is reached through a process-scoped
+binding the sink establishes for the duration of a delivery — Ash passes
+`load/2` only `(resource, action)`, leaving no other channel — so outside a
+sink delivery (the host's own writes) the wrapper is an ordinary Ash notifier.
 
-Until the wrapper and its stateful mutation tests land, the notifier residuals
-above describe current code and this amendment is a proposed release gate, not
-a claim about shipped behavior. The separate obligation on a host change module
+Two admission facts follow from the same probe. Statement and closure are each
+derived TWICE and must agree, so a source that cannot reproduce itself is
+rejected as `{:destination_notifier_unstable, resource, action, notifier}`; and
+because the bindings ride `Manifest.digest`, the generation revalidation at
+every callback entry already rejects drift present before a delivery starts.
+
+The wrapper structurally cannot cover a notifier that carries no wrapper —
+principally one whose statement was EMPTY at admission (nothing was required of
+it) and is not any more, but also a notifier that appeared in or vanished from
+an action's notifier list, and a `load/2` that faults. For those,
+`AshReplicant.Apply.Context.verify_notifier_loads!/4` runs immediately before
+each sink-driven host action (mirror upsert and destroy, SCD2 close and open,
+snapshot `bulk_create`, message route) and halts value-free with
+`{:invalid_destination_config, :notifier_load_drift | :notifier_load_unadmitted
+| :notifier_load_probe_failed}`.
+
+Notifiers without a load statement retain the ordinary Ash contract, unchanged.
+This amendment does not authorize notification dispatch or widen `notify/1`
+into the admitted effect graph. The separate obligation on a host change module
 that invokes one protected auxiliary more than once is unaffected by the
-wrapper and remains a named trust limit after this amendment lands.
+wrapper and remains a named trust limit.
+
+**Residual after this amendment.** The generated checkpoint resource is exempt:
+`use AshReplicant.Checkpoint` owns its `use Ash.Resource` call and forwards
+only domain/data_layer/authorizers, so a host cannot attach a notifier to it
+(pinned by test). And an UNWRAPPED notifier whose statement is empty at
+admission is caught by the sink's own check, not in-band — a statement that
+answered that check and Ash's derivation differently, microseconds apart, would
+not be seen. That is the same declared-semantics trust boundary as a lying
+module body; wrapping removes it for every notifier that carries a statement.
