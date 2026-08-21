@@ -9,6 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Fresh-install Igniter path with a tied-out manual equivalent** (roadmap
+  D1/I01). `mix ash_replicant.install` — reachable as
+  `mix igniter.install ash_replicant` — generates the Ash domain, the checkpoint
+  resource, the sink, and the pipeline supervisor; registers the domain in
+  `:ash_domains`; supervises the pipeline; and queues
+  `mix ash.codegen install_ash_replicant`, so the checkpoint migration comes
+  from the host's own resource snapshots rather than a shipped template that
+  could drift. `--repo`, `--slot`, `--domain`, `--checkpoint`, `--sink`, and
+  `--pipeline` override discovery and naming. Igniter is an **optional**
+  dependency: without it the task prints the instruction to add it, and no
+  shipped library code depends on it.
+  - **Nothing speculative is written.** The installer emits no connection,
+    publication, source identity, or key material — a plausible-looking
+    placeholder is worse than an absent one — so a fresh install compiles and
+    boots as a no-op. Re-running it over an installed project changes nothing.
+  - **`AshReplicant.Pipeline`** is the new generated operator wiring: a host
+    supervisor that supervises no children until
+    `config :otp_app, MyApp.Replicant.Pipeline` supplies `:connection`,
+    `:publication`, and `:source_identity`, and that RAISES on a
+    present-but-incomplete configuration rather than supervising nothing (a
+    silent outage). Its owner child stays `:temporary`, so a halt remains
+    permanent (ADR-0014). Its messages name missing KEYS, never their values.
+  - **Seven structural refusals, each writing nothing:** an illegal PostgreSQL
+    slot name, no repo, an ambiguous repo, a module the installer did not
+    generate sitting at a target name, a checkpoint already bound to another
+    repo, a sink already bound to another slot, and a pipeline already wired to
+    another sink. Re-keying a live sink would abandon its durable checkpoint row
+    and re-deliver from the new slot's position, so the installer stops and
+    names the flag that resolves it.
+  - The README's "Manual installation" block is tied to the installer's actual
+    output by a test comparing parsed module/`use` contracts, so the documented
+    hand path cannot drift from the generated one. Twenty-three mutation proofs
+    cover every refusal, the fail-closed pipeline admission, the idempotency
+    short-circuits, and the doc tie-out itself.
 - **Continuous invariant census** (ADR-0019, roadmap C5/C01). The existing
   temporary `PipelineOwner` now schedules one jittered, bounded worker that
   enters through the same owner-liveness, destination-generation, and pinned

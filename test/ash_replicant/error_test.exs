@@ -64,9 +64,22 @@ defmodule AshReplicant.ErrorTest do
     assert err.shape == nil
   end
 
+  # I01's install planner mints INSTALL-time refusal reasons on its OWN
+  # `AshReplicant.Install.Error` — a Mix-task exception raised before anything
+  # runs, not the runtime value-free boundary taxonomy ADR-0011 freezes. It is
+  # excluded from the census below, and the exclusion is GUARDED: the moment that
+  # file touches the runtime error, the guard reds rather than letting a real
+  # boundary reason slip past the pin.
+  @install_planner "lib/ash_replicant/install.ex"
+
   test "the closed reason set equals every reason minted in lib (live pin)" do
+    refute File.read!(@install_planner) =~ "AshReplicant.Error",
+           "#{@install_planner} now references the runtime error — it can no longer be " <>
+             "excluded from the reason census"
+
     minted =
       Path.wildcard("lib/**/*.ex")
+      |> Enum.reject(&(&1 == @install_planner))
       |> Enum.flat_map(fn path ->
         File.read!(path)
         |> String.split("\n")

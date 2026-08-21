@@ -80,7 +80,144 @@ for the dependency decision and
 for the release-evidence contract. [ADR-0005](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0005-replicant-coordination.md)
 records the Replicant 1.x compatibility and release-order contract.
 
+### Install with Igniter
+
+```bash
+mix igniter.install ash_replicant
+```
+
+That adds the dependency and runs `mix ash_replicant.install`, which generates the
+domain, checkpoint, sink, and pipeline supervisor, registers the domain, supervises
+the pipeline, and queues `mix ash.codegen install_ash_replicant` for the checkpoint
+migration. In an app that already has `ash_replicant` as a dependency, run the
+installer directly:
+
+```bash
+mix ash_replicant.install --repo MyApp.Repo --slot shop_orders
+```
+
+`--repo` is needed only when the project has zero or several repos; `--slot`
+defaults to `<otp_app>_replicant`. `--domain`, `--checkpoint`, `--sink`, and
+`--pipeline` rename individual artifacts.
+
+**It writes no connection, publication, source identity, or key material.** Those
+are operator facts, and a plausible-looking placeholder is worse than an absent
+one — so the generated pipeline supervises *nothing* until you configure it, and a
+fresh install compiles and boots as a no-op. Re-running the installer over an
+installed project changes nothing.
+
+**It stops rather than guess.** An illegal slot name, a missing or ambiguous repo, a
+module it did not generate sitting at a target name, a checkpoint already bound to
+another repo, a sink already bound to another slot, or a pipeline already wired to
+another sink each stop the install — writing nothing — with a message naming the
+flag that resolves it. Re-keying a live sink onto a different slot would abandon its
+durable checkpoint row and re-deliver from the new slot's position; that is exactly
+the kind of quiet, expensive wrongness the installer refuses to perform silently.
+
+Igniter is an **optional** dependency. Without it, `mix ash_replicant.install` prints
+the instruction to add it, and the manual path below reaches the identical contract.
+
+### Manual installation
+
+Everything the installer writes, by hand. These four modules are the whole generated
+surface — no hidden state, no package-owned code:
+
+<!-- ash-replicant-manual-install-modules:start -->
+```elixir
+# lib/my_app/replicant.ex
+defmodule MyApp.Replicant do
+  use Ash.Domain,
+    otp_app: :my_app
+
+  resources do
+    resource MyApp.Replicant.Checkpoint
+  end
+end
+
+# lib/my_app/replicant/checkpoint.ex
+defmodule MyApp.Replicant.Checkpoint do
+  use AshReplicant.Checkpoint,
+    repo: MyApp.Repo,
+    domain: MyApp.Replicant
+end
+
+# lib/my_app/replicant/sink.ex
+defmodule MyApp.Replicant.Sink do
+  use AshReplicant.Sink,
+    repo: MyApp.Repo,
+    domains: [],
+    checkpoint_resource: MyApp.Replicant.Checkpoint,
+    slot_name: "my_app_replicant"
+end
+
+# lib/my_app/replicant/pipeline.ex
+defmodule MyApp.Replicant.Pipeline do
+  use AshReplicant.Pipeline,
+    otp_app: :my_app,
+    sink: MyApp.Replicant.Sink
+end
+```
+<!-- ash-replicant-manual-install-modules:end -->
+
+Then three edits and one command:
+
+```elixir
+# config/config.exs — register the domain
+config :my_app, ash_domains: [MyApp.Replicant]
+```
+
+```elixir
+# lib/my_app/application.ex — supervise the pipeline
+children = [
+  MyApp.Repo,
+  MyApp.Replicant.Pipeline
+]
+```
+
+```bash
+mix ash.codegen install_ash_replicant
+mix ecto.migrate
+```
+
+The checkpoint migration comes from your own resource snapshots, so it stays in
+step with the generated resource instead of drifting from a shipped template.
+
+That is the complete equivalent; a test ties this block to the installer's actual
+output, so the two cannot drift.
+
+### After either path
+
+Four steps remain, and each needs a fact only the operator has:
+
+1. **Configure the pipeline.** Until this exists, `MyApp.Replicant.Pipeline`
+   supervises nothing (see `AshReplicant.Pipeline`):
+
+   ```elixir
+   config :my_app, MyApp.Replicant.Pipeline,
+     connection: [hostname: "standby.example.com", database: "source_db"],
+     publication: "shop_orders_pub",
+     source_identity: [system_identifier: "7378697629483820647", database: "source_db"],
+     go_forward_only: true
+   ```
+
+   A configuration that is present but missing `:connection`, `:publication`, or
+   `:source_identity` **raises** rather than supervising nothing — supervising
+   nothing would be a silent outage.
+2. **Mark the resources you mirror** with the `AshReplicant.Resource` extension and
+   list their domains in the sink's `domains` (see Quick Start step 3). Every
+   published table must be mapped or explicitly ignored, or the pipeline refuses to
+   start.
+3. **Set `ALTER TABLE <table> REPLICA IDENTITY FULL`** on the SOURCE database for
+   every tenant-scoped, SCD2-with-non-PK-business-key, or append-log source table.
+4. **Add the optional key material** only if you use the features that need it:
+   `:message_digest_keys` for logical-message routing (C1) and
+   `:snapshot_provenance_keys` for snapshot provenance (S02).
+
 ## Quick Start
+
+The concepts behind what the installer generates, plus the parts only you can write.
+Steps 1, 2, and 4's supervision are what `mix ash_replicant.install` produces; step 3
+is the modelling decision it deliberately leaves to you.
 
 ### 1. Define the checkpoint resource
 
