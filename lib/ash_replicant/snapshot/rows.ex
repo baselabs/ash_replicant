@@ -200,7 +200,8 @@ defmodule AshReplicant.Snapshot.Rows do
       from_lsn = Info.replicant_history_valid_from_lsn_attribute!(resource)
 
       case Map.get(target, from_lsn) do
-        current_lsn when is_integer(current_lsn) and current_lsn <= snapshot_lsn ->
+        current_lsn
+        when is_integer(current_lsn) and current_lsn >= 0 and current_lsn <= snapshot_lsn ->
           :ok
 
         _newer_or_invalid ->

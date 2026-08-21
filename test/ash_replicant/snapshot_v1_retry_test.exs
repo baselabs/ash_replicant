@@ -442,8 +442,7 @@ defmodule AshReplicant.SnapshotV1RetryTest do
     end
   end
 
-  # --- durable-state helpers (these write the column DIRECTLY, which is what
-  # a tamper or an operator mistake looks like from the sink's side) ---
+  # --- durable-state helpers ---
 
   defp checkpoint_row do
     Ash.get!(
@@ -464,9 +463,18 @@ defmodule AshReplicant.SnapshotV1RetryTest do
   end
 
   defp write_raw_state!(encoded) do
-    TestRepo.query!(
-      "UPDATE ash_replicant_checkpoints SET snapshot_state = $1 WHERE slot_name = $2",
-      [encoded, @slot]
+    row = checkpoint_row()
+
+    Ash.create!(
+      AshReplicant.Test.Checkpoint,
+      row
+      |> Map.take([:source_system_id, :source_database, :slot_name])
+      |> Map.put(:snapshot_state, encoded),
+      action: :upsert,
+      upsert?: true,
+      upsert_identity: :source_slot,
+      upsert_fields: [:snapshot_state],
+      authorize?: false
     )
 
     :ok

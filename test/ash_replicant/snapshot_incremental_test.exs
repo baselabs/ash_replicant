@@ -182,22 +182,20 @@ defmodule AshReplicant.SnapshotIncrementalTest do
     State.decode(encoded, keys)
   end
 
-  defp write_raw_checkpoint!(fields) do
-    pairs = Enum.to_list(fields)
+  defp write_checkpoint!(fields) do
+    row = checkpoint_row()
 
-    assignments =
-      pairs
-      |> Enum.with_index(1)
-      |> Enum.map_join(", ", fn {{field, _value}, index} -> "#{field} = $#{index}" end)
-
-    values = Enum.map(pairs, &elem(&1, 1)) ++ [@slot]
-
-    %{num_rows: 1} =
-      AshReplicant.TestRepo.query!(
-        "UPDATE ash_replicant_checkpoints SET #{assignments} " <>
-          "WHERE slot_name = $#{length(values)}",
-        values
-      )
+    Ash.create!(
+      AshReplicant.Test.Checkpoint,
+      row
+      |> Map.take([:source_system_id, :source_database, :slot_name])
+      |> Map.merge(fields),
+      action: :upsert,
+      upsert?: true,
+      upsert_identity: :source_slot,
+      upsert_fields: Map.keys(fields),
+      authorize?: false
+    )
   end
 
   test "progress callback durably arms one attempt and owner restart reuses it" do
@@ -214,7 +212,7 @@ defmodule AshReplicant.SnapshotIncrementalTest do
   end
 
   test "a committed stream checkpoint with no snapshot state remains stream-only" do
-    write_raw_checkpoint!(%{
+    write_checkpoint!(%{
       commit_lsn: @floor_lsn,
       snapshot_progress: nil,
       snapshot_state: nil
@@ -266,7 +264,7 @@ defmodule AshReplicant.SnapshotIncrementalTest do
     assert :ok = Sink.handle_snapshot([order("1", "a")], chunk_ctx(progress))
 
     replacement = "opaque-progress-valid-but-foreign"
-    write_raw_checkpoint!(%{snapshot_progress: replacement})
+    write_checkpoint!(%{snapshot_progress: replacement})
     activate!()
 
     assert {:error, %AshReplicant.Error{reason: :snapshot_state_invalid}} =
@@ -493,6 +491,32 @@ defmodule AshReplicant.SnapshotIncrementalTest do
     assert %{snapshot_progress: nil} = checkpoint_row()
   end
 
+  test "SCD2 snapshot rejects an invalid negative current-version LSN" do
+    assert %SnapVersion{} =
+             Ash.create!(
+               SnapVersion,
+               %{
+                 order_id: "negative-lsn",
+                 amount: "invalid-current",
+                 valid_from_lsn: -1,
+                 valid_to_lsn: nil,
+                 is_current: true
+               },
+               authorize?: false
+             )
+
+    assert {:ok, :backfill_pending} = Sink.snapshot_progress()
+
+    assert {:error, %AshReplicant.Error{reason: :snapshot_state_invalid}} =
+             Sink.handle_snapshot(
+               [version_change(:snapshot, "negative-lsn", "snapshot", @floor_lsn)],
+               chunk_ctx("opaque-progress-scd2-negative", %{table: "public.snap_versions"})
+             )
+
+    assert [%SnapVersion{valid_from_lsn: -1, amount: "invalid-current", valid_to_lsn: nil}] =
+             Ash.read!(SnapVersion, authorize?: false)
+  end
+
   test "matching completion redelivery no-ops before scan after a later stream write" do
     complete = "opaque-complete-redelivery"
     later_lsn = @floor_lsn + 200
@@ -541,19 +565,19 @@ defmodule AshReplicant.SnapshotIncrementalTest do
   end
 
   test "progress without its state and a tampered state both fail closed" do
-    write_raw_checkpoint!(%{snapshot_progress: "orphan-progress"})
+    write_checkpoint!(%{snapshot_progress: "orphan-progress"})
 
     assert {:error, %AshReplicant.Error{reason: :snapshot_state_invalid}} =
              Sink.snapshot_progress()
 
-    write_raw_checkpoint!(%{snapshot_progress: nil})
+    write_checkpoint!(%{snapshot_progress: nil})
     assert {:ok, :backfill_pending} = Sink.snapshot_progress()
 
     %{snapshot_state: encoded} = checkpoint_row()
     offset = byte_size(State.magic()) + 6
     <<head::binary-size(^offset), byte::8, tail::binary>> = encoded
 
-    write_raw_checkpoint!(%{
+    write_checkpoint!(%{
       snapshot_state: <<head::binary, Bitwise.bxor(byte, 0xFF)::8, tail::binary>>
     })
 
