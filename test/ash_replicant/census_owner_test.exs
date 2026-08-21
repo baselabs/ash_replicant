@@ -68,6 +68,67 @@ defmodule AshReplicant.CensusOwnerTest do
     end
   end
 
+  defp connection_pools do
+    DBConnection.ConnectionPool.Supervisor
+    |> DynamicSupervisor.which_children()
+    |> Enum.map(fn {_id, pid, _type, _modules} -> pid end)
+    |> MapSet.new()
+  end
+
+  defp await_new_pool(baseline, polls \\ 5_000)
+
+  defp await_new_pool(_baseline, 0), do: flunk("census worker never started a Postgrex pool")
+
+  defp await_new_pool(baseline, polls) do
+    case MapSet.difference(connection_pools(), baseline) |> MapSet.to_list() do
+      [pool | _] ->
+        pool
+
+      [] ->
+        Process.sleep(1)
+        await_new_pool(baseline, polls - 1)
+    end
+  end
+
+  defp resume_db_connection_watcher do
+    case Process.whereis(DBConnection.Watcher) do
+      nil ->
+        :ok
+
+      watcher ->
+        _ = :sys.resume(watcher)
+        :ok
+    end
+  catch
+    :exit, _reason -> :ok
+  end
+
+  defp with_unreachable_capture(fun) do
+    baseline_pools = connection_pools()
+
+    with_log(fn ->
+      try do
+        fun.()
+      after
+        assert :ok = AshReplicant.stop_supervised(@slot)
+
+        eventually(fn -> Registry.lookup(Replicant.Registry, {@slot, :pipeline}) == [] end)
+        eventually(fn -> :persistent_term.get(@key, :none) == :none end)
+
+        eventually(fn ->
+          connection_pools()
+          |> MapSet.difference(baseline_pools)
+          |> MapSet.size() == 0
+        end)
+      end
+    end)
+  end
+
+  defp capture_unreachable(fun) do
+    {_result, log} = with_unreachable_capture(fun)
+    log
+  end
+
   defp attach do
     ref = make_ref()
     test_pid = self()
@@ -117,6 +178,59 @@ defmodule AshReplicant.CensusOwnerTest do
     end
   end
 
+  describe "structural fixture lifecycle" do
+    test "the unreachable transport is gone before its explicit capture closes" do
+      capture_unreachable(fn ->
+        assert {:ok, _owner} =
+                 AshReplicant.start_link(start_opts(census: [enabled?: false]))
+      end)
+
+      assert [] == Registry.lookup(Replicant.Registry, {@slot, :pipeline})
+      assert :none == :persistent_term.get(@key, :none)
+    end
+
+    test "a killed census worker's Postgrex pool is gone before capture closes" do
+      baseline = connection_pools()
+      on_exit(&resume_db_connection_watcher/0)
+
+      {pool, _log} =
+        with_unreachable_capture(fn ->
+          opts =
+            start_opts(census: [enabled?: false])
+            |> Keyword.update!(:connection, fn connection ->
+              Keyword.merge(connection,
+                queue_target: 1_000,
+                queue_interval: 1_000,
+                timeout: 5_000
+              )
+            end)
+
+          assert {:ok, _owner} = AshReplicant.start_link(opts)
+          parent = self()
+
+          {worker, worker_monitor} =
+            spawn_monitor(fn ->
+              send(parent, {:census_result, Census.run(@slot, CensusSink)})
+            end)
+
+          pool = await_new_pool(baseline)
+
+          _resumer =
+            spawn(fn ->
+              Process.sleep(250)
+              resume_db_connection_watcher()
+            end)
+
+          assert :ok = :sys.suspend(DBConnection.Watcher)
+          Process.exit(worker, :kill)
+          assert_receive {:DOWN, ^worker_monitor, :process, ^worker, :killed}, 1_000
+          pool
+        end)
+
+      refute Process.alive?(pool)
+    end
+  end
+
   describe "the census configuration gate is wired into activation" do
     test "an unbounded timeout fails the start synchronously and installs no generation" do
       assert {:error, :census_options_invalid} =
@@ -135,7 +249,7 @@ defmodule AshReplicant.CensusOwnerTest do
     test "faults below the budget do NOT halt; the Nth fault halts with :census_unverifiable" do
       ref = attach()
 
-      capture_log(fn ->
+      capture_unreachable(fn ->
         assert {:ok, owner} =
                  AshReplicant.start_link(
                    start_opts(
@@ -168,7 +282,7 @@ defmodule AshReplicant.CensusOwnerTest do
     test "a monitored worker timeout is typed, killed, and the owner survives it" do
       ref = attach()
 
-      capture_log(fn ->
+      capture_unreachable(fn ->
         assert {:ok, owner} =
                  AshReplicant.start_link(
                    start_opts(
@@ -213,7 +327,7 @@ defmodule AshReplicant.CensusOwnerTest do
     test "an already-produced drift report still halts after the timeout wins the mailbox race" do
       ref = attach()
 
-      capture_log(fn ->
+      capture_unreachable(fn ->
         assert {:ok, owner} =
                  AshReplicant.start_link(
                    start_opts(
@@ -261,7 +375,7 @@ defmodule AshReplicant.CensusOwnerTest do
 
   describe "one owner schedules ONE bounded census" do
     test "a tick arriving while a census is in flight is dropped, not stacked" do
-      capture_log(fn ->
+      capture_unreachable(fn ->
         assert {:ok, owner} =
                  AshReplicant.start_link(
                    start_opts(
@@ -307,7 +421,7 @@ defmodule AshReplicant.CensusOwnerTest do
     test "a disabled census schedules nothing" do
       ref = attach()
 
-      capture_log(fn ->
+      capture_unreachable(fn ->
         assert {:ok, owner} =
                  AshReplicant.start_link(
                    start_opts(census: [enabled?: false, interval_ms: 100, jitter_ratio: 0.0])
@@ -321,7 +435,7 @@ defmodule AshReplicant.CensusOwnerTest do
     end
 
     test "pipeline death kills an in-flight census worker before owner cleanup" do
-      capture_log(fn ->
+      capture_unreachable(fn ->
         assert {:ok, owner} =
                  AshReplicant.start_link(
                    start_opts(
@@ -360,7 +474,7 @@ defmodule AshReplicant.CensusOwnerTest do
 
   describe "run/2 — each admitted invariant carries its own mutation red-proof" do
     test "the DESTINATION invariant turns red when the admitted code fingerprint drifts" do
-      capture_log(fn ->
+      capture_unreachable(fn ->
         assert {:ok, _owner} =
                  AshReplicant.start_link(start_opts(census: [enabled?: false]))
 
@@ -377,7 +491,7 @@ defmodule AshReplicant.CensusOwnerTest do
     end
 
     test "the CONTRACT invariant turns red when the admitted contract drifts from the live DSL" do
-      capture_log(fn ->
+      capture_unreachable(fn ->
         assert {:ok, _owner} =
                  AshReplicant.start_link(start_opts(census: [enabled?: false]))
 
@@ -397,7 +511,7 @@ defmodule AshReplicant.CensusOwnerTest do
     end
 
     test "an absent generation is drift, never a pass" do
-      capture_log(fn ->
+      capture_unreachable(fn ->
         assert {:ok, _owner} = AshReplicant.start_link(start_opts(census: [enabled?: false]))
         :persistent_term.erase(@key)
 
@@ -407,7 +521,7 @@ defmodule AshReplicant.CensusOwnerTest do
     end
 
     test "a census never raises out of a faulting checker" do
-      capture_log(fn ->
+      capture_unreachable(fn ->
         assert {:ok, _owner} = AshReplicant.start_link(start_opts(census: [enabled?: false]))
 
         # No repo is started in the structural suite and the source is
