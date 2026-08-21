@@ -21,7 +21,8 @@ post-halt incremental-window rejection, and snapshot-reader connection-option
 precedence. Replicant 1.2.0 added the typed slot-origin callback, fail-closed
 unknown-checkpoint/absent-slot handling, and typed telemetry values; 1.2.1 bounds
 keyed incremental-snapshot contention; 1.2.2 adds an explicit pre-first-chunk
-pending state and safe live-slot origin recovery after a crash. A sibling checkout is not release evidence;
+pending state and safe live-slot origin recovery after a crash; 1.2.3 retains
+append WAL until durable delivery or an explicit published heartbeat. A sibling checkout is not release evidence;
 the consumer must prove the fetched Hex package and its callback ordering.
 
 At the time of the original decision, the adapter supported only Replicant's v1
@@ -31,8 +32,8 @@ idempotency, and provenance contracts landed.
 
 ## Decision
 
-- The public dependency is `>= 1.2.2 and < 2.0.0-0`. CI resolves exact 1.2.2 as
-  the compatibility floor and the selector-free current lock, presently 1.2.2,
+- The public dependency is `>= 1.2.3 and < 2.0.0-0`. CI resolves exact 1.2.3 as
+  the compatibility floor and the selector-free current lock, presently 1.2.3,
   as separate mandatory cells.
 - Production activation requires an operator-pinned PostgreSQL system identifier
   and database. The generated sink compares those values plus the configured slot
@@ -47,8 +48,7 @@ idempotency, and provenance contracts landed.
   `snapshot: true`; enables incremental mode only when every mapped resource has
   snapshot provenance; and exposes sink-owned batch and logical-message
   callbacks only through their destination-side atomicity and AshOnetime
-  contracts. Append-log delivery remains absent until its separate contract
-  lands.
+  contracts. Append-log delivery is governed by ADR-0018.
 - Release order is dependency first: Replicant 1.x is published and fetched before
   AshReplicant can publish a release requiring it. Tags are immutable. If a defect
   is found, publish a compatible Replicant patch and update the AshReplicant lock;
@@ -67,9 +67,10 @@ idempotency, and provenance contracts landed.
   a green current lock cannot substitute for the floor proof.
 - Replicant 1.2.2's slot-origin, typed-telemetry, checkpoint/slot, bounded
   contention, and pending-backfill recovery fixes are mandatory release foundations. AshReplicant enables a
-  Replicant mode only after its own destination-side contract lands.
+  Replicant mode only after its own destination-side contract lands. Replicant
+  1.2.3's append-WAL retention is additionally mandatory for append sinks.
 - Rolling back AshReplicant code does not require moving Replicant tags. The safe
-  Replicant floor remains 1.2.2; selecting an earlier 1.x package reintroduces
+  Replicant floor is 1.2.3; selecting an earlier 1.x package reintroduces
   data-integrity or value-safety defects and is not an admitted rollback.
 - ADR-0007 carries the durable checkpoint binding required for source-bound
   effect-once semantics; this ADR continues to own the replication-session
@@ -81,14 +82,15 @@ The original callback deferral is discharged by
 [ADR-0015](0015-logical-message-effects.md),
 [ADR-0016](0016-atomic-batch-delivery.md), and
 [ADR-0017](0017-snapshot-provenance-and-restart.md). Those records own the live
-message, batch, and incremental-snapshot contracts respectively. This amendment
-does not enable append-log delivery; [ADR-0018](0018-append-log-delivery.md)
-continues to own that boundary.
+message, batch, and incremental-snapshot contracts respectively. Append-log
+delivery subsequently landed under [ADR-0018](0018-append-log-delivery.md),
+raising the package-wide Replicant floor to 1.2.3 because the transport must not
+idle-advance filtered append WAL.
 
 ## Evidence
 
-- `mix.lock` records Replicant 1.2.2 and Postgrex 0.22.4 from Hex.
-- CI's compatibility matrix resolves exact Replicant 1.2.2 and selector-free
+- `mix.lock` records Replicant 1.2.3 and Postgrex 0.22.4 from Hex.
+- CI's compatibility matrix resolves exact Replicant 1.2.3 and selector-free
   current Replicant independently and asserts both versions.
 - The release-contract checker verifies the Hex lock, public dependency shape,
   `SessionIdentity`, callback, and connection-order source from the fetched package.

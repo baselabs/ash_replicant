@@ -445,9 +445,163 @@ the keyed fingerprint suppresses repeated host actions, while incremental chunks
 commit the exact progress token, row effects, membership, and durable ordinal cursor
 in one checkpoint-locked destination transaction. Message (C1), sink-owned batch
 delivery (C2 — `batch_delivery` routes flushes through `handle_batch/1`, one
-destination transaction and one trailing watermark write per batch), and
-incremental snapshot progress (C3) are live. Append-log callbacks remain absent
-until C4.
+destination transaction and one trailing watermark write per batch),
+incremental snapshot progress (C3), and append-log delivery (C4 — `sink_kind/0`
+plus `handle_slot_origin/2`) are live.
+
+## Append-log mode (the event contract)
+
+A generated sink is EXCLUSIVELY a state mirror or an append log; Replicant
+exposes `sink_kind/0` per SINK, not per resource, so a mixed resource set cannot
+be represented by the transport callback and activation rejects it
+(`:sink_kind_mixed`).
+
+```elixir
+use AshReplicant.Sink,
+  repo: MyApp.Repo,
+  domains: [MyApp.Events],
+  checkpoint_resource: MyApp.ReplicantCheckpoint,
+  slot_name: "shop_events",
+  sink_kind: :append_log,
+  initial_state: :go_forward   # or :snapshot — REQUIRED for an append sink
+```
+
+`initial_state` is the sink's ONE declared initial-state intent and must agree
+with the `snapshot:` start option, or activation fails
+`:initial_state_mismatch`. `:go_forward` is what generates
+`handle_slot_origin/2`.
+
+### The host-owned append target
+
+This package generates NO event table, migration, or raw write path. Declare on
+your own AshPostgres resource:
+
+```elixir
+replicant do
+  source_table "orders"
+  append_log true
+  on_truncate :append          # `:halt` (default) or `:append`
+end
+```
+
+and provide, under the configured names (defaults shown):
+
+| Option | Default | Storage | Role |
+|---|---|---|---|
+| `append_source_system_attribute` | `:source_system_id` | `:string` | identity axis |
+| `append_source_database_attribute` | `:source_database` | `:string` | identity axis |
+| `append_slot_attribute` | `:slot_name` | `:string` | identity axis |
+| `append_commit_lsn_attribute` | `:commit_lsn` | `:integer` (bigint) | identity axis |
+| `append_ordinal_attribute` | `:ordinal` | `:integer` | identity axis |
+| `append_operation_attribute` | `:operation` | `:string` | source operation |
+| `append_origin_attribute` | `:origin` | `:string` | delivery origin |
+| `append_attempt_attribute` | `:snapshot_attempt` | binary | backfill attempt |
+| `append_message_prefix_attribute` | `:message_prefix` | `:string` | routed message prefix |
+| `append_message_content_attribute` | `:message_content` | binary | routed message content |
+| `append_action` | `:append` | — | the IMMUTABLE `:create` delivery action |
+| `append_identity` | `:append_identity` | — | identity over the five axes |
+
+Plus the mapped payload attributes — ordinary source columns under the same
+`skip`, `sensitive` and tenant rules a state mirror uses.
+
+### What the compile-time verifier enforces
+
+`ValidateAppendLog` rejects, at build time:
+
+- a missing structural attribute, one whose storage is wrong for its role, one
+  marked `sensitive?: true`, one listed in `sensitive`, or a structural attribute
+  other than `snapshot_attempt` that is nullable;
+- a missing append action, an append action that is not a `:create`, one that
+  declares its OWN upsert (that would replace the sink's conflict target and let
+  a duplicate delivery mutate a stored event), or one that fails to accept a
+  structural attribute; manual actions and arbitrary action or global create
+  changes are rejected because they can replace the insert or rewrite an identity
+  axis after validation (AshCloak encryption of non-structural payload is the sole
+  admitted change);
+- an append identity that is missing, or whose keys are not EXACTLY the five
+  axes — a narrower key makes two distinct same-transaction effects collide, a
+  wider one lets a replay append twice;
+- an attribute-multitenant target whose append identity omits `all_tenants?
+  true` (Ash would otherwise prepend the tenant discriminator to the conflict
+  target, so it no longer matches the five-column unique index);
+- `history_strategy :scd2`, `snapshot_provenance true`, or `on_truncate
+  :mirror` / `:close` on an append target — all of them UPDATE or DELETE rows a
+  log must never touch;
+- `on_truncate :append` beside a declared tenant source (a TRUNCATE is
+  tenant-blind and carries no row to resolve a tenant from), and `on_truncate
+  :append` on a state-mirror resource.
+
+One obligation is NOT compile-checkable: a source column sharing a name with a
+structural attribute. The verifier does not know the live source columns, so
+that collision halts value-free at delivery (`:config_invalid`) before any
+append.
+
+### Operation shapes
+
+| change | `operation` | `origin` | payload |
+|---|---|---|---|
+| insert | `"insert"` | `"stream"` | the new record |
+| update | `"update"` | `"stream"` | the new record |
+| delete | `"delete"` | `"stream"` | the admitted OLD record |
+| truncate | `"truncate"` | `"stream"` | none — structural |
+| message | `"message"` | `"stream"` | routed prefix and binary content |
+| snapshot | `"snapshot"` | `"snapshot"` | the row, plus the attempt id |
+
+A delete appends the complete old record, so **every append source table requires
+`REPLICA IDENTITY FULL`**, tenant-scoped or not. DEFAULT identity carries only
+primary-key columns and would silently append an incomplete delete event.
+
+For an append sink, each `message_routes` entry must target the configured
+append action on a non-tenant append resource. The action must accept the
+configured message prefix/content attributes; content must use binary storage.
+Transactional messages use the transaction commit LSN and their shared ordinal;
+standalone messages use their WAL LSN and ordinal zero. These two attributes are
+destination-only and coverage never expects them on the source table.
+State-mirror message routes retain ADR-0015's AshOnetime profile unchanged.
+
+### Append-once, and what it rests on
+
+Delivery runs `upsert?: true` against `append_identity` with an EMPTY
+`upsert_fields`, which AshPostgres renders as a no-op conflict clause. A
+lawfully re-delivered WAL position appends ONCE and the stored payload is never
+overwritten. Back the identity with a real unique index — it is the defensive
+database constraint. Effect-once itself is unchanged: the append and the
+checkpoint commit in ONE locked destination transaction.
+
+### The origin floor
+
+A `:go_forward` append sink writes the slot origin it first started from to the
+checkpoint's `origin_floor`, once, on its first admitted activation. **No
+completeness claim covers data before that floor.** Later reconnect origins are
+moving resume facts, never replacement floors:
+
+- a slot CREATED this session arriving at a log that already claims a floor
+  halts `:append_origin_gap` — the previous slot is gone, so PostgreSQL no
+  longer retains the WAL between the log's frontier and the new consistent
+  point;
+- an appended event above the durable checkpoint halts
+  `:append_frontier_divergent` — they commit together, so that can only be a
+  torn write.
+
+Replicant does not filtered-WAL idle-advance an `:append_log` sink. The gap check
+therefore compares a reused origin directly to the durable watermark: any higher
+origin was advanced by another consumer or operator and halts `:append_origin_gap`
+before streaming. On a quiet append publication in a busy cluster, publish a
+normal heartbeat transaction to advance the checkpoint and release retained WAL.
+
+### Boundaries
+
+- An append sink cannot run INCREMENTAL snapshots: that mode requires
+  `snapshot_provenance true` on every mapped resource, which an append target
+  may not declare (`:snapshot_unsupported`).
+- A `strategy :context` append target is refused on a go-forward sink
+  (`:append_frontier_unavailable`): its per-tenant schema leaves no
+  statically addressable table to read a tenant-spanning frontier from.
+- A `:snapshot`-intent append sink needs `:ash_replicant,
+  :snapshot_provenance_keys` configured — the backfill attempt id lives in the
+  checkpoint's authenticated state envelope. Activation fails closed without it.
+- Separate mirror and append pipelines may use separate slots and checkpoints.
+  One slot is not claimed to serve both sink kinds.
 
 ## Snapshot provenance and retirement (the row contract)
 
@@ -776,9 +930,9 @@ connection and re-runs the table-membership check at every reconnect.
 - **Column types** are checked against the target attribute at activation
   (`:source_type_invalid`); custom target types are not judged statically —
   the runtime cast stays per-row fail-closed.
-- **REPLICA IDENTITY FULL** is enforced at activation on every
-  tenant-scoped mapped table and every SCD2 table whose business key is not
-  the source primary key (`:source_replica_identity`); a mid-stream identity
+- **REPLICA IDENTITY FULL** is enforced at activation on every append-log
+  source, every tenant-scoped mapped table, and every SCD2 table whose business
+  key is not the source primary key (`:source_replica_identity`); a mid-stream identity
   or type change always halts, never ignorable via `on_schema_change
   :ignore`.
 - **Boot ordering**: a source unreachable at activation defers the coverage

@@ -34,7 +34,7 @@ bound does not mean “Ash 3 only.”
   prerelease.
 - The release lock at the 1.0.0-rc decision point resolved Ash 3.31.3,
   AshPostgres 2.11.0, AshOnetime 0.6.0, EctoSQL 3.14.0, Postgrex 0.22.4,
-  ymlr 5.1.6, and Replicant 1.2.2 (a point-in-time proof snapshot; patch
+  ymlr 5.1.6, and Replicant 1.2.3 (a point-in-time proof snapshot; patch
   versions drift with `mix.lock` — derive the current set from the lock,
   never from this sentence).
 - Public dependency families are bounded with patch-qualified requirements for
@@ -70,8 +70,8 @@ and nonce rejection are recorded in
 
 The Replicant portion of this decision was amended by
 [ADR-0005](0005-replicant-coordination.md): the public requirement is now
-`>= 1.2.2 and < 2.0.0-0`, the release lock is 1.2.2, and CI exercises both the
-exact 1.2.2 floor and the selector-free current lock.
+`>= 1.2.3 and < 2.0.0-0`, the release lock is 1.2.3, and CI exercises both the
+exact 1.2.3 floor and the selector-free current lock.
 
 ## Evidence
 

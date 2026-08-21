@@ -268,6 +268,7 @@ defmodule AshReplicant.ActionContractFreezeTest do
       {{:destination_participant_cycle, nil, nil}, nil},
       {{:destination_message_route_invalid, AshReplicant.Test.Messages.NonceOutbox, :record},
        nil},
+      {{:destination_append_message_route_invalid, AshReplicant.Test.OrderEvent, :read}, nil},
       {{:destination_repo_not_postgres, DestinationFixtures.SimpleRoot}, nil},
       {{:destination_repo_dynamic, DestinationFixtures.ForeignChild}, nil},
       {{:destination_repo_mismatch, DestinationFixtures.ForeignMappedRoot}, nil}
@@ -350,6 +351,12 @@ defmodule AshReplicant.ActionContractFreezeTest do
                Enum.find(
                  enumerated,
                  &match?({:destination_message_route_invalid, _, _}, &1)
+               )
+
+      assert {_, 3, true} =
+               Enum.find(
+                 enumerated,
+                 &match?({:destination_append_message_route_invalid, _, _}, &1)
                )
     end
 

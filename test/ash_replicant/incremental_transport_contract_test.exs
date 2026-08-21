@@ -38,7 +38,7 @@ defmodule AshReplicant.IncrementalTransportContractTest do
 
   test "the fetched artifact is inside the supported callback-lifecycle range" do
     version = :replicant |> Application.spec(:vsn) |> to_string()
-    assert Version.match?(version, ">= 1.2.2 and < 2.0.0-0")
+    assert Version.match?(version, ">= 1.2.3 and < 2.0.0-0")
     assert Replicant.SnapshotProgress.pending?(:backfill_pending)
   end
 

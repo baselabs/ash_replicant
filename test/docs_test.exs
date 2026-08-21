@@ -69,9 +69,17 @@ defmodule AshReplicant.DocsTest do
     assert agents =~
              "A snapshot-backed resource that does NOT opt into `snapshot_provenance` keeps\nrows the source has dropped"
 
-    # Incremental progress is live; append-log delivery is still absent.
+    # P01/ADR-0018: append-log delivery is LIVE. The pin moved from "still
+    # absent" to the live claim, and the two clauses a reader most needs are
+    # pinned with it — the exclusivity of the sink kind (a mixed set cannot be
+    # represented by `sink_kind/0` at all) and the origin floor's completeness
+    # limit. A doc that goes back to promising a state mirror's semantics for a
+    # log, or drops the floor caveat, reds here.
     assert agents =~
-             "incremental snapshot progress (`snapshot_progress/0`, ADR-0017) are live.\nAppend-log callbacks remain absent until C4"
+             "incremental snapshot progress (`snapshot_progress/0`, ADR-0017), and append-log\ndelivery (`sink_kind/0` + `handle_slot_origin/2`, ADR-0018) are live."
+
+    assert agents =~ "A generated sink is EXCLUSIVELY a state mirror or an append log"
+    assert agents =~ "no completeness claim\ncovers data below it"
   end
 
   test "published destination participant examples compile against the public API" do

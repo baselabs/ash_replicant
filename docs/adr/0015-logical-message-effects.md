@@ -198,14 +198,15 @@ New telemetry: `[:ash_replicant, :message, :applied]` with the
   non-transactional peer and the reason the external-effect module's
   `recover/3` must be able to prove absence.
 
-## Approved 1.0 hardening amendment — implementation pending
+## Approved 1.0 hardening amendment
 
 Message prefix and content are runtime user bytes, not structural identifiers.
-The current implementation still places an unknown prefix in the error shape;
-1.0 must remove it from errors, logs, telemetry, doctor, status, and machine
-output. The only public classification is `:message_prefix_unmapped`.
+Unknown-prefix errors now carry only `:message_prefix_unmapped`; neither prefix
+nor content enters an error shape, log, telemetry event, doctor, status, or
+machine output.
 
-A sink with message routes declares a positive
+The remaining hardening item is the recovery-horizon contract. A sink with
+message routes declares a positive
 `message_recovery_horizon`. Activation requires every route's AshOnetime
 retention and every retained digest-key version to cover that horizon.
 Doctor/status warn before cleanup, reap, partition maintenance, or key removal

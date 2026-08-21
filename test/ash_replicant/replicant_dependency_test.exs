@@ -30,7 +30,7 @@ defmodule AshReplicant.ReplicantDependencyTest do
     assert function_exported?(Replicant.Sink, :notify_slot_origin, 3)
 
     version = Application.spec(:replicant, :vsn) |> List.to_string()
-    assert Version.match?(version, ">= 1.2.2 and < 2.0.0-0")
+    assert Version.match?(version, ">= 1.2.3 and < 2.0.0-0")
     assert Code.ensure_loaded?(Incremental)
     assert function_exported?(Incremental, :keyed_retry_decision, 3)
     assert Replicant.SnapshotProgress.pending?(:backfill_pending)

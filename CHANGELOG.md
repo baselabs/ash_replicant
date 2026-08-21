@@ -9,6 +9,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Immutable append-log delivery** (ADR-0018, roadmap C4). A generated sink is
+  now exclusively `sink_kind: :state_mirror` (the default — every existing host
+  is unchanged) or `:append_log`, and an append sink records inserts, updates,
+  deletes, truncates, logical messages, snapshot rows and batches as immutable
+  events through a host-owned Ash create action.
+  - `use AshReplicant.Sink` accepts `sink_kind:` and, for an append sink, the
+    required `initial_state: :snapshot | :go_forward` — its ONE declared
+    initial-state intent. Activation rejects a sink whose mapped resources
+    disagree with its kind (`:sink_kind_mixed`) and an intent that contradicts
+    the `snapshot:` start option (`:initial_state_mismatch`).
+  - `replicant do append_log true end` marks a host AshPostgres resource an
+    append target. It declares its own structural attributes (source system,
+    source database, slot, commit LSN, ordinal, operation, origin, snapshot
+    attempt), optional message prefix/content attributes, the immutable create
+    action (`append_action`, default `:append`),
+    and the append identity (`append_identity`) — verified at compile time by
+    `ValidateAppendLog`, which also refuses SCD2 history, snapshot provenance,
+    and the state-mirror truncate policies on an append target. `on_truncate`
+    gains `:append` (record the structural truncate event), admitted only on an
+    append target and only when no tenant source is declared.
+  - The append identity is exactly `(source system, database, slot, commit LSN,
+    ordinal)`. Delivery upserts against it with an EMPTY `upsert_fields`, which
+    renders as a no-op conflict clause: a re-delivered WAL position appends ONCE
+    and never overwrites the stored payload. Effect-once still rests on the
+    append and the checkpoint committing in one locked destination transaction.
+    Every non-attempt structural attribute is non-null, and the verifier rejects
+    manual append actions or arbitrary action/global create changes that could
+    rewrite the admitted identity after input validation.
+  - Operation shapes are explicit and value-safe. A delete appends the admitted
+    old record; a truncate is a structural event with no payload; a backfill row
+    carries origin `"snapshot"` plus the checkpoint-owned attempt id, reusing
+    none of the state-mirror row-provenance attributes. A routed message appends
+    through the same action with operation `"message"`: transactional messages
+    use the commit LSN/shared ordinal and standalone messages use their WAL LSN
+    with ordinal zero. Payload mapping, tenancy and sensitive-type classification
+    are the state-mirror rules unchanged. Every append source is activation-gated
+    on `REPLICA IDENTITY FULL`, so a delete can never silently degrade to a
+    primary-key-only event.
+  - A go-forward append sink implements `handle_slot_origin/2` and persists the
+    log's IMMUTABLE origin floor on its first admitted activation (new checkpoint
+    attribute `origin_floor`; nullable, always NULL for a state mirror, so the
+    regenerated migration is additive and needs no data capture). Later reconnect
+    origins are resume facts: a slot CREATED this session arriving at a log that
+    already claims a floor halts `:append_origin_gap`, and an appended event
+    above the durable checkpoint halts `:append_frontier_divergent`.
+    Replicant append sinks do not idle-advance over filtered WAL; a reused origin
+    above the durable checkpoint therefore halts as an out-of-band gap. Quiet
+    append publications use a normal published heartbeat to release retained WAL.
+  - New closed error reasons: `:append_origin_gap`, `:append_origin_invalid`,
+    `:append_frontier_divergent`. New AshOnetime invocation label `:append`.
+    The public Replicant floor is now 1.2.3, whose append callback lifecycle
+    retains filtered WAL until an actual append delivery or heartbeat advances
+    the durable checkpoint.
 - **Sink-owned incremental snapshots are restartable and physically
   effect-once** (ADR-0017, roadmap S03). Generated sinks now expose
   `snapshot_progress/0`; activation accepts Replicant 1.2.2 incremental mode
@@ -211,11 +264,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `{:invalid_destination_config, :notifier_load_probe_failed}`. All are
   value-free and survive the sink's scrub, so operators can branch on them.
 
-- Require fetched Replicant `>= 1.2.2 and < 2.0.0-0` and pin the release lock to
-  public Hex 1.2.2. The dependency contract now proves slot-origin rejection,
+- Require fetched Replicant `>= 1.2.3 and < 2.0.0-0` and pin the release lock to
+  public Hex 1.2.3. The dependency contract now proves slot-origin rejection,
   typed telemetry value-shape enforcement without value leakage, and bounded
   keyed-snapshot contention plus pre-first-chunk pending recovery; CI's exact
-  floor and rollback guidance use 1.2.2.
+  floor and rollback guidance use 1.2.3.
 
 - **Atomic sink-owned batch delivery (roadmap C2 / ADR-0016).** The generated
   sink now implements `handle_batch/1` unconditionally, and

@@ -70,9 +70,16 @@ defmodule AshReplicant.Resource.Verifiers.ValidateSnapshotProvenance do
 
   @impl true
   def verify(dsl_state) do
-    if Verifier.get_option(dsl_state, [:replicant], :snapshot_provenance) == true do
+    if Verifier.get_option(dsl_state, [:replicant], :snapshot_provenance) == true and
+         Verifier.get_option(dsl_state, [:replicant], :append_log) != true do
       do_verify(dsl_state)
     else
+      # An APPEND target combined with `snapshot_provenance true` is rejected
+      # outright by `ValidateAppendLog` (ADR-0018 §4: an append log never
+      # retires a row, and backfill rows carry the checkpoint-owned attempt on
+      # their own structural column). Reporting the provenance contract's
+      # missing attributes on top of that would bury the real diagnostic under
+      # a demand for machinery the host must not declare.
       :ok
     end
   end

@@ -495,6 +495,7 @@ defmodule AshReplicant.NotifierLoadBindingTest do
       # degrades to an ordinary unverified notifier.
       for path <- [
             "lib/ash_replicant/apply.ex",
+            "lib/ash_replicant/append.ex",
             "lib/ash_replicant/sink/impl.ex",
             "lib/ash_replicant/messages.ex"
           ] do
@@ -511,6 +512,7 @@ defmodule AshReplicant.NotifierLoadBindingTest do
       # appears nowhere else in these modules.
       for {path, expected} <- [
             {"lib/ash_replicant/apply.ex", 2},
+            {"lib/ash_replicant/append.ex", 1},
             {"lib/ash_replicant/apply/scd2.ex", 2},
             {"lib/ash_replicant/sink/impl.ex", 1},
             {"lib/ash_replicant/messages.ex", 1}

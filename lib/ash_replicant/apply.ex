@@ -12,6 +12,7 @@ defmodule AshReplicant.Apply do
   """
 
   alias AshPostgres.DataLayer.Info, as: PGInfo
+  alias AshReplicant.Append
   alias AshReplicant.Apply.Context
   alias AshReplicant.Apply.Scd2
   alias AshReplicant.{Error, Resolver, Sql}
@@ -47,10 +48,15 @@ defmodule AshReplicant.Apply do
   end
 
   defp dispatch(config, resource, change, commit_timestamp) do
-    if Info.history_scd2?(resource) do
-      Scd2.apply(config, resource, change, commit_timestamp)
-    else
-      apply_to(config, resource, change, commit_timestamp)
+    cond do
+      # ADR-0018: an append target records the change as an immutable event.
+      # It is checked FIRST because the append and mirror contracts are
+      # mutually exclusive by construction (the verifier rejects SCD2 or
+      # provenance on an append target), and routing an append target through
+      # the mirror upsert would silently converge a log into a state table.
+      Info.append_log?(resource) -> Append.apply(config, resource, change)
+      Info.history_scd2?(resource) -> Scd2.apply(config, resource, change, commit_timestamp)
+      true -> apply_to(config, resource, change, commit_timestamp)
     end
   end
 

@@ -36,7 +36,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
   expected = %{
     ash: ">= 3.31.3 and < 4.0.0-0",
-    replicant: ">= 1.2.2 and < 2.0.0-0"
+    replicant: ">= 1.2.3 and < 2.0.0-0"
   }
 
   Enum.each(expected, fn {dependency, requirement} ->
@@ -121,19 +121,19 @@ defmodule AshReplicant.ReleaseContractSelfTest do
      [
        "- Elixir 1.20.3 on Erlang/OTP 29;",
        "- Ash `>= 3.31.3 and < 4.0.0-0` and AshPostgres 2.11.x;",
-       "- Replicant `>= 1.2.2 and < 2.0.0-0` (current release-candidate lock 1.2.2)"
+       "- Replicant `>= 1.2.3 and < 2.0.0-0` (current release-candidate lock 1.2.3)"
      ]},
     {"CONTRIBUTING.md", "## Prerequisites",
      [
        "- **Elixir 1.20.3** and **Erlang/OTP 29**",
        "- Ash `>= 3.31.3 and < 4.0.0-0`; selector-free development uses this public range",
-       "- Replicant `>= 1.2.2 and < 2.0.0-0` from Hex; the release-candidate lock is 1.2.2."
+       "- Replicant `>= 1.2.3 and < 2.0.0-0` from Hex; the release-candidate lock is 1.2.3."
      ]},
     {"AGENTS.md", "## Development workflow",
      [
        "The supported release foundation is Elixir 1.20.3 on Erlang/OTP 29 with Ash\n" <>
          "`>= 3.31.3 and < 4.0.0-0` and Replicant\n" <>
-         "`>= 1.2.2 and < 2.0.0-0` (current release-candidate lock 1.2.2)."
+         "`>= 1.2.3 and < 2.0.0-0` (current release-candidate lock 1.2.3)."
      ]}
   ]
 
@@ -183,7 +183,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   )
   @mix_contracts [
     ~s(@ash_requirement ">= 3.31.3 and < 4.0.0-0"),
-    ~s(@replicant_requirement ">= 1.2.2 and < 2.0.0-0"),
+    ~s(@replicant_requirement ">= 1.2.3 and < 2.0.0-0"),
     ~s(elixir: "~> 1.20.3")
   ]
 
@@ -231,27 +231,19 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
   defp replicant_selector_probes do
     prepare_fixture()
-
-    replace_once!(
-      "mix.lock",
-      ~s("replicant": {:hex, :replicant, "1.2.2"),
-      ~s("replicant": {:hex, :replicant, "1.2.3")
-    )
-
     with_env("ASH_REPLICANT_REPLICANT_VERSION", "1.2.3", &assert_valid!/0)
 
     prepare_fixture()
 
+    replace_once!(
+      "mix.lock",
+      ~s("replicant": {:hex, :replicant, "1.2.3"),
+      ~s("replicant": {:hex, :replicant, "1.2.2")
+    )
+
     with_env("ASH_REPLICANT_REPLICANT_VERSION", "1.2.3", &assert_invalid!/0)
 
     prepare_fixture()
-
-    replace_once!(
-      "mix.lock",
-      ~s("replicant": {:hex, :replicant, "1.2.2"),
-      ~s("replicant": {:hex, :replicant, "1.2.3")
-    )
-
     with_env("ASH_REPLICANT_REPLICANT_VERSION", "latest", &assert_valid!/0)
   end
 
@@ -636,8 +628,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     mutate_job!(
       "compatibility",
-      "            replicant_requirement: \"== 1.2.2\"\n",
-      "            replicant_requirement: \">= 1.2.2\"\n"
+      "            replicant_requirement: \"== 1.2.3\"\n",
+      "            replicant_requirement: \">= 1.2.3\"\n"
     )
 
     assert_invalid!()
@@ -964,7 +956,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       "mix.exs",
-      ~s(@replicant_requirement ">= 1.2.2 and < 2.0.0-0"),
+      ~s(@replicant_requirement ">= 1.2.3 and < 2.0.0-0"),
       ~s(@replicant_requirement ">= 0.3.0 and < 2.0.0-0")
     )
 
@@ -984,7 +976,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       "mix.lock",
-      ~s("replicant": {:hex, :replicant, "1.2.2"),
+      ~s("replicant": {:hex, :replicant, "1.2.3"),
       ~s("replicant": {:hex, :replicant, "0.3.1")
     )
 
@@ -994,7 +986,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       "mix.lock",
-      ~s("replicant": {:hex, :replicant, "1.2.2"),
+      ~s("replicant": {:hex, :replicant, "1.2.3"),
       ~s("replicant": {:hex, :replicant, "1.1.0")
     )
 
@@ -1162,10 +1154,20 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     prepare_fixture()
 
+    replace_once!(
+      "deps/replicant/lib/replicant/connection.ex",
+      "Replicant.Sink.sink_kind(state.sink) != :append_log",
+      "Replicant.Sink.sink_kind(state.sink) == :append_log"
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
     File.write!(
       fixture_path("README.md"),
       File.read!(fixture_path("README.md")) <>
-        "\nThis project does not support Replicant 1.2.2.\n"
+        "\nThis project does not support Replicant 1.2.3.\n"
     )
 
     assert_invalid!()

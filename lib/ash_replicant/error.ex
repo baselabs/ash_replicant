@@ -41,6 +41,9 @@ defmodule AshReplicant.Error do
           | :snapshot_state_invalid
           | :snapshot_provenance_unavailable
           | :snapshot_scope_incomplete
+          | :append_origin_gap
+          | :append_origin_invalid
+          | :append_frontier_divergent
           # Destination admission re-uses this tuple shape with its own
           # structural sub-reasons; their closed set is enumerated in
           # `AshReplicant.Destination`'s own @type.
@@ -138,7 +141,16 @@ defmodule AshReplicant.Error do
     # scope enumeration that is missing, faulting, or malformed.
     :snapshot_state_invalid,
     :snapshot_provenance_unavailable,
-    :snapshot_scope_incomplete
+    :snapshot_scope_incomplete,
+    # P01 (ADR-0018), additive per ADR-0011: the append log's origin-floor
+    # halts. A reconnect origin ahead of the durable frontier means WAL was
+    # skipped (`:append_origin_gap`); an appended event above the durable
+    # checkpoint means a torn write (`:append_frontier_divergent`); a stored
+    # floor that is not an LSN is tamper or decode fault
+    # (`:append_origin_invalid`). All three freeze the checkpoint.
+    :append_origin_gap,
+    :append_origin_invalid,
+    :append_frontier_divergent
   ]
 
   for reason <- @closed_reasons do

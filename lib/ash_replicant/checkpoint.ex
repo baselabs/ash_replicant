@@ -26,6 +26,13 @@ defmodule AshReplicant.Checkpoint do
   ambiguous legacy rows (the NOT NULL identity columns abort `ecto.migrate` on
   any surviving row).
 
+  ## Upgrading for append-log delivery (ADR-0018)
+
+  One nullable column is ADDED: `origin_floor`, the immutable slot origin a
+  go-forward append sink first started from. It is always NULL for a
+  state-mirror host, so the regenerated migration adds an always-NULL column
+  and requires no data capture: run `mix ash.codegen` and migrate.
+
   ## Upgrading from `snapshot_generation` (pre-S02)
 
   The reserved-but-inert `snapshot_generation` column is REPLACED by
@@ -159,6 +166,17 @@ defmodule AshReplicant.Checkpoint do
           allow_nil? true
         end
 
+        # The append log's IMMUTABLE origin floor (ADR-0018 §5): the slot origin
+        # a go-forward append sink first started from. Written ONCE, on the first
+        # admitted activation, under the checkpoint row lock; every later
+        # reconnect origin is a moving resume fact checked against it and the
+        # durable frontier, never a replacement. NULL on a state-mirror sink and
+        # on a snapshot-intent append sink (whose floor is the snapshot's own
+        # consistent point). No completeness claim covers data below it.
+        attribute :origin_floor, :integer do
+          allow_nil? true
+        end
+
         timestamps()
       end
 
@@ -182,7 +200,8 @@ defmodule AshReplicant.Checkpoint do
             :publication_fingerprint,
             :commit_lsn,
             :snapshot_progress,
-            :snapshot_state
+            :snapshot_state,
+            :origin_floor
           ]
         end
 

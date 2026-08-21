@@ -37,6 +37,7 @@ defmodule AshReplicant.CoverageTest do
         skips: MapSet.new(["audit_note"]),
         target_types: %{"id" => :string, "note" => :string, "external_code" => :string},
         tenant?: false,
+        append?: false,
         scd2?: false,
         business_key: []
       }
@@ -246,6 +247,17 @@ defmodule AshReplicant.CoverageTest do
       assert :ok = Coverage.evaluate(census, facts, [])
     end
 
+    test "rule 10: every append source requires FULL identity for delete payloads" do
+      facts = put_in(facts(), [@table, :append?], true)
+
+      assert {:error,
+              %AshReplicant.Error{reason: :source_replica_identity, shape: "public.orders=d"}} =
+               Coverage.evaluate(census(), facts, [])
+
+      census = put_in(census(), [@table, :relreplident], "f")
+      assert :ok = Coverage.evaluate(census, facts, [])
+    end
+
     test "rule 10: an SCD2 table whose business key is NOT the source PK requires FULL" do
       facts =
         facts()
@@ -338,6 +350,13 @@ defmodule AshReplicant.CoverageTest do
     end
   end
 
+  describe "source_mapped_set/1 — destination-only append metadata" do
+    test "excludes identity, origin, attempt, and logical-message payload attributes" do
+      assert Coverage.source_mapped_set(AshReplicant.Test.OrderEvent) ==
+               MapSet.new(["id", "note", "body"])
+    end
+  end
+
   describe "SQL builders" do
     test "the identity probe is version-conditional in ONE statement" do
       sql = Coverage.sql_identity_probe()
@@ -368,6 +387,7 @@ defmodule AshReplicant.CoverageTest do
          skips: MapSet.new(),
          target_types: %{},
          tenant?: false,
+         append?: false,
          scd2?: false,
          business_key: []
        }}

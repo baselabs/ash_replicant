@@ -21,10 +21,24 @@ defmodule AshReplicant.Sink.Impl do
   reads into the graph — the same trust model as `tenant_mfa`.
   """
 
-  alias AshReplicant.{Apply, Destination, Error, Messages, Resolver, Snapshot, Telemetry}
+  alias AshPostgres.DataLayer.Info, as: PGInfo
+
+  alias AshReplicant.{
+    Append,
+    Apply,
+    Destination,
+    Error,
+    Messages,
+    Resolver,
+    Snapshot,
+    Sql,
+    Telemetry
+  }
+
   alias AshReplicant.Checkpoint.Identity
   alias AshReplicant.Resource.Info
   alias AshReplicant.Snapshot.{Provenance, Retirement, State}
+  alias Ecto.Adapters.SQL
 
   @snapshot_transaction_timeout 120_000
 
@@ -53,6 +67,170 @@ defmodule AshReplicant.Sink.Impl do
 
   def handle_session_identity(_config, _identity, _context),
     do: {:error, :source_identity_mismatch}
+
+  @doc """
+  Admit the replication slot's consistent-point origin for a GO-FORWARD append
+  sink (ADR-0018 §5). Generated only on such sinks, and invoked on every
+  connect and reconnect BEFORE `START_REPLICATION` — after
+  `handle_session_identity/3` has bound the checkpoint row, so the row is
+  always present here.
+
+  The first admitted activation persists the callback origin as the log's
+  IMMUTABLE floor: a new slot supplies its `CREATE_REPLICATION_SLOT`
+  consistent point, a reused slot its effective `START_REPLICATION` origin.
+  No completeness claim covers data below that floor.
+
+  Every LATER origin is a moving resume fact, never a replacement floor, and it
+  has to tie out against what the log durably holds:
+
+    * a slot CREATED this session (`reused?: false`) arriving at a log that
+      already claims a floor means the previous slot is gone, so PostgreSQL no
+      longer retains the WAL between the durable frontier and this new
+      consistent point — it halts `:append_origin_gap` before readiness;
+    * an APPENDED event above the durable checkpoint means a torn write, since
+      the append and the checkpoint commit in one transaction — it halts
+      `:append_frontier_divergent` rather than resuming over it.
+
+  Both halts are value-free; the origin and the identity never render.
+  """
+  @spec handle_slot_origin(map(), Replicant.lsn(), map()) :: :ok | {:error, term()}
+  def handle_slot_origin(config, origin, %{reused?: reused?} = _context)
+      when is_integer(origin) and origin >= 0 and is_boolean(reused?) do
+    result =
+      config.repo.transaction(fn ->
+        guard_generation!(config)
+        admit_slot_origin!(config, origin, reused?)
+        guard_generation!(config)
+      end)
+
+    case result do
+      {:ok, _} -> :ok
+      {:error, reason} -> {:error, Error.scrub(reason, nil, :slot_origin)}
+    end
+  rescue
+    e -> {:error, Error.scrub(e, nil, :slot_origin)}
+  catch
+    :throw, value -> {:error, Error.scrub_caught(value, nil, :slot_origin)}
+    :exit, value -> {:error, Error.scrub_caught(value, nil, :slot_origin)}
+  end
+
+  def handle_slot_origin(_config, _origin, _context),
+    do: {:error, Error.exception(reason: :config_invalid, resource: nil, op: :slot_origin)}
+
+  defp admit_slot_origin!(config, origin, reused?) do
+    row = locked_checkpoint_row!(config)
+
+    case row.origin_floor do
+      nil ->
+        # The first admitted activation. Written under the SAME row lock that
+        # guards the watermark, so a racing second activation cannot mint a
+        # second floor.
+        upsert_checkpoint_fields(config, %{origin_floor: origin})
+
+      floor when is_integer(floor) ->
+        verify_resume_origin!(config, row, floor, origin, reused?)
+
+      _invalid ->
+        rollback_conflict!(config, :append_origin_invalid)
+    end
+  end
+
+  # The floor is already set, so this origin is a RESUME FACT.
+  #
+  # Replicant does not idle-advance an :append_log sink over filtered WAL. The
+  # reconnect origin can therefore be compared to the destination watermark
+  # directly: an origin ahead of it was not acknowledged by this sink and is a
+  # real gap. A slot created this session under an existing floor remains the
+  # separate slot-replacement proof and also halts.
+  defp verify_resume_origin!(config, row, floor, origin, reused?) do
+    frontier = if is_integer(row.commit_lsn), do: row.commit_lsn, else: floor
+
+    cond do
+      appended_frontier(config) > frontier ->
+        rollback_conflict!(config, :append_frontier_divergent)
+
+      not reused? ->
+        rollback_conflict!(config, :append_origin_gap)
+
+      # Replicant never performs a filtered-WAL idle acknowledgement for an
+      # append sink. A reused origin ahead of the durable frontier is therefore
+      # unambiguous: PostgreSQL was advanced by another consumer or operator.
+      origin > frontier ->
+        rollback_conflict!(config, :append_origin_gap)
+
+      true ->
+        :ok
+    end
+  end
+
+  # The highest commit LSN this source triple has actually appended, across
+  # every mapped append target. Nothing appended yet reads as -1, so an empty
+  # log can never exceed a frontier.
+  defp appended_frontier(config) do
+    message_resources =
+      config
+      |> Map.get(:message_routes, [])
+      |> Enum.map(fn {_prefix, resource, _action} -> resource end)
+
+    (Map.values(config.resolver_index) ++ message_resources)
+    |> Enum.uniq()
+    |> Enum.filter(&Info.append_log?/1)
+    |> Enum.reduce(-1, fn resource, acc ->
+      max(acc, max_appended_lsn(config, resource))
+    end)
+  end
+
+  # Tenant-BLIND by construction, and therefore raw: an append target may be
+  # tenant-scoped, and the frontier spans every tenant's events, so no single
+  # `tenant:` could scope this read (the same reason `Apply`'s `:mirror`
+  # truncate issues a raw DELETE). It sits at the identical trust boundary —
+  # schema, table and column names come from the resource DSL, never a row
+  # value, and every identifier routes through the ONE quoting home; the three
+  # identity values are parameterized. Activation refuses a `strategy :context`
+  # append target on a go-forward sink precisely because its table is not
+  # statically addressable here.
+  defp max_appended_lsn(config, resource) do
+    names = Info.append_attributes(resource)
+    schema = PGInfo.schema(resource) || "public"
+    table = PGInfo.table(resource)
+
+    sql =
+      "SELECT max(" <>
+        Sql.quote_identifier(column(resource, names.commit_lsn)) <>
+        ") FROM " <>
+        Sql.quote_identifier(schema) <>
+        "." <>
+        Sql.quote_identifier(table) <>
+        " WHERE " <>
+        Sql.quote_identifier(column(resource, names.source_system)) <>
+        " = $1 AND " <>
+        Sql.quote_identifier(column(resource, names.source_database)) <>
+        " = $2 AND " <>
+        Sql.quote_identifier(column(resource, names.slot_name)) <> " = $3"
+
+    params = [
+      config.source_identity.system_identifier,
+      config.source_identity.database,
+      config.slot_name
+    ]
+
+    case SQL.query!(config.repo, sql, params) do
+      %{rows: [[nil]]} -> -1
+      %{rows: [[lsn]]} when is_integer(lsn) -> lsn
+      _other -> rollback_conflict!(config, :append_frontier_divergent)
+    end
+  end
+
+  # The STORAGE column behind an attribute name: a host may rename the column
+  # under the attribute with `source:`, and reading the attribute name would
+  # then quote an identifier that does not exist.
+  defp column(resource, attribute) do
+    case Ash.Resource.Info.attribute(resource, attribute) do
+      %{source: source} when is_binary(source) -> source
+      %{source: source} when is_atom(source) and not is_nil(source) -> Atom.to_string(source)
+      _other -> Atom.to_string(attribute)
+    end
+  end
 
   # Durable source-bound binding (roadmap B2). Runs on EVERY connect/reconnect,
   # inside the identity callback (the only place the ACTUAL session identity is
@@ -947,20 +1125,44 @@ defmodule AshReplicant.Sink.Impl do
     # nodes. It binds even for an EMPTY batch: Replicant dispatches one empty
     # `first_for_table?` chunk for a table with no rows, and that is the only
     # signal an empty source's snapshot phase ever started.
-    if Retirement.provenance_sink?(config) do
-      attempt = bind_attempt!(config)
+    cond do
+      # ADR-0018 §4: a backfill row appended to a LOG carries its structural
+      # mode plus the checkpoint-owned attempt id, and reuses none of the
+      # state-mirror row-provenance machinery (there is nothing to retire). The
+      # attempt still binds under the checkpoint row lock, from the same
+      # authenticated envelope, before any row effect.
+      append_sink?(config) ->
+        attempt = bind_attempt!(config)
 
-      if Info.replicant_snapshot_provenance!(resource) do
-        Snapshot.Rows.apply_batch!(config, resource, changes, snapshot_lsn, ordinal_base, attempt)
-      else
+        config
+        |> Map.put(:append_snapshot_attempt, attempt.attempt)
+        |> apply_snapshot_batch(resource, changes, snapshot_lsn, ordinal_base)
+
+      Retirement.provenance_sink?(config) ->
+        attempt = bind_attempt!(config)
+
+        if Info.replicant_snapshot_provenance!(resource) do
+          Snapshot.Rows.apply_batch!(
+            config,
+            resource,
+            changes,
+            snapshot_lsn,
+            ordinal_base,
+            attempt
+          )
+        else
+          apply_snapshot_batch(config, resource, changes, snapshot_lsn, ordinal_base)
+        end
+
+      true ->
         apply_snapshot_batch(config, resource, changes, snapshot_lsn, ordinal_base)
-      end
-    else
-      apply_snapshot_batch(config, resource, changes, snapshot_lsn, ordinal_base)
     end
 
     guard_generation!(config)
   end
+
+  defp append_sink?(config),
+    do: Map.get(config, :sink_kind, :state_mirror) == :append_log
 
   # ADR-0017: the first ACTUAL `handle_snapshot/2` callback of a run binds that
   # owner's private delivery-run id to a fresh durable attempt; later callbacks
@@ -1233,14 +1435,54 @@ defmodule AshReplicant.Sink.Impl do
         :ok
 
       _ ->
-        if Retirement.provenance_sink?(config) do
-          complete_attempt!(config, row, snapshot_lsn)
+        cond do
+          # ADR-0018 §4: an append sink's backfill attempt is CLOSED at handoff
+          # and nothing is retired — there is no managed row set to sweep. It
+          # still has to close: the streamed changes that follow read the same
+          # envelope, and an attempt left `:active` forever would make every
+          # post-handoff transaction halt `:snapshot_state_invalid`.
+          append_sink?(config) -> close_append_attempt!(config, row, snapshot_lsn)
+          Retirement.provenance_sink?(config) -> complete_attempt!(config, row, snapshot_lsn)
+          true -> :ok
         end
 
         upsert_checkpoint(config, snapshot_lsn)
     end
 
     guard_generation!(config)
+  end
+
+  # The append sink's handoff close (ADR-0018 §4): transition the v1 attempt to
+  # `:complete` and stop. No fingerprint comparison, no membership marker, and
+  # no retirement sweep — an append log never removes a stored event, so there
+  # is nothing an unseen row could mean. An attempt already complete (a
+  # redelivered handoff) is a no-op.
+  defp close_append_attempt!(config, row, snapshot_lsn) do
+    keys = provenance_keys!(config)
+
+    case decode_snapshot_state(row, keys) do
+      {:ok, %State{mode: :v1, status: :complete}} ->
+        :ok
+
+      {:ok, %State{mode: :v1} = state} ->
+        # `completed_lsn` is NOT optional decoration: a v1 envelope with status
+        # `:complete` and no completion LSN fails `State`'s own impossible-pairing
+        # gate, so writing one without it would halt every handoff.
+        store_snapshot_state!(
+          config,
+          %State{state | status: :complete, completed_lsn: snapshot_lsn},
+          keys
+        )
+
+      # No envelope at all: the handoff arrived without a single delivered
+      # chunk (an empty source). Nothing was appended, so there is nothing to
+      # close.
+      :absent ->
+        :ok
+
+      _invalid ->
+        rollback_conflict!(config, :snapshot_state_invalid)
+    end
   end
 
   # ADR-0017's completion protocol. The permanent replay fence is checked FIRST,
@@ -1372,7 +1614,35 @@ defmodule AshReplicant.Sink.Impl do
 
   defp apply_snapshot_batch(_config, _resource, [], _snapshot_lsn, _ordinal_base), do: :ok
 
-  defp apply_snapshot_batch(config, resource, changes, snapshot_lsn, ordinal_base) do
+  # ADR-0018 §4: an APPEND target's backfill rows keep `op: :snapshot`, which is
+  # what stamps `operation`/`origin` as a backfill event rather than a streamed
+  # insert. They also route PER RECORD unconditionally: the mirror's bulk arm
+  # exists to amortize a column-homogeneous upsert, while an append row's
+  # structural inputs differ per row (the ordinal) and the payload can be
+  # tenant- or classification-scoped.
+  defp apply_snapshot_batch(config, resource, changes, snapshot_lsn, ordinal_base)
+       when is_list(changes) do
+    if Info.append_log?(resource) do
+      changes
+      |> Enum.with_index(ordinal_base)
+      |> Enum.each(fn {c, ordinal} ->
+        guard_generation!(config)
+
+        Apply.apply_change(config, %{
+          c
+          | op: :snapshot,
+            commit_lsn: snapshot_lsn,
+            ordinal: ordinal
+        })
+
+        guard_generation!(config)
+      end)
+    else
+      apply_mirror_snapshot_batch(config, resource, changes, snapshot_lsn, ordinal_base)
+    end
+  end
+
+  defp apply_mirror_snapshot_batch(config, resource, changes, snapshot_lsn, ordinal_base) do
     # The load-bearing driver of the split is `tenant_scoped?`: a single bulk
     # upsert carries one `tenant:`, so a mixed-tenant batch cannot go through bulk
     # — it MUST apply per-record, each row under its own resolved tenant.
@@ -1464,12 +1734,20 @@ defmodule AshReplicant.Sink.Impl do
   end
 
   defp preflight_snapshot_onetime!(config, resource, changes) do
-    action = Resolver.upsert_action(resource)
+    # An APPEND target has no primary create — its ONE delivery action is the
+    # declared immutable append (ADR-0018 §2), and asking for a primary create
+    # here raises before a single backfill row is written.
+    {action, op} =
+      if Info.append_log?(resource) do
+        {Info.replicant_append_action!(resource), :append}
+      else
+        {Resolver.upsert_action(resource), :upsert}
+      end
 
     tenants =
       if tenant_scoped?(resource) do
         changes
-        |> Enum.map(&Resolver.resolve_tenant!(resource, &1.record, :upsert))
+        |> Enum.map(&Resolver.resolve_tenant!(resource, &1.record, op))
         |> Enum.uniq()
       else
         [nil]
@@ -1608,14 +1886,13 @@ defmodule AshReplicant.Sink.Impl do
         :ok
 
       {:ok, route} ->
-        Messages.apply(config, message, route, commit_lsn)
+        apply_routed_message(config, message, route, commit_lsn)
 
       {:error, :unmapped} ->
         raise Error.exception(
                 reason: :message_prefix_unmapped,
                 resource: nil,
-                op: :message,
-                shape: message.prefix
+                op: :message
               )
     end
   end
@@ -1650,8 +1927,7 @@ defmodule AshReplicant.Sink.Impl do
           Error.exception(
             reason: :message_prefix_unmapped,
             resource: nil,
-            op: :message,
-            shape: prefix
+            op: :message
           ),
           config
         )
@@ -1668,7 +1944,7 @@ defmodule AshReplicant.Sink.Impl do
       # The claim commits and finalizes through AshOnetime's independent
       # store path — no wrapping destination transaction; the watermark moves
       # only after finalized/replayed success (ADR-0015).
-      Messages.apply(config, message, route, nil)
+      apply_routed_message(config, message, route, nil)
       advance_message_watermark(config, lsn)
       :ok
     else
@@ -1676,7 +1952,7 @@ defmodule AshReplicant.Sink.Impl do
         config.repo.transaction(
           fn ->
             guard_generation!(config)
-            Messages.apply(config, message, route, nil)
+            apply_routed_message(config, message, route, nil)
             advance_watermark!(config, lsn)
             guard_generation!(config)
           end,
@@ -1690,6 +1966,14 @@ defmodule AshReplicant.Sink.Impl do
         {:error, reason} ->
           raise reason
       end
+    end
+  end
+
+  defp apply_routed_message(config, message, route, txn_commit_lsn) do
+    if append_sink?(config) do
+      Append.apply_message(config, message, route, txn_commit_lsn)
+    else
+      Messages.apply(config, message, route, txn_commit_lsn)
     end
   end
 

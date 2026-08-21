@@ -29,6 +29,7 @@ defmodule AshReplicant.Coverage do
             required(:skips) => MapSet.t(String.t()),
             required(:target_types) => %{optional(String.t()) => term()},
             required(:tenant?) => boolean(),
+            required(:append?) => boolean(),
             required(:scd2?) => boolean(),
             required(:business_key) => [String.t()]
           }
@@ -235,7 +236,7 @@ defmodule AshReplicant.Coverage do
       live = Map.fetch!(census, {schema, table})
 
       needs_full? =
-        fact.tenant? or
+        fact.append? or fact.tenant? or
           (fact.scd2? and not business_key_is_pk?(fact, live.pk))
 
       if needs_full? and live.relreplident != "f" do
@@ -443,6 +444,7 @@ defmodule AshReplicant.Coverage do
         skips: skips,
         target_types: target_types,
         tenant?: relation.tenant != nil,
+        append?: Info.append_log?(resource),
         scd2?: Info.history_scd2?(resource),
         business_key: business_key_sources(resource)
       }
@@ -454,9 +456,9 @@ defmodule AshReplicant.Coverage do
   @doc """
   The SOURCE-side mapped column set (strings): the upsert reflection's
   attributes minus declared skips and destination-only metadata. SCD2 window
-  columns and snapshot-provenance attributes are sink-generated on the target,
-  never source columns (their absence from the live source table is not a
-  missing mapping).
+  columns, snapshot-provenance attributes, and an append target's structural
+  identity/label columns are sink-generated on the target, never source columns
+  (their absence from the live source table is not a missing mapping).
   """
   @spec source_mapped_set(module()) :: MapSet.t(String.t())
   def source_mapped_set(resource) do
@@ -520,10 +522,37 @@ defmodule AshReplicant.Coverage do
         []
       end
 
-    (history ++ provenance)
+    # ADR-0018: an append target's structural columns — the five identity axes,
+    # the two labels, the backfill attempt, and the two message-route payload
+    # columns — are stamped by the sink from the replication session/change or
+    # the logical-message callback, never read from a source table row. The
+    # append surrogate primary key is destination-only for the same reason.
+    # Without this the coverage preflight would demand `commit_lsn`, `ordinal`,
+    # `operation` … exist on the SOURCE table and fail every append activation.
+    append =
+      if Info.append_log?(resource) do
+        Map.values(Info.append_attributes(resource)) ++
+          Map.values(Info.append_message_attributes(resource)) ++
+          [append_surrogate_pk(resource)]
+      else
+        []
+      end
+
+    (history ++ provenance ++ append)
     |> Enum.reject(&is_nil/1)
   rescue
     _ -> []
+  end
+
+  # An append target's PK is a surrogate by construction: the append identity is
+  # the five-axis unique identity, never the primary key.
+  defp append_surrogate_pk(resource) do
+    case Ash.Resource.Info.primary_key(resource) do
+      [pk] -> pk
+      _other -> nil
+    end
+  rescue
+    _ -> nil
   end
 
   defp scd2_surrogate_pk(resource) do
