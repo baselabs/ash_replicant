@@ -62,7 +62,8 @@ defmodule AshReplicant do
       `:timeout_ms`, and `:max_consecutive_faults`. Defaults are enabled,
       60 seconds, 10% jitter, a 10-second timeout, and three consecutive
       faults. The next one-shot schedule starts only after the current bounded
-      run settles, so census work never overlaps.
+      run settles, so census work never overlaps. A malformed value fails
+      closed at start (`{:error, :census_options_invalid}`).
 
   The `slot_name` is NOT a `start_link` option — it is baked into the sink via
   `use AshReplicant.Sink, slot_name: ...` and is the single source of truth for

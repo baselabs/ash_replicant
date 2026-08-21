@@ -64,5 +64,5 @@ A second health process would create competing lifecycle authority.
   coverage mutations, permission/unreachable/timeout faults, exact fault-budget
   halt, owner/worker teardown, typed value-free telemetry, and a tamper proving
   every admitted check can go red.
-- Later children retain the remaining live DDL/index/RIF/migration, tombstone,
+- Later children retain the remaining live DDL/index/migration, tombstone,
   owner-death/node-restart, readiness, and subscriber-failure proofs.

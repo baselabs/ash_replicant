@@ -888,12 +888,12 @@ defmodule AshReplicant.ReleaseContract do
 
   defp assert_census_contract(root) do
     Enum.each(@census_doc_contracts, fn {path, heading, required_texts} ->
-      content = root |> Path.join(path) |> File.read!()
+      content = root |> Path.join(path) |> File.read!() |> visible_markdown()
       section = section(content, heading)
 
       assert(section != nil, "published continuous-census contract section is missing")
 
-      normalized_section = section |> visible_markdown() |> normalize_markdown()
+      normalized_section = normalize_markdown(section)
 
       assert(
         Enum.all?(required_texts, &String.contains?(normalized_section, normalize_markdown(&1))),

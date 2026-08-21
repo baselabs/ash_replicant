@@ -220,7 +220,9 @@ defmodule AshReplicant.Census do
 
     case Ash.read(query,
            authorize?: false,
-           context: %{data_layer: Map.get(config, :data_layer_context, %{})}
+           context: %{
+             data_layer: Map.get(config, :data_layer_context, %{repo: config.repo})
+           }
          ) do
       {:ok, rows} ->
         classify_checkpoint(rows, checkpoint_filter(config), config.source_contract.manifest)

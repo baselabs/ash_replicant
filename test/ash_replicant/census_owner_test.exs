@@ -56,13 +56,15 @@ defmodule AshReplicant.CensusOwnerTest do
 
   defp eventually(fun, polls \\ 400) do
     cond do
-      fun.() -> :ok
-      polls == 0 -> flunk("condition not reached within the poll budget")
-      true -> Process.sleep(25)
-    end
-    |> case do
-      :ok -> :ok
-      _ -> eventually(fun, polls - 1)
+      fun.() ->
+        :ok
+
+      polls == 0 ->
+        flunk("condition not reached within the poll budget")
+
+      true ->
+        Process.sleep(25)
+        eventually(fun, polls - 1)
     end
   end
 
@@ -97,6 +99,22 @@ defmodule AshReplicant.CensusOwnerTest do
     end)
 
     :ok
+  end
+
+  describe "test harness polling" do
+    test "eventually keeps polling after a false sample" do
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+      assert :ok =
+               eventually(fn ->
+                 Agent.get_and_update(counter, fn count ->
+                   next = count + 1
+                   {next >= 3, next}
+                 end)
+               end)
+
+      assert Agent.get(counter, & &1) == 3
+    end
   end
 
   describe "the census configuration gate is wired into activation" do

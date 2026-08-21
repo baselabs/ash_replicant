@@ -10,8 +10,14 @@ defmodule AshReplicant.Test.CensusDrift.Order do
     repo AshReplicant.TestRepo
   end
 
+  multitenancy do
+    strategy :attribute
+    attribute :org_id
+  end
+
   replicant do
     source_table("c01_census_orders")
+    tenant_attribute(:org_id)
   end
 
   attributes do
@@ -22,6 +28,7 @@ defmodule AshReplicant.Test.CensusDrift.Order do
     end
 
     attribute :note, :string, public?: true
+    attribute :org_id, :string, allow_nil?: false, public?: true
   end
 
   actions do
@@ -85,8 +92,13 @@ defmodule AshReplicant.CensusDriftTest do
     Marquee.q!("DROP TABLE IF EXISTS c01_census_extra")
     Marquee.q!("DROP TABLE IF EXISTS c01_census_mirror_orders")
 
-    Marquee.q!("CREATE TABLE #{@src} (id text primary key, note text)")
-    Marquee.q!("CREATE TABLE c01_census_mirror_orders (id text primary key, note text)")
+    Marquee.q!("CREATE TABLE #{@src} (id text primary key, org_id text not null, note text)")
+    Marquee.q!("ALTER TABLE #{@src} REPLICA IDENTITY FULL")
+
+    Marquee.q!(
+      "CREATE TABLE c01_census_mirror_orders (id text primary key, org_id text not null, note text)"
+    )
+
     Marquee.q!("CREATE PUBLICATION #{@publication} FOR TABLE #{@src}")
 
     on_exit(fn ->
@@ -170,6 +182,14 @@ defmodule AshReplicant.CensusDriftTest do
     await_bound()
     assert_receive {:census, ^ref, [:ash_replicant, :census, :passed], _}, 15_000
 
+    assert [[watermark]] =
+             Marquee.q!(
+               "SELECT commit_lsn FROM ash_replicant_checkpoints WHERE slot_name = $1",
+               [@slot]
+             ).rows
+
+    assert is_nil(watermark)
+
     # The upstream drift: a new table joins the publication. Nothing is written
     # to it, so no change ever reaches the sink — before C01 this stayed
     # invisible until the next reconnect.
@@ -184,6 +204,33 @@ defmodule AshReplicant.CensusDriftTest do
     # durable watermark never advanced.
     PG.wait_until(fn -> :persistent_term.get({AshReplicant, @slot}, :none) == :none end)
     PG.wait_until(fn -> not Process.alive?(owner) end)
+
+    assert [[^watermark]] =
+             Marquee.q!(
+               "SELECT commit_lsn FROM ash_replicant_checkpoints WHERE slot_name = $1",
+               [@slot]
+             ).rows
+
+    assert [[0]] = Marquee.q!("SELECT count(*) FROM c01_census_mirror_orders").rows
+  end
+
+  test "quiet RIF drift AFTER activation halts through the coverage census" do
+    ref = attach()
+
+    assert {:ok, owner} = start()
+    assert_receive {:census, ^ref, [:replicant, :connection, :slot_active], %{}}, 15_000
+    await_bound()
+    assert_receive {:census, ^ref, [:ash_replicant, :census, :passed], _}, 15_000
+
+    Marquee.q!("ALTER TABLE #{@src} REPLICA IDENTITY DEFAULT")
+
+    assert_receive {:census, ^ref, [:ash_replicant, :census, :halted],
+                    %{kind: :coverage, reason: :source_replica_identity}},
+                   15_000
+
+    PG.wait_until(fn -> :persistent_term.get({AshReplicant, @slot}, :none) == :none end)
+    PG.wait_until(fn -> not Process.alive?(owner) end)
+    assert [[0]] = Marquee.q!("SELECT count(*) FROM c01_census_mirror_orders").rows
   end
 
   test "a tampered durable contract halts via the checkpoint census" do

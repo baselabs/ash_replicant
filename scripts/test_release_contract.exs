@@ -951,6 +951,14 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       replace_once!(path, heading, "#{heading} changed")
       assert_invalid!()
 
+      prepare_fixture()
+      replace_once!(path, heading, "<!--\n#{heading}\n-->")
+      assert_invalid!()
+
+      prepare_fixture()
+      replace_once!(path, heading, "```text\n#{heading}\n```")
+      assert_invalid!()
+
       Enum.each(required_texts, fn required ->
         prepare_fixture()
         replace_once!(path, required, "continuous census contract text removed")

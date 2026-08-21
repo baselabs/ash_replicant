@@ -37,14 +37,16 @@ defmodule AshReplicant.CensusTest do
   end
 
   defp row(overrides \\ %{}) do
+    contract = admitted_contract()
+
     Map.merge(
       %{
         source_system_id: "741852963",
         source_database: "postgres",
         slot_name: "orders",
         source_timeline: 1,
-        publication_contract: admitted_contract().encoded,
-        publication_fingerprint: admitted_contract().fingerprint
+        publication_contract: contract.encoded,
+        publication_fingerprint: contract.fingerprint
       },
       overrides
     )
