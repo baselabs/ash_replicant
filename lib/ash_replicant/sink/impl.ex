@@ -334,50 +334,75 @@ defmodule AshReplicant.Sink.Impl do
     row = locked_checkpoint_row!(config)
 
     progress =
-      case {row.snapshot_progress, decode_snapshot_state(row, keys)} do
-        {nil, :absent} when is_integer(row.commit_lsn) ->
-          # A stream checkpoint with no snapshot state is the explicit
-          # bootstrapped-elsewhere path: no backfill attempt is active.
-          nil
-
-        {nil, :absent} ->
-          digest = contract_digest!(config)
-          state = State.mint_incremental(digest, State.active_key_version(keys))
-          store_snapshot_state!(config, state, keys)
-          :backfill_pending
-
-        {nil, {:ok, %State{mode: :incremental, status: status} = state}}
-        when status in [:armed, :active] ->
-          require_incremental_contract!(config, state)
-
-          if progress_pair_valid?(row, state),
-            do: :backfill_pending,
-            else: rollback_conflict!(config, :snapshot_state_invalid)
-
-        {token, {:ok, %State{mode: :incremental, status: status} = state}}
-        when is_binary(token) and status in [:armed, :active] ->
-          require_incremental_contract!(config, state)
-
-          if progress_pair_valid?(row, state),
-            do: token,
-            else: rollback_conflict!(config, :snapshot_state_invalid)
-
-        {token, {:ok, %State{mode: :incremental, status: :complete} = state}}
-        when is_binary(token) ->
-          if completed_progress_pair_valid?(row, state),
-            do: token,
-            else: rollback_conflict!(config, :snapshot_state_invalid)
-
-        {nil, {:ok, %State{mode: :v1}}} when is_integer(row.commit_lsn) ->
-          nil
-
-        _invalid ->
-          rollback_conflict!(config, :snapshot_state_invalid)
-      end
+      resume_incremental_progress!(config, row, keys, decode_snapshot_state(row, keys))
 
     guard_generation!(config)
     progress
   end
+
+  defp resume_incremental_progress!(
+         _config,
+         %{snapshot_progress: nil, commit_lsn: checkpoint},
+         _keys,
+         :absent
+       )
+       when is_integer(checkpoint),
+       do: nil
+
+  defp resume_incremental_progress!(config, %{snapshot_progress: nil}, keys, :absent) do
+    digest = contract_digest!(config)
+    state = State.mint_incremental(digest, State.active_key_version(keys))
+    store_snapshot_state!(config, state, keys)
+    :backfill_pending
+  end
+
+  defp resume_incremental_progress!(
+         config,
+         %{snapshot_progress: nil} = row,
+         _keys,
+         {:ok, %State{mode: :incremental, status: status} = state}
+       )
+       when status in [:armed, :active] do
+    require_incremental_contract!(config, state)
+    require_progress_pair!(config, row, state)
+    :backfill_pending
+  end
+
+  defp resume_incremental_progress!(
+         config,
+         %{snapshot_progress: token} = row,
+         _keys,
+         {:ok, %State{mode: :incremental, status: status} = state}
+       )
+       when is_binary(token) and status in [:armed, :active] do
+    require_incremental_contract!(config, state)
+    require_progress_pair!(config, row, state)
+    token
+  end
+
+  defp resume_incremental_progress!(
+         config,
+         %{snapshot_progress: token} = row,
+         _keys,
+         {:ok, %State{mode: :incremental, status: :complete} = state}
+       )
+       when is_binary(token) do
+    if completed_progress_pair_valid?(row, state),
+      do: token,
+      else: rollback_conflict!(config, :snapshot_state_invalid)
+  end
+
+  defp resume_incremental_progress!(
+         _config,
+         %{snapshot_progress: nil, commit_lsn: checkpoint},
+         _keys,
+         {:ok, %State{mode: :v1}}
+       )
+       when is_integer(checkpoint),
+       do: nil
+
+  defp resume_incremental_progress!(config, _row, _keys, _state),
+    do: rollback_conflict!(config, :snapshot_state_invalid)
 
   @doc """
   Persist the transaction's changes AND the checkpoint atomically; skip if
@@ -1067,6 +1092,12 @@ defmodule AshReplicant.Sink.Impl do
   end
 
   defp progress_pair_valid?(_row, _state), do: false
+
+  defp require_progress_pair!(config, row, state) do
+    if progress_pair_valid?(row, state),
+      do: :ok,
+      else: rollback_conflict!(config, :snapshot_state_invalid)
+  end
 
   defp completed_progress_pair_valid?(
          %{snapshot_progress: token},

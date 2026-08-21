@@ -143,14 +143,14 @@ defmodule AshReplicant.ReleaseContractSelfTest do
        "Every admitted destination resource uses the sink's literal AshPostgres Repo and the same effective dynamic Repo.",
        "Declarations are trusted metadata; they do not prove an arbitrary Elixir body.",
        "AshOnetime one-time nonces are rejected for WAL replay.",
-       "A Replicant v1 snapshot batch is atomic, but an incomplete multi-batch restart can physically repeat already committed batch effects."
+       "A Replicant v1 retry and incremental resume are physically effect-once for resources declaring `snapshot_provenance true`:"
      ]},
     {"usage-rules.md", "## Destination transaction boundary",
      [
        "Every admitted destination resource uses the sink's literal AshPostgres Repo and the same effective dynamic Repo.",
        "Declarations are trusted metadata; they do not prove an arbitrary Elixir body.",
        "AshOnetime one-time nonces are rejected for WAL replay.",
-       "A Replicant v1 snapshot batch is atomic, but an incomplete multi-batch restart can physically repeat already committed batch effects."
+       "V1 retry and incremental resume are physically effect-once for opted-in resources:"
      ]},
     {"AGENTS.md", "## Critical rules",
      [
@@ -1174,19 +1174,17 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     end
 
     # The B5 ledger gate scans lib/ for the removed `apply_ledger` option and
-    # pins its two allowlisted fail-closed occurrences at sink.ex lines 91 and
-    # 110. The fixture ships a SYNTHETIC sink.ex carrying the allowlisted lines
-    # at those positions: the self-test exercises the checker's logic without
-    # depending on live-code line drift (the real-repo pin runs in the
-    # release-contract assert itself).
+    # admits only the two exact fail-closed lines in sink.ex. The synthetic
+    # fixture deliberately places them at unrelated line numbers: line drift is
+    # harmless, while content or path drift and a third occurrence remain red.
     sink_dir = fixture_path(Path.join(["lib", "ash_replicant"]))
     File.mkdir_p!(sink_dir)
 
     sink_fixture =
-      Enum.map(1..110, fn ix ->
-        if ix in [91, 110],
-          do: "  # apply_ledger (allowlisted line)",
-          else: "  # fixture line #{ix}"
+      Enum.map(1..20, fn
+        7 -> "  # removed `apply_ledger`) must surface as a compile-time failure on the host,"
+        19 -> "  \"(apply_ledger was removed; a removed option must not silently no-op)\""
+        ix -> "  # fixture line #{ix}"
       end)
 
     File.write!(Path.join(sink_dir, "sink.ex"), Enum.join(sink_fixture, "\n") <> "\n")

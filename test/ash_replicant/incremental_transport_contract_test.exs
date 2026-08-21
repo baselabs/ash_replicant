@@ -7,8 +7,8 @@ defmodule AshReplicant.IncrementalTransportContractTest do
   """
   use ExUnit.Case, async: true
 
-  alias Replicant.SnapshotWindow, as: Window
   alias Replicant.Snapshotter.Incremental
+  alias Replicant.SnapshotWindow, as: Window
 
   defp change(op, old_id, new_id \\ nil) do
     %Replicant.Change{

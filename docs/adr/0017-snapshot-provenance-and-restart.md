@@ -126,6 +126,13 @@ destination transaction:
 5. persist the exact incremental progress token and its authenticated hash with
    the row effects.
 
+For SCD2, "current open target" is not restricted to a version opened at or
+below the snapshot floor. A stream change can commit before that table's
+snapshot window opens, after which the snapshot reader sees the already-current
+source row. The sink compares that actual current destination version: a
+matching fingerprint marks it seen without opening another version; a mismatch
+fails closed rather than replacing a later version with an earlier one.
+
 The state envelope advances one durable `next_ordinal` by the number of rows in
 the committed chunk. This extends ADR-0012's collision-free snapshot-run
 ordinal axis across owner/transport restart; a rolled-back chunk advances

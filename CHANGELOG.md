@@ -26,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     host action and stamp the active marker before advancing the stream
     watermark; deletes remove/close normally. Sink-owned transaction batches
     apply the same rule under their one trailing watermark write.
+  - An SCD2 stream version committed before its table's snapshot window remains
+    the current comparison target even when it opened above the snapshot floor.
+    A matching current-read snapshot row coalesces through provenance instead
+    of attempting a second open version.
   - Incremental completion is Replicant's empty at-least-once
     `handle_snapshot/2` call. It retires unseen rows per destination tenant
     scope, stores the exact token plus its SHA-256 replay fence, and never

@@ -249,13 +249,19 @@ defmodule AshReplicant.Snapshot.State do
   # is REQUIRED under V1 (it is the axis that rotates an attempt across owners)
   # and merely a binary otherwise.
   defp well_formed?(state) do
-    is_map_key(@modes, state.mode) and is_map_key(@statuses, state.status) and
-      id?(state.attempt) and id?(state.contract_digest) and
-      valid_key_version?(state.key_version) and is_binary(state.delivery_run) and
-      ((state.mode == :v1 and id?(state.delivery_run)) or
-         (state.mode == :incremental and state.delivery_run == "")) and
+    valid_vocabulary?(state) and valid_ids?(state) and
+      valid_key_version?(state.key_version) and valid_delivery_run?(state) and
       valid_ordinal?(state)
   end
+
+  defp valid_vocabulary?(state),
+    do: is_map_key(@modes, state.mode) and is_map_key(@statuses, state.status)
+
+  defp valid_ids?(state), do: id?(state.attempt) and id?(state.contract_digest)
+
+  defp valid_delivery_run?(%{mode: :v1, delivery_run: delivery_run}), do: id?(delivery_run)
+  defp valid_delivery_run?(%{mode: :incremental, delivery_run: ""}), do: true
+  defp valid_delivery_run?(_state), do: false
 
   defp id?(value), do: is_binary(value) and byte_size(value) in 1..255
 

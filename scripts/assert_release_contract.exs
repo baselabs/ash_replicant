@@ -243,14 +243,14 @@ defmodule AshReplicant.ReleaseContract do
        "Every admitted destination resource uses the sink's literal AshPostgres Repo and the same effective dynamic Repo.",
        "Declarations are trusted metadata; they do not prove an arbitrary Elixir body.",
        "AshOnetime one-time nonces are rejected for WAL replay.",
-       "A Replicant v1 snapshot batch is atomic, but an incomplete multi-batch restart can physically repeat already committed batch effects."
+       "A Replicant v1 retry and incremental resume are physically effect-once for resources declaring `snapshot_provenance true`:"
      ]},
     {"usage-rules.md", "## Destination transaction boundary",
      [
        "Every admitted destination resource uses the sink's literal AshPostgres Repo and the same effective dynamic Repo.",
        "Declarations are trusted metadata; they do not prove an arbitrary Elixir body.",
        "AshOnetime one-time nonces are rejected for WAL replay.",
-       "A Replicant v1 snapshot batch is atomic, but an incomplete multi-batch restart can physically repeat already committed batch effects."
+       "V1 retry and incremental resume are physically effect-once for opted-in resources:"
      ]},
     {"AGENTS.md", "## Critical rules",
      [
@@ -320,17 +320,26 @@ defmodule AshReplicant.ReleaseContract do
         |> String.split("\n")
         |> Enum.with_index()
         |> Enum.flat_map(fn {line, ix} ->
-          if String.contains?(line, "apply_ledger"), do: ["#{path}:#{ix + 1}"], else: []
+          if String.contains?(line, "apply_ledger"),
+            do: [{Path.expand(path), ix + 1, String.trim(line)}],
+            else: []
         end)
       end)
 
-    sink_lines = Path.join(["lib", "ash_replicant", "sink.ex"])
+    sink_path = root |> Path.join(Path.join(["lib", "ash_replicant", "sink.ex"])) |> Path.expand()
+
+    allowed_hits =
+      MapSet.new([
+        {sink_path,
+         "# removed `apply_ledger`) must surface as a compile-time failure on the host,"},
+        {sink_path, "\"(apply_ledger was removed; a removed option must not silently no-op)\""}
+      ])
+
+    actual_hits = MapSet.new(ledger_hits, fn {path, _line, content} -> {path, content} end)
 
     assert(
-      length(ledger_hits) == 2 and
-        Enum.all?(ledger_hits, &String.contains?(&1, sink_lines)) and
-        Enum.sort(Enum.map(ledger_hits, &Path.basename(&1))) == ["sink.ex:110", "sink.ex:91"],
-      "apply_ledger must appear ONLY as the two allowlisted fail-closed lines (91 and 110) of lib/ash_replicant/sink.ex, found: #{inspect(ledger_hits)}"
+      length(ledger_hits) == 2 and actual_hits == allowed_hits,
+      "apply_ledger must appear ONLY in the two exact fail-closed lines of lib/ash_replicant/sink.ex, found: #{inspect(ledger_hits)}"
     )
 
     secret_hits =

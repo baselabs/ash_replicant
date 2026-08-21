@@ -312,6 +312,17 @@ defmodule AshReplicant.Resolver do
     end
   end
 
+  @doc "Build a query selecting the current open SCD2 version by business key."
+  @spec current_open_version_query(module(), map()) :: Ash.Query.t()
+  def current_open_version_query(resource, record) do
+    require Ash.Query
+
+    to_col = Info.replicant_history_valid_to_lsn_attribute!(resource)
+    base = Ash.Query.do_filter(resource, business_key_values(resource, record))
+
+    Ash.Query.filter(base, is_nil(^Ash.Expr.ref(to_col)))
+  end
+
   @doc """
   The `{inputs, upsert_fields}` for OPENING a version: the source data columns (via the
   existing upsert reflection) PLUS the window columns (`valid_from_lsn`, optional

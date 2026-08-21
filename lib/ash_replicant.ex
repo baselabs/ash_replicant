@@ -22,6 +22,7 @@ defmodule AshReplicant do
   alias AshReplicant.Coverage
   alias AshReplicant.Destination.Generation
   alias AshReplicant.Error
+  alias AshReplicant.Resource.Info
   alias AshReplicant.Sink.Impl
   alias AshReplicant.Snapshot.Provenance
   alias AshReplicant.Snapshot.State
@@ -615,22 +616,26 @@ defmodule AshReplicant do
   defp validate_snapshot_mode(opts, index) do
     case Keyword.get(opts, :snapshot, false) do
       snapshot when is_list(snapshot) ->
-        if Keyword.get(snapshot, :mode) == :incremental do
-          resources = index |> Map.values() |> Enum.uniq()
-
-          if resources != [] and
-               Enum.all?(resources, &AshReplicant.Resource.Info.replicant_snapshot_provenance!/1) do
-            :ok
-          else
-            {:error, :snapshot_unsupported}
-          end
-        else
-          :ok
-        end
+        validate_snapshot_options(snapshot, index)
 
       _other ->
         :ok
     end
+  end
+
+  defp validate_snapshot_options(snapshot, index) do
+    case Keyword.get(snapshot, :mode) do
+      :incremental -> validate_incremental_resources(index)
+      _other -> :ok
+    end
+  end
+
+  defp validate_incremental_resources(index) do
+    resources = index |> Map.values() |> Enum.uniq()
+
+    if resources != [] and Enum.all?(resources, &Info.replicant_snapshot_provenance!/1),
+      do: :ok,
+      else: {:error, :snapshot_unsupported}
   end
 
   defp erase_generation_key(key, generation) do
