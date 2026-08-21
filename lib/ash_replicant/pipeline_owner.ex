@@ -57,6 +57,7 @@ defmodule AshReplicant.PipelineOwner do
 
   use GenServer
 
+  alias AshReplicant.{Census, Telemetry}
   alias AshReplicant.Sink.Impl
 
   @doc """
@@ -145,13 +146,19 @@ defmodule AshReplicant.PipelineOwner do
   def handle_cast({:admitted, admitted}, %{pending: true}) do
     monitor = Process.monitor(admitted.pipeline_pid)
 
-    {:noreply,
-     %{
-       slot_name: admitted.slot_name,
-       generation_ref: admitted.generation_ref,
-       pipeline_pid: admitted.pipeline_pid,
-       monitor: monitor
-     }}
+    state = %{
+      slot_name: admitted.slot_name,
+      sink: admitted.sink,
+      generation_ref: admitted.generation_ref,
+      pipeline_pid: admitted.pipeline_pid,
+      monitor: monitor,
+      census: admitted.census,
+      census_timer: nil,
+      census_run: nil,
+      consecutive_faults: 0
+    }
+
+    {:noreply, schedule_next_census(state)}
   end
 
   @impl GenServer
@@ -166,6 +173,54 @@ defmodule AshReplicant.PipelineOwner do
   # that window): same pending reap.
   def handle_info({:EXIT, _pid, _reason}, %{pending: true} = state) do
     reap_pending(state)
+  end
+
+  def handle_info({:census_tick, token}, %{census_timer: %{token: token}} = state) do
+    state = %{state | census_timer: nil}
+    {:noreply, start_census(state)}
+  end
+
+  def handle_info(
+        {:census_result, token, %{state: {:drifted, _check, _reason}} = report},
+        %{census_run: %{token: token, timed_out?: true} = run} = state
+      ) do
+    cancel_census_run(run)
+    apply_census_report(report, %{state | census_run: nil})
+  end
+
+  def handle_info(
+        {:census_result, token, %{state: _state, checks: _checks} = report},
+        %{
+          census_run: %{
+            token: token,
+            monitor: monitor,
+            timeout: timeout,
+            timed_out?: false
+          }
+        } = state
+      ) do
+    cancel_timer(timeout)
+    Process.demonitor(monitor, [:flush])
+    apply_census_report(report, %{state | census_run: nil})
+  end
+
+  def handle_info(
+        {:census_timeout, token},
+        %{census_run: %{token: token, pid: pid} = run} = state
+      ) do
+    Process.exit(pid, :kill)
+    {:noreply, %{state | census_run: %{run | timed_out?: true}}}
+  end
+
+  def handle_info(
+        {:DOWN, monitor, :process, pid, _reason},
+        %{census_run: %{monitor: monitor, pid: pid, timed_out?: timed_out?} = run} = state
+      ) do
+    cancel_timer(run.timeout)
+
+    reason = if timed_out?, do: :census_timeout, else: :census_checker_fault
+    report = census_fault_report(reason)
+    apply_census_report(report, %{state | census_run: nil})
   end
 
   # The pipeline exited (halt, crash, external stop): the generation is
@@ -202,11 +257,131 @@ defmodule AshReplicant.PipelineOwner do
   # snapshot ordinals. Both are idempotent, so racing a stop_supervised
   # that already cleaned up converges.
   defp cleanup(%{slot_name: slot_name, generation_ref: generation_ref, monitor: monitor} = state) do
+    state = stop_census(state)
     Process.demonitor(monitor, [:flush])
     :ok = AshReplicant.erase_generation(slot_name, generation_ref)
     Impl.clear_snapshot_ordinals(slot_name)
     state
   end
+
+  defp schedule_next_census(%{census: %{enabled?: false}} = state), do: state
+
+  defp schedule_next_census(%{census_timer: nil, census_run: nil, census: census} = state) do
+    token = make_ref()
+    timer = Process.send_after(self(), {:census_tick, token}, Census.next_delay(census))
+    %{state | census_timer: %{token: token, timer: timer}}
+  end
+
+  defp schedule_next_census(state), do: state
+
+  defp start_census(%{census: %{enabled?: false}} = state), do: state
+  defp start_census(%{census_run: run} = state) when not is_nil(run), do: state
+
+  defp start_census(state) do
+    parent = self()
+    token = make_ref()
+    slot_name = state.slot_name
+    sink = state.sink
+
+    {pid, monitor} =
+      spawn_monitor(fn ->
+        send(parent, {:census_result, token, Census.run(slot_name, sink)})
+      end)
+
+    timeout = Process.send_after(self(), {:census_timeout, token}, state.census.timeout_ms)
+
+    %{
+      state
+      | census_run: %{
+          token: token,
+          pid: pid,
+          monitor: monitor,
+          timeout: timeout,
+          timed_out?: false
+        }
+    }
+  end
+
+  defp apply_census_report(%{state: :healthy}, state) do
+    Telemetry.event(
+      [:ash_replicant, :census, :passed],
+      %{count: 1},
+      %{slot_name: state.slot_name}
+    )
+
+    {:noreply, schedule_next_census(%{state | consecutive_faults: 0})}
+  end
+
+  defp apply_census_report(
+         %{state: {:faulted, check, reason}},
+         state
+       ) do
+    faults = state.consecutive_faults + 1
+
+    Telemetry.event(
+      [:ash_replicant, :census, :faulted],
+      %{count: 1},
+      %{slot_name: state.slot_name, kind: check, reason: reason}
+    )
+
+    state = %{state | consecutive_faults: faults}
+
+    if faults >= state.census.max_consecutive_faults do
+      halt_for_census(state, check, :census_unverifiable)
+    else
+      {:noreply, schedule_next_census(state)}
+    end
+  end
+
+  defp apply_census_report(
+         %{state: {:drifted, check, reason}},
+         state
+       ) do
+    halt_for_census(state, check, reason)
+  end
+
+  defp halt_for_census(state, check, reason) do
+    Telemetry.event(
+      [:ash_replicant, :census, :halted],
+      %{count: 1},
+      %{slot_name: state.slot_name, kind: check, reason: reason}
+    )
+
+    _ = safe_stop(state)
+    {:stop, :normal, cleanup(state)}
+  end
+
+  defp census_fault_report(reason) do
+    Census.fault_report(reason)
+  end
+
+  defp stop_census(state) do
+    cancel_census_timer(Map.get(state, :census_timer))
+    cancel_census_run(Map.get(state, :census_run))
+
+    state
+    |> Map.put(:census_timer, nil)
+    |> Map.put(:census_run, nil)
+  end
+
+  defp cancel_census_timer(%{timer: timer}), do: cancel_timer(timer)
+  defp cancel_census_timer(_other), do: :ok
+
+  defp cancel_census_run(%{pid: pid, monitor: monitor, timeout: timeout}) do
+    cancel_timer(timeout)
+    Process.demonitor(monitor, [:flush])
+    if Process.alive?(pid), do: Process.exit(pid, :kill)
+    :ok
+  end
+
+  defp cancel_census_run(_other), do: :ok
+
+  defp cancel_timer(timer) when is_reference(timer) do
+    _ = Process.cancel_timer(timer)
+    :ok
+  end
+
+  defp cancel_timer(_other), do: :ok
 
   defp safe_stop(%{slot_name: slot_name}) do
     Replicant.stop(slot_name)

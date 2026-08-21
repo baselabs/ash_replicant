@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Continuous invariant census** (ADR-0019, roadmap C5/C01). The existing
+  temporary `PipelineOwner` now schedules one jittered, bounded worker that
+  enters through the same owner-liveness, destination-generation, and pinned
+  dynamic-Repo guard as delivery callbacks. It rechecks the live destination
+  and source contract, the durable source-bound checkpoint plus authenticated
+  contract, and the full publication/column/type/RIF coverage even on a quiet
+  stream. Drift halts immediately; timeout/unreachable/checker faults are typed
+  non-pass states and the exact consecutive-fault budget halts
+  `:census_unverifiable`. Schedule-after-settle timing, worker teardown, and
+  mutation gates prevent overlap, orphan work, and vacuous green checks. A
+  drift result that races its timeout still halts immediately, and stored
+  contract terms decode in safe mode so checkpoint bytes cannot intern atoms.
 - **Immutable append-log delivery** (ADR-0018, roadmap C4). A generated sink is
   now exclusively `sink_kind: :state_mirror` (the default — every existing host
   is unchanged) or `:append_log`, and an append sink records inserts, updates,

@@ -352,11 +352,12 @@ defmodule AshReplicant.Sink.Impl do
   defp verify_same_triple!(config, row) do
     filter = checkpoint_filter(config)
 
-    if row.source_system_id == filter.source_system_id and
-         row.source_database == filter.source_database and row.slot_name == filter.slot_name do
-      :ok
-    else
-      rollback_conflict!(config, :source_identity_rebound)
+    case Identity.classify_source_binding(row, filter) do
+      :equal ->
+        :ok
+
+      {:incompatible, :source_identity_rebound} ->
+        rollback_conflict!(config, :source_identity_rebound)
     end
   end
 
@@ -381,40 +382,21 @@ defmodule AshReplicant.Sink.Impl do
   end
 
   defp classify_and_store_contract!(config, identity, contract, row) do
-    stored_manifest = decode_stored_manifest(row.publication_contract)
-
-    cond do
-      stored_manifest == :error ->
-        rollback_conflict!(config, :publication_contract_incompatible, "reason=decode_failed")
-
-      is_nil(stored_manifest) ->
+    case Identity.classify_stored_contract(
+           row.publication_contract,
+           row.publication_fingerprint,
+           contract.manifest
+         ) do
+      :unbound ->
         # Adopted row (task 5) or a pre-contract row: initialize without
         # touching the watermark.
         write_bound_contract!(config, identity, contract, %{})
         :ok
 
-      stored_manifest == contract.manifest and row.source_timeline == identity.timeline_id ->
+      :equal when row.source_timeline == identity.timeline_id ->
         # Steady-state reconnect: verify-only, NO write.
         :ok
 
-      true ->
-        store_classified_contract!(config, identity, contract, stored_manifest)
-    end
-  end
-
-  # An undecodable stored contract is the tamper/decode-fault class — never a
-  # silent re-initialization (nil, below, is the only legitimate "no contract").
-  defp decode_stored_manifest(nil), do: nil
-
-  defp decode_stored_manifest(binary) do
-    case Identity.decode(binary) do
-      {:ok, manifest} -> manifest
-      :error -> :error
-    end
-  end
-
-  defp store_classified_contract!(config, identity, contract, stored_manifest) do
-    case Identity.classify(stored_manifest, contract.manifest) do
       {:incompatible, reason} ->
         rollback_conflict!(
           config,

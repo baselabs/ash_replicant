@@ -101,7 +101,7 @@ defmodule AshReplicant.Checkpoint.Identity do
   @doc "Decode a stored contract term (unknown/garbage decodes as `:error`)."
   @spec decode(binary()) :: {:ok, manifest()} | :error
   def decode(binary) when is_binary(binary) do
-    case :erlang.binary_to_term(binary) do
+    case :erlang.binary_to_term(binary, [:safe]) do
       %{contract_version: v, publication: _, relations: _, ignores: _} = manifest
       when is_integer(v) ->
         {:ok, manifest}
@@ -118,6 +118,37 @@ defmodule AshReplicant.Checkpoint.Identity do
   @doc "sha256 over exactly the stored bytes (digest == manifest checkable without decoding)."
   @spec fingerprint(binary()) :: binary()
   def fingerprint(encoded), do: :crypto.hash(:sha256, encoded)
+
+  @doc false
+  @spec classify_source_binding(map(), map()) ::
+          :equal | {:incompatible, :source_identity_rebound}
+  def classify_source_binding(row, expected) when is_map(row) and is_map(expected) do
+    if Map.get(row, :source_system_id) == Map.get(expected, :source_system_id) and
+         Map.get(row, :source_database) == Map.get(expected, :source_database) and
+         Map.get(row, :slot_name) == Map.get(expected, :slot_name) do
+      :equal
+    else
+      {:incompatible, :source_identity_rebound}
+    end
+  end
+
+  @doc false
+  @spec classify_stored_contract(binary() | nil, binary() | nil, manifest()) ::
+          :unbound | :equal | {:compatible, atom()} | {:incompatible, atom()}
+  def classify_stored_contract(nil, _stored_fingerprint, _current), do: :unbound
+
+  def classify_stored_contract(stored, stored_fingerprint, current) when is_binary(stored) do
+    with true <- is_binary(stored_fingerprint),
+         true <- fingerprint(stored) == stored_fingerprint,
+         {:ok, stored_manifest} <- decode(stored) do
+      classify(stored_manifest, current)
+    else
+      _other -> {:incompatible, :stored_contract_invalid}
+    end
+  end
+
+  def classify_stored_contract(_stored, _stored_fingerprint, _current),
+    do: {:incompatible, :stored_contract_invalid}
 
   @doc """
   Classify a stored manifest against the current one.

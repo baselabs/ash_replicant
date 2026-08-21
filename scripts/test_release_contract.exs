@@ -172,6 +172,56 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     "DestinationParticipant proves arbitrary callback bodies contain no undeclared effects."
   ]
 
+  @census_doc_contracts [
+    {"README.md", "### 4. Start the pipeline",
+     [
+       "The owner continuously re-runs destination-generation, live contract,\n" <>
+         "  durable checkpoint, and full source-coverage checks.",
+       "Drift halts immediately; a checker fault or timeout\n" <>
+         "  is never a pass and halts after the configured consecutive budget.",
+       "one\n  owner never overlaps census work (ADR-0019)."
+     ]},
+    {"usage-rules.md", "### 4. Start the pipeline",
+     [
+       "Exact bounds are\n  `interval_ms: 50..86_400_000`, `jitter_ratio: 0.0..0.5`,\n" <>
+         "  `timeout_ms: 1..60_000`, and `max_consecutive_faults: 1..1_000`."
+     ]},
+    {"usage-rules.md", "### Continuous invariant census",
+     [
+       "A run enters through the same admitted callback guard as\n" <>
+         "delivery, including owner-liveness checks and dynamic-Repo pinning",
+       "Any drift halts the temporary pipeline immediately and freezes checkpoint\nadvance.",
+       "the exact configured consecutive fault\nhalts with `:census_unverifiable`."
+     ]},
+    {"AGENTS.md", "## Architecture (realized)",
+     [
+       "The same owner runs the C01 continuous invariant census through the admitted\n" <>
+         "callback guard (never a second Replicant callback or lifecycle process)",
+       "The next run is scheduled only after the\n" <>
+         "current one settles, and pipeline/owner teardown kills any in-flight worker."
+     ]}
+  ]
+
+  @census_source_contracts [
+    {"lib/ash_replicant/census.ex", "@defaults %{\n"},
+    {"lib/ash_replicant/census.ex", "    enabled?: true,\n"},
+    {"lib/ash_replicant/census.ex", "    interval_ms: 60_000,\n"},
+    {"lib/ash_replicant/census.ex", "    jitter_ratio: 0.1,\n"},
+    {"lib/ash_replicant/census.ex", "    timeout_ms: 10_000,\n"},
+    {"lib/ash_replicant/census.ex", "    max_consecutive_faults: 3\n"},
+    {"lib/ash_replicant.ex", "{:ok, census} <- Census.options(opts),"},
+    {"lib/ash_replicant.ex", "{:ok, Map.merge(admitted, %{sink: sink, census: census})}"},
+    {"lib/ash_replicant/pipeline_owner.ex",
+     "send(parent, {:census_result, token, Census.run(slot_name, sink)})"},
+    {"lib/ash_replicant/pipeline_owner.ex",
+     "schedule_next_census(%{state | consecutive_faults: 0})"},
+    {"lib/ash_replicant/pipeline_owner.ex",
+     "halt_for_census(state, check, :census_unverifiable)"},
+    {"lib/ash_replicant/telemetry.ex", "[:ash_replicant, :census, :passed]"},
+    {"lib/ash_replicant/telemetry.ex", "[:ash_replicant, :census, :faulted]"},
+    {"lib/ash_replicant/telemetry.ex", "[:ash_replicant, :census, :halted]"}
+  ]
+
   @checkout "actions/checkout@11d5960a326750d5838078e36cf38b85af677262"
   @setup_beam "erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236"
   @cache "actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830"
@@ -200,6 +250,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       replicant_selector_probes()
       documentation_probes()
       b1_documentation_probes()
+      census_contract_probes()
     end)
 
     IO.puts("release contract self-tests: PASS")
@@ -894,6 +945,34 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     assert_invalid!()
   end
 
+  defp census_contract_probes do
+    Enum.each(@census_doc_contracts, fn {path, heading, required_texts} ->
+      prepare_fixture()
+      replace_once!(path, heading, "#{heading} changed")
+      assert_invalid!()
+
+      prepare_fixture()
+      replace_once!(path, heading, "<!--\n#{heading}\n-->")
+      assert_invalid!()
+
+      prepare_fixture()
+      replace_once!(path, heading, "```text\n#{heading}\n```")
+      assert_invalid!()
+
+      Enum.each(required_texts, fn required ->
+        prepare_fixture()
+        replace_once!(path, required, "continuous census contract text removed")
+        assert_invalid!()
+      end)
+    end)
+
+    Enum.each(@census_source_contracts, fn {path, required} ->
+      prepare_fixture()
+      replace_once!(path, required, "# continuous census contract removed")
+      assert_invalid!()
+    end)
+  end
+
   defp mix_contract_probes do
     Enum.each(@mix_contracts, fn required ->
       prepare_fixture()
@@ -1203,7 +1282,11 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           "docs/CHARTER.md",
           "mix.exs",
           "mix.lock",
-          "scripts/test-release-checkers.sh"
+          "scripts/test-release-checkers.sh",
+          "lib/ash_replicant.ex",
+          "lib/ash_replicant/census.ex",
+          "lib/ash_replicant/pipeline_owner.ex",
+          "lib/ash_replicant/telemetry.ex"
         ] do
       File.mkdir_p!(Path.dirname(fixture_path(path)))
       File.cp!(Path.join(@source_root, path), fixture_path(path))

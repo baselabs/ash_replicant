@@ -348,6 +348,7 @@ AshReplicant.start_link(
   source_identity: [system_identifier: "7378697629483820647", database: "source_db"],
   go_forward_only: true,
   snapshot: false,
+  census: [interval_ms: 60_000, jitter_ratio: 0.1, timeout_ms: 10_000],
   max_inflight_lag: 64 * 1024 * 1024,
   max_command_retries: 5,
   failover: false
@@ -379,6 +380,13 @@ AshReplicant.start_link(
 - Rows arrive from the source's CDC stream and are upserted into the mirrors.
 - `streaming`, `max_inflight_lag`, `max_command_retries`, and `failover` are passed
   through to Replicant 1.x.
+- The owner continuously re-runs destination-generation, live contract,
+  durable checkpoint, and full source-coverage checks. `census:` accepts the
+  closed keys `enabled?`, `interval_ms`, `jitter_ratio`, `timeout_ms`, and
+  `max_consecutive_faults`. Drift halts immediately; a checker fault or timeout
+  is never a pass and halts after the configured consecutive budget. The next
+  jittered run is scheduled only after the current bounded run settles, so one
+  owner never overlaps census work (ADR-0019).
 - `snapshot: false`, Replicant's v1 snapshot (`snapshot: true`), and sink-owned
   incremental snapshots (`snapshot: [mode: :incremental, chunk_rows: n,
   max_pending_chunks: n]`) are supported. Incremental activation requires every
@@ -397,6 +405,11 @@ short-lived source connection) and the table-membership check re-runs at
 every reconnect — see
 [ADR-0008](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0008-strict-source-coverage.md) and
 [usage-rules](usage-rules.md) for the operator rules.
+
+The `PipelineOwner` also runs that full coverage census periodically on a quiet
+stream. A table added to a publication, a type/RIF change, destination code or
+config drift, or a tampered checkpoint contract is therefore detected without
+waiting for reconnect or an affected row.
 
 ## Effect-Once Semantics
 
