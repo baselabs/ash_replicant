@@ -11,6 +11,7 @@ defmodule AshReplicant.Destination do
 
   @core_code_modules [
     AshReplicant,
+    AshReplicant.Append,
     AshReplicant.Apply,
     AshReplicant.Apply.Context,
     AshReplicant.Apply.Scd2,
@@ -212,6 +213,7 @@ defmodule AshReplicant.Destination do
           | {:destination_notifier_unstable, module(), atom(), module()}
           | {:destination_notifier_unwrapped, module(), atom(), module()}
           | {:destination_message_route_invalid, module(), atom()}
+          | {:destination_append_message_route_invalid, module(), atom()}
 
   @spec manifest(map()) :: {:ok, Manifest.t()} | {:error, reason()}
   def manifest(%{repo: repo, domains: domains, checkpoint_resource: checkpoint} = config)
@@ -219,7 +221,9 @@ defmodule AshReplicant.Destination do
     message_routes = Map.get(config, :message_routes, [])
 
     with :ok <- validate_repo_module(repo),
-         {:ok, roots} <- root_actions(domains, checkpoint, message_routes),
+         :ok <- AshReplicant.Append.validate_message_routes(config),
+         {:ok, roots} <-
+           root_actions(domains, checkpoint, message_routes, Map.get(config, :sink_kind)),
          {:ok, entries, onetime_prefixes_by_action, notifier_loads} <- walk_roots(roots, repo),
          :ok <- validate_onetime_entries(entries) do
       entries =
@@ -404,7 +408,7 @@ defmodule AshReplicant.Destination do
     end
   end
 
-  defp root_actions(domains, checkpoint, message_routes) do
+  defp root_actions(domains, checkpoint, message_routes, sink_kind) do
     with {:ok, mapped_roots} <- mapped_root_actions(domains),
          {:ok, checkpoint_read} <- required_primary_action(checkpoint, :read),
          :ok <- required_named_action(checkpoint, :destroy, :operator_reset) do
@@ -414,7 +418,7 @@ defmodule AshReplicant.Destination do
            root_ref(checkpoint, checkpoint_read, :checkpoint),
            root_ref(checkpoint, :upsert, :checkpoint),
            root_ref(checkpoint, :operator_reset, :checkpoint)
-         ] ++ message_root_actions(message_routes)}
+         ] ++ message_root_actions(message_routes, sink_kind)}
     end
   end
 
@@ -423,7 +427,13 @@ defmodule AshReplicant.Destination do
   # so the route's own trust boundary is this admission. The replay identity
   # is sink-fixed (the 6-axis identity; `participant` = the routed resource,
   # `:message` the invocation label) — a host never declares it.
-  defp message_root_actions(message_routes) do
+  defp message_root_actions(message_routes, :append_log) do
+    Enum.map(message_routes, fn {prefix, resource, action} ->
+      {resource, action, :append_message, {:append_message_route, prefix}, :inherit, nil}
+    end)
+  end
+
+  defp message_root_actions(message_routes, _state_mirror) do
     Enum.map(message_routes, fn {prefix, resource, action} ->
       {resource, action, :message, {:message_route, prefix}, :inherit,
        %ReplayIdentity{
@@ -554,6 +564,28 @@ defmodule AshReplicant.Destination do
     do: AshReplicant.Resource in Spark.extensions(resource)
 
   defp mapped_resource_roots(resource) do
+    if Info.append_log?(resource) do
+      append_resource_roots(resource)
+    else
+      mirror_resource_roots(resource)
+    end
+  end
+
+  # ADR-0018: an append target's admitted graph is its primary read plus the ONE
+  # immutable create action the sink appends through. It deliberately does NOT
+  # demand a primary create or destroy — update, upsert, and destroy are never
+  # delivery paths onto a log, so requiring them would push a host into
+  # declaring exactly the mutating actions the ADR forbids.
+  defp append_resource_roots(resource) do
+    append = Info.replicant_append_action!(resource)
+
+    with {:ok, read} <- required_primary_action(resource, :read),
+         :ok <- required_named_action(resource, :create, append) do
+      {:ok, [root_ref(resource, read, :mapped), root_ref(resource, append, :append)]}
+    end
+  end
+
+  defp mirror_resource_roots(resource) do
     with {:ok, read} <- required_primary_action(resource, :read),
          {:ok, create} <- required_primary_action(resource, :create),
          {:ok, destroy} <- required_primary_action(resource, :destroy) do

@@ -33,12 +33,24 @@ defmodule AshReplicant.Sink do
   checkpoint-owned attempt before Replicant starts its reader and stream. It
   returns `:backfill_pending` until the first authenticated progress token is
   durable, so a slot-created/pre-reader crash cannot abandon the backfill.
+
+  `sink_kind` (ADR-0018) makes the generated sink exclusively `:state_mirror`
+  (default — every pre-existing host is unchanged) or `:append_log`. An append
+  sink additionally declares `initial_state: :snapshot | :go_forward`, its ONE
+  initial-state intent; `:go_forward` is what generates `handle_slot_origin/2`,
+  which persists the log's immutable origin floor. A slot CREATED under an
+  existing floor is rejected as a gap. Replicant never filtered-WAL
+  idle-advances an append sink, so a reused origin above the durable destination
+  watermark is also a gap; quiet append publications advance through an ordinary
+  published heartbeat transaction. Activation cross-checks the kind against
+  every mapped resource and the intent against the `snapshot:` start option.
   """
 
   alias AshReplicant.Sink.Impl
 
   @final_callbacks [
     handle_session_identity: 2,
+    handle_slot_origin: 2,
     checkpoint: 0,
     handle_transaction: 1,
     handle_batch: 1,
@@ -105,7 +117,9 @@ defmodule AshReplicant.Sink do
            :slot_name,
            :ignored_sources,
            :message_routes,
-           :ignored_message_prefixes
+           :ignored_message_prefixes,
+           :sink_kind,
+           :initial_state
          ]) do
       [] ->
         :ok
@@ -114,9 +128,56 @@ defmodule AshReplicant.Sink do
         raise ArgumentError,
               "unknown AshReplicant.Sink option(s) #{inspect(Keyword.keys(extra))} — " <>
                 "the sink admits only :repo, :domains, :checkpoint_resource, :slot_name, " <>
-                ":ignored_sources, :message_routes, :ignored_message_prefixes " <>
+                ":ignored_sources, :message_routes, :ignored_message_prefixes, :sink_kind, " <>
+                ":initial_state " <>
                 "(apply_ledger was removed; a removed option must not silently no-op)"
     end
+
+    # ADR-0018 §1: a generated sink is EXCLUSIVELY one kind. Replicant reads
+    # `sink_kind/0` per sink with no runtime context to consult, so the kind is
+    # necessarily a compile-time decision; activation then cross-checks that
+    # every mapped resource agrees with it.
+    sink_kind = Keyword.get(opts, :sink_kind, :state_mirror)
+
+    unless sink_kind in [:state_mirror, :append_log] do
+      raise ArgumentError,
+            "AshReplicant.Sink :sink_kind must be :state_mirror (default) or :append_log " <>
+              "(got #{inspect(sink_kind)})"
+    end
+
+    # ADR-0018 §5: "A fresh append sink declares exactly one initial-state
+    # intent: snapshot or go-forward." Declared, not inferred — the choice
+    # decides whether the origin floor comes from the slot-origin callback or
+    # from the snapshot's consistent point, and a sink that left it implicit
+    # would make no honest completeness claim at all.
+    initial_state = Keyword.get(opts, :initial_state)
+
+    case {sink_kind, initial_state} do
+      {:append_log, state} when state in [:snapshot, :go_forward] ->
+        :ok
+
+      {:append_log, other} ->
+        raise ArgumentError,
+              "AshReplicant.Sink :sink_kind :append_log requires :initial_state to be " <>
+                ":snapshot or :go_forward — a fresh append sink declares exactly one " <>
+                "initial-state intent, and it is what fixes the log's origin floor " <>
+                "(got #{inspect(other)})"
+
+      {:state_mirror, nil} ->
+        :ok
+
+      {:state_mirror, other} ->
+        raise ArgumentError,
+              "AshReplicant.Sink :initial_state (#{inspect(other)}) applies only to " <>
+                ":sink_kind :append_log. A state mirror converges to current state and " <>
+                "claims no origin floor."
+    end
+
+    # Only a GO-FORWARD append sink implements `handle_slot_origin/2`: it is the
+    # callback that supplies its floor. Replicant gates the extra connect query
+    # on the callback's presence, so a snapshot-intent or mirror sink must not
+    # export it (`supports_slot_origin?/1`).
+    slot_origin_capable? = sink_kind == :append_log and initial_state == :go_forward
 
     # Compile-time validation of the explicit table ignores: strictly qualified
     # `schema.table` strings; bare names and duplicates are compile errors
@@ -234,7 +295,9 @@ defmodule AshReplicant.Sink do
           slot_name: unquote(slot_name),
           ignored_sources: unquote(Macro.escape(ignored_sources)),
           message_routes: unquote(Macro.escape(message_routes)),
-          ignored_message_prefixes: unquote(Macro.escape(ignored_message_prefixes))
+          ignored_message_prefixes: unquote(Macro.escape(ignored_message_prefixes)),
+          sink_kind: unquote(sink_kind),
+          initial_state: unquote(initial_state)
         }
       end
 
@@ -280,7 +343,16 @@ defmodule AshReplicant.Sink do
       end
 
       @impl Replicant.Sink
-      def sink_kind, do: :state_mirror
+      def sink_kind, do: unquote(sink_kind)
+
+      if unquote(slot_origin_capable?) do
+        @impl Replicant.Sink
+        def handle_slot_origin(origin, ctx) do
+          AshReplicant.run_callback(unquote(slot_name), __MODULE__, :mutate, fn config ->
+            Impl.handle_slot_origin(config, origin, ctx)
+          end)
+        end
+      end
 
       @impl Replicant.Sink
       def handle_schema_change(sc, ctx) do

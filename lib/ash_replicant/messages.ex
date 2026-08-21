@@ -99,6 +99,8 @@ defmodule AshReplicant.Messages do
 
   @doc false
   @spec preflight_digest(map()) :: :ok | {:error, term()}
+  def preflight_digest(%{sink_kind: :append_log}), do: :ok
+
   def preflight_digest(config) do
     if routes_configured?(config) do
       case digest_keys() do

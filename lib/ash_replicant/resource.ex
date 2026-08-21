@@ -29,7 +29,10 @@ defmodule AshReplicant.Resource do
   valid (`ValidateHistory`); and that a resource opting into `snapshot_provenance`
   declares the two protected attributes and the private mark/retire actions, with
   NO action able to accept those attributes as input
-  (`ValidateSnapshotProvenance`, ADR-0017).
+  (`ValidateSnapshotProvenance`, ADR-0017); and that an `append_log true` resource
+  carries the immutable create action, the structural attributes, and the exact
+  five-column append identity, and reuses no state-mirror machinery
+  (`ValidateAppendLog`, ADR-0018).
   """
 
   @replicant %Spark.Dsl.Section{
@@ -81,12 +84,15 @@ defmodule AshReplicant.Resource do
         doc: "Source columns excluded from the mirror write."
       ],
       on_truncate: [
-        type: {:one_of, [:halt, :mirror, :close]},
+        type: {:one_of, [:halt, :mirror, :close, :append]},
         default: :halt,
         doc:
           "Policy for an upstream TRUNCATE: `:halt` (fail-closed), `:mirror` " <>
-            "(raw-delete the mirror rows in-txn), or `:close` (SCD2 only — close " <>
-            "every open version tenant-blind, retiring the whole window)."
+            "(raw-delete the mirror rows in-txn), `:close` (SCD2 only — close " <>
+            "every open version tenant-blind, retiring the whole window), or " <>
+            "`:append` (append-log only — record the structural truncate event). " <>
+            "`:mirror`/`:close` are state-mirror policies and `:append` is an " <>
+            "append-log policy; mixing them is a compile error."
       ],
       on_schema_change: [
         type: {:one_of, [:halt_destructive, :ignore]},
@@ -146,6 +152,108 @@ defmodule AshReplicant.Resource do
         doc:
           "SCD2 only: the host `:update` action that sets the window columns to close a version."
       ],
+      append_log: [
+        type: :boolean,
+        default: false,
+        doc:
+          "Make this resource an immutable APPEND target rather than a state mirror " <>
+            "(ADR-0018). Every mapped resource of one generated sink must agree, and the " <>
+            "sink must declare the matching `sink_kind` — activation rejects a mixed set. " <>
+            "The resource is host-owned: it declares the structural attributes named below, " <>
+            "the immutable create action, and the exact five-column append identity. " <>
+            "Update, upsert, and destroy actions are never delivery paths. Every source table " <>
+            "for an append resource must use REPLICA IDENTITY FULL so delete events carry the " <>
+            "complete old record."
+      ],
+      append_action: [
+        type: :atom,
+        default: :append,
+        doc:
+          "Append-log only: the host's IMMUTABLE `:create` action the sink appends through. " <>
+            "It must accept every structural attribute plus the mapped payload, and must not " <>
+            "declare its own upsert, be manual, or carry arbitrary action changes; arbitrary " <>
+            "global create changes are also rejected (the sink supplies the append identity's " <>
+            "conflict target; AshCloak encryption of non-structural payload is admitted)."
+      ],
+      append_identity: [
+        type: :atom,
+        default: :append_identity,
+        doc:
+          "Append-log only: the host `identity` whose keys are EXACTLY the five append-identity " <>
+            "columns (source system, source database, slot, commit LSN, ordinal). It is the " <>
+            "defensive database constraint behind append-once; effect-once still rests on the " <>
+            "append and the checkpoint committing in the same locked destination transaction."
+      ],
+      append_source_system_attribute: [
+        type: :atom,
+        default: :source_system_id,
+        doc:
+          "Append-log only: the string attribute stamped with the replication session's " <>
+            "PostgreSQL system identifier."
+      ],
+      append_source_database_attribute: [
+        type: :atom,
+        default: :source_database,
+        doc: "Append-log only: the string attribute stamped with the source database name."
+      ],
+      append_slot_attribute: [
+        type: :atom,
+        default: :slot_name,
+        doc: "Append-log only: the string attribute stamped with the replication slot name."
+      ],
+      append_commit_lsn_attribute: [
+        type: :atom,
+        default: :commit_lsn,
+        doc:
+          "Append-log only: the integer (bigint) attribute stamped with the change's commit LSN."
+      ],
+      append_ordinal_attribute: [
+        type: :atom,
+        default: :ordinal,
+        doc:
+          "Append-log only: the integer attribute stamped with the change's ordinal within its " <>
+            "commit LSN. One ordinal is one appended event — distinct same-transaction effects " <>
+            "never overwrite one another."
+      ],
+      append_operation_attribute: [
+        type: :atom,
+        default: :operation,
+        doc:
+          "Append-log only: the string attribute stamped with the source operation " <>
+            ~s|("insert" \| "update" \| "delete" \| "truncate" \| "message" \| "snapshot"). | <>
+            "A library-minted structural label, never a row value."
+      ],
+      append_origin_attribute: [
+        type: :atom,
+        default: :origin,
+        doc:
+          "Append-log only: the string attribute stamped with the delivery origin " <>
+            ~s|("stream" \| "snapshot"). | <>
+            "A library-minted structural label, never a row value."
+      ],
+      append_attempt_attribute: [
+        type: :atom,
+        default: :snapshot_attempt,
+        doc:
+          "Append-log only: the nullable binary attribute stamped with the checkpoint-owned " <>
+            "snapshot attempt id on backfill rows (NULL on streamed rows). It is the append " <>
+            "target's OWN structural column — the state-mirror row-provenance attributes " <>
+            "(`replica_fingerprint` / `replica_seen_attempt`) are never reused here."
+      ],
+      append_message_prefix_attribute: [
+        type: :atom,
+        default: :message_prefix,
+        doc:
+          "Append-log message routes only: the string attribute that receives the logical " <>
+            "message prefix. It must be accepted by the immutable append action."
+      ],
+      append_message_content_attribute: [
+        type: :atom,
+        default: :message_content,
+        doc:
+          "Append-log message routes only: the binary-storage attribute that receives the " <>
+            "logical message content. It must be accepted by the immutable append action."
+      ],
       snapshot_provenance: [
         type: :boolean,
         default: false,
@@ -196,6 +304,7 @@ defmodule AshReplicant.Resource do
       AshReplicant.Resource.Verifiers.ValidateTenantSource,
       AshReplicant.Resource.Verifiers.ValidateActionMultitenancy,
       AshReplicant.Resource.Verifiers.ValidateHistory,
-      AshReplicant.Resource.Verifiers.ValidateSnapshotProvenance
+      AshReplicant.Resource.Verifiers.ValidateSnapshotProvenance,
+      AshReplicant.Resource.Verifiers.ValidateAppendLog
     ]
 end

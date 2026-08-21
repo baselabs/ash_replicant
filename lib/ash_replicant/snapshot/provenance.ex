@@ -133,12 +133,15 @@ defmodule AshReplicant.Snapshot.Provenance do
 
   @doc """
   Fail closed at activation when a mapped resource declares
-  `snapshot_provenance true` but the key configuration is absent or malformed —
-  the same posture as C1's message-digest activation preflight.
+  `snapshot_provenance true` — or when a `:snapshot`-intent APPEND sink will
+  need a checkpoint-owned attempt (ADR-0018 §4) — but the key configuration is
+  absent or malformed. Same posture as C1's message-digest activation
+  preflight: an append sink whose first backfill callback discovered the
+  missing key would halt mid-snapshot instead of refusing to start.
   """
   @spec preflight(map()) :: :ok | {:error, Error.t()}
   def preflight(config) do
-    if provenance_declared?(config) do
+    if provenance_declared?(config) or append_attempt_required?(config) do
       case keys() do
         {:ok, _keys} ->
           :ok
@@ -149,6 +152,14 @@ defmodule AshReplicant.Snapshot.Provenance do
     else
       :ok
     end
+  end
+
+  # A snapshot-intent append sink stamps every backfill row with the attempt id
+  # from the checkpoint's AUTHENTICATED snapshot-state envelope, so it needs the
+  # same keys even though it declares no row provenance.
+  defp append_attempt_required?(config) do
+    Map.get(config, :sink_kind) == :append_log and
+      Map.get(config, :initial_state) == :snapshot
   end
 
   defp provenance_declared?(config) do

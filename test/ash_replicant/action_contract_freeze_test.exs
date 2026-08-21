@@ -224,6 +224,18 @@ defmodule AshReplicant.ActionContractFreezeTest do
         refute function_exported?(sink, :append, 2)
       end
     end
+
+    test "slot-origin admission uses the long checkpoint-lock transaction timeout" do
+      source = File.read!("lib/ash_replicant/sink/impl.ex")
+
+      [body] =
+        Regex.run(
+          ~r/def handle_slot_origin\(config,.*?(?=\n  def handle_slot_origin\(_config)/s,
+          source
+        )
+
+      assert body =~ "timeout: @snapshot_transaction_timeout"
+    end
   end
 
   test "the telemetry conformance inventory covers every event name emitted in lib (live pin)" do
@@ -268,6 +280,7 @@ defmodule AshReplicant.ActionContractFreezeTest do
       {{:destination_participant_cycle, nil, nil}, nil},
       {{:destination_message_route_invalid, AshReplicant.Test.Messages.NonceOutbox, :record},
        nil},
+      {{:destination_append_message_route_invalid, AshReplicant.Test.OrderEvent, :read}, nil},
       {{:destination_repo_not_postgres, DestinationFixtures.SimpleRoot}, nil},
       {{:destination_repo_dynamic, DestinationFixtures.ForeignChild}, nil},
       {{:destination_repo_mismatch, DestinationFixtures.ForeignMappedRoot}, nil}
@@ -277,11 +290,12 @@ defmodule AshReplicant.ActionContractFreezeTest do
       # Diff-review F5: the fixture list alone is self-referential. This cell
       # greps the LIVE constructors — a new reason kind added to destination.ex
       # without a fixture row goes red here.
-      source = File.read!("lib/ash_replicant/destination.ex")
-
       constructed =
-        Regex.scan(~r/\{:(destination_[a-z_]+),/, source)
-        |> Enum.map(&String.to_atom(Enum.at(&1, 1)))
+        ["lib/ash_replicant/destination.ex", "lib/ash_replicant/append.ex"]
+        |> Enum.flat_map(fn path ->
+          Regex.scan(~r/\{:(destination_[a-z_]+),/, File.read!(path))
+          |> Enum.map(&String.to_atom(Enum.at(&1, 1)))
+        end)
         |> MapSet.new()
 
       enumerated =
@@ -350,6 +364,12 @@ defmodule AshReplicant.ActionContractFreezeTest do
                Enum.find(
                  enumerated,
                  &match?({:destination_message_route_invalid, _, _}, &1)
+               )
+
+      assert {_, 3, true} =
+               Enum.find(
+                 enumerated,
+                 &match?({:destination_append_message_route_invalid, _, _}, &1)
                )
     end
 

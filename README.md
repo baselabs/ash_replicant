@@ -58,7 +58,7 @@ The current 1.0.0 hardening baseline is built and tested with:
 
 - Elixir 1.20.3 on Erlang/OTP 29;
 - Ash `>= 3.31.3 and < 4.0.0-0` and AshPostgres 2.11.x;
-- Replicant `>= 1.2.2 and < 2.0.0-0` (current release-candidate lock 1.2.2) and
+- Replicant `>= 1.2.3 and < 2.0.0-0` (current release-candidate lock 1.2.3) and
   AshOnetime 0.6.x;
 - PostgreSQL with `wal_level=logical` for the live integration gate: CI pins
   PostgreSQL 16, the local gate runs whatever instance `ASH_REPLICANT_TEST_URL`
@@ -414,6 +414,149 @@ snapshot retry:** zero repeated host business effects and zero loss across repla
 restart, and injected rollback faults. Snapshot chunks, provenance, exact incremental
 progress, and completion fences commit under the same source-bound checkpoint lock;
 unchanged retry rows perform bookkeeping only.
+
+## Append-log mode
+
+A generated sink is exclusively a **state mirror** (the default: rows converge
+to the source's current state) or an **append log** (every change is recorded as
+an immutable event and nothing is ever modified or removed). The kind is
+declared on the sink, because Replicant exposes `sink_kind/0` per sink rather
+than per resource; activation rejects a mixed resource set
+([ADR-0018](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0018-append-log-delivery.md)).
+
+```elixir
+defmodule MyApp.EventSink do
+  use AshReplicant.Sink,
+    repo: MyApp.Repo,
+    domains: [MyApp.Events],
+    checkpoint_resource: MyApp.ReplicantCheckpoint,
+    slot_name: "shop_events",
+    sink_kind: :append_log,
+    # The ONE initial-state intent. `:go_forward` starts the log at the slot's
+    # origin; `:snapshot` starts it from a full backfill. It must agree with the
+    # `snapshot:` start option.
+    initial_state: :go_forward,
+    message_routes: [{"events", MyApp.Events.OrderEvent, :append}]
+end
+```
+
+The append target is **yours** — this package generates no event table, no
+migration and no raw write path:
+
+```elixir
+defmodule MyApp.Events.OrderEvent do
+  use Ash.Resource,
+    domain: MyApp.Events,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshReplicant.Resource]
+
+  postgres do
+    table "order_events"
+    repo MyApp.Repo
+  end
+
+  replicant do
+    source_table "orders"
+    append_log true
+    # `:halt` (default) or `:append` — record the structural truncate event.
+    on_truncate :append
+  end
+
+  attributes do
+    uuid_primary_key :event_id
+
+    # The five append-identity axes, plus the two structural labels and the
+    # backfill attempt. Names are configurable (`append_commit_lsn_attribute`
+    # and friends); these are the defaults.
+    attribute :source_system_id, :string, allow_nil?: false, public?: true
+    attribute :source_database, :string, allow_nil?: false, public?: true
+    attribute :slot_name, :string, allow_nil?: false, public?: true
+    attribute :commit_lsn, :integer, allow_nil?: false, public?: true
+    attribute :ordinal, :integer, allow_nil?: false, public?: true
+    attribute :operation, :string, allow_nil?: false, public?: true
+    attribute :origin, :string, allow_nil?: false, public?: true
+    attribute :snapshot_attempt, :binary, public?: true
+
+    # The mapped payload — ordinary source columns, under the same skip,
+    # sensitive and tenant rules a state mirror uses.
+    attribute :id, :string, public?: true
+    attribute :note, :string, public?: true
+    # Destination-only logical-message payload. Content is binary-storage.
+    attribute :message_prefix, :string, public?: true
+    attribute :message_content, :binary, public?: true
+  end
+
+  identities do
+    identity :append_identity, [
+      :source_system_id, :source_database, :slot_name, :commit_lsn, :ordinal
+    ]
+  end
+
+  actions do
+    defaults [:read]
+
+    # The IMMUTABLE create action — the only delivery path. Update, upsert and
+    # destroy actions never are. Manual actions and arbitrary action/global
+    # create changes are rejected because they can rewrite the identity after
+    # input validation.
+    create :append do
+      accept [
+        :source_system_id, :source_database, :slot_name, :commit_lsn, :ordinal,
+        :operation, :origin, :snapshot_attempt, :id, :note,
+        :message_prefix, :message_content
+      ]
+    end
+  end
+end
+```
+
+Back that identity with a real unique index (`mix ash.codegen` generates one
+from the `identity`) — it is the defensive database constraint behind
+append-once. On an **attribute-multitenant** append target the identity must
+also declare `all_tenants? true`, or Ash widens the upsert conflict target with
+the tenant discriminator; the compile verifier rejects the omission.
+All structural attributes except the stream-optional `snapshot_attempt` must be
+`allow_nil?: false`; PostgreSQL unique constraints do not collide NULLs.
+
+**Operation shapes.** `operation` is `"insert" | "update" | "delete" |
+"truncate" | "message" | "snapshot"`; `origin` is `"stream" | "snapshot"`. A delete appends
+the admitted **old** record, so the deleted payload survives in the log. Every
+append source table therefore requires `REPLICA IDENTITY FULL`; DEFAULT identity
+would supply only primary-key columns and silently truncate the delete event. A
+truncate is a structural event with no payload (and, being tenant-blind, is
+refused at compile time on a tenant-scoped target — use `on_truncate :halt`).
+Backfill rows carry the checkpoint-owned attempt id; they reuse none of the
+state-mirror provenance attributes. In append mode, each `message_routes` entry
+must target a non-tenant append resource's configured append action. A
+transactional message uses the transaction commit LSN and its shared ordinal; a
+standalone message uses its WAL LSN and ordinal zero. Prefix/content are written
+only to `append_message_prefix_attribute` / `append_message_content_attribute`
+(defaults `:message_prefix` / `:message_content`); they are destination-only and
+never treated as source-table columns. State-mirror message routes keep the
+ADR-0015 AshOnetime contract unchanged.
+
+**Append-once.** The append identity is exactly `(source system, database, slot,
+commit LSN, ordinal)`, and delivery upserts against it with an empty
+`upsert_fields` — a no-op conflict clause. A lawfully re-delivered WAL position
+(a crash redo, a snapshot re-run) appends once and never rewrites the stored
+event. Effect-once itself is unchanged: the append and the checkpoint commit in
+one locked destination transaction.
+
+**The origin floor.** A `:go_forward` sink records the slot origin it first
+started from on the checkpoint's `origin_floor`, once. No completeness claim
+covers data below it. Later reconnect origins are resume facts; a slot
+*recreated* under an existing floor halts `:append_origin_gap`, and an appended
+event above the durable checkpoint halts `:append_frontier_divergent`.
+Replicant does not filtered-WAL idle-advance an append sink, so a reused origin
+ahead of the durable checkpoint is an unambiguous `:append_origin_gap`. Publish
+a normal heartbeat transaction on a quiet append publication to advance the
+checkpoint and release retained WAL.
+
+**Boundaries.** An append sink cannot run incremental snapshots (that mode
+requires `snapshot_provenance` on every mapped resource, which an append target
+may not declare), and a `strategy :context` append target is refused on a
+go-forward sink. Separate mirror and append pipelines may use separate slots and
+checkpoints; one slot is not claimed to serve both kinds.
 
 ## Destination transaction boundary
 

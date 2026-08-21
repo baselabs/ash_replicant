@@ -549,6 +549,8 @@ defmodule AshReplicant do
          {:ok, source_contract} <-
            Identity.build_contract(sink_config, publication),
          {:ok, index} <- AshReplicant.Resolver.build_index(sink_config.domains),
+         :ok <- validate_sink_kind(sink_config, index),
+         :ok <- validate_initial_state(opts, sink_config, index),
          :ok <- validate_snapshot_mode(opts, index),
          {:ok, coverage} <-
            Coverage.preflight(
@@ -612,6 +614,61 @@ defmodule AshReplicant do
       end
     end
   end
+
+  # ADR-0018 §1: a generated sink is exclusively `:state_mirror` or
+  # `:append_log`, and activation rejects a MIXED resource set before starting
+  # Replicant. Replicant exposes `sink_kind/0` per sink, not per resource, so a
+  # mixed set cannot be represented by the transport callback at all — one kind
+  # would silently take the other's delivery path.
+  defp validate_sink_kind(sink_config, index) do
+    append_sink? = Map.get(sink_config, :sink_kind, :state_mirror) == :append_log
+
+    if Enum.all?(mapped_resources(index), &(Info.append_log?(&1) == append_sink?)),
+      do: :ok,
+      else: {:error, :sink_kind_mixed}
+  end
+
+  # ADR-0018 §5: the declared initial-state intent is what fixes the log's
+  # origin floor, so it has to AGREE with how the pipeline is actually started.
+  # A `:snapshot` sink started go-forward would silently claim a completeness
+  # it never established; a `:go_forward` sink started with a snapshot would
+  # take its floor from the backfill while its callback wrote a second one.
+  defp validate_initial_state(opts, sink_config, index) do
+    case Map.get(sink_config, :sink_kind, :state_mirror) do
+      :append_log ->
+        snapshot? = Keyword.get(opts, :snapshot, false) != false
+        intent = Map.get(sink_config, :initial_state)
+
+        cond do
+          snapshot? != (intent == :snapshot) -> {:error, :initial_state_mismatch}
+          intent == :go_forward -> validate_frontier_addressable(index)
+          true -> :ok
+        end
+
+      _state_mirror ->
+        :ok
+    end
+  end
+
+  # A go-forward append sink owes the origin-floor frontier tie-out, which is a
+  # tenant-BLIND read over each append target's own table. Under `strategy
+  # :context` AshPostgres resolves that table's schema per tenant, so there is
+  # no statically addressable table to read a tenant-spanning frontier from.
+  # Refuse the combination rather than skip the tie-out silently.
+  defp validate_frontier_addressable(index) do
+    unaddressable? =
+      index
+      |> mapped_resources()
+      |> Enum.any?(fn resource ->
+        Info.append_log?(resource) and
+          Ash.Resource.Info.multitenancy_strategy(resource) == :context and
+          Ash.Resource.Info.multitenancy_global?(resource) != true
+      end)
+
+    if unaddressable?, do: {:error, :append_frontier_unavailable}, else: :ok
+  end
+
+  defp mapped_resources(index), do: index |> Map.values() |> Enum.uniq()
 
   defp validate_snapshot_mode(opts, index) do
     case Keyword.get(opts, :snapshot, false) do

@@ -25,7 +25,13 @@ defmodule AshReplicant.Apply.Context do
     # sharing `:upsert`/`:destroy_prior` would alias a bookkeeping mark onto a
     # business row's operation key.
     :mark_seen,
-    :retire_unseen
+    :retire_unseen,
+    # P01 (ADR-0018): the append-log effect site. It cannot share `:upsert` —
+    # an append target and a state mirror are never the same resource, but the
+    # label is part of the AshOnetime operation key, and aliasing an appended
+    # event onto a mirror upsert's key would let one replay the other's stored
+    # response.
+    :append
   ]
 
   @doc "The closed per-invocation label set (the single home is shared with DestinationParticipant)."

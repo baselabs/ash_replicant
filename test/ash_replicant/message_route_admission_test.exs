@@ -19,6 +19,13 @@ defmodule AshReplicant.MessageRouteAdmissionTest do
   end
 
   describe "the generated sink" do
+    test "unknown prefix bytes never enter an error shape" do
+      source = File.read!("lib/ash_replicant/sink/impl.ex")
+
+      refute source =~ "shape: message.prefix"
+      refute source =~ "shape: prefix"
+    end
+
     test "a sink with routes exposes handle_message/2; the route-less fixture does not" do
       assert Code.ensure_loaded?(Fixtures.Sink)
       assert function_exported?(Fixtures.Sink, :handle_message, 2)
@@ -115,6 +122,51 @@ defmodule AshReplicant.MessageRouteAdmissionTest do
   end
 
   describe "the manifest walk" do
+    test "an append sink routes messages through the immutable append action without an AshOnetime profile" do
+      assert {:ok, manifest} =
+               Destination.manifest(%{
+                 repo: AshReplicant.TestRepo,
+                 domains: [AshReplicant.Test.AppendDomain],
+                 checkpoint_resource: AshReplicant.Test.Checkpoint,
+                 sink_kind: :append_log,
+                 message_routes: [{"events", AshReplicant.Test.OrderEvent, :append}]
+               })
+
+      entry =
+        Enum.find(
+          manifest.entries,
+          &(&1.resource == AshReplicant.Test.OrderEvent and &1.role == :append_message)
+        )
+
+      assert entry.action == :append
+      assert entry.source == {:append_message_route, "events"}
+      assert entry.replay_identity == nil
+      assert entry.protection == nil
+    end
+
+    test "append message routes reject a different action or a tenant-scoped target" do
+      assert {:error,
+              {:destination_append_message_route_invalid, AshReplicant.Test.OrderEvent, :read}} =
+               Destination.manifest(%{
+                 repo: AshReplicant.TestRepo,
+                 domains: [AshReplicant.Test.AppendDomain],
+                 checkpoint_resource: AshReplicant.Test.Checkpoint,
+                 sink_kind: :append_log,
+                 message_routes: [{"events", AshReplicant.Test.OrderEvent, :read}]
+               })
+
+      assert {:error,
+              {:destination_append_message_route_invalid, AshReplicant.Test.TenantOrderEvent,
+               :append}} =
+               Destination.manifest(%{
+                 repo: AshReplicant.TestRepo,
+                 domains: [AshReplicant.Test.AppendDomain],
+                 checkpoint_resource: AshReplicant.Test.Checkpoint,
+                 sink_kind: :append_log,
+                 message_routes: [{"events", AshReplicant.Test.TenantOrderEvent, :append}]
+               })
+    end
+
     test "a routed action enters the graph as a :message root with the 6-axis replay identity" do
       assert {:ok, manifest} = manifest_for([{"outbox", Fixtures.Outbox, :record}])
 

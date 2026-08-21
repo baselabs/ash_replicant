@@ -151,6 +151,8 @@ defmodule AshReplicant.DestinationParticipantTest do
       #                     snapshot_v1_retry_test (bookkeeping-only legs)
       #   :retire_unseen -> snapshot/retirement.ex completion sweep —
       #                     snapshot_v1_retry_test (retirement legs)
+      #   :append        -> append.ex immutable append (stream + snapshot) —
+      #                     append_test + append_log integration marquee
       assert Context.invocation_labels() == DestinationParticipant.invocation_labels()
 
       assert Context.invocation_labels() == [
@@ -161,7 +163,8 @@ defmodule AshReplicant.DestinationParticipantTest do
                :upsert,
                :message,
                :mark_seen,
-               :retire_unseen
+               :retire_unseen,
+               :append
              ]
     end
 

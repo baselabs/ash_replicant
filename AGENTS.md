@@ -94,6 +94,11 @@ close), which would otherwise let Ash ignore the tenant on a write OR a `bulk_up
 > `history_business_key` is not the source primary key** — a delete / key-changing
 > update reads the business key from `old_record`, absent under the default identity —
 > so the close would match no open version.
+>
+> **Every append-log source table also requires `REPLICA IDENTITY FULL`.** A delete
+> is an immutable event whose payload is the complete old record; DEFAULT identity
+> supplies only the primary key and would silently record an incomplete event. The
+> activation census enforces FULL whether or not the append resource is tenant-scoped.
 
 **3. Sensitive = AshCloak-encrypted or binary, verified by type-shape.** Enforce
 via verifier: sensitive attrs must map to an AshCloak-encrypted attribute (the
@@ -216,16 +221,54 @@ rows the source has dropped — there is no marker to retire them by. That is th
 documented cost of not opting in, and it is strictly less destructive than the
 wipe it replaces.
 
+**8. A generated sink is EXCLUSIVELY a state mirror or an append log
+(ADR-0018).** `use AshReplicant.Sink, sink_kind: :append_log` (default
+`:state_mirror`) makes every mapped resource an immutable append target; a
+mixed set fails activation (`:sink_kind_mixed`) because Replicant exposes
+`sink_kind/0` per SINK, not per resource. An append sink additionally declares
+`initial_state: :snapshot | :go_forward`, its ONE initial-state intent, which
+must agree with the `snapshot:` start option.
+
+The append target is HOST-owned: an AshPostgres resource in the admitted Repo
+declaring `append_log true`, its structural attributes (source system, source
+database, slot, commit LSN, ordinal, operation, origin, snapshot attempt), an
+IMMUTABLE create action, and the append identity. Update, upsert and destroy
+are never delivery paths, and `ValidateAppendLog` moves every one of those
+obligations — plus the refusal of SCD2 history, snapshot provenance and the
+state-mirror truncate policies — to build time.
+
+**The append identity is exactly `(source system, database, slot, commit LSN,
+ordinal)`.** Delivery upserts against it with an EMPTY `upsert_fields`, which
+AshPostgres renders as a no-op conflict clause: a re-delivered WAL position
+appends ONCE and never overwrites the stored payload. That unique identity is a
+defensive database constraint; effect-once still rests on rule 6 — the append
+and the checkpoint committing in one locked destination transaction. Payload
+mapping, tenancy and sensitive-type classification are rules 1–4 unchanged; a
+source column colliding with a structural attribute name halts before insert.
+`on_truncate :append` records the structural truncate event (no payload) and is
+admitted only on an append target with NO declared tenant source, because a
+TRUNCATE is tenant-blind.
+
+A go-forward append sink implements `handle_slot_origin/2` and writes the log's
+IMMUTABLE `origin_floor` on its first admitted activation; no completeness claim
+covers data below it. Later origins are resume facts — a slot CREATED this
+session under an existing floor halts `:append_origin_gap`, an appended event
+above the durable checkpoint halts `:append_frontier_divergent`. An append sink
+cannot run INCREMENTAL snapshots (that mode requires `snapshot_provenance` on
+every mapped resource, which an append target may not declare), and a
+`strategy :context` append target is refused on a go-forward sink because its
+per-tenant schema leaves no tenant-blind frontier to tie out against.
+
 Message (C1), sink-owned batch (C2, `handle_batch/1` — one destination
-transaction, one trailing watermark write per flushed batch, ADR-0016), and
-incremental snapshot progress (`snapshot_progress/0`, ADR-0017) are live.
-Append-log callbacks remain absent until C4.
+transaction, one trailing watermark write per flushed batch, ADR-0016),
+incremental snapshot progress (`snapshot_progress/0`, ADR-0017), and append-log
+delivery (`sink_kind/0` + `handle_slot_origin/2`, ADR-0018) are live.
 
 ## Development workflow
 
 The supported release foundation is Elixir 1.20.3 on Erlang/OTP 29 with Ash
 `>= 3.31.3 and < 4.0.0-0` and Replicant
-`>= 1.2.2 and < 2.0.0-0` (current release-candidate lock 1.2.2).
+`>= 1.2.3 and < 2.0.0-0` (current release-candidate lock 1.2.3).
 
 ```bash
 asdf install
