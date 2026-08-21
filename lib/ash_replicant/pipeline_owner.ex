@@ -180,7 +180,13 @@ defmodule AshReplicant.PipelineOwner do
     {:noreply, start_census(state)}
   end
 
-  def handle_info(:census_tick, state), do: {:noreply, start_census(state)}
+  def handle_info(
+        {:census_result, token, %{state: {:drifted, _check, _reason}} = report},
+        %{census_run: %{token: token, timed_out?: true} = run} = state
+      ) do
+    cancel_census_run(run)
+    apply_census_report(report, %{state | census_run: nil})
+  end
 
   def handle_info(
         {:census_result, token, %{state: _state, checks: _checks} = report},

@@ -164,6 +164,17 @@ defmodule AshReplicant.CensusTest do
   end
 
   describe "classify_checkpoint/3 — the durable checkpoint invariants" do
+    test "untrusted checkpoint bytes cannot intern a new atom" do
+      name = "ash_replicant_untrusted_atom_#{System.unique_integer([:positive])}"
+
+      assert_raise ArgumentError, fn -> String.to_existing_atom(name) end
+
+      encoded = <<131, 118, byte_size(name)::16, name::binary>>
+      assert :error = Identity.decode(encoded)
+
+      assert_raise ArgumentError, fn -> String.to_existing_atom(name) end
+    end
+
     test "the bound row under the admitted contract passes" do
       assert Census.classify_checkpoint([row()], filter(), admitted_contract().manifest) == :pass
     end

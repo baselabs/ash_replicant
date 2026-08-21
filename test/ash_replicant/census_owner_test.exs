@@ -191,6 +191,54 @@ defmodule AshReplicant.CensusOwnerTest do
         assert :sys.get_state(owner).census_run == nil
       end)
     end
+
+    test "an already-produced drift report still halts after the timeout wins the mailbox race" do
+      ref = attach()
+
+      capture_log(fn ->
+        assert {:ok, owner} =
+                 AshReplicant.start_link(
+                   start_opts(
+                     census: [
+                       interval_ms: 60_000,
+                       jitter_ratio: 0.0,
+                       timeout_ms: 5_000,
+                       max_consecutive_faults: 50
+                     ]
+                   )
+                 )
+
+        worker = spawn(fn -> Process.sleep(:infinity) end)
+        token = make_ref()
+        timeout = Process.send_after(owner, :never, 60_000)
+
+        :sys.replace_state(owner, fn state ->
+          state
+          |> Map.put(:census_timer, nil)
+          |> Map.put(:census_run, %{
+            token: token,
+            monitor: Process.monitor(worker),
+            pid: worker,
+            timeout: timeout,
+            timed_out?: true
+          })
+        end)
+
+        report = %Census.Report{
+          state: {:drifted, :contract, :publication_contract_incompatible},
+          checks: [contract: {:drift, :publication_contract_incompatible}]
+        }
+
+        send(owner, {:census_result, token, report})
+
+        assert_receive {:census, ^ref, [:ash_replicant, :census, :halted],
+                        %{kind: :contract, reason: :publication_contract_incompatible}},
+                       1_000
+
+        eventually(fn -> not Process.alive?(owner) end)
+        refute Process.alive?(worker)
+      end)
+    end
   end
 
   describe "one owner schedules ONE bounded census" do
@@ -212,13 +260,15 @@ defmodule AshReplicant.CensusOwnerTest do
         # tick: the owner must NOT start a second census over it.
         worker = spawn(fn -> Process.sleep(:infinity) end)
         timeout = Process.send_after(owner, :never, 60_000)
-        token = make_ref()
+        run_token = make_ref()
+        tick_token = make_ref()
+        tick_timer = Process.send_after(owner, :never, 60_000)
 
         :sys.replace_state(owner, fn state ->
           state
-          |> Map.put(:census_timer, nil)
+          |> Map.put(:census_timer, %{token: tick_token, timer: tick_timer})
           |> Map.put(:census_run, %{
-            token: token,
+            token: run_token,
             monitor: Process.monitor(worker),
             pid: worker,
             timeout: timeout,
@@ -226,7 +276,7 @@ defmodule AshReplicant.CensusOwnerTest do
           })
         end)
 
-        send(owner, :census_tick)
+        send(owner, {:census_tick, tick_token})
         in_flight = :sys.get_state(owner).census_run
 
         assert in_flight.pid == worker,

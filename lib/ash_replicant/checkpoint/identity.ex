@@ -101,7 +101,7 @@ defmodule AshReplicant.Checkpoint.Identity do
   @doc "Decode a stored contract term (unknown/garbage decodes as `:error`)."
   @spec decode(binary()) :: {:ok, manifest()} | :error
   def decode(binary) when is_binary(binary) do
-    case :erlang.binary_to_term(binary) do
+    case :erlang.binary_to_term(binary, [:safe]) do
       %{contract_version: v, publication: _, relations: _, ignores: _} = manifest
       when is_integer(v) ->
         {:ok, manifest}
