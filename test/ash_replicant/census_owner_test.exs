@@ -81,12 +81,15 @@ defmodule AshReplicant.CensusOwnerTest do
 
   defp await_new_pool(baseline, polls) do
     case MapSet.difference(connection_pools(), baseline) |> MapSet.to_list() do
-      [pool | _] ->
+      [pool] ->
         pool
 
       [] ->
         Process.sleep(1)
         await_new_pool(baseline, polls - 1)
+
+      pools ->
+        flunk("expected exactly one census-owned Postgrex pool, observed #{length(pools)}")
     end
   end
 
@@ -215,13 +218,14 @@ defmodule AshReplicant.CensusOwnerTest do
 
           pool = await_new_pool(baseline)
 
+          assert :ok = :sys.suspend(DBConnection.Watcher)
+
           _resumer =
             spawn(fn ->
               Process.sleep(250)
               resume_db_connection_watcher()
             end)
 
-          assert :ok = :sys.suspend(DBConnection.Watcher)
           Process.exit(worker, :kill)
           assert_receive {:DOWN, ^worker_monitor, :process, ^worker, :killed}, 1_000
           pool
