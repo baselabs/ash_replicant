@@ -18,6 +18,7 @@ defmodule AshReplicant do
 
   @version Mix.Project.config()[:version]
 
+  alias AshReplicant.Census
   alias AshReplicant.Checkpoint.Identity
   alias AshReplicant.Coverage
   alias AshReplicant.Destination.Generation
@@ -56,6 +57,12 @@ defmodule AshReplicant do
       generated sink's `handle_batch/1` — one destination transaction and one
       watermark write per flushed batch, effect-once preserved. A malformed
       value fails closed at start (`{:error, :config_invalid}`).
+    * `:census` — owner-scheduled continuous invariant checks (C01/ADR-0019).
+      The closed keys are `:enabled?`, `:interval_ms`, `:jitter_ratio`,
+      `:timeout_ms`, and `:max_consecutive_faults`. Defaults are enabled,
+      60 seconds, 10% jitter, a 10-second timeout, and three consecutive
+      faults. The next one-shot schedule starts only after the current bounded
+      run settles, so census work never overlaps.
 
   The `slot_name` is NOT a `start_link` option — it is baked into the sink via
   `use AshReplicant.Sink, slot_name: ...` and is the single source of truth for
@@ -64,7 +71,7 @@ defmodule AshReplicant do
   Builds the `{schema,table}=>resource` index from the sink's domains, **fails
   closed** on a duplicate or missing source table, caches the index in
   `:persistent_term`, then starts the `replicant` pipeline. Returns the
-  OWNER's pid (linked to the caller); a host supervisor should start the same
+  OWNER's pid (deliberately unlinked from a bare caller); a host supervisor should start the same
   thing through `AshReplicant.PipelineOwner.child_spec/1` instead. When the
   pipeline exits for any reason the owner erases the generation, so the slot
   is immediately re-activatable (ADR-0014).
@@ -472,15 +479,46 @@ defmodule AshReplicant do
   # any orphan pipeline) and replaced by the fresh activation.
   @doc false
   @spec activate_owner(keyword(), pid()) ::
-          {:ok, %{slot_name: String.t(), generation_ref: reference(), pipeline_pid: pid()}}
+          {:ok,
+           %{
+             slot_name: String.t(),
+             generation_ref: reference(),
+             pipeline_pid: pid(),
+             sink: module(),
+             census: Census.Options.t()
+           }}
           | {:error, term()}
   def activate_owner(opts, owner_pid) when is_list(opts) and is_pid(owner_pid) do
     with {:ok, sink, sink_config} <- validate_sink(opts),
+         {:ok, census} <- Census.options(opts),
          {:ok, source_identity} <- validate_source_identity(opts),
          {:ok, publication} <- normalize_publication(Keyword.get(opts, :publication)) do
       activation_lock(sink_config.slot_name, fn ->
-        admit_slot(opts, sink, sink_config, source_identity, publication, owner_pid)
+        activate_slot(
+          opts,
+          sink,
+          sink_config,
+          source_identity,
+          publication,
+          owner_pid,
+          census
+        )
       end)
+    end
+  end
+
+  defp activate_slot(
+         opts,
+         sink,
+         sink_config,
+         source_identity,
+         publication,
+         owner_pid,
+         census
+       ) do
+    with {:ok, admitted} <-
+           admit_slot(opts, sink, sink_config, source_identity, publication, owner_pid) do
+      {:ok, Map.merge(admitted, %{sink: sink, census: census})}
     end
   end
 

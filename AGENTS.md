@@ -39,6 +39,14 @@ Generated internal resources (the checkpoint) are **default-deny**: the policy
 authorizer with an empty policy set forbids every external actor; the sink and
 operator paths run `authorize?: false`.
 
+The same owner runs the C01 continuous invariant census through the admitted
+callback guard (never a second Replicant callback or lifecycle process): one
+jittered, bounded, monitored worker rechecks destination, live contract,
+checkpoint contract/fingerprint, and full source coverage. Drift halts
+immediately; timeout/unreachable/checker faults are typed non-pass results and
+halt at the exact consecutive budget. The next run is scheduled only after the
+current one settles, and pipeline/owner teardown kills any in-flight worker.
+
 ## Critical rules
 
 **1. Route writes through Ash actions, never raw Ecto.** The host resource's OWN

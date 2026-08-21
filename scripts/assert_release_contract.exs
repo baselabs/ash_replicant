@@ -273,6 +273,56 @@ defmodule AshReplicant.ReleaseContract do
     "DestinationParticipant proves arbitrary callback bodies contain no undeclared effects."
   ]
 
+  @census_doc_contracts [
+    {"README.md", "### 4. Start the pipeline",
+     [
+       "The owner continuously re-runs destination-generation, live contract,\n" <>
+         "  durable checkpoint, and full source-coverage checks.",
+       "Drift halts immediately; a checker fault or timeout\n" <>
+         "  is never a pass and halts after the configured consecutive budget.",
+       "one\n  owner never overlaps census work (ADR-0019)."
+     ]},
+    {"usage-rules.md", "### 4. Start the pipeline",
+     [
+       "Exact bounds are\n  `interval_ms: 50..86_400_000`, `jitter_ratio: 0.0..0.5`,\n" <>
+         "  `timeout_ms: 1..60_000`, and `max_consecutive_faults: 1..1_000`."
+     ]},
+    {"usage-rules.md", "### Continuous invariant census",
+     [
+       "A run enters through the same admitted callback guard as\n" <>
+         "delivery, including owner-liveness checks and dynamic-Repo pinning",
+       "Any drift halts the temporary pipeline immediately and freezes checkpoint\nadvance.",
+       "the exact configured consecutive fault\nhalts with `:census_unverifiable`."
+     ]},
+    {"AGENTS.md", "## Architecture (realized)",
+     [
+       "The same owner runs the C01 continuous invariant census through the admitted\n" <>
+         "callback guard (never a second Replicant callback or lifecycle process)",
+       "The next run is scheduled only after the\n" <>
+         "current one settles, and pipeline/owner teardown kills any in-flight worker."
+     ]}
+  ]
+
+  @census_source_contracts [
+    {"lib/ash_replicant/census.ex", "@defaults %{\n"},
+    {"lib/ash_replicant/census.ex", "    enabled?: true,\n"},
+    {"lib/ash_replicant/census.ex", "    interval_ms: 60_000,\n"},
+    {"lib/ash_replicant/census.ex", "    jitter_ratio: 0.1,\n"},
+    {"lib/ash_replicant/census.ex", "    timeout_ms: 10_000,\n"},
+    {"lib/ash_replicant/census.ex", "    max_consecutive_faults: 3\n"},
+    {"lib/ash_replicant.ex", "{:ok, census} <- Census.options(opts),"},
+    {"lib/ash_replicant.ex", "{:ok, Map.merge(admitted, %{sink: sink, census: census})}"},
+    {"lib/ash_replicant/pipeline_owner.ex",
+     "send(parent, {:census_result, token, Census.run(slot_name, sink)})"},
+    {"lib/ash_replicant/pipeline_owner.ex",
+     "schedule_next_census(%{state | consecutive_faults: 0})"},
+    {"lib/ash_replicant/pipeline_owner.ex",
+     "halt_for_census(state, check, :census_unverifiable)"},
+    {"lib/ash_replicant/telemetry.ex", "[:ash_replicant, :census, :passed]"},
+    {"lib/ash_replicant/telemetry.ex", "[:ash_replicant, :census, :faulted]"},
+    {"lib/ash_replicant/telemetry.ex", "[:ash_replicant, :census, :halted]"}
+  ]
+
   # The exact package-inspection bytes the contract enforces on the workflow.
   # The package-inspection self-test executes these bytes against staged
   # fixtures (leak + clean), so the shipped predicate is proven to REJECT, not
@@ -296,6 +346,7 @@ defmodule AshReplicant.ReleaseContract do
     assert_b1_docs(root)
     assert_b1_examples(root)
     assert_no_b1_positive_contradictions(root)
+    assert_census_contract(root)
     assert_b5_absence_scans(root)
   rescue
     _error in [YamlElixir.ParsingError, File.Error] -> fail("release contract input is invalid")
@@ -833,6 +884,33 @@ defmodule AshReplicant.ReleaseContract do
       end),
       "published destination boundary contract contains a stale positive claim"
     )
+  end
+
+  defp assert_census_contract(root) do
+    Enum.each(@census_doc_contracts, fn {path, heading, required_texts} ->
+      content = root |> Path.join(path) |> File.read!()
+      section = section(content, heading)
+
+      assert(section != nil, "published continuous-census contract section is missing")
+
+      normalized_section = section |> visible_markdown() |> normalize_markdown()
+
+      assert(
+        Enum.all?(required_texts, &String.contains?(normalized_section, normalize_markdown(&1))),
+        "published continuous-census contract is incomplete"
+      )
+    end)
+
+    Enum.each(@census_source_contracts, fn {path, required} ->
+      source = root |> Path.join(path) |> File.read!()
+
+      assert(
+        String.contains?(source, required),
+        "continuous-census package contract is incomplete"
+      )
+    end)
+  rescue
+    _error in [File.Error] -> fail("continuous-census package contract input is invalid")
   end
 
   defp visible_markdown(content) do

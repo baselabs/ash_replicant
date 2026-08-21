@@ -192,6 +192,7 @@ AshReplicant.start_link(
   source_identity: [system_identifier: "7378697629483820647", database: "source_db"],
   go_forward_only: true,
   snapshot: false,
+  census: [interval_ms: 60_000, jitter_ratio: 0.1, timeout_ms: 10_000],
   max_inflight_lag: 64 * 1024 * 1024,
   max_command_retries: 5,
   failover: false
@@ -215,10 +216,34 @@ AshReplicant.start_link(
   activation requires every mapped resource to opt in.
 - `:streaming`, `:max_inflight_lag`, `:max_command_retries`, and `:failover` —
   passed through unchanged to Replicant 1.x.
+- `:census` — continuous invariant checks owned by the `PipelineOwner`. Closed
+  keys: `enabled?` (default `true`), `interval_ms` (default `60_000`),
+  `jitter_ratio` (default `0.1`), `timeout_ms` (default `10_000`), and
+  `max_consecutive_faults` (default `3`). Unknown keys/types and out-of-range
+  bounds reject activation with `:census_options_invalid`. Exact bounds are
+  `interval_ms: 50..86_400_000`, `jitter_ratio: 0.0..0.5`,
+  `timeout_ms: 1..60_000`, and `max_consecutive_faults: 1..1_000`.
 
 **Key:** the `slot_name` comes from the sink, not `start_link` options. It keys the
 active resolver generation and the replication slot name. Start/stop activation is
 serialized per slot so a duplicate cannot overwrite or erase the winner's generation.
+
+### Continuous invariant census
+
+The owner schedules one jittered census only after the previous run has
+finished or timed out. A run enters through the same admitted callback guard as
+delivery, including owner-liveness checks and dynamic-Repo pinning, then checks
+the live destination generation, rebuilt source contract, durable bound
+checkpoint/contract fingerprint, and full source publication/column/type/RIF
+coverage. There is no second poller or Replicant callback.
+
+Any drift halts the temporary pipeline immediately and freezes checkpoint
+advance. Source/Repo faults and checker timeouts are typed non-pass results; a
+healthy run resets the counter, while the exact configured consecutive fault
+halts with `:census_unverifiable`. Census telemetry carries only `slot_name`,
+the structural check `kind`, and a frozen reason atom. It never carries contract
+bytes, source identity values, row values, tenants, message prefixes, or client
+exception text.
 
 ### SCD2 history mode (optional)
 

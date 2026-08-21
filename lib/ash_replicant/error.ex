@@ -44,6 +44,10 @@ defmodule AshReplicant.Error do
           | :append_origin_gap
           | :append_origin_invalid
           | :append_frontier_divergent
+          | :census_timeout
+          | :census_checker_fault
+          | :census_source_unreachable
+          | :census_unverifiable
           # Destination admission re-uses this tuple shape with its own
           # structural sub-reasons; their closed set is enumerated in
           # `AshReplicant.Destination`'s own @type.
@@ -150,7 +154,14 @@ defmodule AshReplicant.Error do
     # (`:append_origin_invalid`). All three freeze the checkpoint.
     :append_origin_gap,
     :append_origin_invalid,
-    :append_frontier_divergent
+    :append_frontier_divergent,
+    # C01 (ADR-0019): bounded continuous-census fault and terminal classes.
+    # All are structural atoms; checker exceptions and source values never
+    # cross the boundary.
+    :census_timeout,
+    :census_checker_fault,
+    :census_source_unreachable,
+    :census_unverifiable
   ]
 
   for reason <- @closed_reasons do

@@ -60,7 +60,10 @@ defmodule AshReplicant.Telemetry do
       [:ash_replicant, :message, :applied],
       [:ash_replicant, :snapshot, :batch],
       [:ash_replicant, :snapshot, :complete],
-      [:ash_replicant, :preflight, :failed]
+      [:ash_replicant, :preflight, :failed],
+      [:ash_replicant, :census, :passed],
+      [:ash_replicant, :census, :faulted],
+      [:ash_replicant, :census, :halted]
     ]
   end
 
