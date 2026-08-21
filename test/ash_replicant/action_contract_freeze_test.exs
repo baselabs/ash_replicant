@@ -224,6 +224,18 @@ defmodule AshReplicant.ActionContractFreezeTest do
         refute function_exported?(sink, :append, 2)
       end
     end
+
+    test "slot-origin admission uses the long checkpoint-lock transaction timeout" do
+      source = File.read!("lib/ash_replicant/sink/impl.ex")
+
+      [body] =
+        Regex.run(
+          ~r/def handle_slot_origin\(config,.*?(?=\n  def handle_slot_origin\(_config)/s,
+          source
+        )
+
+      assert body =~ "timeout: @snapshot_transaction_timeout"
+    end
   end
 
   test "the telemetry conformance inventory covers every event name emitted in lib (live pin)" do
@@ -278,11 +290,12 @@ defmodule AshReplicant.ActionContractFreezeTest do
       # Diff-review F5: the fixture list alone is self-referential. This cell
       # greps the LIVE constructors — a new reason kind added to destination.ex
       # without a fixture row goes red here.
-      source = File.read!("lib/ash_replicant/destination.ex")
-
       constructed =
-        Regex.scan(~r/\{:(destination_[a-z_]+),/, source)
-        |> Enum.map(&String.to_atom(Enum.at(&1, 1)))
+        ["lib/ash_replicant/destination.ex", "lib/ash_replicant/append.ex"]
+        |> Enum.flat_map(fn path ->
+          Regex.scan(~r/\{:(destination_[a-z_]+),/, File.read!(path))
+          |> Enum.map(&String.to_atom(Enum.at(&1, 1)))
+        end)
         |> MapSet.new()
 
       enumerated =

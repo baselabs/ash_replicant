@@ -548,7 +548,6 @@ defmodule AshReplicant.ReleaseContract do
 
   defp assert_replicant_contract(root) do
     lock = root |> Path.join("mix.lock") |> File.read!()
-    lock_version = hex_lock_version(lock, "replicant")
 
     assert_hex_lock(lock, "replicant", expected_replicant_lock_version(lock))
     assert_hex_lock(lock, "postgrex", "0.22.4")
@@ -573,9 +572,7 @@ defmodule AshReplicant.ReleaseContract do
       "Replicant checkpoint/slot contract is incomplete"
     )
 
-    if lock_version == "1.2.3" do
-      assert_replicant_fixed_floor_contract(root, connection_source)
-    end
+    assert_replicant_fixed_floor_contract(root, connection_source)
 
     assert(
       semantic_identity_gate?(connection_source),

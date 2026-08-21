@@ -34,6 +34,13 @@ defmodule AshReplicant.ValidateAppendLogTest do
     end
   end
 
+  defmodule ManualAppend do
+    @behaviour Ash.Resource.ManualCreate
+
+    @impl true
+    def create(_changeset, _opts, _context), do: {:error, :manual_append_forbidden}
+  end
+
   @structural_accept [
     :source_system_id,
     :source_database,
@@ -223,6 +230,35 @@ defmodule AshReplicant.ValidateAppendLogTest do
         end
 
       assert error.message =~ "must not declare its own upsert"
+    end
+
+    test "a manual append action is rejected" do
+      error =
+        assert_dsl_error %Spark.Error.DslError{path: [:actions, :append, :manual]} do
+          append_resource(Elixir.AshReplicant.ValidateAppendLogTest.AppendIsManual,
+            actions: [
+              defaults([:read]),
+              create :append do
+                accept [
+                  :source_system_id,
+                  :source_database,
+                  :slot_name,
+                  :commit_lsn,
+                  :ordinal,
+                  :operation,
+                  :origin,
+                  :snapshot_attempt,
+                  :id,
+                  :note
+                ]
+
+                manual AshReplicant.ValidateAppendLogTest.ManualAppend
+              end
+            ]
+          )
+        end
+
+      assert error.message =~ "must not be manual"
     end
 
     test "an append action that does not accept a structural attribute is rejected" do

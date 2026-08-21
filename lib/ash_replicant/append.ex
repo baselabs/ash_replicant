@@ -264,7 +264,7 @@ defmodule AshReplicant.Append do
       names.ordinal => ordinal,
       names.operation => operation!(resource, op),
       names.origin => origin(op),
-      names.attempt => attempt(config, op)
+      names.attempt => attempt!(config, resource, op)
     }
   end
 
@@ -286,8 +286,17 @@ defmodule AshReplicant.Append do
   # The checkpoint-owned snapshot attempt (ADR-0018 §4) rides the runtime
   # config, bound under the checkpoint row lock before any row effect. Streamed
   # changes carry none.
-  defp attempt(config, :snapshot), do: Map.get(config, :append_snapshot_attempt)
-  defp attempt(_config, _op), do: nil
+  defp attempt!(config, resource, :snapshot) do
+    case Map.get(config, :append_snapshot_attempt) do
+      attempt when not is_nil(attempt) ->
+        attempt
+
+      _absent ->
+        raise Error.exception(reason: :config_invalid, resource: resource, op: :append)
+    end
+  end
+
+  defp attempt!(_config, _resource, _op), do: nil
 
   # A source column sharing a name with a structural attribute would have its
   # value silently replaced by the structural stamp (or vice versa), so the

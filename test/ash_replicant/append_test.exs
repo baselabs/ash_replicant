@@ -186,6 +186,21 @@ defmodule AshReplicant.AppendTest do
              ] = events()
     end
 
+    test "a SNAPSHOT row without a checkpoint-owned attempt fails before append" do
+      assert_raise Error, fn ->
+        Apply.apply_change(
+          config(),
+          change(:snapshot, "orders",
+            record: %{"id" => "o1", "note" => "n"},
+            lsn: 10,
+            ordinal: 3
+          )
+        )
+      end
+
+      assert events() == []
+    end
+
     test "transactional and standalone messages append explicit immutable events" do
       cfg = config()
 

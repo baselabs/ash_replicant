@@ -97,11 +97,14 @@ defmodule AshReplicant.Sink.Impl do
   def handle_slot_origin(config, origin, %{reused?: reused?} = _context)
       when is_integer(origin) and origin >= 0 and is_boolean(reused?) do
     result =
-      config.repo.transaction(fn ->
-        guard_generation!(config)
-        admit_slot_origin!(config, origin, reused?)
-        guard_generation!(config)
-      end)
+      config.repo.transaction(
+        fn ->
+          guard_generation!(config)
+          admit_slot_origin!(config, origin, reused?)
+          guard_generation!(config)
+        end,
+        timeout: @snapshot_transaction_timeout
+      )
 
     case result do
       {:ok, _} -> :ok

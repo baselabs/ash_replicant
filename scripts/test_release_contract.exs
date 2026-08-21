@@ -1164,6 +1164,22 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     prepare_fixture()
 
+    replace_once!(
+      "mix.lock",
+      ~s("replicant": {:hex, :replicant, "1.2.3"),
+      ~s("replicant": {:hex, :replicant, "1.2.4")
+    )
+
+    replace_once!(
+      "deps/replicant/lib/replicant/connection.ex",
+      "Replicant.Sink.sink_kind(state.sink) != :append_log",
+      "Replicant.Sink.sink_kind(state.sink) == :append_log"
+    )
+
+    with_env("ASH_REPLICANT_REPLICANT_VERSION", "latest", &assert_invalid!/0)
+
+    prepare_fixture()
+
     File.write!(
       fixture_path("README.md"),
       File.read!(fixture_path("README.md")) <>
