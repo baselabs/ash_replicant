@@ -192,11 +192,12 @@ defmodule AshReplicant.SnapshotIncrementalTest do
 
     values = Enum.map(pairs, &elem(&1, 1)) ++ [@slot]
 
-    AshReplicant.TestRepo.query!(
-      "UPDATE ash_replicant_checkpoints SET #{assignments} " <>
-        "WHERE slot_name = $#{length(values)}",
-      values
-    )
+    %{num_rows: 1} =
+      AshReplicant.TestRepo.query!(
+        "UPDATE ash_replicant_checkpoints SET #{assignments} " <>
+          "WHERE slot_name = $#{length(values)}",
+        values
+      )
   end
 
   test "progress callback durably arms one attempt and owner restart reuses it" do
@@ -463,6 +464,33 @@ defmodule AshReplicant.SnapshotIncrementalTest do
 
     assert [%SnapVersion{valid_from_lsn: ^stream_lsn, valid_to_lsn: nil} = open] = versions
     assert is_binary(open.replica_seen_attempt)
+  end
+
+  test "SCD2 snapshot mismatch cannot open below a newer streamed version" do
+    progress = "opaque-progress-scd2-newer-mismatch"
+    stream_lsn = @floor_lsn + 80
+
+    assert {:ok, :backfill_pending} = Sink.snapshot_progress()
+
+    assert {:ok, ^stream_lsn} =
+             Sink.handle_transaction(
+               transaction(stream_lsn, [
+                 version_change(:insert, "newer-mismatch", "current", stream_lsn)
+               ])
+             )
+
+    assert {:error, %AshReplicant.Error{reason: :snapshot_state_invalid}} =
+             Sink.handle_snapshot(
+               [version_change(:snapshot, "newer-mismatch", "stale", @floor_lsn)],
+               chunk_ctx(progress, %{table: "public.snap_versions"})
+             )
+
+    versions = Ash.read!(SnapVersion, authorize?: false)
+
+    assert [%SnapVersion{valid_from_lsn: ^stream_lsn, valid_to_lsn: nil, amount: "current"}] =
+             versions
+
+    assert %{snapshot_progress: nil} = checkpoint_row()
   end
 
   test "matching completion redelivery no-ops before scan after a later stream write" do

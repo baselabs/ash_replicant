@@ -127,11 +127,14 @@ defmodule AshReplicant.IncrementalSnapshotPipelineTest do
 
     PG.wait_until(fn -> target_count() == 9 and complete_checkpoint?() end, 1_200)
 
-    [[progress, encoded_state, nil]] =
+    [[progress, encoded_state, pre_stream_lsn]] =
       q!(
         "SELECT snapshot_progress, snapshot_state, commit_lsn FROM ash_replicant_checkpoints WHERE slot_name = $1",
         [@slot]
       ).rows
+
+    assert is_nil(pre_stream_lsn),
+           "no stream watermark may commit before the snapshot hands off"
 
     assert {:ok, %Replicant.SnapshotProgress{complete?: true}} =
              Replicant.SnapshotProgress.decode(progress)
@@ -198,6 +201,9 @@ defmodule AshReplicant.IncrementalSnapshotPipelineTest do
              )
 
     assert_receive {:crashed_before_reader, crashed_connection}, 15_000
+
+    monitor = Process.monitor(crashed_connection)
+    assert_receive {:DOWN, ^monitor, :process, ^crashed_connection, _reason}, 5_000
     refute Process.alive?(crashed_connection)
 
     PG.wait_until(fn -> target_count() == 500 and complete_checkpoint?() end, 1_500)

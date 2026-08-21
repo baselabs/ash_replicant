@@ -624,6 +624,10 @@ defmodule AshReplicant.StartLinkTest do
   end
 
   test "attempting to redefine any generated callback fails compilation" do
+    assert callback_definitions() |> Map.keys() |> Enum.sort() ==
+             final_callbacks() |> Enum.map(fn {name, arity} -> {name, arity} end) |> Enum.sort(),
+           "every final callback needs a redefinition fixture"
+
     for {{name, arity}, definition} <- callback_definitions() do
       module = Module.concat(AshReplicant.Test, "Final#{name}#{arity}Sink")
 

@@ -34,6 +34,7 @@ defmodule AshReplicant.ReplicantDependencyTest do
     assert Code.ensure_loaded?(Incremental)
     assert function_exported?(Incremental, :keyed_retry_decision, 3)
     assert Replicant.SnapshotProgress.pending?(:backfill_pending)
+    refute Replicant.SnapshotProgress.pending?(%Replicant.SnapshotProgress{complete?: true})
   end
 
   test "the fetched slot-origin contract is typed and fail-closed" do

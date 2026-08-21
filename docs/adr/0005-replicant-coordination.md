@@ -24,10 +24,10 @@ keyed incremental-snapshot contention; 1.2.2 adds an explicit pre-first-chunk
 pending state and safe live-slot origin recovery after a crash. A sibling checkout is not release evidence;
 the consumer must prove the fetched Hex package and its callback ordering.
 
-The adapter already supports Replicant's v1 snapshot. It does not yet implement
-logical messages, sink-owned transaction batches, or incremental snapshot
-progress. Advertising those callbacks early would enable modes whose destination
-atomicity, nonce, and provenance contracts are owned by later roadmap rows.
+At the time of the original decision, the adapter supported only Replicant's v1
+snapshot. Logical messages, sink-owned transaction batches, and incremental
+snapshot progress remained disabled until their destination atomicity,
+idempotency, and provenance contracts landed.
 
 ## Decision
 
@@ -44,17 +44,20 @@ atomicity, nonce, and provenance contracts are owned by later roadmap rows.
   erase only its own generation; a duplicate cannot replace the active one.
 - The adapter forwards Replicant's `streaming`, `max_inflight_lag`,
   `max_command_retries`, and `failover` options unchanged. It preserves v1
-  `snapshot: true` and rejects incremental snapshot mode until durable progress
-  and target provenance land. Batch and message callbacks remain absent until
-  their atomicity and AshOnetime contracts land.
+  `snapshot: true`; enables incremental mode only when every mapped resource has
+  snapshot provenance; and exposes sink-owned batch and logical-message
+  callbacks only through their destination-side atomicity and AshOnetime
+  contracts. Append-log delivery remains absent until its separate contract
+  lands.
 - Release order is dependency first: Replicant 1.x is published and fetched before
   AshReplicant can publish a release requiring it. Tags are immutable. If a defect
   is found, publish a compatible Replicant patch and update the AshReplicant lock;
   retire an unsafe Hex release when warranted rather than moving a tag. If no safe
   compatible patch exists, AshReplicant publication remains blocked.
-- Persisting the accepted source identity and resolver/publication manifest with
-  checkpoint state remains B2 work. This activation comparison does not claim a
-  source-bound durable checkpoint.
+- Durable source identity and resolver/publication binding is owned by
+  [ADR-0007](0007-source-bound-checkpoint-effect-once.md). The activation
+  comparison here remains the first admission step before that checkpoint-bound
+  contract is read or advanced.
 
 ## Consequences
 
@@ -68,8 +71,19 @@ atomicity, nonce, and provenance contracts are owned by later roadmap rows.
 - Rolling back AshReplicant code does not require moving Replicant tags. The safe
   Replicant floor remains 1.2.2; selecting an earlier 1.x package reintroduces
   data-integrity or value-safety defects and is not an admitted rollback.
-- B2 must migrate the activation-only identity into durable checkpoint binding
-  before AshReplicant can claim source-bound effect-once semantics.
+- ADR-0007 carries the durable checkpoint binding required for source-bound
+  effect-once semantics; this ADR continues to own the replication-session
+  comparison that precedes it.
+
+## Amendment (2026-08-20)
+
+The original callback deferral is discharged by
+[ADR-0015](0015-logical-message-effects.md),
+[ADR-0016](0016-atomic-batch-delivery.md), and
+[ADR-0017](0017-snapshot-provenance-and-restart.md). Those records own the live
+message, batch, and incremental-snapshot contracts respectively. This amendment
+does not enable append-log delivery; [ADR-0018](0018-append-log-delivery.md)
+continues to own that boundary.
 
 ## Evidence
 

@@ -1132,6 +1132,36 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     prepare_fixture()
 
+    replace_once!(
+      "deps/replicant/lib/replicant/sink.ex",
+      "binary() | nil | :backfill_pending",
+      "binary() | nil"
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
+    replace_once!(
+      "deps/replicant/lib/replicant/connection.ex",
+      "def classify_progress({:ok, :backfill_pending})",
+      "def removed_pending_progress_classification({:ok, :backfill_pending})"
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
+    replace_once!(
+      "deps/replicant/lib/replicant/snapshotter/incremental.ex",
+      "def classify_durable_progress(:backfill_pending, :sink_owned)",
+      "def removed_pending_progress_classification(:backfill_pending, :sink_owned)"
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
     File.write!(
       fixture_path("README.md"),
       File.read!(fixture_path("README.md")) <>
