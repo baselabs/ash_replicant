@@ -15,7 +15,26 @@ defmodule AshReplicant.SnapshotStateTest do
         delivery_run: :binary.copy(<<9>>, 32),
         contract_digest: :binary.copy(<<3>>, 32),
         key_version: 1,
+        progress_token_hash: nil,
         completed_lsn: nil
+      },
+      overrides
+    )
+  end
+
+  defp incremental(overrides) do
+    Map.merge(
+      %State{
+        mode: :incremental,
+        status: :armed,
+        attempt: :binary.copy(<<8>>, 32),
+        delivery_run: "",
+        contract_digest: :binary.copy(<<4>>, 32),
+        key_version: 1,
+        next_ordinal: 0,
+        progress_token_hash: nil,
+        completed_lsn: nil,
+        completed_token_hash: nil
       },
       overrides
     )
@@ -32,6 +51,28 @@ defmodule AshReplicant.SnapshotStateTest do
 
     test "a complete V1 attempt carries its completed LSN" do
       state = v1(%{status: :complete, completed_lsn: 9_876_543_210})
+
+      assert {:ok, encoded} = State.encode(state, @keys)
+      assert {:ok, ^state} = State.decode(encoded, @keys)
+    end
+
+    test "an incremental attempt carries a token-hash completion fence" do
+      token_hash = :crypto.hash(:sha256, "opaque-progress-token")
+
+      state =
+        incremental(%{
+          status: :complete,
+          progress_token_hash: token_hash,
+          completed_token_hash: token_hash
+        })
+
+      assert {:ok, encoded} = State.encode(state, @keys)
+      assert {:ok, ^state} = State.decode(encoded, @keys)
+    end
+
+    test "an active incremental attempt authenticates its separately stored progress token" do
+      token_hash = :crypto.hash(:sha256, "opaque-progress-token")
+      state = incremental(%{status: :active, progress_token_hash: token_hash})
 
       assert {:ok, encoded} = State.encode(state, @keys)
       assert {:ok, ^state} = State.decode(encoded, @keys)
@@ -132,6 +173,35 @@ defmodule AshReplicant.SnapshotStateTest do
       assert {:error, :undecodable} =
                State.encode(v1(%{status: :complete, completed_lsn: -1}), @keys)
     end
+
+    test "incremental completion hashes are symmetric and only complete state carries the fence" do
+      token_hash = :crypto.hash(:sha256, "opaque-progress-token")
+
+      assert {:error, :undecodable} =
+               State.encode(
+                 incremental(%{status: :armed, progress_token_hash: token_hash}),
+                 @keys
+               )
+
+      assert {:error, :undecodable} =
+               State.encode(
+                 incremental(%{status: :active, completed_token_hash: token_hash}),
+                 @keys
+               )
+
+      assert {:error, :undecodable} =
+               State.encode(incremental(%{status: :complete, completed_token_hash: nil}), @keys)
+
+      assert {:error, :undecodable} =
+               State.encode(
+                 incremental(%{
+                   status: :complete,
+                   progress_token_hash: token_hash,
+                   completed_token_hash: :crypto.hash(:sha256, "different-token")
+                 }),
+                 @keys
+               )
+    end
   end
 
   describe "mint_v1/3" do
@@ -147,10 +217,30 @@ defmodule AshReplicant.SnapshotStateTest do
       assert a.status == :active
       assert a.delivery_run == run
       assert a.contract_digest == digest
+      assert is_nil(a.progress_token_hash)
       assert is_nil(a.completed_lsn)
 
       # Two mints for the SAME run and consistent point still differ: the
       # attempt is random, never derived from the LSN.
+      refute a.attempt == b.attempt
+    end
+  end
+
+  describe "mint_incremental/2" do
+    test "mints a durable armed attempt without a V1 delivery run" do
+      digest = :binary.copy(<<2>>, 32)
+
+      a = State.mint_incremental(digest, 1)
+      b = State.mint_incremental(digest, 1)
+
+      assert byte_size(a.attempt) == 32
+      assert a.mode == :incremental
+      assert a.status == :armed
+      assert a.delivery_run == ""
+      assert a.contract_digest == digest
+      assert is_nil(a.progress_token_hash)
+      assert is_nil(a.completed_lsn)
+      assert is_nil(a.completed_token_hash)
       refute a.attempt == b.attempt
     end
   end

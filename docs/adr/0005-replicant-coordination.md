@@ -20,7 +20,8 @@ Postgrex 0.22.4 floor. Replicant 1.1.0 then fixed valid float-array casting,
 post-halt incremental-window rejection, and snapshot-reader connection-option
 precedence. Replicant 1.2.0 added the typed slot-origin callback, fail-closed
 unknown-checkpoint/absent-slot handling, and typed telemetry values; 1.2.1 bounds
-keyed incremental-snapshot contention. A sibling checkout is not release evidence;
+keyed incremental-snapshot contention; 1.2.2 adds an explicit pre-first-chunk
+pending state and safe live-slot origin recovery after a crash. A sibling checkout is not release evidence;
 the consumer must prove the fetched Hex package and its callback ordering.
 
 The adapter already supports Replicant's v1 snapshot. It does not yet implement
@@ -30,8 +31,8 @@ atomicity, nonce, and provenance contracts are owned by later roadmap rows.
 
 ## Decision
 
-- The public dependency is `>= 1.2.1 and < 2.0.0-0`. CI resolves exact 1.2.1 as
-  the compatibility floor and the selector-free current lock, presently 1.2.1,
+- The public dependency is `>= 1.2.2 and < 2.0.0-0`. CI resolves exact 1.2.2 as
+  the compatibility floor and the selector-free current lock, presently 1.2.2,
   as separate mandatory cells.
 - Production activation requires an operator-pinned PostgreSQL system identifier
   and database. The generated sink compares those values plus the configured slot
@@ -61,19 +62,19 @@ atomicity, nonce, and provenance contracts are owned by later roadmap rows.
   or resolver generation is active.
 - Both the oldest admitted Replicant release and the current release are tested;
   a green current lock cannot substitute for the floor proof.
-- Replicant 1.2.1's slot-origin, typed-telemetry, checkpoint/slot, and bounded
-  contention fixes are mandatory release foundations. AshReplicant enables a
+- Replicant 1.2.2's slot-origin, typed-telemetry, checkpoint/slot, bounded
+  contention, and pending-backfill recovery fixes are mandatory release foundations. AshReplicant enables a
   Replicant mode only after its own destination-side contract lands.
 - Rolling back AshReplicant code does not require moving Replicant tags. The safe
-  Replicant floor remains 1.2.1; selecting an earlier 1.x package reintroduces
+  Replicant floor remains 1.2.2; selecting an earlier 1.x package reintroduces
   data-integrity or value-safety defects and is not an admitted rollback.
 - B2 must migrate the activation-only identity into durable checkpoint binding
   before AshReplicant can claim source-bound effect-once semantics.
 
 ## Evidence
 
-- `mix.lock` records Replicant 1.2.1 and Postgrex 0.22.4 from Hex.
-- CI's compatibility matrix resolves exact Replicant 1.2.1 and selector-free
+- `mix.lock` records Replicant 1.2.2 and Postgrex 0.22.4 from Hex.
+- CI's compatibility matrix resolves exact Replicant 1.2.2 and selector-free
   current Replicant independently and asserts both versions.
 - The release-contract checker verifies the Hex lock, public dependency shape,
   `SessionIdentity`, callback, and connection-order source from the fetched package.

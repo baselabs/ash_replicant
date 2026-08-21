@@ -595,8 +595,9 @@ AshReplicant.start_link(
 ```
 
 `snapshot: false` disables snapshots; `snapshot: true` selects Replicant's v1
-snapshot. Incremental snapshot options are not supported until roadmap C3 adds
-durable progress and target provenance.
+snapshot. Replicant's incremental options are accepted when every mapped resource
+declares `snapshot_provenance true`; activation otherwise fails closed with
+`:snapshot_unsupported` before transport starts.
 
 Stop it (idempotent; clears the cached index) with
 `AshReplicant.stop_supervised("shop_orders")`.
@@ -698,7 +699,9 @@ delivery run, a keyed fingerprint per row, and tenant-scoped retirement at fence
 completion (ADR-0017). Crash injection at every batch boundary shows exactly one
 host business effect per source row across all retries. No snapshot callback
 clears a resource any more — a resource that does NOT opt in simply keeps rows the
-source has dropped. Incremental snapshot restart is roadmap S03.
+source has dropped. Incremental mode arms its attempt in `snapshot_progress/0`,
+commits each opaque progress token with its bounded row effects, marks stream writes
+during the attempt, and fences completion redelivery before any retirement scan.
 
 ```mermaid
 flowchart TD

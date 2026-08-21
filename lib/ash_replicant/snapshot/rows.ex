@@ -58,6 +58,51 @@ defmodule AshReplicant.Snapshot.Rows do
     :ok
   end
 
+  @doc "Stamp a streamed insert/update with the active incremental membership marker."
+  @spec mark_stream_change!(map(), Replicant.Change.t(), map()) :: :ok
+  def mark_stream_change!(config, %Replicant.Change{op: op} = change, attempt)
+      when op in [:insert, :update] do
+    case Resolver.lookup(config.resolver_index, change.schema, change.table) do
+      nil ->
+        :ok
+
+      resource ->
+        if AshReplicant.Resource.Info.replicant_snapshot_provenance!(resource) do
+          reflection = Resolver.upsert_reflection(resource)
+          tenant = Resolver.resolve_tenant!(resource, change.record, :snapshot)
+          {inputs, _upsert_fields} = Resolver.upsert_input(reflection, change.record)
+          lookup = %{record: change.record, inputs: inputs}
+
+          fingerprint =
+            case Provenance.fingerprint(
+                   resource,
+                   tenant,
+                   inputs,
+                   attempt.key_version,
+                   attempt.keys
+                 ) do
+              {:ok, fingerprint} -> fingerprint
+              {:error, _reason} -> raise provenance_unavailable(resource)
+            end
+
+          mark!(
+            config,
+            resource,
+            lookup,
+            tenant,
+            change,
+            change.commit_lsn,
+            attempt,
+            fingerprint
+          )
+        else
+          :ok
+        end
+    end
+  end
+
+  def mark_stream_change!(_config, _change, _attempt), do: :ok
+
   defp apply_row!(config, resource, reflection, change, snapshot_lsn, ordinal, attempt) do
     change = %{change | op: :insert, commit_lsn: snapshot_lsn, ordinal: ordinal}
     record = change.record

@@ -40,7 +40,7 @@ defmodule AshReplicant.CheckpointTest do
         assert attrs[name].allow_nil? == true
       end
 
-      # `snapshot_progress` stays reserved for S03 incremental mode.
+      # The exact opaque incremental progress token is nullable before arming.
       assert attrs[:snapshot_progress].allow_nil? == true
 
       # S02 (ADR-0017): the inert `snapshot_generation` placeholder became the
@@ -53,6 +53,7 @@ defmodule AshReplicant.CheckpointTest do
       # action has to accept it.
       upsert = Enum.find(Info.actions(Checkpoint), &(&1.name == :upsert))
       assert :snapshot_state in upsert.accept
+      assert :snapshot_progress in upsert.accept
 
       assert attrs[:inserted_at] && attrs[:updated_at]
     end

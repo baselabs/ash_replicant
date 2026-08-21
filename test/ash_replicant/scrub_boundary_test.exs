@@ -12,8 +12,8 @@ defmodule AshReplicant.ScrubBoundaryTest do
   HARNESS (pinned per plan F2): the matrix drives callbacks DIRECTLY (the
   schema_change_test.exs:58 pattern), never through replicant's wrapper.
 
-  RED-CELL CALIBRATION under direct drive: the throw/exit cells of ALL six
-  bodies are RED pre-fix (`rescue` misses them; schema-change is bare); the
+  RED-CELL CALIBRATION under direct drive: the throw/exit cells of all six
+  original bodies were RED pre-fix (`rescue` missed them; schema-change was bare); the
   schema-change RAISE cell is RED pre-fix (no boundary at all); the five
   delivery bodies' raise cells are GREEN pre-fix (already rescued) — recorded
   as already-closed depth. Bind's :exit cell is drivable in-unit (round 3):
@@ -367,6 +367,17 @@ defmodule AshReplicant.ScrubBoundaryTest do
 
         {result, _telemetry} =
           assert_value_free(fn -> Impl.handle_snapshot_complete(config(), 5) end)
+
+        assert {:error, %AshReplicant.Error{reason: :sink_failed}} = result
+      end
+    end
+
+    test "snapshot_progress: raise/throw/exit all scrub value-free" do
+      for shape <- [:raise, :throw, :exit] do
+        set_shape(shape)
+
+        {result, _telemetry} =
+          assert_value_free(fn -> Impl.snapshot_progress(config()) end)
 
         assert {:error, %AshReplicant.Error{reason: :sink_failed}} = result
       end

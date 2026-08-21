@@ -9,6 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Sink-owned incremental snapshots are restartable and physically
+  effect-once** (ADR-0017, roadmap S03). Generated sinks now expose
+  `snapshot_progress/0`; activation accepts Replicant 1.2.2 incremental mode
+  only when every mapped resource declares `snapshot_provenance true`.
+  - `snapshot_progress/0` locks the source-bound checkpoint and durably arms a
+    random attempt before Replicant can start its reader and stream. Before the
+    first chunk it returns `:backfill_pending`, so a crash after slot creation
+    resumes the reader instead of abandoning the backfill. Owner or transport
+    restart returns the exact previously committed opaque token and reuses the
+    attempt.
+  - Each bounded chunk commits its host effects, row fingerprint/membership,
+    exact progress token, and durable operation-key ordinal cursor in one
+    destination transaction. A failed chunk advances none of them.
+  - Streamed inserts and updates during an armed/active backfill run the normal
+    host action and stamp the active marker before advancing the stream
+    watermark; deletes remove/close normally. Sink-owned transaction batches
+    apply the same rule under their one trailing watermark write.
+  - Incremental completion is Replicant's empty at-least-once
+    `handle_snapshot/2` call. It retires unseen rows per destination tenant
+    scope, stores the exact token plus its SHA-256 replay fence, and never
+    regresses the stream watermark. Matching redelivery no-ops before any scan.
+  - In-flight progress is hash-bound inside the authenticated state envelope,
+    so a valid replacement token cannot skip work. State/progress tamper,
+    impossible pairing, incomplete-attempt contract drift, and missing key
+    versions fail closed. A completed fence survives later admitted contract
+    drift so deployment cannot brick streaming. A durable rewrite rotates the
+    envelope to the active retained key; after completion the old key can be
+    removed.
+  - Black-box gates over the fetched Replicant artifact pin current-read
+    collision filtering (insert/update/delete/key change), keyed three-attempt
+    contention exhaustion, keyless redo signaling, reconnect accounting, and
+    pending-chunk backpressure.
+
 - **Whole-table (V1) snapshot retry is now physically effect-once** (ADR-0017,
   roadmap S02). A retry no longer repeats a committed host business effect for
   a row that did not change. Converging to the same final state was never proof
@@ -60,8 +93,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Three new reasons join the frozen taxonomy (additive per ADR-0011):
     `:snapshot_state_invalid`, `:snapshot_provenance_unavailable`,
     `:snapshot_scope_incomplete`.
-  - Incremental mode (`snapshot_progress/0`, the progress token and its
-    token-hash fence) remains roadmap S03; the envelope is shaped for it.
+  - Incremental mode reuses this envelope and row contract; its progress,
+    stream-membership, ordinal cursor, and token-hash fence are now live.
 
 ### Changed
 
@@ -83,7 +116,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Nothing ever wrote `snapshot_generation` (it was reserved and inert), so the
   regenerated migration drops an always-NULL column and adds an always-NULL one.
   Hosts run `mix ash.codegen` and migrate; no data capture is required.
-  `snapshot_progress` stays reserved for S03.
+  `snapshot_progress` is now written atomically by incremental chunks and
+  completion.
 
 - **Snapshot provenance and retirement contract** (ADR-0017, roadmap S01). A
   mirror resource can opt in with `snapshot_provenance true`, declaring two
@@ -113,16 +147,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Activation preflights the key configuration whenever a mapped resource opts
     in, and refuses to start without it.
   - `snapshot_provenance` defaults to `false`: an existing resource compiles and
-    behaves exactly as before. This slice installs the contract only — the
-    retry protocol that reads it (attempt state, completion, retirement) remains
-    roadmap C3 work.
+    behaves exactly as before. V1 uses the contract for effect-once retry and
+    incremental mode requires it for activation.
 
 ### Documented
 
-- Record the approved 1.0 release design as proposed ADRs 0017-0021 and pending
-  hardening amendments to ADR-0010/0015. These records define release gates;
-  they do not claim snapshot restart, append-log, continuous assurance,
-  install/doctor, expanded support, or publication behavior is implemented.
+- Record the approved 1.0 release design as ADRs 0017-0021 and pending hardening
+  amendments to ADR-0010/0015. ADR-0017's snapshot restart protocol is now live;
+  the later append-log, continuous assurance, install/doctor, expanded support,
+  and publication records remain proposed release gates.
 
 ### Breaking
 
@@ -174,10 +207,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `{:invalid_destination_config, :notifier_load_probe_failed}`. All are
   value-free and survive the sink's scrub, so operators can branch on them.
 
-- Require fetched Replicant `>= 1.2.1 and < 2.0.0-0` and pin the release lock to
-  public Hex 1.2.1. The dependency contract now proves slot-origin rejection,
+- Require fetched Replicant `>= 1.2.2 and < 2.0.0-0` and pin the release lock to
+  public Hex 1.2.2. The dependency contract now proves slot-origin rejection,
   typed telemetry value-shape enforcement without value leakage, and bounded
-  keyed-snapshot contention; CI's exact floor and rollback guidance use 1.2.1.
+  keyed-snapshot contention plus pre-first-chunk pending recovery; CI's exact
+  floor and rollback guidance use 1.2.2.
 
 - **Atomic sink-owned batch delivery (roadmap C2 / ADR-0016).** The generated
   sink now implements `handle_batch/1` unconditionally, and
@@ -341,11 +375,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Serialize resolver activation per slot, generation-check rejected-start cleanup,
   and forward Replicant's safe `streaming`, `max_inflight_lag`,
   `max_command_retries`, and `failover` transport options. Incremental snapshots,
-  batch delivery, and logical messages remain capability-gated for their owning rows.
-- Scope the current physical effect-once guarantee to committed streaming
-  transactions and atomic snapshot batches. An incomplete Replicant v1 multi-batch
-  snapshot restart can repeat already committed batch effects before rebuilding the
-  target; C3 must remove those repeats before the stable snapshot-restart claim.
+  batch delivery, and logical messages are now live under their owning contracts.
+- Extend the physical effect-once guarantee from committed streaming transactions
+  and atomic snapshot batches to V1 and incremental snapshot retry through the
+  checkpoint-owned provenance protocol and permanent completion fences.
 - Require Elixir 1.20.3/OTP 29 and the AshPostgres 2.11 dependency family for the
   1.0.0 release line.
 ### Security

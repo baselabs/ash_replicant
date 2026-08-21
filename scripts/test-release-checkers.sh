@@ -41,7 +41,7 @@ if scripts/assert-exunit-output.sh "$fixture_dir/intentional-exclusion.txt" >/de
 fi
 
 scripts/assert-dependency-version.sh ash '>= 3.31.3 and < 4.0.0-0' >/dev/null
-scripts/assert-dependency-version.sh replicant '>= 1.2.1 and < 2.0.0-0' >/dev/null
+scripts/assert-dependency-version.sh replicant '>= 1.2.2 and < 2.0.0-0' >/dev/null
 
 if scripts/assert-dependency-version.sh ash '== 0.0.0' >/dev/null 2>&1; then
   echo "dependency checker accepted a nonmatching requirement" >&2
@@ -174,7 +174,7 @@ if [[ "$replicant_old_exit" -eq 0 ]] || [[ "$replicant_old_output" != *"must be 
   exit 1
 fi
 
-replicant_public_requirement=">= 1.2.1 and < 2.0.0-0"
+replicant_public_requirement=">= 1.2.2 and < 2.0.0-0"
 
 for selector in unset empty latest; do
   case "$selector" in
@@ -198,10 +198,10 @@ for selector in unset empty latest; do
   fi
 done
 
-replicant_floor_requirement="$(ASH_REPLICANT_REPLICANT_VERSION=1.2.1 mix run --no-start --no-compile --no-deps-check -e '
+replicant_floor_requirement="$(ASH_REPLICANT_REPLICANT_VERSION=1.2.2 mix run --no-start --no-compile --no-deps-check -e '
   Mix.Project.config() |> Keyword.fetch!(:deps) |> List.keyfind!(:replicant, 0) |> elem(1) |> IO.write()')"
 
-if [[ "$replicant_floor_requirement" != "== 1.2.1" ]]; then
+if [[ "$replicant_floor_requirement" != "== 1.2.2" ]]; then
   echo "exact Replicant floor selector did not produce an exact requirement" >&2
   exit 1
 fi

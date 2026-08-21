@@ -8,8 +8,9 @@ defmodule AshReplicant do
   Whole-table (V1) snapshot retry is physically effect-once for a resource that
   declares `snapshot_provenance true`: a retry marks unchanged rows instead of
   re-running the host business action, and retires only the rows a completed
-  attempt never saw (ADR-0017). Incremental snapshot mode — `snapshot_progress/0`
-  and its durable progress token — remains roadmap S03.
+  attempt never saw (ADR-0017). Incremental snapshot mode uses the same row
+  contract plus checkpoint-locked progress, stream membership stamping, and a
+  permanent completion-token replay fence.
 
   This is the `ash_postgres`-of-`replicant`: `replicant` is the tenant-blind CDC
   transport; multitenancy and classification live here, one layer up.
@@ -40,9 +41,9 @@ defmodule AshReplicant do
       from the actual replication session, as
       `[system_identifier: "...", database: "..."]`.
     * `:go_forward_only` — passed through to `Replicant.start_link/1`.
-    * `:snapshot` — `false` or Replicant's v1 snapshot (`true`). Incremental
-      snapshot options are unsupported until the adapter implements durable
-      progress and target provenance.
+    * `:snapshot` — `false`, Replicant's v1 snapshot (`true`), or sink-owned
+      incremental snapshot options (`[mode: :incremental, ...]`). Incremental
+      mode requires every mapped resource to declare `snapshot_provenance true`.
     * `:streaming`, `:max_inflight_lag`, `:max_command_retries`, and `:failover`
       — passed through unchanged to Replicant.
     * `:messages` — passed through to Replicant; a sink with a declared
@@ -547,6 +548,7 @@ defmodule AshReplicant do
          {:ok, source_contract} <-
            Identity.build_contract(sink_config, publication),
          {:ok, index} <- AshReplicant.Resolver.build_index(sink_config.domains),
+         :ok <- validate_snapshot_mode(opts, index),
          {:ok, coverage} <-
            Coverage.preflight(
              Keyword.get(opts, :connection),
@@ -607,6 +609,27 @@ defmodule AshReplicant do
           erase_generation_key(key, reference)
           result
       end
+    end
+  end
+
+  defp validate_snapshot_mode(opts, index) do
+    case Keyword.get(opts, :snapshot, false) do
+      snapshot when is_list(snapshot) ->
+        if Keyword.get(snapshot, :mode) == :incremental do
+          resources = index |> Map.values() |> Enum.uniq()
+
+          if resources != [] and
+               Enum.all?(resources, &AshReplicant.Resource.Info.replicant_snapshot_provenance!/1) do
+            :ok
+          else
+            {:error, :snapshot_unsupported}
+          end
+        else
+          :ok
+        end
+
+      _other ->
+        :ok
     end
   end
 

@@ -58,7 +58,7 @@ The current 1.0.0 hardening baseline is built and tested with:
 
 - Elixir 1.20.3 on Erlang/OTP 29;
 - Ash `>= 3.31.3 and < 4.0.0-0` and AshPostgres 2.11.x;
-- Replicant `>= 1.2.1 and < 2.0.0-0` (current release-candidate lock 1.2.1) and
+- Replicant `>= 1.2.2 and < 2.0.0-0` (current release-candidate lock 1.2.2) and
   AshOnetime 0.6.x;
 - PostgreSQL with `wal_level=logical` for the live integration gate: CI pins
   PostgreSQL 16, the local gate runs whatever instance `ASH_REPLICANT_TEST_URL`
@@ -315,11 +315,16 @@ fingerprint keys come from
 `:ash_replicant, :snapshot_provenance_keys` and are preflighted at activation.
 
 On a **whole-table (V1) retry** the adapter binds one random attempt to the pipeline
-owner's delivery run, marks unchanged rows instead of re-running the host action, and
-at fenced completion retires only the managed open rows the attempt never saw — per
-tenant scope, through your own retire action. A completion redelivered after its reply
-was lost returns at a permanent replay fence before scanning, so it cannot retire a
-later stream write. Incremental snapshot mode is roadmap S03.
+owner's delivery run. In **incremental mode**, `snapshot_progress/0` arms the durable
+attempt before Replicant can start the reader and stream, returning
+`:backfill_pending` until the first chunk token commits; every chunk commits its exact
+opaque progress, authenticated progress hash, destination effects, membership markers,
+and ordinal cursor together. Streaming inserts/updates during the backfill carry the same
+marker. Both modes mark unchanged rows instead of re-running the host action and retire
+only managed open rows the attempt never saw. Incremental completion stores matching
+progress/completion token hashes as a permanent replay fence before returning, so
+redelivery after a later stream write or an admitted-contract deployment cannot scan,
+retire, or brick streaming.
 
 > **No snapshot callback clears a resource.** The pre-1.0 whole-resource `DELETE` on
 > `first_for_table?` is gone: it repeated every committed host business effect on a
@@ -374,10 +379,11 @@ AshReplicant.start_link(
 - Rows arrive from the source's CDC stream and are upserted into the mirrors.
 - `streaming`, `max_inflight_lag`, `max_command_retries`, and `failover` are passed
   through to Replicant 1.x.
-- `snapshot: false` and Replicant's v1 snapshot (`snapshot: true`) are supported;
-  a V1 retry is physically effect-once for a resource declaring
-  `snapshot_provenance true`. Incremental snapshot configuration is rejected until
-  roadmap S03 adds the durable progress token.
+- `snapshot: false`, Replicant's v1 snapshot (`snapshot: true`), and sink-owned
+  incremental snapshots (`snapshot: [mode: :incremental, chunk_rows: n,
+  max_pending_chunks: n]`) are supported. Incremental activation requires every
+  mapped resource to declare `snapshot_provenance true`; otherwise start fails
+  closed with `:snapshot_unsupported`.
 
 ## Strict source coverage
 
@@ -403,12 +409,11 @@ Each transaction is applied in **one** `Repo.transaction`:
 On failure (schema change, multitenancy error, write fault), the entire transaction
 rolls back. The un-acked WAL re-streams on resume and dedups against the checkpoint.
 
-**Result for committed streaming transactions:** zero physical duplicate effects
-and zero loss across replay, restart, and injected rollback faults. Replicant v1
-snapshot batches are individually atomic, but an incomplete multi-batch snapshot
-restart clears and rebuilds the target and can physically repeat already committed
-batch effects. Roadmap C3 must eliminate those repeats before the stable release
-extends the physical effect-once claim to snapshot restart.
+**Result for committed streaming transactions and provenance-backed V1/incremental
+snapshot retry:** zero repeated host business effects and zero loss across replay,
+restart, and injected rollback faults. Snapshot chunks, provenance, exact incremental
+progress, and completion fences commit under the same source-bound checkpoint lock;
+unchanged retry rows perform bookkeeping only.
 
 ## Destination transaction boundary
 
@@ -474,12 +479,13 @@ the admitted Repo. It must take the private, non-null `operation_key` produced b
 participant scope and replay identity shown above. AshOnetime one-time nonces are
 rejected for WAL replay. Independent commits and external effects are rejected too.
 
-A Replicant v1 snapshot batch is atomic, but an incomplete multi-batch restart can
-physically repeat already committed batch effects. Message (C1) and sink-owned
-batch delivery (C2) are live — `batch_delivery` opts a pipeline into
-`handle_batch/1`, one destination transaction and one watermark write per flushed
-batch (ADR-0016). Incremental snapshot-progress and append-log callbacks are not
-exported yet; their roadmap rows must compose with this same boundary. See
+A Replicant v1 retry and incremental resume are physically effect-once for resources
+declaring `snapshot_provenance true`: fingerprints suppress repeated host actions,
+and incremental progress commits atomically with each bounded chunk. Message (C1),
+sink-owned batch delivery (C2), and incremental progress (C3) are live —
+`batch_delivery` opts a pipeline into `handle_batch/1`, one destination transaction
+and one watermark write per flushed batch (ADR-0016). Append-log delivery is not
+exported yet and must compose with this same boundary. See
 [ADR-0006](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0006-destination-transaction-boundary.md).
 
 ## Multitenancy & Classification

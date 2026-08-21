@@ -424,20 +424,17 @@ defmodule AshReplicant.Coverage do
       declared_sources = relation.columns |> Enum.map(& &1.source) |> MapSet.new()
 
       sink_generated =
-        if Info.history_scd2?(resource) do
-          relation.columns
-          |> Enum.filter(&(&1.target in sink_generated_attribute_atoms(resource)))
-          |> Enum.map(& &1.source)
-          |> MapSet.new()
-        else
-          MapSet.new()
-        end
+        relation.columns
+        |> Enum.filter(&(&1.target in sink_generated_attribute_atoms(resource)))
+        |> Enum.map(& &1.source)
+        |> MapSet.new()
 
       source_mapped = MapSet.difference(declared_sources, sink_generated)
       skips = relation.skips |> MapSet.new()
 
       target_types =
         relation.columns
+        |> Enum.reject(&MapSet.member?(sink_generated, &1.source))
         |> Map.new(&{&1.source, Map.fetch!(relation.types, &1.target)})
 
       facts = %{
@@ -456,9 +453,10 @@ defmodule AshReplicant.Coverage do
 
   @doc """
   The SOURCE-side mapped column set (strings): the upsert reflection's
-  attributes minus declared skips MINUS the SCD2 window/current columns —
-  those are sink-generated on the destination version table, never source
-  columns (their absence from the live source table is not a missing mapping).
+  attributes minus declared skips and destination-only metadata. SCD2 window
+  columns and snapshot-provenance attributes are sink-generated on the target,
+  never source columns (their absence from the live source table is not a
+  missing mapping).
   """
   @spec source_mapped_set(module()) :: MapSet.t(String.t())
   def source_mapped_set(resource) do
@@ -494,20 +492,35 @@ defmodule AshReplicant.Coverage do
     end
   end
 
-  # The SCD2 window/current ATTRIBUTE atoms — sink-generated on the
-  # destination version table, never source columns.
+  # Destination-only ATTRIBUTE atoms: SCD2 window/current columns and the two
+  # protected snapshot-provenance fields. Excluding the provenance fields only
+  # when the resource opts in preserves ordinary source columns with those names.
   defp sink_generated_attribute_atoms(resource) do
-    [
-      elem(Info.replicant_history_valid_from_lsn_attribute(resource), 1),
-      elem(Info.replicant_history_valid_to_lsn_attribute(resource), 1),
-      opt_value(Info.replicant_history_valid_from_timestamp_attribute(resource)),
-      opt_value(Info.replicant_history_valid_to_timestamp_attribute(resource)),
-      opt_value(Info.replicant_history_current_attribute(resource)),
-      # The destination-side SURROGATE primary key (uuid_primary_key) is not a
-      # source column — but ONLY on SCD2 version resources; an SCD1 mirror's
-      # single PK IS its source PK.
-      scd2_surrogate_pk(resource)
-    ]
+    history =
+      if Info.history_scd2?(resource) do
+        [
+          elem(Info.replicant_history_valid_from_lsn_attribute(resource), 1),
+          elem(Info.replicant_history_valid_to_lsn_attribute(resource), 1),
+          opt_value(Info.replicant_history_valid_from_timestamp_attribute(resource)),
+          opt_value(Info.replicant_history_valid_to_timestamp_attribute(resource)),
+          opt_value(Info.replicant_history_current_attribute(resource)),
+          # The destination-side SURROGATE primary key (uuid_primary_key) is not a
+          # source column — but ONLY on SCD2 version resources; an SCD1 mirror's
+          # single PK IS its source PK.
+          scd2_surrogate_pk(resource)
+        ]
+      else
+        []
+      end
+
+    provenance =
+      if Info.replicant_snapshot_provenance!(resource) do
+        [:replica_fingerprint, :replica_seen_attempt]
+      else
+        []
+      end
+
+    (history ++ provenance)
     |> Enum.reject(&is_nil/1)
   rescue
     _ -> []

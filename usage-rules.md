@@ -208,11 +208,11 @@ AshReplicant.start_link(
   containing nonempty `:system_identifier` and `:database` strings. A mismatch
   rejects the session before checkpoint lookup with a value-free structural error.
 - `:go_forward_only` — passed to `Replicant.start_link/1`.
-- `:snapshot` — `false` disables snapshots and `true` selects Replicant's v1
-  snapshot, whose retry is physically effect-once for a resource declaring
-  `snapshot_provenance true` (ADR-0017). Incremental snapshot options are not
-  supported by this adapter until roadmap S03 adds `snapshot_progress/0` and its
-  durable progress token.
+- `:snapshot` — `false` disables snapshots, `true` selects Replicant's v1
+  snapshot, and `[mode: :incremental, chunk_rows: n, max_pending_chunks: n]`
+  selects sink-owned incremental backfill. Both modes are physically effect-once
+  for resources declaring `snapshot_provenance true` (ADR-0017); incremental
+  activation requires every mapped resource to opt in.
 - `:streaming`, `:max_inflight_lag`, `:max_command_retries`, and `:failover` —
   passed through unchanged to Replicant 1.x.
 
@@ -436,18 +436,18 @@ transactional, fail closed on store failure, accept a private non-null string
 supplies carries a per-invocation label (`invocation:`) that the derivation
 REQUIRES; manual minters (tests, replay probes) must pass the label the sink
 mints at that effect site (`:close_prior | :close_current | :open |
-:destroy_prior | :upsert`). AshOnetime one-time nonces
+:destroy_prior | :upsert | :message | :mark_seen | :retire_unseen`). AshOnetime one-time nonces
 are rejected for WAL replay. Independent commits, external effects, opaque stores,
 and incomplete replay identities are rejected.
 
-A Replicant v1 snapshot batch is atomic, but an incomplete multi-batch restart can
-physically repeat already committed batch effects. The v1 target is cleared and
-rebuilt, so final-state convergence is not proof of zero physical repeats. Roadmap
-C3 owns zero-repeat v1 and incremental restart. Message (C1) and sink-owned batch
+V1 retry and incremental resume are physically effect-once for opted-in resources:
+the keyed fingerprint suppresses repeated host actions, while incremental chunks
+commit the exact progress token, row effects, membership, and durable ordinal cursor
+in one checkpoint-locked destination transaction. Message (C1), sink-owned batch
 delivery (C2 — `batch_delivery` routes flushes through `handle_batch/1`, one
-destination transaction and one trailing watermark write per batch) are live;
-incremental snapshot progress and append-log callbacks remain absent until S03
-through C4.
+destination transaction and one trailing watermark write per batch), and
+incremental snapshot progress (C3) are live. Append-log callbacks remain absent
+until C4.
 
 ## Snapshot provenance and retirement (the row contract)
 
@@ -458,11 +458,11 @@ converges. So a snapshot-managed resource stores a keyed fingerprint of the
 values its host action was given, plus a marker for the attempt that last saw
 the row ([ADR-0017](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0017-snapshot-provenance-and-restart.md)).
 
-The **whole-table (V1) retry protocol that reads this contract is live**: one
-checkpoint-owned attempt per delivery run, fingerprint-gated row effects, and
-tenant-scoped retirement at fenced completion (see "How a V1 retry behaves"
-below). Incremental snapshot mode — `snapshot_progress/0` and its progress
-token — remains roadmap S03.
+The **V1 and incremental protocols that read this contract are live**. V1 binds
+one checkpoint-owned attempt per delivery run. Incremental `snapshot_progress/0`
+arms one durable attempt before reader/stream start, persists exact progress and
+the operation-key cursor with every chunk, stamps concurrent stream writes, and
+uses a completion-token hash as a permanent no-rescan fence.
 
 > **Opting in is what buys you retirement.** No snapshot callback clears a
 > resource any more (see the migration note at the end of this section). A
@@ -624,6 +624,47 @@ manifest, code identity, source contract). Resuming under drift fails closed
 with `:snapshot_state_invalid`; so does a tampered or undecodable envelope.
 Under SCD2, retirement CLOSES the unseen open version and never touches closed
 history.
+
+### How incremental resume behaves
+
+Configure Replicant's sink-owned mode only after every mapped resource has the
+row contract above:
+
+```elixir
+AshReplicant.start_link(
+  # sink, connection, publication, source_identity ...
+  go_forward_only: false,
+  snapshot: [mode: :incremental, chunk_rows: 1_000, max_pending_chunks: 4]
+)
+```
+
+1. **Prepare.** Replicant calls `snapshot_progress/0` before it can start the
+   reader or stream. Under the checkpoint lock, absent state mints an `armed`
+   attempt and returns `:backfill_pending`; an armed/active attempt with no first
+   chunk token returns the same marker after restart. Otherwise resume authenticates
+   and returns the exact token already committed. A complete token returns without
+   reactivating membership or re-checking the current admitted contract. Impossible
+   progress/state pairings, incomplete-attempt drift, tamper, or a missing retained
+   key fail closed.
+2. **Chunk.** Each `handle_snapshot/2` chunk reads the active attempt, applies
+   fingerprint-gated rows, advances the durable operation-key ordinal cursor,
+   and stores the exact opaque `context.progress` plus its authenticated hash in
+   the same destination transaction. A fault commits none of those effects.
+3. **Concurrent stream.** Every streamed insert/update committed while the
+   attempt is armed or active runs the normal host action, then stamps its new
+   fingerprint and the same membership marker before the stream watermark
+   advances. Deletes remove or close normally. Replicant 1.2.2's collision
+   window makes the later stream image win.
+4. **Complete.** Replicant sends one empty `handle_snapshot/2` callback with
+   `backfill_complete?: true`. Completion retires unseen open rows, stores the
+   exact complete token and matching progress/completion hashes, and does not alter
+   the stream watermark. Redelivery of that token returns before any scan,
+   including after a later stream write or admitted-contract deployment.
+
+The fetched Replicant 1.2.2 contract bounds keyed and keyless contention at
+three discarded table attempts, distinguishes reconnect from contention, and
+applies pending-chunk backpressure. AshReplicant pins those behaviors with
+black-box tests rather than checking only for module/function presence.
 
 ### Migration path
 
@@ -792,7 +833,8 @@ halts — do not TOAST your tenant column).
   dedups. Whole-table snapshot RETRY is effect-once by a separate mechanism —
   the checkpoint-owned attempt and the row fingerprint (see "Snapshot provenance
   and retirement"), which is what an LSN watermark cannot give a COPY-based
-  snapshot; incremental snapshot progress remains S03.
+  snapshot. Incremental chunks use the same row fingerprint plus atomic durable
+  progress and stream membership stamping.
 
 ## Relationship to `replicant`
 

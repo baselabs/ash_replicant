@@ -404,7 +404,7 @@ defmodule AshReplicant.StartLinkTest do
     end)
   end
 
-  test "incremental snapshot remains guarded and rejected starts leave no cache" do
+  test "incremental snapshot rejects a sink without complete provenance coverage" do
     opts =
       start_opts(
         go_forward_only: false,
@@ -420,7 +420,8 @@ defmodule AshReplicant.StartLinkTest do
     # supports_batch?/1 start gate for ANY caller that opts in.
     assert function_exported?(ValidSink, :handle_batch, 1)
     refute function_exported?(ValidSink, :handle_message, 2)
-    refute function_exported?(ValidSink, :snapshot_progress, 0)
+    assert function_exported?(ValidSink, :snapshot_progress, 0)
+    assert Replicant.Sink.supports_incremental_snapshot?(ValidSink)
   end
 
   test "a foreign effective dynamic Repo is rejected before activation state" do
@@ -650,7 +651,8 @@ defmodule AshReplicant.StartLinkTest do
       sink_kind: 0,
       handle_schema_change: 2,
       handle_snapshot: 2,
-      handle_snapshot_complete: 1
+      handle_snapshot_complete: 1,
+      snapshot_progress: 0
     ]
   end
 
@@ -663,7 +665,8 @@ defmodule AshReplicant.StartLinkTest do
       {:sink_kind, 0} => "def sink_kind, do: :append_log",
       {:handle_schema_change, 2} => "def handle_schema_change(_change, _context), do: :ok",
       {:handle_snapshot, 2} => "def handle_snapshot(_changes, _context), do: :ok",
-      {:handle_snapshot_complete, 1} => "def handle_snapshot_complete(lsn), do: {:ok, lsn}"
+      {:handle_snapshot_complete, 1} => "def handle_snapshot_complete(lsn), do: {:ok, lsn}",
+      {:snapshot_progress, 0} => "def snapshot_progress, do: {:ok, nil}"
     }
   end
 
