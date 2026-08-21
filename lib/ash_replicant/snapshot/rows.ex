@@ -58,6 +58,43 @@ defmodule AshReplicant.Snapshot.Rows do
     :ok
   end
 
+  @doc "Stamp a streamed insert/update with the active incremental membership marker."
+  @spec mark_stream_change!(map(), Replicant.Change.t(), map()) :: :ok
+  def mark_stream_change!(config, %Replicant.Change{op: op} = change, attempt)
+      when op in [:insert, :update] do
+    case Resolver.lookup(config.resolver_index, change.schema, change.table) do
+      nil ->
+        :ok
+
+      resource ->
+        mark_stream_resource!(config, resource, change, attempt)
+    end
+  end
+
+  def mark_stream_change!(_config, _change, _attempt), do: :ok
+
+  defp mark_stream_resource!(config, resource, change, attempt) do
+    if Info.replicant_snapshot_provenance!(resource) do
+      reflection = Resolver.upsert_reflection(resource)
+      tenant = Resolver.resolve_tenant!(resource, change.record, :snapshot)
+      {inputs, _upsert_fields} = Resolver.upsert_input(reflection, change.record)
+      lookup = %{record: change.record, inputs: inputs}
+      fingerprint = fingerprint!(resource, tenant, inputs, attempt)
+
+      mark!(
+        config,
+        resource,
+        lookup,
+        tenant,
+        change,
+        attempt,
+        fingerprint
+      )
+    else
+      :ok
+    end
+  end
+
   defp apply_row!(config, resource, reflection, change, snapshot_lsn, ordinal, attempt) do
     change = %{change | op: :insert, commit_lsn: snapshot_lsn, ordinal: ordinal}
     record = change.record
@@ -65,11 +102,7 @@ defmodule AshReplicant.Snapshot.Rows do
     {inputs, _upsert_fields} = Resolver.upsert_input(reflection, record)
     lookup = %{record: record, inputs: inputs}
 
-    fingerprint =
-      case Provenance.fingerprint(resource, tenant, inputs, attempt.key_version, attempt.keys) do
-        {:ok, fingerprint} -> fingerprint
-        {:error, _reason} -> raise provenance_unavailable(resource)
-      end
+    fingerprint = fingerprint!(resource, tenant, inputs, attempt)
 
     case verdict(config, resource, lookup, tenant, snapshot_lsn, attempt) do
       :match ->
@@ -80,7 +113,6 @@ defmodule AshReplicant.Snapshot.Rows do
           lookup,
           tenant,
           change,
-          snapshot_lsn,
           attempt,
           fingerprint
         )
@@ -94,7 +126,6 @@ defmodule AshReplicant.Snapshot.Rows do
           lookup,
           tenant,
           change,
-          snapshot_lsn,
           attempt,
           fingerprint
         )
@@ -107,21 +138,32 @@ defmodule AshReplicant.Snapshot.Rows do
   # An absent target, or one carrying no fingerprint at all, is `:changed`: the
   # host action has to run. Only a stored fingerprint that MATCHES may skip it.
   defp verdict(config, resource, lookup, tenant, snapshot_lsn, attempt) do
-    case current_target(config, resource, lookup, tenant, snapshot_lsn) do
+    case current_target(config, resource, lookup, tenant) do
       nil ->
         :changed
 
-      %{replica_fingerprint: nil} ->
+      %{replica_fingerprint: nil} = target ->
+        ensure_snapshot_order!(resource, target, snapshot_lsn)
         :changed
 
-      %{replica_fingerprint: stored} ->
-        Provenance.compare(stored, resource, tenant, lookup.inputs, attempt.keys)
+      %{replica_fingerprint: stored} = target ->
+        case Provenance.compare(stored, resource, tenant, lookup.inputs, attempt.keys) do
+          :match ->
+            :match
+
+          :changed ->
+            ensure_snapshot_order!(resource, target, snapshot_lsn)
+            :changed
+
+          {:error, _reason} = error ->
+            error
+        end
     end
   end
 
-  defp current_target(config, resource, lookup, tenant, snapshot_lsn) do
+  defp current_target(config, resource, lookup, tenant) do
     config
-    |> target_query(resource, lookup, snapshot_lsn)
+    |> target_query(resource, lookup)
     |> Ash.read_one!(tenant: tenant, authorize?: config.authorize?)
   rescue
     e in AshReplicant.Error -> reraise e, __STACKTRACE__
@@ -130,13 +172,19 @@ defmodule AshReplicant.Snapshot.Rows do
 
   # SCD1 targets the mirrored row by the SAME configured identity used by its
   # upsert (the PK only when no alternate identity is declared); SCD2 targets
-  # the CURRENT OPEN version by business key. `inclusive?: true` is required for
-  # the post-apply mark: the version this run just opened carries
-  # `valid_from_lsn == lsn`, and the exclusive predicate would miss it.
-  defp target_query(config, resource, lookup, snapshot_lsn) do
+  # the CURRENT OPEN version by business key regardless of its opening LSN.
+  #
+  # An incremental stream change may commit before this table's snapshot window
+  # opens. The later snapshot read then contains that already-current source row.
+  # Restricting the lookup to `valid_from_lsn <= snapshot_lsn` misses the newer
+  # destination version and tries to open a second current version at the floor.
+  # Comparing the actual current version lets an identical row coalesce through
+  # provenance. A mismatch against a version newer than the snapshot floor is
+  # rejected explicitly before any host close/open action runs.
+  defp target_query(config, resource, lookup) do
     query =
       if Info.history_scd2?(resource) do
-        Resolver.open_version_query(resource, lookup.record, snapshot_lsn, inclusive?: true)
+        Resolver.current_open_version_query(resource, lookup.record)
       else
         case Resolver.upsert_lookup_query(resource, lookup.inputs) do
           {:ok, query} -> query
@@ -145,6 +193,27 @@ defmodule AshReplicant.Snapshot.Rows do
       end
 
     Ash.Query.set_context(query, Context.action_context(config))
+  end
+
+  defp ensure_snapshot_order!(resource, target, snapshot_lsn) do
+    if Info.history_scd2?(resource) do
+      from_lsn = Info.replicant_history_valid_from_lsn_attribute!(resource)
+
+      case Map.get(target, from_lsn) do
+        current_lsn
+        when is_integer(current_lsn) and current_lsn >= 0 and current_lsn <= snapshot_lsn ->
+          :ok
+
+        _newer_or_invalid ->
+          raise Error.exception(
+                  reason: :snapshot_state_invalid,
+                  resource: resource,
+                  op: :snapshot
+                )
+      end
+    else
+      :ok
+    end
   end
 
   # The ONE write path to the two protected attributes. The values ride the
@@ -160,7 +229,6 @@ defmodule AshReplicant.Snapshot.Rows do
          lookup,
          tenant,
          change,
-         snapshot_lsn,
          attempt,
          fingerprint
        ) do
@@ -177,7 +245,7 @@ defmodule AshReplicant.Snapshot.Rows do
 
     result =
       config
-      |> target_query(resource, lookup, snapshot_lsn)
+      |> target_query(resource, lookup)
       |> Ash.Query.set_context(context)
       |> Ash.bulk_update!(action, %{},
         strategy: [:atomic, :stream],
@@ -213,5 +281,12 @@ defmodule AshReplicant.Snapshot.Rows do
       resource: resource,
       op: :snapshot
     )
+  end
+
+  defp fingerprint!(resource, tenant, inputs, attempt) do
+    case Provenance.fingerprint(resource, tenant, inputs, attempt.key_version, attempt.keys) do
+      {:ok, fingerprint} -> fingerprint
+      {:error, _reason} -> raise provenance_unavailable(resource)
+    end
   end
 end

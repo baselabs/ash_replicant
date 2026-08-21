@@ -6,7 +6,7 @@ defmodule AshReplicant.ReleaseContract do
   @immutable_action ~r/\A[^@\s]+@[0-9a-f]{40}\z/
   @postgres_image "postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b"
   @ash_requirement ">= 3.31.3 and < 4.0.0-0"
-  @replicant_requirement ">= 1.2.1 and < 2.0.0-0"
+  @replicant_requirement ">= 1.2.2 and < 2.0.0-0"
   @checkout "actions/checkout@11d5960a326750d5838078e36cf38b85af677262"
   @setup_beam "erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236"
   @cache "actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830"
@@ -56,7 +56,7 @@ defmodule AshReplicant.ReleaseContract do
 
   expected = %{
     ash: ">= 3.31.3 and < 4.0.0-0",
-    replicant: ">= 1.2.1 and < 2.0.0-0"
+    replicant: ">= 1.2.2 and < 2.0.0-0"
   }
 
   Enum.each(expected, fn {dependency, requirement} ->
@@ -111,9 +111,9 @@ defmodule AshReplicant.ReleaseContract do
       "ash_selector" => "3.31.3",
       "ash_unlock" => true,
       "ash_requirement" => "== 3.31.3",
-      "replicant_selector" => "1.2.1",
+      "replicant_selector" => "1.2.2",
       "replicant_unlock" => true,
-      "replicant_requirement" => "== 1.2.1"
+      "replicant_requirement" => "== 1.2.2"
     },
     %{
       "label" => "current-lock",
@@ -221,19 +221,19 @@ defmodule AshReplicant.ReleaseContract do
      [
        "- Elixir 1.20.3 on Erlang/OTP 29;",
        "- Ash `#{@ash_requirement}` and AshPostgres 2.11.x;",
-       "- Replicant `#{@replicant_requirement}` (current release-candidate lock 1.2.1)"
+       "- Replicant `#{@replicant_requirement}` (current release-candidate lock 1.2.2)"
      ]},
     {"CONTRIBUTING.md", "## Prerequisites",
      [
        "- **Elixir 1.20.3** and **Erlang/OTP 29**",
        "- Ash `#{@ash_requirement}`; selector-free development uses this public range",
-       "- Replicant `#{@replicant_requirement}` from Hex; the release-candidate lock is 1.2.1."
+       "- Replicant `#{@replicant_requirement}` from Hex; the release-candidate lock is 1.2.2."
      ]},
     {"AGENTS.md", "## Development workflow",
      [
        "The supported release foundation is Elixir 1.20.3 on Erlang/OTP 29 with Ash\n" <>
          "`#{@ash_requirement}` and Replicant\n" <>
-         "`#{@replicant_requirement}` (current release-candidate lock 1.2.1)."
+         "`#{@replicant_requirement}` (current release-candidate lock 1.2.2)."
      ]}
   ]
 
@@ -243,14 +243,14 @@ defmodule AshReplicant.ReleaseContract do
        "Every admitted destination resource uses the sink's literal AshPostgres Repo and the same effective dynamic Repo.",
        "Declarations are trusted metadata; they do not prove an arbitrary Elixir body.",
        "AshOnetime one-time nonces are rejected for WAL replay.",
-       "A Replicant v1 snapshot batch is atomic, but an incomplete multi-batch restart can physically repeat already committed batch effects."
+       "A Replicant v1 retry and incremental resume are physically effect-once for resources declaring `snapshot_provenance true`:"
      ]},
     {"usage-rules.md", "## Destination transaction boundary",
      [
        "Every admitted destination resource uses the sink's literal AshPostgres Repo and the same effective dynamic Repo.",
        "Declarations are trusted metadata; they do not prove an arbitrary Elixir body.",
        "AshOnetime one-time nonces are rejected for WAL replay.",
-       "A Replicant v1 snapshot batch is atomic, but an incomplete multi-batch restart can physically repeat already committed batch effects."
+       "V1 retry and incremental resume are physically effect-once for opted-in resources:"
      ]},
     {"AGENTS.md", "## Critical rules",
      [
@@ -320,17 +320,26 @@ defmodule AshReplicant.ReleaseContract do
         |> String.split("\n")
         |> Enum.with_index()
         |> Enum.flat_map(fn {line, ix} ->
-          if String.contains?(line, "apply_ledger"), do: ["#{path}:#{ix + 1}"], else: []
+          if String.contains?(line, "apply_ledger"),
+            do: [{Path.expand(path), ix + 1, String.trim(line)}],
+            else: []
         end)
       end)
 
-    sink_lines = Path.join(["lib", "ash_replicant", "sink.ex"])
+    sink_path = root |> Path.join(Path.join(["lib", "ash_replicant", "sink.ex"])) |> Path.expand()
+
+    allowed_hits =
+      MapSet.new([
+        {sink_path,
+         "# removed `apply_ledger`) must surface as a compile-time failure on the host,"},
+        {sink_path, "\"(apply_ledger was removed; a removed option must not silently no-op)\""}
+      ])
+
+    actual_hits = MapSet.new(ledger_hits, fn {path, _line, content} -> {path, content} end)
 
     assert(
-      length(ledger_hits) == 2 and
-        Enum.all?(ledger_hits, &String.contains?(&1, sink_lines)) and
-        Enum.sort(Enum.map(ledger_hits, &Path.basename(&1))) == ["sink.ex:110", "sink.ex:91"],
-      "apply_ledger must appear ONLY as the two allowlisted fail-closed lines (91 and 110) of lib/ash_replicant/sink.ex, found: #{inspect(ledger_hits)}"
+      length(ledger_hits) == 2 and actual_hits == allowed_hits,
+      "apply_ledger must appear ONLY in the two exact fail-closed lines of lib/ash_replicant/sink.ex, found: #{inspect(ledger_hits)}"
     )
 
     secret_hits =
@@ -564,7 +573,7 @@ defmodule AshReplicant.ReleaseContract do
       "Replicant checkpoint/slot contract is incomplete"
     )
 
-    if lock_version == "1.2.1" do
+    if lock_version == "1.2.2" do
       assert_replicant_fixed_floor_contract(root, connection_source)
     end
 
@@ -582,6 +591,8 @@ defmodule AshReplicant.ReleaseContract do
 
     incremental_source =
       read_dependency_source!(root, "lib/replicant/snapshotter/incremental.ex")
+
+    sink_source = read_dependency_source!(root, "lib/replicant/sink.ex")
 
     assert(
       String.contains?(connection_source, "reason: :checkpoint_unknown"),
@@ -607,12 +618,22 @@ defmodule AshReplicant.ReleaseContract do
         String.contains?(incremental_source, "attempt >= @max_table_attempts"),
       "Replicant keyed-contention contract is incomplete"
     )
+
+    assert(
+      String.contains?(sink_source, "binary() | nil | :backfill_pending") and
+        String.contains?(connection_source, "def classify_progress({:ok, :backfill_pending})") and
+        String.contains?(
+          incremental_source,
+          "def classify_durable_progress(:backfill_pending, :sink_owned)"
+        ),
+      "Replicant pending-backfill contract is incomplete"
+    )
   end
 
   defp expected_replicant_lock_version(lock) do
     case System.get_env("ASH_REPLICANT_REPLICANT_VERSION") do
       value when value in [nil, ""] ->
-        "1.2.1"
+        "1.2.2"
 
       "latest" ->
         lock

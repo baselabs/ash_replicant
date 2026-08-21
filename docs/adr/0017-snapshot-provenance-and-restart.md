@@ -30,10 +30,13 @@ durable progress token. Re-running its retirement scan after a later stream
 write would misclassify that newer row as unseen. The completion result therefore
 needs a durable replay fence, not only an idempotent final state.
 
-Replicant 1.2.1 is the accepted transport floor for this protocol. It bounds
-both PK-less and keyed drop-cap contention at three discarded table attempts and
-halts `:snapshot_table_contended`; AshReplicant must prove that fetched behavior
-as a black box rather than infer it from module or function presence.
+Replicant 1.2.2 is the accepted transport floor for this protocol. Replicant
+1.2.1 bounds both PK-less and keyed drop-cap contention at three discarded table
+attempts and halts `:snapshot_table_contended`; 1.2.2 additionally represents a
+durably armed backfill before its first chunk as `:backfill_pending` and resumes
+the reader from the live slot origin after a crash in that window. AshReplicant
+must prove those fetched behaviors as a black box rather than infer them from
+module or function presence.
 
 ## Decision
 
@@ -50,9 +53,11 @@ strictly decoded `snapshot_state` envelope with these logical fields:
 - a V1-only delivery-run id minted for each `PipelineOwner` activation;
 - the source and destination contract digest, including the admitted action
   graph and code identity;
-- the provenance HMAC key id; and
+- the provenance HMAC key id;
+- the next incremental operation-key ordinal, advanced with durable progress;
+- the hash of the separately stored in-flight progress token; and
 - the completed progress-token hash for incremental mode or completed LSN for
-  V1 mode.
+  V1 mode. A complete incremental state requires both token hashes to match.
 
 Attempt ids, delivery-run ids, progress, token hashes, and tenant values are
 data-plane values. They never enter errors, logs, or telemetry metadata.
@@ -61,11 +66,12 @@ Incremental `snapshot_progress/0` runs a short destination transaction and locks
 the checkpoint before Replicant can start the reader and stream:
 
 - absent progress, checkpoint, and state creates an armed attempt and returns
-  `nil`;
-- a matching armed or active attempt returns its exact durable progress and is
-  reused across transport or owner restart;
-- a matching complete attempt returns its exact complete progress without
-  reactivating membership;
+  `:backfill_pending`;
+- a matching armed or active attempt with no first token returns
+  `:backfill_pending`; otherwise it authenticates and returns its exact durable
+  progress. Both forms reuse the attempt across transport or owner restart;
+- a matching complete attempt authenticates and returns its exact complete
+  progress without reactivating membership or re-checking the current contract;
 - absent progress with a committed stream checkpoint is a bootstrapped-elsewhere
   path and does not arm a snapshot; and
 - an undecodable, impossible, or contract-mismatched pairing fails closed.
@@ -117,7 +123,20 @@ destination transaction:
 3. if the stored fingerprint matches, invoke only the private mark action;
 4. otherwise invoke the normal host business action and stamp fingerprint plus
    membership internally; and
-5. persist the exact incremental progress token with the row effects.
+5. persist the exact incremental progress token and its authenticated hash with
+   the row effects.
+
+For SCD2, "current open target" is not restricted to a version opened at or
+below the snapshot floor. A stream change can commit before that table's
+snapshot window opens, after which the snapshot reader sees the already-current
+source row. The sink compares that actual current destination version: a
+matching fingerprint marks it seen without opening another version; a mismatch
+fails closed rather than replacing a later version with an earlier one.
+
+The state envelope advances one durable `next_ordinal` by the number of rows in
+the committed chunk. This extends ADR-0012's collision-free snapshot-run
+ordinal axis across owner/transport restart; a rolled-back chunk advances
+neither progress nor the cursor.
 
 No snapshot callback clears a whole resource. `first_for_table?` never
 authorizes deletion or starts membership.
@@ -133,7 +152,8 @@ checkpoint advances atomically with those effects.
 
 Completion locks the checkpoint and first checks its permanent replay fence:
 
-- incremental completion already recorded with the same progress-token hash is
+- incremental completion already recorded with matching authenticated progress
+  and completion-token hashes is
   a no-op before any row scan; and
 - V1 completion already recorded for the same delivery run and LSN is likewise
   a no-op.
@@ -168,7 +188,9 @@ An incomplete attempt is bound to the source contract, destination manifest,
 admitted code identity, provenance-key contract, and Replicant artifact
 contract. Resume under drift fails closed. Explicit operator abandonment,
 migration, or reset is required; reconnection never guesses that an incompatible
-attempt is safe.
+attempt is safe. A completed attempt is a permanent replay fence, not an active
+contract: deployment or admitted manifest drift does not invalidate it, brick
+streaming, or authorize another retirement scan.
 
 The supported completion size must be measured. If one transaction cannot meet
 the declared bound, the replacement is a durable retirement cursor whose
@@ -213,8 +235,9 @@ claim an unmeasured bound.
   path.
 - Cross-node checkpoint-lock races and post-completion stream ordering are
   exercised.
-- A fetched Replicant 1.2.1 black box proves collision ordering and keyed
-  contention exhaustion.
+- A fetched Replicant 1.2.2 black box proves collision ordering, keyed
+  contention exhaustion, and crash recovery from the slot-created/pre-reader
+  pending window.
 - Mutation tests remove fingerprint comparison, stream marker stamping,
   checkpoint locking, completion replay fencing, tenant scoping, and protected
   input enforcement and observe the named tests go red.

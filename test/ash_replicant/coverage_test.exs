@@ -331,6 +331,13 @@ defmodule AshReplicant.CoverageTest do
     end
   end
 
+  describe "source_mapped_set/1 — destination-only snapshot metadata" do
+    test "provenance attributes are never classified as source columns" do
+      assert Coverage.source_mapped_set(AshReplicant.Test.SnapOrder) ==
+               MapSet.new(["id", "note"])
+    end
+  end
+
   describe "SQL builders" do
     test "the identity probe is version-conditional in ONE statement" do
       sql = Coverage.sql_identity_probe()

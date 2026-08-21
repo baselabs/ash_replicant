@@ -143,8 +143,8 @@ defmodule AshReplicant.Checkpoint do
           allow_nil? true
         end
 
-        # The exact opaque Replicant incremental progress token. Still inert:
-        # incremental mode lands with `snapshot_progress/0` (roadmap C3, S03).
+        # The exact opaque Replicant incremental progress token, committed with
+        # each chunk's destination effects and snapshot-state cursor.
         attribute :snapshot_progress, :binary do
           allow_nil? true
         end
@@ -181,6 +181,7 @@ defmodule AshReplicant.Checkpoint do
             :publication_contract,
             :publication_fingerprint,
             :commit_lsn,
+            :snapshot_progress,
             :snapshot_state
           ]
         end

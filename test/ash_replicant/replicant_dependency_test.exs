@@ -30,12 +30,11 @@ defmodule AshReplicant.ReplicantDependencyTest do
     assert function_exported?(Replicant.Sink, :notify_slot_origin, 3)
 
     version = Application.spec(:replicant, :vsn) |> List.to_string()
-    assert Version.match?(version, ">= 1.2.1 and < 2.0.0-0")
-
-    if version == "1.2.1" do
-      assert Code.ensure_loaded?(Incremental)
-      assert function_exported?(Incremental, :keyed_retry_decision, 3)
-    end
+    assert Version.match?(version, ">= 1.2.2 and < 2.0.0-0")
+    assert Code.ensure_loaded?(Incremental)
+    assert function_exported?(Incremental, :keyed_retry_decision, 3)
+    assert Replicant.SnapshotProgress.pending?(:backfill_pending)
+    refute Replicant.SnapshotProgress.pending?(%Replicant.SnapshotProgress{complete?: true})
   end
 
   test "the fetched slot-origin contract is typed and fail-closed" do
@@ -78,13 +77,7 @@ defmodule AshReplicant.ReplicantDependencyTest do
   end
 
   test "the fetched keyed snapshot contract exhausts contention without charging reconnects" do
-    version = Application.spec(:replicant, :vsn) |> List.to_string()
-
-    if version != "1.2.1" do
-      assert Version.match?(version, "> 1.2.1 and < 2.0.0-0")
-    else
-      assert_keyed_contention_contract()
-    end
+    assert_keyed_contention_contract()
   end
 
   defp assert_keyed_contention_contract do

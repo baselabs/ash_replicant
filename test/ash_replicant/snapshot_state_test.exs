@@ -15,11 +15,50 @@ defmodule AshReplicant.SnapshotStateTest do
         delivery_run: :binary.copy(<<9>>, 32),
         contract_digest: :binary.copy(<<3>>, 32),
         key_version: 1,
+        progress_token_hash: nil,
         completed_lsn: nil
       },
       overrides
     )
   end
+
+  defp incremental(overrides) do
+    Map.merge(
+      %State{
+        mode: :incremental,
+        status: :armed,
+        attempt: :binary.copy(<<8>>, 32),
+        delivery_run: "",
+        contract_digest: :binary.copy(<<4>>, 32),
+        key_version: 1,
+        next_ordinal: 0,
+        progress_token_hash: nil,
+        completed_lsn: nil,
+        completed_token_hash: nil
+      },
+      overrides
+    )
+  end
+
+  defp legacy_v1(state) do
+    completed_lsn = state.completed_lsn || 0
+    completed_flag = if(is_nil(state.completed_lsn), do: 0, else: 1)
+
+    body =
+      IO.iodata_to_binary([
+        <<1::8, 2::8>>,
+        sized(state.attempt),
+        sized(state.delivery_run),
+        sized(state.contract_digest),
+        <<state.key_version::32, completed_flag::8, completed_lsn::64>>
+      ])
+
+    framed = State.magic() <> <<1::8>> <> body
+    key = @keys |> Map.new() |> Map.fetch!(state.key_version)
+    framed <> :crypto.mac(:hmac, :sha256, key, framed)
+  end
+
+  defp sized(value), do: <<byte_size(value)::8>> <> value
 
   describe "encode/decode round trip" do
     test "an active V1 attempt round-trips under its own key version" do
@@ -37,12 +76,45 @@ defmodule AshReplicant.SnapshotStateTest do
       assert {:ok, ^state} = State.decode(encoded, @keys)
     end
 
+    test "an incremental attempt carries a token-hash completion fence" do
+      token_hash = :crypto.hash(:sha256, "opaque-progress-token")
+
+      state =
+        incremental(%{
+          status: :complete,
+          progress_token_hash: token_hash,
+          completed_token_hash: token_hash
+        })
+
+      assert {:ok, encoded} = State.encode(state, @keys)
+      assert {:ok, ^state} = State.decode(encoded, @keys)
+    end
+
+    test "an active incremental attempt authenticates its separately stored progress token" do
+      token_hash = :crypto.hash(:sha256, "opaque-progress-token")
+      state = incremental(%{status: :active, progress_token_hash: token_hash})
+
+      assert {:ok, encoded} = State.encode(state, @keys)
+      assert {:ok, ^state} = State.decode(encoded, @keys)
+    end
+
     test "a row minted under a RETAINED key still decodes after rotation" do
       state = v1(%{key_version: 1})
       assert {:ok, encoded} = State.encode(state, @keys)
 
       # Rotation adds v2 and retains v1: the envelope names v1, so it verifies.
       assert {:ok, ^state} = State.decode(encoded, @keys)
+    end
+
+    test "a legacy version-1 V1 envelope decodes with the new fields absent" do
+      encoded = legacy_v1(v1())
+
+      assert {:ok, decoded} = State.decode(encoded, @keys)
+      assert decoded.mode == :v1
+      assert decoded.status == :active
+      assert is_nil(decoded.next_ordinal)
+      assert is_nil(decoded.progress_token_hash)
+      assert is_nil(decoded.completed_token_hash)
     end
 
     test "encoding under an unknown key version fails closed" do
@@ -132,6 +204,35 @@ defmodule AshReplicant.SnapshotStateTest do
       assert {:error, :undecodable} =
                State.encode(v1(%{status: :complete, completed_lsn: -1}), @keys)
     end
+
+    test "incremental completion hashes are symmetric and only complete state carries the fence" do
+      token_hash = :crypto.hash(:sha256, "opaque-progress-token")
+
+      assert {:error, :undecodable} =
+               State.encode(
+                 incremental(%{status: :armed, progress_token_hash: token_hash}),
+                 @keys
+               )
+
+      assert {:error, :undecodable} =
+               State.encode(
+                 incremental(%{status: :active, completed_token_hash: token_hash}),
+                 @keys
+               )
+
+      assert {:error, :undecodable} =
+               State.encode(incremental(%{status: :complete, completed_token_hash: nil}), @keys)
+
+      assert {:error, :undecodable} =
+               State.encode(
+                 incremental(%{
+                   status: :complete,
+                   progress_token_hash: token_hash,
+                   completed_token_hash: :crypto.hash(:sha256, "different-token")
+                 }),
+                 @keys
+               )
+    end
   end
 
   describe "mint_v1/3" do
@@ -147,11 +248,45 @@ defmodule AshReplicant.SnapshotStateTest do
       assert a.status == :active
       assert a.delivery_run == run
       assert a.contract_digest == digest
+      assert is_nil(a.progress_token_hash)
       assert is_nil(a.completed_lsn)
 
       # Two mints for the SAME run and consistent point still differ: the
       # attempt is random, never derived from the LSN.
       refute a.attempt == b.attempt
+    end
+  end
+
+  describe "mint_incremental/2" do
+    test "mints a durable armed attempt without a V1 delivery run" do
+      digest = :binary.copy(<<2>>, 32)
+
+      a = State.mint_incremental(digest, 1)
+      b = State.mint_incremental(digest, 1)
+
+      assert byte_size(a.attempt) == 32
+      assert a.mode == :incremental
+      assert a.status == :armed
+      assert a.delivery_run == ""
+      assert a.contract_digest == digest
+      assert a.next_ordinal == 0
+      assert is_nil(a.progress_token_hash)
+      assert is_nil(a.completed_lsn)
+      assert is_nil(a.completed_token_hash)
+      refute a.attempt == b.attempt
+    end
+  end
+
+  describe "ordinal invariants" do
+    test "incremental state requires an unsigned 64-bit ordinal" do
+      for invalid <- [nil, -1, 0x1_0000_0000_0000_0000] do
+        assert {:error, :undecodable} =
+                 State.encode(incremental(%{next_ordinal: invalid}), @keys)
+      end
+    end
+
+    test "V1 state rejects any ordinal" do
+      assert {:error, :undecodable} = State.encode(v1(%{next_ordinal: 0}), @keys)
     end
   end
 

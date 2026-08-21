@@ -197,7 +197,7 @@ defmodule AshReplicant.ActionContractFreezeTest do
     end
   end
 
-  describe "row: append/message/batch (message PRESENT-when-configured since C1; batch PRESENT since C2; snapshot/append ABSENT until C3/C4)" do
+  describe "row: append/message/batch/progress (message conditional; batch/progress present; append absent)" do
     test "the generated sink exposes handle_message/2 ONLY when a routing surface is declared" do
       sink = DestinationFixtures.Sink
 
@@ -220,7 +220,7 @@ defmodule AshReplicant.ActionContractFreezeTest do
       for sink <- [DestinationFixtures.Sink, AshReplicant.Test.Messages.Sink] do
         assert Code.ensure_loaded?(sink)
         assert function_exported?(sink, :handle_batch, 1)
-        refute function_exported?(sink, :snapshot_progress, 0)
+        assert function_exported?(sink, :snapshot_progress, 0)
         refute function_exported?(sink, :append, 2)
       end
     end

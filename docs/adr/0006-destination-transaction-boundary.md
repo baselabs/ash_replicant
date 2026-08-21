@@ -95,10 +95,10 @@ also not unique when one transaction contains several effects.
 - Append-only effect observers, callback sequencing, and fault switches are
   compiled from test configuration only. No
   production `apply_ledger` API or table participates in the guarantee.
-- The currently exported delivery callbacks cover streaming transactions and
-  Replicant v1 snapshot batches/handoff. Message actions, sink-owned transaction
-  batches, incremental snapshot progress, and append-log delivery remain absent
-  until roadmap C1 through C4 compose their own participants with this boundary.
+- The exported delivery callbacks cover streaming transactions, Replicant v1
+  and incremental snapshots, logical messages, and sink-owned transaction
+  batches. Each later capability composed its participants with this boundary;
+  append-log delivery remains absent until roadmap C4.
 
 ## Consequences
 
@@ -112,10 +112,10 @@ also not unique when one transaction contains several effects.
   dishonest arbitrary provider remains outside what Elixir reflection can prove;
   hosts must not conceal raw SQL, external calls, asynchronous work, or foreign
   Repo use behind a declaration.
-- A Replicant v1 snapshot batch is atomic, but an incomplete multi-batch snapshot
-  restart can physically repeat already committed batch effects before the target
-  is cleared and rebuilt. Roadmap C3 must prove zero physical repeats for both v1
-  and incremental restart before the stable release claim can include snapshots.
+- V1 and incremental snapshot effects, provenance, progress, retirement, and the
+  source-bound checkpoint share this admitted transaction boundary. ADR-0017's
+  permanent completion fences and durable attempt state prevent restart from
+  repeating already committed host business effects.
 - The checkpoint row is still keyed by the existing schema until B2 binds the
   admitted source identity and canonical manifest durably. B5, B6, and C1 through
   C4 retain their classified-data, host-action, message, batch, snapshot, and

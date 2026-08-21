@@ -36,7 +36,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
   expected = %{
     ash: ">= 3.31.3 and < 4.0.0-0",
-    replicant: ">= 1.2.1 and < 2.0.0-0"
+    replicant: ">= 1.2.2 and < 2.0.0-0"
   }
 
   Enum.each(expected, fn {dependency, requirement} ->
@@ -121,19 +121,19 @@ defmodule AshReplicant.ReleaseContractSelfTest do
      [
        "- Elixir 1.20.3 on Erlang/OTP 29;",
        "- Ash `>= 3.31.3 and < 4.0.0-0` and AshPostgres 2.11.x;",
-       "- Replicant `>= 1.2.1 and < 2.0.0-0` (current release-candidate lock 1.2.1)"
+       "- Replicant `>= 1.2.2 and < 2.0.0-0` (current release-candidate lock 1.2.2)"
      ]},
     {"CONTRIBUTING.md", "## Prerequisites",
      [
        "- **Elixir 1.20.3** and **Erlang/OTP 29**",
        "- Ash `>= 3.31.3 and < 4.0.0-0`; selector-free development uses this public range",
-       "- Replicant `>= 1.2.1 and < 2.0.0-0` from Hex; the release-candidate lock is 1.2.1."
+       "- Replicant `>= 1.2.2 and < 2.0.0-0` from Hex; the release-candidate lock is 1.2.2."
      ]},
     {"AGENTS.md", "## Development workflow",
      [
        "The supported release foundation is Elixir 1.20.3 on Erlang/OTP 29 with Ash\n" <>
          "`>= 3.31.3 and < 4.0.0-0` and Replicant\n" <>
-         "`>= 1.2.1 and < 2.0.0-0` (current release-candidate lock 1.2.1)."
+         "`>= 1.2.2 and < 2.0.0-0` (current release-candidate lock 1.2.2)."
      ]}
   ]
 
@@ -143,14 +143,14 @@ defmodule AshReplicant.ReleaseContractSelfTest do
        "Every admitted destination resource uses the sink's literal AshPostgres Repo and the same effective dynamic Repo.",
        "Declarations are trusted metadata; they do not prove an arbitrary Elixir body.",
        "AshOnetime one-time nonces are rejected for WAL replay.",
-       "A Replicant v1 snapshot batch is atomic, but an incomplete multi-batch restart can physically repeat already committed batch effects."
+       "A Replicant v1 retry and incremental resume are physically effect-once for resources declaring `snapshot_provenance true`:"
      ]},
     {"usage-rules.md", "## Destination transaction boundary",
      [
        "Every admitted destination resource uses the sink's literal AshPostgres Repo and the same effective dynamic Repo.",
        "Declarations are trusted metadata; they do not prove an arbitrary Elixir body.",
        "AshOnetime one-time nonces are rejected for WAL replay.",
-       "A Replicant v1 snapshot batch is atomic, but an incomplete multi-batch restart can physically repeat already committed batch effects."
+       "V1 retry and incremental resume are physically effect-once for opted-in resources:"
      ]},
     {"AGENTS.md", "## Critical rules",
      [
@@ -183,7 +183,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   )
   @mix_contracts [
     ~s(@ash_requirement ">= 3.31.3 and < 4.0.0-0"),
-    ~s(@replicant_requirement ">= 1.2.1 and < 2.0.0-0"),
+    ~s(@replicant_requirement ">= 1.2.2 and < 2.0.0-0"),
     ~s(elixir: "~> 1.20.3")
   ]
 
@@ -234,22 +234,22 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       "mix.lock",
-      ~s("replicant": {:hex, :replicant, "1.2.1"),
-      ~s("replicant": {:hex, :replicant, "1.2.2")
+      ~s("replicant": {:hex, :replicant, "1.2.2"),
+      ~s("replicant": {:hex, :replicant, "1.2.3")
     )
 
-    with_env("ASH_REPLICANT_REPLICANT_VERSION", "1.2.2", &assert_valid!/0)
+    with_env("ASH_REPLICANT_REPLICANT_VERSION", "1.2.3", &assert_valid!/0)
 
     prepare_fixture()
 
-    with_env("ASH_REPLICANT_REPLICANT_VERSION", "1.2.2", &assert_invalid!/0)
+    with_env("ASH_REPLICANT_REPLICANT_VERSION", "1.2.3", &assert_invalid!/0)
 
     prepare_fixture()
 
     replace_once!(
       "mix.lock",
-      ~s("replicant": {:hex, :replicant, "1.2.1"),
-      ~s("replicant": {:hex, :replicant, "1.2.2")
+      ~s("replicant": {:hex, :replicant, "1.2.2"),
+      ~s("replicant": {:hex, :replicant, "1.2.3")
     )
 
     with_env("ASH_REPLICANT_REPLICANT_VERSION", "latest", &assert_valid!/0)
@@ -636,8 +636,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     mutate_job!(
       "compatibility",
-      "            replicant_requirement: \"== 1.2.1\"\n",
-      "            replicant_requirement: \">= 1.2.1\"\n"
+      "            replicant_requirement: \"== 1.2.2\"\n",
+      "            replicant_requirement: \">= 1.2.2\"\n"
     )
 
     assert_invalid!()
@@ -964,7 +964,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       "mix.exs",
-      ~s(@replicant_requirement ">= 1.2.1 and < 2.0.0-0"),
+      ~s(@replicant_requirement ">= 1.2.2 and < 2.0.0-0"),
       ~s(@replicant_requirement ">= 0.3.0 and < 2.0.0-0")
     )
 
@@ -984,7 +984,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       "mix.lock",
-      ~s("replicant": {:hex, :replicant, "1.2.1"),
+      ~s("replicant": {:hex, :replicant, "1.2.2"),
       ~s("replicant": {:hex, :replicant, "0.3.1")
     )
 
@@ -994,7 +994,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       "mix.lock",
-      ~s("replicant": {:hex, :replicant, "1.2.1"),
+      ~s("replicant": {:hex, :replicant, "1.2.2"),
       ~s("replicant": {:hex, :replicant, "1.1.0")
     )
 
@@ -1132,10 +1132,40 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     prepare_fixture()
 
+    replace_once!(
+      "deps/replicant/lib/replicant/sink.ex",
+      "binary() | nil | :backfill_pending",
+      "binary() | nil"
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
+    replace_once!(
+      "deps/replicant/lib/replicant/connection.ex",
+      "def classify_progress({:ok, :backfill_pending})",
+      "def removed_pending_progress_classification({:ok, :backfill_pending})"
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
+    replace_once!(
+      "deps/replicant/lib/replicant/snapshotter/incremental.ex",
+      "def classify_durable_progress(:backfill_pending, :sink_owned)",
+      "def removed_pending_progress_classification(:backfill_pending, :sink_owned)"
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
     File.write!(
       fixture_path("README.md"),
       File.read!(fixture_path("README.md")) <>
-        "\nThis project does not support Replicant 1.2.1.\n"
+        "\nThis project does not support Replicant 1.2.2.\n"
     )
 
     assert_invalid!()
@@ -1174,19 +1204,17 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     end
 
     # The B5 ledger gate scans lib/ for the removed `apply_ledger` option and
-    # pins its two allowlisted fail-closed occurrences at sink.ex lines 91 and
-    # 110. The fixture ships a SYNTHETIC sink.ex carrying the allowlisted lines
-    # at those positions: the self-test exercises the checker's logic without
-    # depending on live-code line drift (the real-repo pin runs in the
-    # release-contract assert itself).
+    # admits only the two exact fail-closed lines in sink.ex. The synthetic
+    # fixture deliberately places them at unrelated line numbers: line drift is
+    # harmless, while content or path drift and a third occurrence remain red.
     sink_dir = fixture_path(Path.join(["lib", "ash_replicant"]))
     File.mkdir_p!(sink_dir)
 
     sink_fixture =
-      Enum.map(1..110, fn ix ->
-        if ix in [91, 110],
-          do: "  # apply_ledger (allowlisted line)",
-          else: "  # fixture line #{ix}"
+      Enum.map(1..20, fn
+        7 -> "  # removed `apply_ledger`) must surface as a compile-time failure on the host,"
+        19 -> "  \"(apply_ledger was removed; a removed option must not silently no-op)\""
+        ix -> "  # fixture line #{ix}"
       end)
 
     File.write!(Path.join(sink_dir, "sink.ex"), Enum.join(sink_fixture, "\n") <> "\n")

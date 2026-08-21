@@ -52,7 +52,7 @@ defmodule AshReplicant.DocsTest do
     assert adr =~ "unchanged out-of-line"
   end
 
-  test "AGENTS carries the source-bound clause, the S02 opt-in cost, and what is still absent" do
+  test "AGENTS carries the source-bound clause, snapshot opt-in cost, and what is still absent" do
     agents = File.read!("AGENTS.md")
 
     # The amended watermark sentence (pinned by the B2 design note).
@@ -69,10 +69,9 @@ defmodule AshReplicant.DocsTest do
     assert agents =~
              "A snapshot-backed resource that does NOT opt into `snapshot_provenance` keeps\nrows the source has dropped"
 
-    # The enumeration still names what is genuinely absent: S02 landed V1 retry;
-    # incremental progress and the append log did not.
+    # Incremental progress is live; append-log delivery is still absent.
     assert agents =~
-             "Incremental snapshot progress (`snapshot_progress/0`) and append-log callbacks\nremain absent until S03–C4"
+             "incremental snapshot progress (`snapshot_progress/0`, ADR-0017) are live.\nAppend-log callbacks remain absent until C4"
   end
 
   test "published destination participant examples compile against the public API" do

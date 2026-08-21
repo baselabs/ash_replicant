@@ -299,6 +299,111 @@ defmodule AshReplicant.Sink.Impl do
     :exit, value -> {:error, Error.scrub_caught(value, config.checkpoint_resource, :checkpoint)}
   end
 
+  @doc "Read or prepare the durable incremental-snapshot progress authority."
+  @spec snapshot_progress(map()) ::
+          {:ok, binary() | nil | :backfill_pending} | {:error, term()}
+  def snapshot_progress(config) do
+    if empty_index?(config) do
+      {:error, Error.exception(reason: :config_invalid, resource: nil, op: :snapshot_progress)}
+    else
+      config.repo.transaction(
+        fn -> prepare_incremental_progress!(config) end,
+        timeout: @snapshot_transaction_timeout
+      )
+      |> case do
+        {:ok, progress} ->
+          {:ok, progress}
+
+        {:error, reason} ->
+          {:error, Error.scrub(reason, config.checkpoint_resource, :snapshot_progress)}
+      end
+    end
+  rescue
+    e -> {:error, Error.scrub(e, config.checkpoint_resource, :snapshot_progress)}
+  catch
+    :throw, value ->
+      {:error, Error.scrub_caught(value, config.checkpoint_resource, :snapshot_progress)}
+
+    :exit, value ->
+      {:error, Error.scrub_caught(value, config.checkpoint_resource, :snapshot_progress)}
+  end
+
+  defp prepare_incremental_progress!(config) do
+    guard_generation!(config)
+    keys = provenance_keys!(config)
+    row = locked_checkpoint_row!(config)
+
+    progress =
+      resume_incremental_progress!(config, row, keys, decode_snapshot_state(row, keys))
+
+    guard_generation!(config)
+    progress
+  end
+
+  defp resume_incremental_progress!(
+         _config,
+         %{snapshot_progress: nil, commit_lsn: checkpoint},
+         _keys,
+         :absent
+       )
+       when is_integer(checkpoint),
+       do: nil
+
+  defp resume_incremental_progress!(config, %{snapshot_progress: nil}, keys, :absent) do
+    digest = contract_digest!(config)
+    state = State.mint_incremental(digest, State.active_key_version(keys))
+    store_snapshot_state!(config, state, keys)
+    :backfill_pending
+  end
+
+  defp resume_incremental_progress!(
+         config,
+         %{snapshot_progress: nil} = row,
+         _keys,
+         {:ok, %State{mode: :incremental, status: status} = state}
+       )
+       when status in [:armed, :active] do
+    require_incremental_contract!(config, state)
+    require_progress_pair!(config, row, state)
+    :backfill_pending
+  end
+
+  defp resume_incremental_progress!(
+         config,
+         %{snapshot_progress: token} = row,
+         _keys,
+         {:ok, %State{mode: :incremental, status: status} = state}
+       )
+       when is_binary(token) and status in [:armed, :active] do
+    require_incremental_contract!(config, state)
+    require_progress_pair!(config, row, state)
+    token
+  end
+
+  defp resume_incremental_progress!(
+         config,
+         %{snapshot_progress: token} = row,
+         _keys,
+         {:ok, %State{mode: :incremental, status: :complete} = state}
+       )
+       when is_binary(token) do
+    if completed_progress_pair_valid?(row, state),
+      do: token,
+      else: rollback_conflict!(config, :snapshot_state_invalid)
+  end
+
+  defp resume_incremental_progress!(
+         _config,
+         %{snapshot_progress: nil, commit_lsn: checkpoint},
+         _keys,
+         {:ok, %State{mode: :v1}}
+       )
+       when is_integer(checkpoint),
+       do: nil
+
+  defp resume_incremental_progress!(config, _row, _keys, _state),
+    do: rollback_conflict!(config, :snapshot_state_invalid)
+
   @doc """
   Persist the transaction's changes AND the checkpoint atomically; skip if
   `commit_lsn <= checkpoint`. Returns `{:ok, commit_lsn}` or a value-free
@@ -397,17 +502,20 @@ defmodule AshReplicant.Sink.Impl do
         fn ->
           guard_generation!(config)
 
-          case locked_checkpoint!(config) do
+          row = locked_checkpoint_row!(config)
+
+          case row.commit_lsn do
             cp when is_integer(cp) and last_lsn <= cp ->
               guard_generation!(config)
               :skipped
 
             cp ->
-              {txn_count, change_count} = apply_batch(config, transactions, cp)
+              incremental = stream_incremental_attempt!(config, row)
+              {txn_count, change_count} = apply_batch(config, transactions, cp, incremental)
               guard_generation!(config)
               # Ascending order + last_lsn > cp here, so the write cannot
               # regress the locked watermark.
-              upsert_checkpoint(config, last_lsn)
+              upsert_stream_checkpoint!(config, last_lsn, incremental)
               guard_generation!(config)
               {:applied, txn_count, change_count}
           end
@@ -449,7 +557,7 @@ defmodule AshReplicant.Sink.Impl do
   # Elixir's total term order sorts every integer BELOW the atom nil, so a
   # bare `lsn <= checkpoint_lsn` would "skip" every transaction on a
   # never-persisted (nil) checkpoint.
-  defp apply_batch(config, transactions, checkpoint_lsn) do
+  defp apply_batch(config, transactions, checkpoint_lsn, incremental) do
     Enum.reduce(transactions, {0, 0}, fn
       %Replicant.Transaction{commit_lsn: lsn}, acc
       when is_integer(checkpoint_lsn) and is_integer(lsn) and lsn <= checkpoint_lsn ->
@@ -463,7 +571,7 @@ defmodule AshReplicant.Sink.Impl do
       },
       {txn_count, change_count} ->
         guard_generation!(config)
-        count = apply_all(config, txn_changes, ts, messages || [], lsn)
+        count = apply_all(config, txn_changes, ts, messages || [], lsn, incremental)
         guard_generation!(config)
         {txn_count + 1, change_count + count}
     end)
@@ -555,10 +663,38 @@ defmodule AshReplicant.Sink.Impl do
   stamps the batch's snapshot LSN onto each change so each version opens at
   `valid_from_lsn = snapshot_lsn`.
 
-  This sink implements replicant's v1 snapshot only (no `snapshot_progress/0`
-  callback); incremental mode is S03.
+  Incremental chunks persist their exact opaque progress with the row effects
+  and durable ordinal cursor. The dedicated empty completion callback retires
+  unseen rows and stores its token-hash replay fence without regressing the
+  stream watermark.
   """
   @spec handle_snapshot(map(), [Replicant.Change.t()], map()) :: :ok | {:error, term()}
+  def handle_snapshot(
+        config,
+        [],
+        %{backfill_complete?: true, progress: progress, snapshot_lsn: snapshot_lsn}
+      )
+      when is_binary(progress) and is_integer(snapshot_lsn) do
+    run_incremental_completion(config, progress, snapshot_lsn)
+  rescue
+    e -> {:error, Error.scrub(e, config.checkpoint_resource, :snapshot_complete)}
+  catch
+    :throw, value ->
+      {:error, Error.scrub_caught(value, config.checkpoint_resource, :snapshot_complete)}
+
+    :exit, value ->
+      {:error, Error.scrub_caught(value, config.checkpoint_resource, :snapshot_complete)}
+  end
+
+  def handle_snapshot(config, _changes, %{backfill_complete?: true}) do
+    {:error,
+     Error.exception(
+       reason: :snapshot_state_invalid,
+       resource: config.checkpoint_resource,
+       op: :snapshot_complete
+     )}
+  end
+
   def handle_snapshot(config, changes, %{table: qualified, first_for_table?: first?} = ctx) do
     if empty_index?(config) do
       {:error, Error.exception(reason: :config_invalid, resource: nil, op: :snapshot)}
@@ -592,7 +728,7 @@ defmodule AshReplicant.Sink.Impl do
   defp run_snapshot_batch(config, resource, changes, first?, table, ctx) do
     snapshot_lsn = Map.get(ctx, :snapshot_lsn)
 
-    with :ok <- run_snapshot(config, resource, changes, first?, snapshot_lsn) do
+    with :ok <- run_snapshot(config, resource, changes, first?, snapshot_lsn, ctx) do
       # Snapshot changes are a materialized list (the bulk path indexes them via
       # List.first), so counting is single-pass-safe here — unlike the streaming
       # path's lazy Enumerable.
@@ -606,7 +742,28 @@ defmodule AshReplicant.Sink.Impl do
     end
   end
 
-  defp run_snapshot(config, resource, changes, first?, snapshot_lsn) do
+  defp run_snapshot(config, resource, changes, first?, snapshot_lsn, ctx) do
+    if Map.has_key?(ctx, :progress) do
+      case Map.get(ctx, :progress) do
+        progress when is_binary(progress) ->
+          run_incremental_snapshot_transaction(
+            config,
+            resource,
+            changes,
+            snapshot_lsn,
+            progress
+          )
+
+        _invalid ->
+          {:error,
+           Error.exception(reason: :snapshot_state_invalid, resource: resource, op: :snapshot)}
+      end
+    else
+      run_v1_snapshot(config, resource, changes, first?, snapshot_lsn)
+    end
+  end
+
+  defp run_v1_snapshot(config, resource, changes, first?, snapshot_lsn) do
     case snapshot_ordinal_base(config, snapshot_lsn, first?) do
       {:ok, ordinal_base} ->
         run_snapshot_transaction(config, resource, changes, snapshot_lsn, ordinal_base)
@@ -614,6 +771,141 @@ defmodule AshReplicant.Sink.Impl do
       :error ->
         {:error, Error.exception(reason: :config_invalid, resource: resource, op: :snapshot)}
     end
+  end
+
+  defp run_incremental_snapshot_transaction(
+         config,
+         resource,
+         changes,
+         snapshot_lsn,
+         progress
+       ) do
+    result =
+      config.repo.transaction(
+        fn ->
+          apply_incremental_snapshot_transaction!(
+            config,
+            resource,
+            changes,
+            snapshot_lsn,
+            progress
+          )
+        end,
+        timeout: @snapshot_transaction_timeout
+      )
+
+    case result do
+      {:ok, _} -> :ok
+      {:error, reason} -> {:error, Error.scrub(reason, resource, :snapshot)}
+    end
+  end
+
+  defp apply_incremental_snapshot_transaction!(
+         config,
+         resource,
+         changes,
+         snapshot_lsn,
+         progress
+       ) do
+    guard_generation!(config)
+    config = preflight_snapshot_onetime!(config, resource, changes)
+
+    unless Retirement.provenance_sink?(config) and Info.replicant_snapshot_provenance!(resource) do
+      rollback_conflict!(config, :snapshot_state_invalid)
+    end
+
+    keys = provenance_keys!(config)
+    digest = contract_digest!(config)
+    row = locked_checkpoint_row!(config)
+
+    {%State{next_ordinal: ordinal} = state, attempt} =
+      active_incremental_attempt!(config, row, keys, digest)
+
+    Snapshot.Rows.apply_batch!(
+      config,
+      resource,
+      changes,
+      snapshot_lsn,
+      ordinal,
+      attempt
+    )
+
+    next = %State{
+      state
+      | status: :active,
+        next_ordinal: ordinal + length(changes),
+        progress_token_hash: token_hash(progress)
+    }
+
+    store_snapshot_progress_state!(config, progress, next, keys)
+    guard_generation!(config)
+  end
+
+  defp run_incremental_completion(config, progress, snapshot_lsn) do
+    if empty_index?(config) do
+      {:error,
+       Error.exception(
+         reason: :config_invalid,
+         resource: config.checkpoint_resource,
+         op: :snapshot_complete
+       )}
+    else
+      config.repo.transaction(
+        fn -> complete_incremental_transaction!(config, progress, snapshot_lsn) end,
+        timeout: @snapshot_transaction_timeout
+      )
+      |> case do
+        {:ok, _} ->
+          Telemetry.event(
+            [:ash_replicant, :snapshot, :complete],
+            %{},
+            %{commit_lsn: snapshot_lsn}
+          )
+
+          :ok
+
+        {:error, reason} ->
+          {:error, Error.scrub(reason, config.checkpoint_resource, :snapshot_complete)}
+      end
+    end
+  end
+
+  defp complete_incremental_transaction!(config, progress, snapshot_lsn) do
+    guard_generation!(config)
+    keys = provenance_keys!(config)
+    row = locked_checkpoint_row!(config)
+    hash = token_hash(progress)
+
+    case decode_snapshot_state(row, keys) do
+      {:ok, %State{mode: :incremental, status: :complete} = state} ->
+        if row.snapshot_progress == progress and completed_progress_pair_valid?(row, state),
+          do: :fenced,
+          else: rollback_conflict!(config, :snapshot_state_invalid)
+
+      {:ok, %State{mode: :incremental, status: status} = state}
+      when status in [:armed, :active] ->
+        require_incremental_contract!(config, state)
+
+        if progress_pair_valid?(row, state) do
+          Retirement.retire_unseen!(config, state.attempt, snapshot_lsn)
+
+          complete = %State{
+            state
+            | status: :complete,
+              progress_token_hash: hash,
+              completed_token_hash: hash
+          }
+
+          store_snapshot_progress_state!(config, progress, complete, keys)
+        else
+          rollback_conflict!(config, :snapshot_state_invalid)
+        end
+
+      _invalid ->
+        rollback_conflict!(config, :snapshot_state_invalid)
+    end
+
+    guard_generation!(config)
   end
 
   defp run_snapshot_transaction(config, resource, changes, snapshot_lsn, ordinal_base) do
@@ -718,6 +1010,19 @@ defmodule AshReplicant.Sink.Impl do
     attempt(state, keys)
   end
 
+  defp active_incremental_attempt!(config, row, keys, digest) do
+    case decode_snapshot_state(row, keys) do
+      {:ok, %State{mode: :incremental, status: status, contract_digest: ^digest} = state}
+      when status in [:armed, :active] ->
+        if progress_pair_valid?(row, state),
+          do: {state, attempt(state, keys)},
+          else: rollback_conflict!(config, :snapshot_state_invalid)
+
+      _invalid ->
+        rollback_conflict!(config, :snapshot_state_invalid)
+    end
+  end
+
   # The per-batch attempt handle: the membership marker plus the key material
   # the row fingerprints are computed and compared under.
   defp attempt(%State{} = state, keys) do
@@ -746,11 +1051,119 @@ defmodule AshReplicant.Sink.Impl do
   end
 
   defp store_snapshot_state!(config, %State{} = state, keys) do
+    upsert_checkpoint_fields(config, %{
+      snapshot_state: encode_snapshot_state!(config, state, keys)
+    })
+  end
+
+  defp store_snapshot_progress_state!(config, progress, %State{} = state, keys)
+       when is_binary(progress) do
+    upsert_checkpoint_fields(config, %{
+      snapshot_progress: progress,
+      snapshot_state: encode_snapshot_state!(config, state, keys)
+    })
+  end
+
+  defp encode_snapshot_state!(config, %State{} = state, keys) do
+    # Any durable rewrite rotates the envelope to the active retained key. The
+    # old key is still required to READ the prior state; after a completed sweep
+    # every surviving row and the fence name the active key, so the old key can
+    # be removed without making resume undecodable.
+    state = %State{state | key_version: State.active_key_version(keys)}
+
     case State.encode(state, keys) do
-      {:ok, encoded} -> upsert_checkpoint_fields(config, %{snapshot_state: encoded})
+      {:ok, encoded} -> encoded
       {:error, _reason} -> rollback_conflict!(config, :snapshot_state_invalid)
     end
   end
+
+  defp token_hash(token) when is_binary(token), do: :crypto.hash(:sha256, token)
+
+  defp progress_pair_valid?(%{snapshot_progress: nil}, %State{progress_token_hash: nil}),
+    do: true
+
+  defp progress_pair_valid?(
+         %{snapshot_progress: token},
+         %State{progress_token_hash: expected}
+       )
+       when is_binary(token) and is_binary(expected) do
+    actual = token_hash(token)
+    byte_size(actual) == byte_size(expected) and :crypto.hash_equals(actual, expected)
+  end
+
+  defp progress_pair_valid?(_row, _state), do: false
+
+  defp require_progress_pair!(config, row, state) do
+    if progress_pair_valid?(row, state),
+      do: :ok,
+      else: rollback_conflict!(config, :snapshot_state_invalid)
+  end
+
+  defp completed_progress_pair_valid?(
+         %{snapshot_progress: token},
+         %State{progress_token_hash: progress_hash, completed_token_hash: completed_hash}
+       )
+       when is_binary(token) and is_binary(progress_hash) and is_binary(completed_hash) do
+    actual = token_hash(token)
+
+    byte_size(actual) == byte_size(progress_hash) and
+      :crypto.hash_equals(actual, progress_hash) and
+      byte_size(progress_hash) == byte_size(completed_hash) and
+      :crypto.hash_equals(progress_hash, completed_hash)
+  end
+
+  defp completed_progress_pair_valid?(_row, _state), do: false
+
+  defp require_incremental_contract!(config, %State{contract_digest: bound}) do
+    if contract_digest!(config) == bound,
+      do: :ok,
+      else: rollback_conflict!(config, :snapshot_state_invalid)
+  end
+
+  defp stream_incremental_attempt!(_config, %{snapshot_state: nil}), do: :none
+
+  defp stream_incremental_attempt!(config, row) do
+    keys = provenance_keys!(config)
+
+    case decode_snapshot_state(row, keys) do
+      {:ok, %State{mode: :incremental, status: status} = state}
+      when status in [:armed, :active] ->
+        require_incremental_contract!(config, state)
+
+        if progress_pair_valid?(row, state),
+          do: {state, attempt(state, keys), keys},
+          else: rollback_conflict!(config, :snapshot_state_invalid)
+
+      {:ok, %State{mode: :incremental, status: :complete} = state} ->
+        if completed_progress_pair_valid?(row, state),
+          do: :none,
+          else: rollback_conflict!(config, :snapshot_state_invalid)
+
+      {:ok, %State{mode: :v1, status: :complete}} ->
+        :none
+
+      _invalid ->
+        rollback_conflict!(config, :snapshot_state_invalid)
+    end
+  end
+
+  defp upsert_stream_checkpoint!(config, lsn, :none), do: upsert_checkpoint(config, lsn)
+
+  defp upsert_stream_checkpoint!(
+         config,
+         lsn,
+         {%State{status: :armed} = state, _attempt, keys}
+       ) do
+    active = %State{state | status: :active}
+
+    upsert_checkpoint_fields(config, %{
+      commit_lsn: lsn,
+      snapshot_state: encode_snapshot_state!(config, active, keys)
+    })
+  end
+
+  defp upsert_stream_checkpoint!(config, lsn, {%State{status: :active}, _attempt, _keys}),
+    do: upsert_checkpoint(config, lsn)
 
   # ONE continuing ordinal space per snapshot RUN. A v1 snapshot shares ONE
   # consistent point (`commit_lsn`) across every table, and two mapped resources
@@ -1096,15 +1509,18 @@ defmodule AshReplicant.Sink.Impl do
         fn ->
           guard_generation!(config)
 
-          case locked_checkpoint!(config) do
+          row = locked_checkpoint_row!(config)
+
+          case row.commit_lsn do
             cp when is_integer(cp) and lsn <= cp ->
               guard_generation!(config)
               :skipped
 
             _ ->
-              count = apply_all(config, changes, ts, messages, lsn)
+              incremental = stream_incremental_attempt!(config, row)
+              count = apply_all(config, changes, ts, messages, lsn, incremental)
               guard_generation!(config)
-              upsert_checkpoint(config, lsn)
+              upsert_stream_checkpoint!(config, lsn, incremental)
               guard_generation!(config)
               {:applied, count}
           end
@@ -1138,13 +1554,14 @@ defmodule AshReplicant.Sink.Impl do
   # list sharing the changes' ONE ascending numbering space (spec §7.1), so the
   # messages with ordinal < the next change's ordinal flush ahead of it and the
   # tail flushes after — source order preserved without materializing the stream.
-  defp apply_all(config, changes, ts, messages, commit_lsn) do
+  defp apply_all(config, changes, ts, messages, commit_lsn, incremental) do
     {count, remaining} =
       Enum.reduce(changes, {0, messages}, fn change, {n, msgs} ->
         {n, msgs} = flush_messages_before(config, msgs, change.ordinal, n, commit_lsn)
 
         guard_generation!(config)
         Apply.apply_change(config, change, ts)
+        mark_stream_change!(config, change, incremental)
         guard_generation!(config)
 
         {n + 1, msgs}
@@ -1153,6 +1570,11 @@ defmodule AshReplicant.Sink.Impl do
     {count, _} = flush_messages_before(config, remaining, :infinity, count, commit_lsn)
     count
   end
+
+  defp mark_stream_change!(_config, _change, :none), do: :ok
+
+  defp mark_stream_change!(config, change, {_state, attempt, _keys}),
+    do: Snapshot.Rows.mark_stream_change!(config, change, attempt)
 
   defp flush_messages_before(config, messages, bound, n, commit_lsn) do
     {ready, rest} =

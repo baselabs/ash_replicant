@@ -175,8 +175,8 @@ New telemetry: `[:ash_replicant, :message, :applied]` with the
 - Digest rotation is an online operation: mint under the new version,
   retain the old ones at least one retention window.
 - The freeze table's message row flips from ABSENT to
-  PRESENT-when-configured; `handle_batch/1`, `snapshot_progress/0`, and
-  append stay absent until C2/C3/C4.
+  PRESENT-when-configured; `handle_batch/1` and `snapshot_progress/0` were
+  subsequently added by C2/C3, while append stays absent until C4.
 - AGENTS Rule 4's boundary count moves six → seven; Rule 6's AshOnetime
   paragraph gains the message-route profile (external effects admitted
   there and only there).

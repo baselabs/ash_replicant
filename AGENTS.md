@@ -108,8 +108,9 @@ the halt path.** Assume every value is PII or a secret. Errors are scrubbed to a
 structural reason (operator + field) before Ash inspects them into logs. Column
 names are strings, never atoms. Telemetry metadata is allowlisted AND TYPED
 per key (LSNs, table names, counts, durations, error classes) with a closed
-measurement-key set — never row values (ADR-0009). All eight sink boundary bodies
-(including C1's `handle_message/2` and C2's `handle_batch/1`)
+measurement-key set — never row values (ADR-0009). All nine sink boundary bodies
+(including C1's `handle_message/2`, C2's `handle_batch/1`, and C3's
+`snapshot_progress/0`)
 catch `:throw`/`:exit` into the same scrub (the schema-change body fires the
 sink's own `:halted` with the structural reason — never the sibling's
 `:decode_failure` mislabel), and raw-SQL identifiers route through the ONE
@@ -150,7 +151,8 @@ AshOnetime is permitted only for an admitted local auxiliary action using
 no external effect, a private non-null `operation_key`, and the exact versioned
 source-system/database/slot/commit-LSN/ordinal/participant identity plus the
 SINK-MINTED per-invocation label (`:close_prior | :close_current | :open |
-:destroy_prior | :upsert | :message` — ADR-0010/0015; declarations stay 6-axis,
+:destroy_prior | :upsert | :message | :mark_seen | :retire_unseen` —
+ADR-0010/0015/0017; declarations stay 6-axis,
 the label is appended at encode). Use `DestinationParticipant.operation_key/2`.
 Reject nonce, independent, external, opaque-store, or incomplete-identity
 profiles. **Message-route actions (C1 / ADR-0015)** are the one exception to
@@ -214,16 +216,16 @@ rows the source has dropped — there is no marker to retire them by. That is th
 documented cost of not opting in, and it is strictly less destructive than the
 wipe it replaces.
 
-Message (C1) and sink-owned batch (C2, `handle_batch/1` — one destination
-transaction, one trailing watermark write per flushed batch, ADR-0016) are live.
-Incremental snapshot progress (`snapshot_progress/0`) and append-log callbacks
-remain absent until S03–C4.
+Message (C1), sink-owned batch (C2, `handle_batch/1` — one destination
+transaction, one trailing watermark write per flushed batch, ADR-0016), and
+incremental snapshot progress (`snapshot_progress/0`, ADR-0017) are live.
+Append-log callbacks remain absent until C4.
 
 ## Development workflow
 
 The supported release foundation is Elixir 1.20.3 on Erlang/OTP 29 with Ash
 `>= 3.31.3 and < 4.0.0-0` and Replicant
-`>= 1.2.1 and < 2.0.0-0` (current release-candidate lock 1.2.1).
+`>= 1.2.2 and < 2.0.0-0` (current release-candidate lock 1.2.2).
 
 ```bash
 asdf install

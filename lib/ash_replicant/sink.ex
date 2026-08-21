@@ -26,6 +26,13 @@ defmodule AshReplicant.Sink do
   need nothing beyond the admitted generation, and the pipeline-level
   `batch_delivery` start option is what opts a pipeline into batched
   delivery.
+
+  `snapshot_progress/0` is also generated on every sink (ADR-0017). An
+  incremental pipeline may activate only when every mapped resource declares
+  `snapshot_provenance true`; the callback then arms or resumes the exact
+  checkpoint-owned attempt before Replicant starts its reader and stream. It
+  returns `:backfill_pending` until the first authenticated progress token is
+  durable, so a slot-created/pre-reader crash cannot abandon the backfill.
   """
 
   alias AshReplicant.Sink.Impl
@@ -39,7 +46,8 @@ defmodule AshReplicant.Sink do
     sink_kind: 0,
     handle_schema_change: 2,
     handle_snapshot: 2,
-    handle_snapshot_complete: 1
+    handle_snapshot_complete: 1,
+    snapshot_progress: 0
   ]
 
   @doc false
@@ -292,6 +300,13 @@ defmodule AshReplicant.Sink do
       def handle_snapshot_complete(lsn) do
         AshReplicant.run_callback(unquote(slot_name), __MODULE__, :mutate, fn config ->
           Impl.handle_snapshot_complete(config, lsn)
+        end)
+      end
+
+      @impl Replicant.Sink
+      def snapshot_progress do
+        AshReplicant.run_callback(unquote(slot_name), __MODULE__, :mutate, fn config ->
+          Impl.snapshot_progress(config)
         end)
       end
 

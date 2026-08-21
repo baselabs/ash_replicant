@@ -119,8 +119,8 @@ future caller's shape.
 ## Consequences
 
 - The action-contract freeze table's batch row flips ABSENT → PRESENT
-  (always, not when-configured); `snapshot_progress/0` and `:append` stay
-  absent until C3/C4. The start-link forwarding test's withheld-option pin
+  (always, not when-configured); `snapshot_progress/0` was subsequently added
+  by C3, while `:append` stays absent until C4. The start-link forwarding test's withheld-option pin
   inverts: `batch_delivery: :invalid` now fails closed
   `{:error, :config_invalid}` instead of starting.
 - AGENTS Rule 4's boundary count moves seven → eight; Rule 6's "sink-owned

@@ -24,7 +24,12 @@ defmodule AshReplicant.Snapshot.State do
       A resume under drift fails closed rather than guessing that an
       incompatible attempt is safe;
     * `key_version` — the provenance HMAC key that authenticated the envelope; and
-    * `completed_lsn` — the V1 replay fence.
+    * `next_ordinal` — the durable incremental operation-key cursor; and
+    * `progress_token_hash` — the authenticated pairing for the separately
+      stored opaque incremental progress token;
+    * `completed_lsn` — the V1 replay fence; and
+    * `completed_token_hash` — the incremental replay fence, a SHA-256 over
+      the exact opaque Replicant progress token.
 
   Attempt ids, delivery-run ids and tenants are **data-plane values**: they
   never enter an error, a log, or telemetry metadata. Every failure here is a
@@ -51,7 +56,8 @@ defmodule AshReplicant.Snapshot.State do
   alias AshReplicant.Snapshot.Provenance
 
   @magic "arss"
-  @version 1
+  @version 2
+  @legacy_version 1
   @modes %{v1: 1, incremental: 2}
   @statuses %{armed: 1, active: 2, complete: 3}
   @modes_by_byte Map.new(@modes, fn {name, byte} -> {byte, name} end)
@@ -75,7 +81,10 @@ defmodule AshReplicant.Snapshot.State do
           delivery_run: binary(),
           contract_digest: binary(),
           key_version: pos_integer(),
-          completed_lsn: non_neg_integer() | nil
+          next_ordinal: non_neg_integer() | nil,
+          progress_token_hash: binary() | nil,
+          completed_lsn: non_neg_integer() | nil,
+          completed_token_hash: binary() | nil
         }
 
   @enforce_keys [:mode, :status, :attempt, :delivery_run, :contract_digest, :key_version]
@@ -86,7 +95,10 @@ defmodule AshReplicant.Snapshot.State do
     :delivery_run,
     :contract_digest,
     :key_version,
-    :completed_lsn
+    :next_ordinal,
+    :progress_token_hash,
+    :completed_lsn,
+    :completed_token_hash
   ]
 
   @doc "The envelope magic (exposed so tamper tests can address a byte offset)."
@@ -126,7 +138,28 @@ defmodule AshReplicant.Snapshot.State do
       delivery_run: delivery_run,
       contract_digest: contract_digest,
       key_version: key_version,
-      completed_lsn: nil
+      next_ordinal: nil,
+      progress_token_hash: nil,
+      completed_lsn: nil,
+      completed_token_hash: nil
+    }
+  end
+
+  @doc "Mint a fresh ARMED incremental attempt before reader and stream start."
+  @spec mint_incremental(binary(), pos_integer()) :: t()
+  def mint_incremental(contract_digest, key_version)
+      when is_binary(contract_digest) and is_integer(key_version) do
+    %__MODULE__{
+      mode: :incremental,
+      status: :armed,
+      attempt: :crypto.strong_rand_bytes(@attempt_bytes),
+      delivery_run: "",
+      contract_digest: contract_digest,
+      key_version: key_version,
+      next_ordinal: 0,
+      progress_token_hash: nil,
+      completed_lsn: nil,
+      completed_token_hash: nil
     }
   end
 
@@ -193,8 +226,8 @@ defmodule AshReplicant.Snapshot.State do
   @spec decode(binary(), Provenance.key_set()) :: {:ok, t()} | {:error, failure()}
   def decode(encoded, keys) when is_binary(encoded) and is_list(keys) do
     with {:ok, framed, mac} <- split_mac(encoded),
-         {:ok, body} <- unframe(framed),
-         {:ok, state} <- parse_body(body),
+         {:ok, version, body} <- unframe(framed),
+         {:ok, state} <- parse_body(version, body),
          {:ok, key} <- fetch_key(keys, state.key_version),
          :ok <- verify_mac(framed, mac, key),
          :ok <- validate(state) do
@@ -216,33 +249,94 @@ defmodule AshReplicant.Snapshot.State do
   # is REQUIRED under V1 (it is the axis that rotates an attempt across owners)
   # and merely a binary otherwise.
   defp well_formed?(state) do
-    is_map_key(@modes, state.mode) and is_map_key(@statuses, state.status) and
-      id?(state.attempt) and id?(state.contract_digest) and
-      valid_key_version?(state.key_version) and is_binary(state.delivery_run) and
-      (state.mode != :v1 or id?(state.delivery_run))
+    valid_vocabulary?(state) and valid_ids?(state) and
+      valid_key_version?(state.key_version) and valid_delivery_run?(state) and
+      valid_ordinal?(state)
   end
+
+  defp valid_vocabulary?(state),
+    do: is_map_key(@modes, state.mode) and is_map_key(@statuses, state.status)
+
+  defp valid_ids?(state), do: id?(state.attempt) and id?(state.contract_digest)
+
+  defp valid_delivery_run?(%{mode: :v1, delivery_run: delivery_run}), do: id?(delivery_run)
+  defp valid_delivery_run?(%{mode: :incremental, delivery_run: ""}), do: true
+  defp valid_delivery_run?(_state), do: false
 
   defp id?(value), do: is_binary(value) and byte_size(value) in 1..255
 
   defp valid_key_version?(version),
     do: is_integer(version) and version >= 1 and version <= 0xFFFFFFFF
 
+  defp valid_ordinal?(%{mode: :v1, next_ordinal: nil}), do: true
+
+  defp valid_ordinal?(%{mode: :incremental, next_ordinal: ordinal}),
+    do: is_integer(ordinal) and ordinal >= 0 and ordinal <= 0xFFFFFFFFFFFFFFFF
+
+  defp valid_ordinal?(_state), do: false
+
   # A `:complete` V1 attempt IS its replay fence — without the LSN there is
   # nothing to fence against, and completion would rescan. An `:armed` or
   # `:active` attempt carrying one is the inverse impossibility.
-  defp valid_completion?(%{status: :complete, mode: :v1, completed_lsn: lsn}),
-    do: is_integer(lsn) and lsn >= 0 and lsn <= 0xFFFFFFFFFFFFFFFF
+  defp valid_completion?(%{
+         status: :complete,
+         mode: :v1,
+         progress_token_hash: nil,
+         completed_lsn: lsn,
+         completed_token_hash: nil
+       }),
+       do: is_integer(lsn) and lsn >= 0 and lsn <= 0xFFFFFFFFFFFFFFFF
 
-  defp valid_completion?(%{status: :complete, completed_lsn: lsn}),
-    do: is_nil(lsn) or (is_integer(lsn) and lsn >= 0 and lsn <= 0xFFFFFFFFFFFFFFFF)
+  defp valid_completion?(%{
+         status: :complete,
+         mode: :incremental,
+         progress_token_hash: progress_hash,
+         completed_lsn: nil,
+         completed_token_hash: hash
+       }),
+       do:
+         is_binary(progress_hash) and byte_size(progress_hash) == 32 and
+           is_binary(hash) and byte_size(hash) == 32 and progress_hash == hash
 
-  defp valid_completion?(%{completed_lsn: lsn}), do: is_nil(lsn)
+  defp valid_completion?(%{
+         status: :armed,
+         mode: :incremental,
+         progress_token_hash: nil,
+         completed_lsn: nil,
+         completed_token_hash: nil
+       }),
+       do: true
+
+  defp valid_completion?(%{
+         status: :active,
+         mode: :incremental,
+         progress_token_hash: hash,
+         completed_lsn: nil,
+         completed_token_hash: nil
+       }),
+       do: is_nil(hash) or (is_binary(hash) and byte_size(hash) == 32)
+
+  defp valid_completion?(%{
+         mode: :v1,
+         progress_token_hash: nil,
+         completed_lsn: nil,
+         completed_token_hash: nil
+       }),
+       do: true
+
+  defp valid_completion?(_state), do: false
 
   # --- the wire format ---
 
   defp body(%__MODULE__{} = state) do
     {flag, lsn} =
       case state.completed_lsn do
+        nil -> {0, 0}
+        value -> {1, value}
+      end
+
+    {ordinal_flag, next_ordinal} =
+      case state.next_ordinal do
         nil -> {0, 0}
         value -> {1, value}
       end
@@ -256,7 +350,11 @@ defmodule AshReplicant.Snapshot.State do
        sized(state.contract_digest),
        <<state.key_version::32>>,
        <<flag::8>>,
-       <<lsn::64>>
+       <<lsn::64>>,
+       <<ordinal_flag::8>>,
+       <<next_ordinal::64>>,
+       sized(state.progress_token_hash || ""),
+       sized(state.completed_token_hash || "")
      ])}
   end
 
@@ -268,10 +366,44 @@ defmodule AshReplicant.Snapshot.State do
 
   defp split_mac(_encoded), do: {:error, :undecodable}
 
-  defp unframe(<<@magic, @version::8, body::binary>>), do: {:ok, body}
+  defp unframe(<<@magic, version::8, body::binary>>) when version in [@legacy_version, @version],
+    do: {:ok, version, body}
+
   defp unframe(_framed), do: {:error, :undecodable}
 
-  defp parse_body(<<mode::8, status::8, rest::binary>>) do
+  defp parse_body(@version, <<mode::8, status::8, rest::binary>>) do
+    with {:ok, attempt, rest} <- take_sized(rest),
+         {:ok, delivery_run, rest} <- take_sized(rest),
+         {:ok, contract_digest, rest} <- take_sized(rest),
+         <<key_version::32, flag::8, lsn::64, ordinal_flag::8, next_ordinal::64,
+           hash_rest::binary>> <- rest,
+         {:ok, progress_hash, hash_rest} <- take_sized(hash_rest),
+         {:ok, completed_hash, <<>>} <- take_sized(hash_rest),
+         {:ok, mode_name} <- Map.fetch(@modes_by_byte, mode),
+         {:ok, status_name} <- Map.fetch(@statuses_by_byte, status),
+         {:ok, completed_lsn} <- completion(flag, lsn),
+         {:ok, next_ordinal} <- optional_integer(ordinal_flag, next_ordinal),
+         {:ok, progress_token_hash} <- token_hash(progress_hash),
+         {:ok, completed_token_hash} <- token_hash(completed_hash) do
+      {:ok,
+       %__MODULE__{
+         mode: mode_name,
+         status: status_name,
+         attempt: attempt,
+         delivery_run: delivery_run,
+         contract_digest: contract_digest,
+         key_version: key_version,
+         next_ordinal: next_ordinal,
+         progress_token_hash: progress_token_hash,
+         completed_lsn: completed_lsn,
+         completed_token_hash: completed_token_hash
+       }}
+    else
+      _other -> {:error, :undecodable}
+    end
+  end
+
+  defp parse_body(@legacy_version, <<mode::8, status::8, rest::binary>>) do
     with {:ok, attempt, rest} <- take_sized(rest),
          {:ok, delivery_run, rest} <- take_sized(rest),
          {:ok, contract_digest, rest} <- take_sized(rest),
@@ -287,14 +419,17 @@ defmodule AshReplicant.Snapshot.State do
          delivery_run: delivery_run,
          contract_digest: contract_digest,
          key_version: key_version,
-         completed_lsn: completed_lsn
+         next_ordinal: nil,
+         progress_token_hash: nil,
+         completed_lsn: completed_lsn,
+         completed_token_hash: nil
        }}
     else
       _other -> {:error, :undecodable}
     end
   end
 
-  defp parse_body(_body), do: {:error, :undecodable}
+  defp parse_body(_version, _body), do: {:error, :undecodable}
 
   # The flag and the value are decoded together so exactly ONE byte sequence
   # encodes "no completed LSN" — a `0` flag paired with a non-zero value would
@@ -302,6 +437,14 @@ defmodule AshReplicant.Snapshot.State do
   defp completion(0, 0), do: {:ok, nil}
   defp completion(1, lsn), do: {:ok, lsn}
   defp completion(_flag, _lsn), do: :error
+
+  defp optional_integer(0, 0), do: {:ok, nil}
+  defp optional_integer(1, value), do: {:ok, value}
+  defp optional_integer(_flag, _value), do: :error
+
+  defp token_hash(""), do: {:ok, nil}
+  defp token_hash(hash) when byte_size(hash) == 32, do: {:ok, hash}
+  defp token_hash(_hash), do: :error
 
   defp sized(binary) when is_binary(binary), do: <<byte_size(binary)::8>> <> binary
 
