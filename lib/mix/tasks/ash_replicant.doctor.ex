@@ -31,6 +31,18 @@ defmodule Mix.Tasks.AshReplicant.Diagnosis do
     end
   end
 
+  @doc "Run one command after starting only its PostgreSQL client runtime."
+  @spec execute(Report.mode(), [String.t()]) :: :ok | no_return()
+  def execute(mode, argv) do
+    report =
+      case Application.ensure_all_started(:postgrex) do
+        {:ok, _applications} -> report(mode, argv)
+        {:error, _reason} -> Report.invalid(:runtime_dependencies_unavailable)
+      end
+
+    finish(report, format(argv))
+  end
+
   @doc """
   Render the report and hand its exit code to the shell. A passing report
   returns `:ok`; anything else exits with the report's code so a monitoring
@@ -161,9 +173,6 @@ defmodule Mix.Tasks.AshReplicant.Doctor do
   @impl Mix.Task
   def run(argv) do
     Mix.Task.run("app.config")
-
-    argv
-    |> report()
-    |> Diagnosis.finish(Diagnosis.format(argv))
+    Diagnosis.execute(:doctor, argv)
   end
 end

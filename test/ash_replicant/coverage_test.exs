@@ -324,6 +324,11 @@ defmodule AshReplicant.CoverageTest do
 
       assert :ok = Coverage.replica_identity_check(census, facts)
     end
+
+    test "a missing declared table is structural, never an exception" do
+      assert {:error, %AshReplicant.Error{reason: :source_table_missing, shape: "public.orders"}} =
+               Coverage.replica_identity_check(%{}, facts())
+    end
   end
 
   describe "assert_change!/3 — streaming column accounting" do
@@ -403,13 +408,14 @@ defmodule AshReplicant.CoverageTest do
   end
 
   describe "SQL builders" do
-    test "the identity probe is version-conditional in ONE statement" do
+    test "the identity probe reads the system identifier on every supported release" do
       sql = Coverage.sql_identity_probe()
 
       assert sql =~ "server_version_num"
       assert sql =~ "pg_control_system"
-      assert sql =~ "170000"
       assert sql =~ "current_database()"
+      refute sql =~ "170000"
+      refute sql =~ "ELSE NULL"
     end
 
     test "the relreplident census mirrors pk_columns' join shape with $1 binding" do
@@ -418,6 +424,22 @@ defmodule AshReplicant.CoverageTest do
       assert sql =~ "pg_publication_tables"
       assert sql =~ "ANY($1)"
       assert sql =~ "relreplident"
+    end
+  end
+
+  describe "probe_identity_check/2" do
+    @expected_identity %{system_identifier: "741852963", database: "source_db"}
+
+    test "requires the system identifier instead of accepting a database-only match" do
+      assert {:error, %AshReplicant.Error{reason: :source_identity_mismatch}} =
+               Coverage.probe_identity_check(
+                 %{system_identifier: nil, database: "source_db"},
+                 @expected_identity
+               )
+    end
+
+    test "accepts the exact system and database identity" do
+      assert :ok = Coverage.probe_identity_check(@expected_identity, @expected_identity)
     end
   end
 

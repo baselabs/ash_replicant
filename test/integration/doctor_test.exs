@@ -95,6 +95,7 @@ defmodule AshReplicant.Integration.DoctorTest do
 
       assert is_integer(probed.release)
       assert probed.release >= 150_000
+      assert probed.identity.system_identifier == Marquee.source_identity()[:system_identifier]
       assert is_binary(probed.identity.database)
       assert is_boolean(probed.role.superuser?)
       assert is_boolean(probed.role.replication?)
@@ -190,12 +191,69 @@ defmodule AshReplicant.Integration.DoctorTest do
 
       reachable = Enum.find(report.checks, &(&1.name == :source_reachable))
 
+      coverage = Enum.find(report.checks, &(&1.name == :source_coverage))
+      replica_identity = Enum.find(report.checks, &(&1.name == :source_replica_identity))
+
       assert reachable.status == :pass
+
+      assert coverage.status == :fail
+      assert coverage.reason == :source_table_missing
+
+      assert replica_identity.status == :skipped
+      assert replica_identity.reason == :coverage_unjudgeable
 
       # Every source-derived check was actually JUDGED against the live census.
       for name <- [:source_release, :source_privileges, :slot_presence, :slot_retention] do
         assert Enum.find(report.checks, &(&1.name == name)).status != :skipped
       end
+    end
+
+    test "the real Mix task starts only its PostgreSQL client runtime" do
+      identity = Marquee.source_identity()
+
+      script = """
+      defmodule AshReplicant.Integration.DoctorSubprocessPipeline do
+        def start_options do
+          connection = AshReplicant.Test.Marquee.conn()
+
+          {:ok,
+           [
+             sink: AshReplicant.Test.Marquee.Sink,
+             connection: connection,
+             publication: \"#{@publication}\",
+             source_identity: [
+               system_identifier: System.fetch_env!(\"ASH_REPLICANT_DOCTOR_SYSTEM_IDENTIFIER\"),
+               database: Keyword.fetch!(connection, :database)
+             ]
+           ]}
+        end
+      end
+
+      Mix.Tasks.AshReplicant.Preflight.run([
+        \"--pipeline\",
+        \"AshReplicant.Integration.DoctorSubprocessPipeline\",
+        \"--format\",
+        \"json\"
+      ])
+      """
+
+      {output, status} =
+        System.cmd(System.find_executable("mix"), ["run", "--no-start", "-e", script],
+          env: [
+            {"MIX_ENV", "test"},
+            {"ASH_REPLICANT_DOCTOR_SYSTEM_IDENTIFIER", identity[:system_identifier]}
+          ],
+          stderr_to_stdout: true
+        )
+
+      assert status == 1
+      refute output =~ "DBConnection.Watcher"
+
+      report = output |> String.split("\n", trim: true) |> List.last() |> Jason.decode!()
+      reachable = Enum.find(report["checks"], &(&1["name"] == "source_reachable"))
+
+      assert reachable["status"] == "pass"
+      assert reachable["reason"] == "ok"
     end
   end
 

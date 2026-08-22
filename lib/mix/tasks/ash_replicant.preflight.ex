@@ -53,9 +53,6 @@ defmodule Mix.Tasks.AshReplicant.Preflight do
   @impl Mix.Task
   def run(argv) do
     Mix.Task.run("app.config")
-
-    argv
-    |> report()
-    |> Diagnosis.finish(Diagnosis.format(argv))
+    Diagnosis.execute(:preflight, argv)
   end
 end

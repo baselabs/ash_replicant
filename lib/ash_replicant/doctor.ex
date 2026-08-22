@@ -328,8 +328,11 @@ defmodule AshReplicant.Doctor do
         facts = Coverage.relation_facts(index, contract.manifest)
 
         %{
-          evaluate: Coverage.evaluate(probed.tables, facts, contract.manifest.ignores),
-          replica_identity: Coverage.replica_identity_check(probed.tables, facts)
+          evaluate:
+            guarded_coverage(fn ->
+              Coverage.evaluate(probed.tables, facts, contract.manifest.ignores)
+            end),
+          replica_identity: replica_identity_verdict(probed.tables, facts)
         }
 
       _unbuildable ->
@@ -339,6 +342,21 @@ defmodule AshReplicant.Doctor do
     _error -> %{evaluate: :unjudgeable, replica_identity: :unjudgeable}
   catch
     _kind, _reason -> %{evaluate: :unjudgeable, replica_identity: :unjudgeable}
+  end
+
+  defp replica_identity_verdict(census, facts) do
+    case guarded_coverage(fn -> Coverage.replica_identity_check(census, facts) end) do
+      {:error, %Error{reason: :source_table_missing}} -> :unjudgeable
+      result -> result
+    end
+  end
+
+  defp guarded_coverage(fun) do
+    fun.()
+  rescue
+    _error -> :unjudgeable
+  catch
+    _kind, _reason -> :unjudgeable
   end
 
   # --- durable leg (doctor only) ---

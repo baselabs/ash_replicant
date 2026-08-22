@@ -27,7 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `dblink*`); a probe connection opened `default_transaction_read_only=on`, so
   PostgreSQL itself refuses a write the admission missed; and a destination
   checkpoint read through its `:read` action with `authorize?: false` and no
-  lock. They never start a repo, a pipeline, or a service.
+  lock. They start only Postgrex's client runtime dependencies; they never
+  start the host application, a repo, a pipeline, or a service.
 
   Machine (`--format json`) and operator output are both total functions of one
   canonical `AshReplicant.Doctor.Report`, so they cannot disagree. Missing
@@ -48,6 +49,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Coverage.probe_identity_check/2` delegates to the existing private rules
   (so replica identity is reported even when an earlier rule short-circuits),
   and `Identity.classify_stored_contract/3` for drift.
+  Missing declared tables remain a concrete `source_table_missing` coverage
+  failure instead of being masked as an unjudgeable census, and replica
+  identity is skipped independently when its relation does not exist. The
+  identity probe now reads `pg_control_system().system_identifier` on every
+  supported PostgreSQL 15 through 18 release rather than weakening PG15–16 to
+  a database-name-only comparison.
 
 - **Guarded 0.4.0 to 1.0.0 package upgrade and rollback.**
   `mix ash_replicant.upgrade 0.4.0 1.0.0` requires explicit per-sink source

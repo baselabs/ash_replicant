@@ -13,6 +13,7 @@ defmodule AshReplicant.DoctorRunTest do
 
   alias AshReplicant.Doctor
   alias AshReplicant.Doctor.Report
+  alias AshReplicant.Test.AdmittedGeneration
 
   defmodule DiagnosisSink do
     use AshReplicant.Sink,
@@ -44,8 +45,11 @@ defmodule AshReplicant.DoctorRunTest do
   setup do
     previous = System.get_env("PGDATABASE")
     System.delete_env("PGDATABASE")
+    :persistent_term.erase({AshReplicant, "diagnosis_slot"})
 
     on_exit(fn ->
+      :persistent_term.erase({AshReplicant, "diagnosis_slot"})
+
       if previous,
         do: System.put_env("PGDATABASE", previous),
         else: System.delete_env("PGDATABASE")
@@ -150,7 +154,16 @@ defmodule AshReplicant.DoctorRunTest do
   end
 
   describe "an unavailable destination is skipped, never inferred" do
-    test "checkpoint and contract are skipped when the repo is not running" do
+    test "checkpoint and contract are skipped when the destination is unavailable" do
+      unavailable_repo = spawn(fn -> :ok end)
+      monitor = Process.monitor(unavailable_repo)
+      assert_receive {:DOWN, ^monitor, :process, ^unavailable_repo, _reason}
+
+      # The live suite starts the named TestRepo globally. Pin this test
+      # process to a dead dynamic identity so the destination is unavailable
+      # in BOTH the no-database and combined live-suite environments.
+      AshReplicant.TestRepo.put_dynamic_repo(unavailable_repo)
+
       report = Doctor.run(:doctor, opts())
 
       assert check(report, :checkpoint_state).status == :skipped
@@ -163,6 +176,28 @@ defmodule AshReplicant.DoctorRunTest do
 
       assert check(report, :runtime_generation).status == :warn
       assert check(report, :runtime_generation).reason == :generation_absent
+    end
+
+    test "the in-process public doctor reports a live generation" do
+      AdmittedGeneration.put!(DiagnosisSink)
+
+      report = AshReplicant.doctor(opts())
+
+      assert check(report, :runtime_generation).status == :pass
+      assert check(report, :runtime_generation).reason == :generation_live
+    end
+
+    test "the in-process public doctor fails a generation whose owner died" do
+      owner = spawn(fn -> :ok end)
+      monitor = Process.monitor(owner)
+      assert_receive {:DOWN, ^monitor, :process, ^owner, :normal}
+
+      AdmittedGeneration.put!(DiagnosisSink, owner: owner)
+
+      report = AshReplicant.doctor(opts())
+
+      assert check(report, :runtime_generation).status == :fail
+      assert check(report, :runtime_generation).reason == :generation_owner_dead
     end
   end
 
