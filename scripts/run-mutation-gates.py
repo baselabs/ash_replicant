@@ -972,7 +972,7 @@ MATRIX = [
         ],
     },
     {
-        "id": "provenance_collision.container_count",
+        "id": "provenance_collision.list_count",
         "file": PROVENANCE,
         "beams": [B_PROVENANCE],
         "replacements": [
@@ -987,6 +987,50 @@ MATRIX = [
                 "red": [
                     "container ELEMENT COUNTS are explicit — differently-shaped nestings"
                     " do not collide",
+                    "Refute with == failed",
+                ],
+                "absent": ["is stable across calls and independent of map insertion order"],
+            }
+        ],
+    },
+    {
+        "id": "provenance_collision.tuple_count",
+        "file": PROVENANCE,
+        "beams": [B_PROVENANCE],
+        "replacements": [
+            [
+                '      {:ok, "u" <> <<count::64>> <> payload}\n',
+                '      {:ok, "u" <> <<0 * count::64>> <> payload}\n',
+            ]
+        ],
+        "runs": [
+            {
+                "file": T_PROVENANCE,
+                "red": [
+                    "tuple ELEMENT COUNTS are explicit — differently-shaped tuples"
+                    " do not collide",
+                    "Refute with == failed",
+                ],
+                "absent": ["is stable across calls and independent of map insertion order"],
+            }
+        ],
+    },
+    {
+        "id": "provenance_collision.map_count",
+        "file": PROVENANCE,
+        "beams": [B_PROVENANCE],
+        "replacements": [
+            [
+                '      {:ok, "m" <> <<map_size(map)::64>> <> payload}\n',
+                '      {:ok, "m" <> <<0 * map_size(map)::64>> <> payload}\n',
+            ]
+        ],
+        "runs": [
+            {
+                "file": T_PROVENANCE,
+                "red": [
+                    "map PAIR COUNTS are explicit — sibling pairs do not collapse"
+                    " into nesting",
                     "Refute with == failed",
                 ],
                 "absent": ["is stable across calls and independent of map insertion order"],
@@ -1168,7 +1212,9 @@ REQUIRED_CELL_IDS = [
     "notifier_drift.site_snapshot_retire",
     "provenance_collision.length_prefix",
     "provenance_collision.type_tag",
-    "provenance_collision.container_count",
+    "provenance_collision.list_count",
+    "provenance_collision.tuple_count",
+    "provenance_collision.map_count",
     "append_identity.missing_identity",
     "append_identity.exact_axes",
     "append_identity.all_tenants",
