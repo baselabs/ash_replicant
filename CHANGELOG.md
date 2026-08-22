@@ -20,9 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   append identity, and requires the named focused selector to go red with a
   property-specific fingerprint. Mutants run serially in an isolated
   temporary project copy (dependencies copied and made read-only, mutant and
-  restored BEAM digests proving build identity, `ASH_REPLICANT_TEST_URL`
-  deleted from every child, zero `TestRepo` starts asserted); runner output
-  is structural and value-free, and a sentinel self-test drives every
+  restored BEAM digests proving build identity, `ASH_REPLICANT_TEST_URL` and
+  Mix path redirections deleted from every child, zero `TestRepo` starts
+  asserted); runner output is structural and value-free, SIGINT/SIGTERM
+  teardown kills and confirms the child process group before scratch cleanup,
+  and a sentinel self-test drives every
   failure class — missing/duplicate anchors, stale builds, restoration
   drift, baseline failures, vacuous mutants, wrong reds, timeouts with live
   descendants, and internal errors — proving no child byte reaches the

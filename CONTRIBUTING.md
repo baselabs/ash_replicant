@@ -58,6 +58,8 @@ It compiles the project once per mutant, so expect
 a long serial run; CI executes it once in the no-database job. Its
 `--self-test` mode runs only the runner's own fixture/sentinel battery, and
 `--cells <prefix>` runs a subset while iterating on one guard family.
+The runner deletes inherited Mix build/dependency path overrides and handles
+SIGINT/SIGTERM by stopping the active child process group before scratch cleanup.
 
 4. Update `CHANGELOG.md` under `[Unreleased]`.
 5. Open a Pull Request against `main`.

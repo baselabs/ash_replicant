@@ -35,10 +35,10 @@ Contract (SEC01 / the reconciled T2 design):
   marker or the exact structural reason/path — never merely a test name)
   while every declared green control stays absent. Compile failures,
   timeouts, and unrelated failures are runner failures, not reds.
-- Every child process gets an environment with `ASH_REPLICANT_TEST_URL`
-  DELETED (the test Repo start sentinel is active without it) and each green
-  baseline must report `TestRepo start attempts: 0`. No database or server
-  is ever started.
+- Every child process gets an environment with `ASH_REPLICANT_TEST_URL` and
+  Mix's build/dependency path redirections DELETED (the test Repo start
+  sentinel is active without the URL) and each green baseline must report
+  `TestRepo start attempts: 0`. No database or server is ever started.
 - Runner output is structural and value-free: cell ids, verdict classes and
   counts only. Raw child output is captured into the scratch tree and
   deleted on exit, after the child's whole process group has stopped. Each
@@ -58,7 +58,9 @@ the self-test's fixture scenarios and is not a supported entry point.
 """
 
 import argparse
+import contextlib
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -1638,6 +1640,12 @@ class ChildCleanupFailed(Exception):
     pass
 
 
+class RunnerTermination(BaseException):
+    def __init__(self, signum):
+        super().__init__(signum)
+        self.signum = signum
+
+
 def process_group_exists(pgid):
     try:
         os.killpg(pgid, 0)
@@ -1686,6 +1694,9 @@ def run_child(argv, cwd, env, timeout, log_path):
         except subprocess.TimeoutExpired:
             kill_and_confirm_process_group(proc.pid, reap=proc.wait)
             raise ChildTimeout()
+        except BaseException:
+            kill_and_confirm_process_group(proc.pid, reap=proc.wait)
+            raise
         if process_group_exists(proc.pid):
             kill_and_confirm_process_group(proc.pid)
             raise ChildDescendantLeak()
@@ -1894,10 +1905,15 @@ def run_gates(config, cells, label="mutation-gates"):
     config = dict(config)
     config["copy_files"] = tracked
 
-    live_before = tree_manifest(root, tracked)
-    deps_before = {
-        reldir: dir_manifest(root, reldir) for reldir in config.get("deps_dirs", [])
-    }
+    try:
+        live_before = tree_manifest(root, tracked)
+        deps_before = {
+            reldir: dir_manifest(root, reldir)
+            for reldir in config.get("deps_dirs", [])
+        }
+    except OSError:
+        print(f"{label}: FAIL runner {INTERNAL_ERROR}")
+        return 1
 
     workspace = Workspace(config)
     failures = []
@@ -2003,13 +2019,18 @@ def run_gates(config, cells, label="mutation-gates"):
     finally:
         workspace.destroy()
 
-    live_after = tree_manifest(root, tracked)
-    deps_after = {
-        reldir: dir_manifest(root, reldir) for reldir in config.get("deps_dirs", [])
-    }
-    if live_after != live_before or deps_after != deps_before:
-        failures.append(StructuralFailure("live-tree", LIVE_TREE_MUTATED))
-        print(f"{label}: FAIL live-tree {LIVE_TREE_MUTATED}")
+    try:
+        live_after = tree_manifest(root, tracked)
+        deps_after = {
+            reldir: dir_manifest(root, reldir)
+            for reldir in config.get("deps_dirs", [])
+        }
+        if live_after != live_before or deps_after != deps_before:
+            failures.append(StructuralFailure("live-tree", LIVE_TREE_MUTATED))
+            print(f"{label}: FAIL live-tree {LIVE_TREE_MUTATED}")
+    except OSError:
+        failures.append(StructuralFailure("runner", INTERNAL_ERROR))
+        print(f"{label}: FAIL runner {INTERNAL_ERROR}")
 
     if failures:
         print(f"{label}: FAIL ({len(failures)} failure(s))")
@@ -2037,7 +2058,12 @@ def real_config():
         "compile": ["mix", "compile"],
         "beam_dir": "_build/test/lib/ash_replicant/ebin",
         "baseline_required_output": "TestRepo start attempts: 0",
-        "env_delete": ["ASH_REPLICANT_TEST_URL"],
+        "env_delete": [
+            "ASH_REPLICANT_TEST_URL",
+            "MIX_BUILD_ROOT",
+            "MIX_BUILD_PATH",
+            "MIX_DEPS_PATH",
+        ],
         "env_set": {"MIX_ENV": "test"},
         "compile_timeout": 1800,
         "test_timeout": 900,
@@ -2161,6 +2187,13 @@ if "GUARD_LINE_A" in src:
     sys.exit(0)
 print("{FIXTURE_RED}", flush=True)
 sys.exit(1)
+"""
+
+TEST_BLOCKING_BASELINE = f"""
+import os, pathlib, time
+pathlib.Path(os.environ["FIXTURE_PID_FILE"]).write_text(str(os.getpid()))
+print("{FIXTURE_MARKER}", flush=True)
+time.sleep(300)
 """
 
 TEST_SENTINEL_GREEN = f"""
@@ -2408,6 +2441,139 @@ def self_test():
         "normal-exit-descendant"
     )
 
+    for signal_name, signal_value in (
+        ("sigint", signal.SIGINT),
+        ("sigterm", signal.SIGTERM),
+    ):
+        signal_pid_dir = tempfile.mkdtemp(
+            prefix=f"mutation-gates-selftest-{signal_name}-pid."
+        )
+        signal_pid_file = os.path.join(signal_pid_dir, "child.pid")
+        signal_ok = False
+        child_pid = None
+        runner = None
+        try:
+            with tempfile.TemporaryDirectory(
+                prefix=f"mutation-gates-selftest-{signal_name}."
+            ) as base:
+                config_path = build_fixture(
+                    base,
+                    SRC_DEFAULT,
+                    COMPILE_DEFAULT,
+                    TEST_BLOCKING_BASELINE,
+                    [fixture_cell()],
+                    env_set={"FIXTURE_PID_FILE": signal_pid_file},
+                )
+                runner = subprocess.Popen(
+                    [
+                        sys.executable,
+                        os.path.abspath(__file__),
+                        "--fixture-config",
+                        config_path,
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                )
+                deadline = time.monotonic() + 15
+                while time.monotonic() < deadline and not os.path.isfile(
+                    signal_pid_file
+                ):
+                    if runner.poll() is not None:
+                        break
+                    time.sleep(0.1)
+                if os.path.isfile(signal_pid_file):
+                    child_pid = int(open(signal_pid_file).read().strip())
+                    runner.send_signal(signal_value)
+                    out, _ = runner.communicate(timeout=20)
+                    deadline = time.monotonic() + 10
+                    child_dead = False
+                    while time.monotonic() < deadline:
+                        try:
+                            os.kill(child_pid, 0)
+                        except ProcessLookupError:
+                            child_dead = True
+                            break
+                        time.sleep(0.1)
+                    signal_ok = (
+                        runner.returncode != 0
+                        and "mutation-gates: FAIL runner interrupted" in out
+                        and child_dead
+                    )
+        finally:
+            if runner is not None and runner.poll() is None:
+                runner.kill()
+                runner.wait()
+            if child_pid is not None:
+                try:
+                    os.killpg(child_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            shutil.rmtree(signal_pid_dir, ignore_errors=True)
+        checks.append((f"{signal_name}-cleans-child", signal_ok))
+        print(
+            f"{label}: {'PASS' if signal_ok else 'FAIL'} "
+            f"{signal_name}-cleans-child"
+        )
+
+    isolation_vars = {"MIX_BUILD_ROOT", "MIX_BUILD_PATH", "MIX_DEPS_PATH"}
+    env_isolation_ok = isolation_vars.issubset(set(real_config()["env_delete"]))
+    checks.append(("mix-env-isolation", env_isolation_ok))
+    print(
+        f"{label}: {'PASS' if env_isolation_ok else 'FAIL'} mix-env-isolation"
+    )
+
+    with tempfile.TemporaryDirectory(
+        prefix="mutation-gates-selftest-manifest."
+    ) as base:
+        config_path = build_fixture(
+            base,
+            SRC_DEFAULT,
+            COMPILE_DEFAULT,
+            TEST_DEFAULT,
+            [fixture_cell()],
+        )
+        with open(config_path) as handle:
+            manifest_config = json.load(handle)
+        manifest_cells = manifest_config.pop("cells")
+        manifest_config["test_command"] = lambda file: [
+            sys.executable,
+            "tool/test.py",
+        ]
+        original_tree_manifest = tree_manifest
+
+        def failing_tree_manifest(_root, _relpaths):
+            raise OSError("manifest sentinel path")
+
+        manifest_out = io.StringIO()
+        manifest_code = None
+        try:
+            globals()["tree_manifest"] = failing_tree_manifest
+            with contextlib.redirect_stdout(manifest_out):
+                try:
+                    manifest_code = run_gates(
+                        manifest_config,
+                        manifest_cells,
+                        label="manifest-fixture",
+                    )
+                except OSError:
+                    pass
+        finally:
+            globals()["tree_manifest"] = original_tree_manifest
+        manifest_text = manifest_out.getvalue()
+        manifest_ok = (
+            manifest_code == 1
+            and manifest_text.strip()
+            == "manifest-fixture: FAIL runner internal_error"
+            and "Traceback" not in manifest_text
+            and "sentinel" not in manifest_text
+        )
+    checks.append(("manifest-error-structural", manifest_ok))
+    print(
+        f"{label}: {'PASS' if manifest_ok else 'FAIL'} "
+        "manifest-error-structural"
+    )
+
     cleanup_workspace = Workspace({"env_delete": [], "env_set": {}})
     cleanup_workspace.base = tempfile.mkdtemp(
         prefix="mutation-gates-selftest-cleanup-failure."
@@ -2525,7 +2691,7 @@ def self_test():
 # --------------------------------------------------------------------------
 
 
-def main():
+def run_main():
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(line_buffering=True)
 
@@ -2567,6 +2733,25 @@ def main():
     if code != 0:
         return code
     return run_gates(real_config(), MATRIX)
+
+
+def raise_runner_termination(signum, _frame):
+    raise RunnerTermination(signum)
+
+
+def main():
+    previous_sigterm = signal.getsignal(signal.SIGTERM)
+    signal.signal(signal.SIGTERM, raise_runner_termination)
+    try:
+        return run_main()
+    except KeyboardInterrupt:
+        print("mutation-gates: FAIL runner interrupted")
+        return 130
+    except RunnerTermination as termination:
+        print("mutation-gates: FAIL runner interrupted")
+        return 128 + termination.signum
+    finally:
+        signal.signal(signal.SIGTERM, previous_sigterm)
 
 
 if __name__ == "__main__":

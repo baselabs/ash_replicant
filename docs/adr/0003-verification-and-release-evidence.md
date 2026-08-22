@@ -75,16 +75,19 @@ Release evidence is separated by what it proves:
    selector to fail with the cell's property-specific fingerprint — never
    merely its test name. Dependencies are copied (never symlinked) and made
    read-only; every child process runs in its own session with
-   `ASH_REPLICANT_TEST_URL` deleted and the green baseline asserts zero
-   `TestRepo` start attempts; build identity is proven by strictly
+   `ASH_REPLICANT_TEST_URL`, `MIX_BUILD_ROOT`, `MIX_BUILD_PATH`, and
+   `MIX_DEPS_PATH` deleted and the green baseline asserts zero `TestRepo`
+   start attempts; SIGINT/SIGTERM teardown kills and confirms the active
+   child process group before scratch cleanup; build identity is proven by strictly
    increasing source stamps plus BEAM digests (the mutant's differs from
    pristine, the restoration returns to it exactly), with `File.read!`
    source-pin cells declaring that observation mode instead. The runner's
    output is structural and value-free; its sentinel self-test drives every
    failure class (missing/duplicate anchor, duplicate cell id, inert
    replacement, stale build, restoration drift, baseline failure, vacuous
-   mutant, wrong red, regressed green control, timeout with a live
-   descendant, internal error) and fails if an injected value-shaped
+   mutant, wrong red, regressed green control, interrupt/termination with a
+   live child, timeout with a live descendant, manifest error, internal error)
+   and fails if an injected value-shaped
    sentinel from child output ever reaches the runner's own output. The
    matrix runs once in the no-database job and is pinned by the release
    contract; the compatibility matrices keep running the focused tests on
