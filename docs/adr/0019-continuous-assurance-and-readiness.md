@@ -4,9 +4,11 @@ Date: 2026-08-19
 
 ## Status
 
-Status: Partially accepted for the 1.0.0 release line. C01's continuous census
-is implemented; the doctor, status/readiness, tombstone, and remaining
-destination/migration checks stay owned by their later roadmap children.
+Status: Accepted for the 1.0.0 release line. C01's continuous census and
+O02's status/tombstone child are implemented (`AshReplicant.Status`,
+`AshReplicant.status/1`, the durable tombstone columns); the remaining
+destination/migration census extensions stay owned by their later roadmap
+children.
 
 ## Context
 

@@ -27,6 +27,7 @@ defmodule AshReplicant do
   alias AshReplicant.Sink.Impl
   alias AshReplicant.Snapshot.Provenance
   alias AshReplicant.Snapshot.State
+  alias AshReplicant.Status
 
   @doc "The library version string."
   @spec version() :: String.t()
@@ -85,15 +86,31 @@ defmodule AshReplicant do
   @doc """
   Stop a running pipeline by slot name (idempotent). Clears the cached resolver
   index from `:persistent_term` so a subsequent `start_link/1` rebuilds it fresh.
+  Stopping a slot whose owner is live records the `:operator_stopped` terminal
+  tombstone first (O02); stopping an already-dead slot leaves whatever terminal
+  cause it already recorded.
   """
   @spec stop_supervised(String.t()) :: :ok | {:error, :pipeline_stop_failed}
   def stop_supervised(slot_name) do
     activation_lock(slot_name, fn ->
+      record_stop_tombstone(slot_name)
       result = safe_stop(slot_name)
       :persistent_term.erase({AshReplicant, slot_name})
       Impl.clear_snapshot_ordinals(slot_name)
       result
     end)
+  end
+
+  defp record_stop_tombstone(slot_name) do
+    case :persistent_term.get({AshReplicant, slot_name}, :none) do
+      %Generation{sink: sink, source_identity: identity, owner: owner} ->
+        if owner_alive?(owner),
+          do: Status.record_terminal(slot_name, sink, identity, :operator_stopped),
+          else: :ok
+
+      _absent ->
+        :ok
+    end
   end
 
   @doc false
@@ -154,6 +171,36 @@ defmodule AshReplicant do
   """
   @spec doctor(keyword()) :: AshReplicant.Doctor.Report.t()
   def doctor(opts) when is_list(opts), do: AshReplicant.Doctor.run(:doctor, opts)
+
+  @doc """
+  The coherent runtime status of a sink's slot (O02 / issue #12 /
+  ADR-0019): `:healthy`, `:catching_up`, `{:halted, reason}`,
+  `{:misconfigured, reason}`, or `:not_started`.
+
+  Derived — never stored — from the live owner's own facts, the
+  node-local generation entry, the tombstone legs, and (when the repo is
+  running) the durable checkpoint evidence. A dead or stale generation can
+  never report `:healthy`. Healthy requires a live owner and pipeline, an
+  enabled census whose last run passed, and no in-flight snapshot — owner
+  liveness alone is insufficient, so a pipeline whose census has not yet
+  passed (or is disabled) conservatively reports `:catching_up`.
+
+  Runtime evidence is NODE-LOCAL (`:persistent_term` plus process facts),
+  so call this from inside the running application. Every reason is a
+  closed value-free atom; no row, message, prefix, or progress-token bytes
+  ever appear.
+
+  `AshReplicant.Status.derive/2` exposes the six-state generation
+  lifecycle underneath (`:activating`, `:ready`, `:degraded`, `:halted`,
+  `:stopped`, `:superseded`) with its typed evidence.
+  """
+  @spec status(module()) ::
+          :healthy
+          | :catching_up
+          | {:halted, Status.reason()}
+          | {:misconfigured, Status.reason()}
+          | :not_started
+  def status(sink) when is_atom(sink), do: Status.status(sink)
 
   @doc """
   Adopt a legacy slot-only watermark into a source-bound checkpoint row (the
@@ -679,11 +726,16 @@ defmodule AshReplicant do
 
       case result do
         {:ok, pipeline_pid} ->
+          # The live generation is the newer fact: the previous terminal
+          # cause's node-local leg must not outlive its successor (O02).
+          :ok = Status.clear_node_local(sink_config.slot_name)
+
           {:ok,
            %{
              slot_name: sink_config.slot_name,
              generation_ref: reference,
-             pipeline_pid: pipeline_pid
+             pipeline_pid: pipeline_pid,
+             source_identity: source_identity
            }}
 
         _start_failed ->

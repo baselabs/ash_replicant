@@ -329,6 +329,37 @@ is a catalog identifier, so an identity-class shape (which embeds the source
 database) can never reach operator output. Anything unjudgeable is `:skipped`
 with the reason it could not be judged — never `:pass`.
 
+**12. Runtime status is one DERIVED model; tombstones are value-free and
+bounded (O02, ADR-0019).** `AshReplicant.status/1` answers the closed public
+five (`:healthy | :catching_up | {:halted, reason} | {:misconfigured, reason}
+| :not_started`); `AshReplicant.Status.derive/2` is the six-state generation
+model underneath (`:activating`, `:ready`, `:degraded`, `:halted`,
+`:stopped`, `:superseded`). The answer is DERIVED, never stored: precedence
+walks the live owner's own facts (a `handle_call` seam the owner answers in
+BOTH pending and admitted phases — an unmatched call would kill a healthy
+activation), then the generation entry (a DEAD owner is the fault
+`{:halted, :owner_lost}` — never ready, never `:not_started`), then the
+tombstone legs (node-local first, durable second), then nothing. `:healthy`
+requires a live owner AND pipeline AND an enabled census whose last run passed
+AND no in-flight snapshot — owner liveness alone is insufficient. A call
+TIMEOUT on a live owner is `:catching_up` (the conservative bucket), not owner
+loss. Tombstones record WHY a generation ended: cause atoms from the CLOSED
+reason vocabulary (plus `:operator_stopped`, `:pipeline_terminated`,
+`:owner_lost`, `:tombstone_unknown`), a class (`halt | misconfigured |
+stopped`, fail-closed default `halt`), and a timestamp — never a row value,
+prefix, or progress token; decode is closed-set with a fixed fallback and
+NEVER mints atoms from persisted bytes. The durable leg lives on the checkpoint
+row (`terminal_cause`/`terminal_class`/`terminal_at`), is written ONLY when the
+row already exists (a tombstone never creates watermark-less rows), is cleared
+by EVERY admitted checkpoint write (bind AND advance — a stale cause must not
+outlive its successor), and is written by the party that knows the cause (the
+sink's scrubbed halt reason; the owner's census halt — node-local at the
+decision, durable AFTER `safe_stop`; `stop_supervised` before it stops). A
+tree shutdown writes nothing; an unexplained pipeline death records
+`:pipeline_terminated` only when no tombstone is already present. One writer
+home: `AshReplicant.Status` — never re-derive the walk in the doctor, the
+owner, or a host health endpoint.
+
 ## Development workflow
 
 The supported release foundation is Elixir 1.20.3 on Erlang/OTP 29 with Ash

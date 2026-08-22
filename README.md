@@ -633,6 +633,52 @@ unhealthy" from "you invoked me wrong".
 > the running application (a remote console or a health endpoint) for the real
 > answer.
 
+## Runtime status and lifecycle tombstones
+
+`AshReplicant.status/1` answers one question — what state is this sink's
+pipeline in? — with a closed five-value contract:
+
+```elixir
+AshReplicant.status(MyApp.Replicant.Sink)
+#=> :healthy | :catching_up | {:halted, reason} | {:misconfigured, reason} | :not_started
+```
+
+The answer is **derived, never stored**: it asks the live `PipelineOwner` for
+its own facts (census health, pipeline liveness), falls back to the
+node-local generation entry (a dead owner is the fault
+`{:halted, :owner_lost}` — mirroring has stopped, never "not started"), then
+to the tombstone legs. `AshReplicant.Status.derive/2` exposes the six-state
+generation lifecycle underneath (`:activating`, `:ready`, `:degraded`,
+`:halted`, `:stopped`, `:superseded`) with its typed, value-free evidence.
+
+Healthy is a strong claim: it requires a live owner and pipeline, an
+**enabled census whose last run passed**, and no in-flight snapshot. Owner
+liveness alone is insufficient — a pipeline whose census has not run yet (or
+is disabled) conservatively reports `:catching_up`, and so does one whose
+census is currently faulting below the halt budget.
+
+### Tombstones
+
+When a generation ends, the party that knows the cause records a **terminal
+tombstone** — bounded (latest per slot), value-free (a closed reason atom, a
+class, a timestamp; never a row value, message prefix, or progress token).
+The sink's halt paths record the scrubbed halt reason; the owner's census
+halt records the census reason; an operator stop records
+`:operator_stopped`. The tombstone has two legs: a node-local one (always
+writable) and a durable one on the checkpoint row (`terminal_cause`,
+`terminal_class`, `terminal_at` — added by `mix ash.codegen` + migrate),
+written only when the row already exists. Every admitted checkpoint write
+(bind and advance) clears the durable leg, so a stale cause never outlives
+the generation that superseded it.
+
+Two documented edges: a halt while the destination is unreachable persists
+only the node-local leg (after a node restart the slot reports
+`:not_started`; the halt telemetry is the durable record), and a host-tree
+shutdown writes no tombstone at all (no database writes during app teardown).
+Replicant discards halt reasons at teardown, so a pipeline death nothing
+else explained records the generic `{:halted, :pipeline_terminated}` —
+over-alerting by design.
+
 ## Strict source coverage
 
 Every publication table is mapped, explicitly ignored

@@ -275,6 +275,9 @@ defmodule AshReplicant.Upgrade do
       attribute(:snapshot_progress, :binary),
       attribute(:snapshot_state, :binary),
       attribute(:origin_floor, :bigint),
+      attribute(:terminal_cause, :text),
+      attribute(:terminal_class, :text),
+      attribute(:terminal_at, :utc_datetime_usec),
       attribute(:inserted_at, :utc_datetime_usec, false, false,
         default: ~s|fragment("(now() AT TIME ZONE 'utc')")|
       ),

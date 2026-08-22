@@ -127,7 +127,7 @@ defmodule AshReplicant.UpgradeTest do
     assert decoded["repo"] == "Elixir.AshReplicant.TestRepo"
 
     assert Enum.map(decoded["attributes"], & &1["source"]) ==
-             ~w(source_system_id source_database slot_name source_timeline publication_contract publication_fingerprint commit_lsn snapshot_progress snapshot_state origin_floor inserted_at updated_at)
+             ~w(source_system_id source_database slot_name source_timeline publication_contract publication_fingerprint commit_lsn snapshot_progress snapshot_state origin_floor terminal_cause terminal_class terminal_at inserted_at updated_at)
 
     assert [%{"keys" => keys}] = decoded["identities"]
 

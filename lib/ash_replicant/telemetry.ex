@@ -63,7 +63,8 @@ defmodule AshReplicant.Telemetry do
       [:ash_replicant, :preflight, :failed],
       [:ash_replicant, :census, :passed],
       [:ash_replicant, :census, :faulted],
-      [:ash_replicant, :census, :halted]
+      [:ash_replicant, :census, :halted],
+      [:ash_replicant, :status, :tombstone_write_failed]
     ]
   end
 

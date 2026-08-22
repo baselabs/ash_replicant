@@ -32,6 +32,7 @@ defmodule AshReplicant.Sink.Impl do
     Resolver,
     Snapshot,
     Sql,
+    Status,
     Telemetry
   }
 
@@ -418,13 +419,27 @@ defmodule AshReplicant.Sink.Impl do
         %{
           source_timeline: identity.timeline_id,
           publication_contract: contract.encoded,
-          publication_fingerprint: contract.fingerprint
+          publication_fingerprint: contract.fingerprint,
+          # O02 (design D6): the bind is an admitted checkpoint write on
+          # EVERY connect — the terminal-clear here is what guarantees a
+          # successor generation's row carries no stale cause even when it
+          # never streams a single advance.
+          terminal_cause: nil,
+          terminal_class: nil,
+          terminal_at: nil
         }
       ),
       action: :upsert,
       upsert?: true,
       upsert_identity: :source_slot,
-      upsert_fields: [:source_timeline, :publication_contract, :publication_fingerprint],
+      upsert_fields: [
+        :source_timeline,
+        :publication_contract,
+        :publication_fingerprint,
+        :terminal_cause,
+        :terminal_class,
+        :terminal_at
+      ],
       authorize?: false,
       context: action_context(config),
       return_notifications?: true
@@ -2029,6 +2044,7 @@ defmodule AshReplicant.Sink.Impl do
       error_class: error.class
     })
 
+    record_terminal_cause(config, error)
     {:error, error}
   end
 
@@ -2042,7 +2058,24 @@ defmodule AshReplicant.Sink.Impl do
       error_class: error.class
     })
 
+    record_terminal_cause(config, error)
     {:error, error}
+  end
+
+  # O02: the halt path is the one party that KNOWS the cause (Replicant 1.x
+  # discards it at teardown), so the tombstone is recorded here — node-local
+  # always, durable best-effort — before the error stops the pipeline.
+  defp record_terminal_cause(config, error) do
+    Status.record_terminal(
+      config.slot_name,
+      Map.get(config, :sink),
+      Map.get(config, :source_identity),
+      error.reason
+    )
+  rescue
+    _error -> :ok
+  catch
+    _kind, _reason -> :ok
   end
 
   # Mechanical triple rekey (source-bound checkpoint, B2). The identity comes from the
@@ -2095,6 +2128,11 @@ defmodule AshReplicant.Sink.Impl do
   # `upsert_fields` names exactly the supplied columns, so writing the snapshot
   # state never disturbs the watermark and vice versa.
   defp upsert_checkpoint_fields(config, fields) when is_map(fields) do
+    # O02 (design D6): every admitted checkpoint write declares the row
+    # alive again — the terminal tombstone columns clear with it, so a
+    # stale cause can never outlive the generation that superseded it.
+    fields = Map.merge(fields, %{terminal_cause: nil, terminal_class: nil, terminal_at: nil})
+
     Ash.create!(
       config.checkpoint_resource,
       Map.merge(checkpoint_filter(config), fields),

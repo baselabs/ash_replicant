@@ -57,7 +57,7 @@ defmodule AshReplicant.PipelineOwner do
 
   use GenServer
 
-  alias AshReplicant.{Census, Telemetry}
+  alias AshReplicant.{Census, Status, Telemetry}
   alias AshReplicant.Sink.Impl
 
   @doc """
@@ -149,16 +149,42 @@ defmodule AshReplicant.PipelineOwner do
     state = %{
       slot_name: admitted.slot_name,
       sink: admitted.sink,
+      source_identity: admitted.source_identity,
       generation_ref: admitted.generation_ref,
       pipeline_pid: admitted.pipeline_pid,
       monitor: monitor,
       census: admitted.census,
       census_timer: nil,
       census_run: nil,
-      consecutive_faults: 0
+      consecutive_faults: 0,
+      last_census: :none
     }
 
     {:noreply, schedule_next_census(state)}
+  end
+
+  # O02: the status derivation's facts seam. The owner answers in BOTH
+  # phases (an unmatched call would exit the GenServer and kill a healthy
+  # activation), and a catch-all keeps every other caller harmless.
+  @impl GenServer
+  def handle_call(:ash_replicant_status, _from, %{pending: true} = state) do
+    {:reply, %{phase: :pending}, state}
+  end
+
+  def handle_call(:ash_replicant_status, _from, state) do
+    {:reply, status_facts(state), state}
+  end
+
+  def handle_call(_other, _from, state), do: {:reply, {:error, :unknown_call}, state}
+
+  defp status_facts(state) do
+    %{
+      phase: :admitted,
+      pipeline_alive: is_pid(state.pipeline_pid) and Process.alive?(state.pipeline_pid),
+      last_census: Map.get(state, :last_census, :none),
+      census_enabled?: match?(%{enabled?: true}, state.census),
+      consecutive_faults: state.consecutive_faults
+    }
   end
 
   @impl GenServer
@@ -224,11 +250,21 @@ defmodule AshReplicant.PipelineOwner do
   end
 
   # The pipeline exited (halt, crash, external stop): the generation is
-  # dead weight — erase only OURS and leave.
+  # dead weight — erase only OURS and leave. Replicant 1.x discards the
+  # halt reason at teardown (the halting caller owns the distinguishing
+  # signal), so an unexplained death records the GENERIC terminal cause —
+  # but never over a tombstone a precise writer already left.
   def handle_info(
         {:DOWN, ref, :process, pid, _reason},
         %{monitor: ref, pipeline_pid: pid} = state
       ) do
+    Status.record_if_absent(
+      state.slot_name,
+      state.sink,
+      state.source_identity,
+      :pipeline_terminated
+    )
+
     {:stop, :normal, cleanup(state)}
   end
 
@@ -247,7 +283,12 @@ defmodule AshReplicant.PipelineOwner do
   def handle_info(_other, state), do: {:noreply, state}
 
   defp reap_pending(%{pending: true} = state) do
-    if slot_name = state.slot_name, do: AshReplicant.reclaim_owned_generation(slot_name, self())
+    if slot_name = state.slot_name do
+      AshReplicant.reclaim_owned_generation(slot_name, self())
+      # The reaped pipeline ended by the handshake aborting — a teardown
+      # write hazard, so the node-local leg is the whole record.
+      Status.record_node_local(slot_name, :pipeline_terminated)
+    end
 
     {:stop, :normal, state}
   end
@@ -309,7 +350,7 @@ defmodule AshReplicant.PipelineOwner do
       %{slot_name: state.slot_name}
     )
 
-    {:noreply, schedule_next_census(%{state | consecutive_faults: 0})}
+    {:noreply, schedule_next_census(%{state | consecutive_faults: 0, last_census: :healthy})}
   end
 
   defp apply_census_report(
@@ -324,7 +365,7 @@ defmodule AshReplicant.PipelineOwner do
       %{slot_name: state.slot_name, kind: check, reason: reason}
     )
 
-    state = %{state | consecutive_faults: faults}
+    state = %{state | consecutive_faults: faults, last_census: :faulted}
 
     if faults >= state.census.max_consecutive_faults do
       halt_for_census(state, check, :census_unverifiable)
@@ -347,7 +388,13 @@ defmodule AshReplicant.PipelineOwner do
       %{slot_name: state.slot_name, kind: check, reason: reason}
     )
 
+    # The node-local tombstone leg is written at the DECISION (always
+    # legible, even with the destination down); the durable leg waits for
+    # termination — after `safe_stop` no admitted delivery can still commit
+    # its terminal-clear (O02 design D3).
+    tombstone = Status.record_node_local(state.slot_name, reason)
     _ = safe_stop(state)
+    Status.record_durable(state.slot_name, state.sink, state.source_identity, tombstone)
     {:stop, :normal, cleanup(state)}
   end
 

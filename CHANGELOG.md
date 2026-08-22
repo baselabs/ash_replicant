@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Coherent runtime status and lifecycle tombstones** (roadmap D3-status /
+  issue #12 / ADR-0019). `AshReplicant.status/1` answers with the closed
+  five-value contract `:healthy | :catching_up | {:halted, reason} |
+  {:misconfigured, reason} | :not_started`, derived — never stored — from the
+  live `PipelineOwner`'s own facts (census health, pipeline liveness), the
+  node-local generation entry, the tombstone legs, and, when the repo is
+  running, the durable checkpoint evidence. `AshReplicant.Status.derive/2`
+  exposes the six-state generation lifecycle underneath (`:activating`,
+  `:ready`, `:degraded`, `:halted`, `:stopped`, `:superseded`) with typed
+  value-free evidence. Healthy requires a live owner and pipeline, an enabled
+  census whose last run passed, and no in-flight snapshot — owner liveness
+  alone is insufficient, and a dead or stale generation can never report
+  healthy (it is the fault `{:halted, :owner_lost}`).
+
+  When a generation ends, the party that knows the cause records a terminal
+  tombstone: the sink's halt paths (the scrubbed reason), the owner's census
+  halt, and an operator stop (`:operator_stopped`). The tombstone is bounded
+  (latest per slot) and value-free (closed reason atoms, a class, a
+  timestamp); its durable leg lives in three new nullable checkpoint columns
+  (`terminal_cause`, `terminal_class`, `terminal_at` — regenerate with
+  `mix ash.codegen` and migrate), written only when the row already exists.
+  Every admitted checkpoint write (bind and advance) clears the durable leg,
+  so a stale cause cannot outlive the generation that superseded it. A halt
+  while the destination is unreachable persists only the node-local leg; a
+  host-tree shutdown writes no tombstone; an unexplained pipeline death
+  records the generic `{:halted, :pipeline_terminated}` (Replicant discards
+  halt reasons at teardown). Status/tombstone reasons never carry row,
+  message, prefix, or progress-token bytes, and a foreign persisted cause
+  decodes to the closed fallback `{:halted, :tombstone_unknown}` without
+  minting atoms.
+
 - **Read-only operator preflight and doctor commands** (roadmap D2).
   `mix ash_replicant.preflight --pipeline MyApp.Replicant.Pipeline` answers
   whether a pipeline may start — dependency requirements, sink configuration,

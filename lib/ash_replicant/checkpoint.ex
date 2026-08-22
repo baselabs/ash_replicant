@@ -40,6 +40,14 @@ defmodule AshReplicant.Checkpoint do
   regenerated migration drops an always-NULL column and adds an always-NULL one:
   run `mix ash.codegen` and migrate. No data capture is required.
 
+  ## Upgrading for runtime status tombstones (O02)
+
+  Three nullable columns are ADDED: `terminal_cause`, `terminal_class`, and
+  `terminal_at` — the bounded, value-free record of why the slot's last
+  generation ended (`AshReplicant.status/1`). They are cleared by every
+  admitted checkpoint write, so the regenerated migration adds always-NULL
+  columns and requires no data capture: run `mix ash.codegen` and migrate.
+
   ## Default-deny trust posture (B7 / ADR-0014)
 
   The checkpoint is an internal watermark, not tenant data: nothing outside
@@ -177,6 +185,25 @@ defmodule AshReplicant.Checkpoint do
           allow_nil? true
         end
 
+        # O02 (issue #12 / ADR-0019): the bounded lifecycle tombstone — why the
+        # slot's last generation ended, as a CLOSED value-free string (a reason
+        # atom name, or "invalid_destination_config/<tag>" for the one structural
+        # tuple). `terminal_class` is "halt" | "misconfigured" | "stopped";
+        # `terminal_at` is the time the cause was recorded. A tombstone never
+        # carries a row value, message prefix, or progress token, and every
+        # admitted checkpoint write clears all three (the row is live again).
+        attribute :terminal_cause, :string do
+          allow_nil? true
+        end
+
+        attribute :terminal_class, :string do
+          allow_nil? true
+        end
+
+        attribute :terminal_at, :utc_datetime_usec do
+          allow_nil? true
+        end
+
         timestamps()
       end
 
@@ -201,7 +228,10 @@ defmodule AshReplicant.Checkpoint do
             :commit_lsn,
             :snapshot_progress,
             :snapshot_state,
-            :origin_floor
+            :origin_floor,
+            :terminal_cause,
+            :terminal_class,
+            :terminal_at
           ]
         end
 

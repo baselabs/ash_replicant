@@ -952,6 +952,43 @@ Rules for reading a report:
 - Output carries no connection option, publication name, source identity, slot
   name, watermark, or row value, in either format.
 
+## Asking a pipeline how it is
+
+```elixir
+AshReplicant.status(MyApp.Replicant.Sink)
+#=> :healthy | :catching_up | {:halted, reason} | {:misconfigured, reason} | :not_started
+```
+
+Call it from inside the running application (a remote console or a health
+endpoint) — the live evidence is node-local. The answer is derived from the
+owner's own facts, the generation entry, and the tombstone legs; it is never
+a stored flag that can drift.
+
+Rules for reading it:
+
+- **`:healthy` is a strong claim**: live owner and pipeline, an enabled
+  census whose last run passed, and no in-flight snapshot. A pipeline whose
+  census has not run yet, is disabled, or is faulting below the halt budget
+  reports `:catching_up` — owner liveness alone is insufficient.
+- **`{:halted, :owner_lost}` is a fault.** A dead owner means mirroring has
+  stopped (or stops at the next callback); restart explicitly. It is never
+  reported as `:not_started`.
+- **`{:misconfigured, reason}` names the config/contract drift** an operator
+  fixes before a restart can succeed (identity rebinding, contract drift,
+  source mapping gaps). Other halt causes report `{:halted, reason}`.
+- **A deliberate stop is `:not_started`.** The tombstone distinguishes it on
+  the lifecycle surface (`AshReplicant.Status.derive/2` returns
+  `:stopped`), but the public five-state set treats "cleanly stopped" and
+  "never started" the same: nothing is wrong.
+- **Terminal causes persist as value-free tombstones** — closed reason
+  atoms, a class, and a timestamp on the checkpoint row
+  (`terminal_cause`/`terminal_class`/`terminal_at`), cleared by every
+  admitted checkpoint write. If the destination was unreachable at halt
+  time, only the node-local leg survives; after a node restart such a slot
+  reports `:not_started` and the halt telemetry is the record.
+- Reasons never carry row values, message prefixes, or progress tokens, and
+  a foreign persisted cause decodes to `{:halted, :tombstone_unknown}`.
+
 ## Source-bound checkpoints, binding, and operator recovery
 
 The durable checkpoint row is keyed by the ACTUAL replication session's
