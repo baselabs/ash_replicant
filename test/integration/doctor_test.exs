@@ -213,21 +213,23 @@ defmodule AshReplicant.Integration.DoctorTest do
 
       script = """
       defmodule AshReplicant.Integration.DoctorSubprocessPipeline do
-        def start_options do
-          connection = AshReplicant.Test.Marquee.conn()
-
-          {:ok,
-           [
-             sink: AshReplicant.Test.Marquee.Sink,
-             connection: connection,
-             publication: \"#{@publication}\",
-             source_identity: [
-               system_identifier: System.fetch_env!(\"ASH_REPLICANT_DOCTOR_SYSTEM_IDENTIFIER\"),
-               database: Keyword.fetch!(connection, :database)
-             ]
-           ]}
-        end
+        use AshReplicant.Pipeline,
+          otp_app: :ash_replicant,
+          sink: AshReplicant.Test.Marquee.Sink
       end
+
+      connection = AshReplicant.Test.Marquee.conn()
+
+      Application.put_env(
+        :ash_replicant,
+        AshReplicant.Integration.DoctorSubprocessPipeline,
+        connection: connection,
+        publication: \"#{@publication}\",
+        source_identity: [
+          system_identifier: System.fetch_env!(\"ASH_REPLICANT_DOCTOR_SYSTEM_IDENTIFIER\"),
+          database: Keyword.fetch!(connection, :database)
+        ]
+      )
 
       Mix.Tasks.AshReplicant.Preflight.run([
         \"--pipeline\",

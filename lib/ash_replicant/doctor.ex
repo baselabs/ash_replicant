@@ -257,10 +257,19 @@ defmodule AshReplicant.Doctor do
   # the LEADING tag in every case; the payload is dropped rather than rendered,
   # because a diagnosis report is not the place to decide whether a tuple's tail
   # is a module name or something else.
-  defp structural_reason({:invalid_destination_config, tag}) when is_atom(tag), do: tag
+  @doc false
+  @spec structural_reason(term()) :: atom()
+  def structural_reason({:invalid_destination_config, tag}) when is_atom(tag), do: tag
 
-  defp structural_reason(reason) when is_tuple(reason) and tuple_size(reason) > 0,
-    do: elem(reason, 0)
+  def structural_reason(reason) when is_tuple(reason) and tuple_size(reason) > 0 do
+    case elem(reason, 0) do
+      tag when is_atom(tag) -> tag
+      _unstructured -> :config_invalid
+    end
+  end
+
+  def structural_reason(reason) when is_atom(reason), do: reason
+  def structural_reason(_unstructured), do: :config_invalid
 
   # --- source leg ---
 
@@ -279,13 +288,34 @@ defmodule AshReplicant.Doctor do
       {:ok, probed} ->
         [check_source_reachable(:ok) | judged_source_checks(plan, contract, probed, watermark)]
 
-      {:error, _unreachable} ->
+      {:error, :unreachable} ->
         [
           check_source_reachable({:error, :unreachable})
           | skipped(@source_check_names, :source_unreachable)
         ]
+
+      {:error, reason} when reason in [:permission_denied, :query_failed] ->
+        source_probe_failure_checks(reason)
     end
   end
+
+  @doc false
+  @spec source_probe_failure_checks(:permission_denied | :query_failed) :: [Check.t()]
+  def source_probe_failure_checks(:permission_denied) do
+    checks =
+      Enum.map(@source_check_names, fn
+        :source_privileges ->
+          fail(:source_privileges, :source, :privilege_probe_missing)
+
+        name ->
+          skipped_check(name, domain_of(name), :source_probe_failed)
+      end)
+
+    [check_source_reachable(:ok) | checks]
+  end
+
+  def source_probe_failure_checks(:query_failed),
+    do: [check_source_reachable(:ok) | skipped(@source_check_names, :source_probe_failed)]
 
   defp judged_source_checks(plan, contract, probed, watermark) do
     coverage = coverage_verdicts(plan, contract, probed)

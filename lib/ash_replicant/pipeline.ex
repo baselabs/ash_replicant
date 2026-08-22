@@ -85,6 +85,9 @@ defmodule AshReplicant.Pipeline do
       @ash_replicant_otp_app unquote(otp_app)
       @ash_replicant_sink unquote(sink)
 
+      @doc false
+      def __ash_replicant_pipeline__, do: true
+
       @doc """
       Start the pipeline supervisor. Supervises nothing until
       `config #{inspect(unquote(otp_app))}, #{inspect(__MODULE__)}` supplies the
@@ -127,6 +130,34 @@ defmodule AshReplicant.Pipeline do
           @ash_replicant_sink
         )
       end
+    end
+  end
+
+  @doc false
+  @spec generated?(module()) :: boolean()
+  def generated?(module) when is_atom(module) do
+    if Code.loaded?(module) do
+      function_exported?(module, :__ash_replicant_pipeline__, 0)
+    else
+      module
+      |> Atom.to_charlist()
+      |> Kernel.++(~c".beam")
+      |> :code.where_is_file()
+      |> generated_beam?()
+    end
+  end
+
+  def generated?(_module), do: false
+
+  defp generated_beam?(:non_existing), do: false
+
+  defp generated_beam?(path) do
+    case :beam_lib.chunks(path, [:exports]) do
+      {:ok, {_module, [exports: exports]}} ->
+        {:__ash_replicant_pipeline__, 0} in exports
+
+      _unreadable ->
+        false
     end
   end
 

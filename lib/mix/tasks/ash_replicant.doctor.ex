@@ -92,10 +92,11 @@ defmodule Mix.Tasks.AshReplicant.Diagnosis do
   # sink included — so the command never asks the operator to restate
   # configuration the application already carries.
   defp diagnose(mode, pipeline) do
-    # `resolve_module/1` always yields an atom, so the only real question is
-    # whether that atom is a loadable module exposing the generated pipeline's
-    # own start options.
-    if Code.ensure_loaded?(pipeline) and function_exported?(pipeline, :start_options, 0) do
+    # Check the generated marker in the BEAM export table BEFORE loading an
+    # operator-named module. `Code.ensure_loaded?/1` may run `@on_load`; an
+    # arbitrary module must not gain that execution path from a read-only task.
+    if AshReplicant.Pipeline.generated?(pipeline) and Code.ensure_loaded?(pipeline) and
+         function_exported?(pipeline, :start_options, 0) do
       start_options(mode, pipeline)
     else
       Report.invalid(:pipeline_required)

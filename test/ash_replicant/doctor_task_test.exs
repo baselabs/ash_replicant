@@ -88,6 +88,45 @@ defmodule AshReplicant.DoctorTaskTest do
       assert [%{name: :invocation, reason: :pipeline_required}] = report.checks
     end
 
+    test "an unloaded imposter is rejected without loading or invoking it" do
+      imposter = AshReplicant.Test.UnadmittedPipeline
+      load_count_key = {imposter, :load_count}
+      start_options_key = {imposter, :start_options_called}
+      load_count = :persistent_term.get(load_count_key, 0)
+
+      :persistent_term.erase(start_options_key)
+      :code.purge(imposter)
+      :code.delete(imposter)
+      refute Code.loaded?(imposter)
+
+      on_exit(fn ->
+        Code.ensure_loaded(imposter)
+        :persistent_term.erase(start_options_key)
+      end)
+
+      report = DoctorTask.report(["--pipeline", inspect(imposter)])
+
+      assert report.exit_code == 3
+      assert [%{name: :invocation, reason: :pipeline_required}] = report.checks
+      refute Code.loaded?(imposter)
+      assert :persistent_term.get(load_count_key, 0) == load_count
+      refute :persistent_term.get(start_options_key, false)
+    end
+
+    test "an unloaded generated pipeline is admitted from its BEAM marker" do
+      pipeline = AshReplicant.Test.AdmittedPipeline
+
+      :code.purge(pipeline)
+      :code.delete(pipeline)
+      refute Code.loaded?(pipeline)
+
+      report = DoctorTask.report(["--pipeline", inspect(pipeline)])
+
+      assert report.exit_code == 3
+      assert [%{name: :invocation, reason: :pipeline_not_configured}] = report.checks
+      assert Code.loaded?(pipeline)
+    end
+
     test "an unconfigured pipeline is refused as unconfigured, not as unhealthy" do
       report = DoctorTask.report(["--pipeline", inspect(BarePipeline)])
 

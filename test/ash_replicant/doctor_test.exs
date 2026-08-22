@@ -183,6 +183,42 @@ defmodule AshReplicant.DoctorTest do
       assert unreachable.reason == :source_unreachable
       refute unreachable.reason == privileges.reason
     end
+
+    test "a permission fault after connecting fails privileges and preserves reachability" do
+      checks = Doctor.source_probe_failure_checks(:permission_denied)
+
+      assert Enum.find(checks, &(&1.name == :source_reachable)).status == :pass
+
+      privileges = Enum.find(checks, &(&1.name == :source_privileges))
+      assert privileges.status == :fail
+      assert privileges.reason == :privilege_probe_missing
+
+      coverage = Enum.find(checks, &(&1.name == :source_coverage))
+      assert coverage.status == :skipped
+      assert coverage.reason == :source_probe_failed
+    end
+
+    test "another statement fault preserves reachability and judges nothing else" do
+      checks = Doctor.source_probe_failure_checks(:query_failed)
+
+      assert Enum.find(checks, &(&1.name == :source_reachable)).status == :pass
+
+      for check <- Enum.reject(checks, &(&1.name == :source_reachable)) do
+        assert check.status == :skipped
+        assert check.reason == :source_probe_failed
+      end
+    end
+  end
+
+  describe "structural admission reasons" do
+    test "a bare atom remains the diagnosis reason" do
+      assert Doctor.structural_reason(:sink_kind_mixed) == :sink_kind_mixed
+    end
+
+    test "an unstructured reason fails closed" do
+      assert Doctor.structural_reason(%{unexpected: true}) == :config_invalid
+      assert Doctor.structural_reason({"row-shaped", :payload}) == :config_invalid
+    end
   end
 
   describe "replica identity is distinguished from the rest of coverage" do

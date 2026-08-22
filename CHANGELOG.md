@@ -19,7 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `mix ash_replicant.doctor` adds the durable-state classes: checkpoint state,
   contract drift, and runtime readiness. Both resolve the generated pipeline's
   own admitted start options, and the same diagnosis is available in-process as
-  `AshReplicant.preflight/1` and `AshReplicant.doctor/1`.
+  `AshReplicant.preflight/1` and `AshReplicant.doctor/1`. The Mix task admits
+  the generated marker from the BEAM export table before loading the named
+  module, so an arbitrary module cannot execute `@on_load` or
+  `start_options/0` through the read-only command.
 
   The commands perform **no writes**, on three independent legs: a fail-closed
   read-only statement admission (leading `SELECT` only, no separator, no write
@@ -43,6 +46,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   invocation that could not be diagnosed at all — distinct from `1` so a
   monitoring caller can tell an unhealthy deployment from a bad invocation.
   A never-matching `ignored_sources` entry now warns (`ignore_never_matches`).
+  A permission or catalog-statement fault after connection is now reported as
+  `privilege_probe_missing` / `source_probe_failed` while reachability remains
+  passed, rather than misclassifying a responding server as unreachable.
 
   Coverage rules are reused, never re-implemented: `Coverage.evaluate/3`,
   the new `Coverage.replica_identity_check/2` and

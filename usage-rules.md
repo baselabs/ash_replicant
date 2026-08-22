@@ -915,7 +915,9 @@ on a fresh install. `doctor` adds the durable-state classes a deployed pipeline
 has: checkpoint state, contract drift, and runtime readiness. Both resolve the
 generated pipeline's own admitted start options — never restate configuration
 the application already carries. In-process, the same diagnosis is
-`AshReplicant.preflight/1` and `AshReplicant.doctor/1`.
+`AshReplicant.preflight/1` and `AshReplicant.doctor/1`. The Mix task checks the
+generated-pipeline marker in the BEAM export table before loading the named
+module, so an arbitrary module cannot run `@on_load` or `start_options/0`.
 
 **The commands perform no writes.** Every source statement passes a fail-closed
 read-only admission, the probe connection is opened
@@ -926,14 +928,17 @@ commands never start a repo, a pipeline, or a service.
 Rules for reading a report:
 
 - **Every class has its own reason.** Missing privileges
-  (`privilege_replication_missing` / `privilege_select_missing`), unknown
+  (`privilege_replication_missing` / `privilege_select_missing` /
+  `privilege_probe_missing`), unknown
   checkpoint state (`checkpoint_state_unknown`), replica identity
   (`source_replica_identity`, judged independently of the rest of coverage),
   the retention horizon, contract drift, and version mismatch are never
   collapsed into one bucket.
 - **`skipped` is not `pass`.** An unreachable source or an unavailable
   destination skips what it could not judge and says why; reachability itself
-  still fails, so the verdict stays closed.
+  still fails, so the verdict stays closed. A statement fault after a source
+  connection succeeds keeps reachability passed and marks the affected checks
+  `source_probe_failed` instead of calling a responding server unreachable.
 - **Act on `retention_at_risk` before `retention_lost`.** The first warns while
   the WAL is still there; the second means recovery is already impossible. A
   durable watermark whose slot has disappeared is `retention_lost`.

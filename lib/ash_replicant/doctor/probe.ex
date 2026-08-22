@@ -155,11 +155,14 @@ defmodule AshReplicant.Doctor.Probe do
 
   Returns `{:error, :unreachable}` for every connection-level outcome — an
   unresolvable database (classified BEFORE a pool exists, so no retry storm and
-  no uncontrolled log output), a refused connection, or a fault mid-probe. The
-  caller reports that as a failed reachability check and SKIPS everything it
-  could not judge; it never guesses a verdict.
+  no uncontrolled log output), a refused connection, or a dropped connection
+  mid-probe. A statement-level permission failure remains
+  `:permission_denied`; another statement fault remains `:query_failed`. The
+  caller can therefore preserve established reachability and report the
+  unjudgeable checks without calling a responding server unreachable.
   """
-  @spec gather(keyword(), [String.t()], String.t()) :: {:ok, map()} | {:error, :unreachable}
+  @spec gather(keyword(), [String.t()], String.t()) ::
+          {:ok, map()} | {:error, :unreachable | :permission_denied | :query_failed}
   def gather(connection_opts, publication, slot_name) do
     opts = connection_options(connection_opts || [])
 
@@ -226,7 +229,11 @@ defmodule AshReplicant.Doctor.Probe do
          slot: slot(slot_rows)
        }}
     else
-      _fault -> {:error, :unreachable}
+      {:error, reason} when reason in [:unreachable, :permission_denied, :query_failed] ->
+        {:error, reason}
+
+      _fault ->
+        {:error, :query_failed}
     end
   end
 
@@ -283,7 +290,7 @@ defmodule AshReplicant.Doctor.Probe do
 
   defp framework_query(conn, publication, builder) do
     case framework_sql(builder) do
-      nil -> :error
+      nil -> {:error, :query_failed}
       sql -> query(conn, sql, [publication])
     end
   end
@@ -293,11 +300,22 @@ defmodule AshReplicant.Doctor.Probe do
   defp query(conn, sql, params \\ []) do
     case Postgrex.query(conn, admit!(sql), params) do
       {:ok, %Postgrex.Result{} = result} -> {:ok, result}
-      {:error, _reason} -> :error
+      {:error, reason} -> {:error, classify_query_error(reason)}
     end
   rescue
-    _error -> :error
+    error -> {:error, classify_query_error(error)}
+  catch
+    :exit, _reason -> {:error, :unreachable}
+    _kind, _reason -> {:error, :query_failed}
   end
+
+  @doc false
+  @spec classify_query_error(term()) :: :unreachable | :permission_denied | :query_failed
+  def classify_query_error(%Postgrex.Error{postgres: %{code: :insufficient_privilege}}),
+    do: :permission_denied
+
+  def classify_query_error(%DBConnection.ConnectionError{}), do: :unreachable
+  def classify_query_error(_error), do: :query_failed
 
   @doc """
   The probe connection options: the operator's own connection facts, with the

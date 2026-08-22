@@ -169,4 +169,24 @@ defmodule AshReplicant.DoctorProbeTest do
       assert opts[:parameters][:default_transaction_read_only] == "on"
     end
   end
+
+  describe "statement-fault classification" do
+    test "an established connection's permission error is not unreachable" do
+      error = %Postgrex.Error{postgres: %{code: :insufficient_privilege}}
+
+      assert Probe.classify_query_error(error) == :permission_denied
+    end
+
+    test "a connection failure remains unreachable" do
+      error = %DBConnection.ConnectionError{message: "connection closed"}
+
+      assert Probe.classify_query_error(error) == :unreachable
+    end
+
+    test "another statement error is a probe failure, not unreachable" do
+      error = %Postgrex.Error{postgres: %{code: :undefined_table}}
+
+      assert Probe.classify_query_error(error) == :query_failed
+    end
+  end
 end

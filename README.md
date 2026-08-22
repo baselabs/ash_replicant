@@ -566,7 +566,10 @@ Both resolve the generated pipeline's **own** admitted start options, so you
 never restate configuration the application already carries. The same diagnosis
 is available in-process as `AshReplicant.preflight/1` and
 `AshReplicant.doctor/1`, which take the option list `AshReplicant.start_link/1`
-takes and return an `AshReplicant.Doctor.Report`.
+takes and return an `AshReplicant.Doctor.Report`. The Mix tasks verify the
+generated-pipeline marker from the BEAM export table before loading the named
+module, so an arbitrary `--pipeline` module cannot run `@on_load` or
+`start_options/0` through a read-only command.
 
 ### It performs no writes
 
@@ -593,7 +596,7 @@ single "failed" bucket:
 
 | Class | Reasons |
 |---|---|
-| Missing privileges | `privilege_replication_missing`, `privilege_select_missing` |
+| Missing privileges | `privilege_replication_missing`, `privilege_select_missing`, `privilege_probe_missing` |
 | Unknown checkpoint state | `checkpoint_state_unknown`, `checkpoint_state_key_unknown` |
 | Replica identity | `source_replica_identity`, judged independently of the rest of coverage |
 | Retention horizon | `retention_extended` → `retention_at_risk` → `retention_lost` |
@@ -604,6 +607,9 @@ Reasons come from a closed vocabulary, and no connection option, publication
 name, source identity, slot name, watermark, or row value ever appears. A leg
 that could not be judged — an unreachable source, a repo that is not running —
 is reported `skipped` with the reason it could not be judged, never passed.
+If a connected server rejects or faults a catalog statement, reachability stays
+passed; the affected checks are `source_probe_failed` rather than falsely
+reported as unreachable.
 
 Retention is the alert that must fire **before** recovery becomes impossible:
 `retention_at_risk` warns while the WAL is still there, `retention_lost` fails
