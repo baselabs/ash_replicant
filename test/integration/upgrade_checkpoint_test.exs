@@ -357,7 +357,7 @@ defmodule AshReplicant.Upgrade.CheckpointIntegrationTest do
       |> Map.put(:path, "/#{@database}")
       |> URI.to_string()
 
-    runtime = Path.join(root, "scripts/with-release-runtime.sh")
+    mix = System.find_executable("mix") || flunk("mix executable not found")
 
     env = [
       {"ASH_REPLICANT_PATH", root},
@@ -365,7 +365,7 @@ defmodule AshReplicant.Upgrade.CheckpointIntegrationTest do
       {"MIX_ENV", "test"}
     ]
 
-    assert_cmd!(:deps_get, runtime, ["mix", "deps.get"], temp, env)
+    assert_cmd!(:deps_get, mix, ["deps.get"], temp, env)
     before_dry_run = source_digest(temp)
 
     binding =
@@ -377,7 +377,6 @@ defmodule AshReplicant.Upgrade.CheckpointIntegrationTest do
       })
 
     args = [
-      "mix",
       "ash_replicant.upgrade",
       "0.4.0",
       "1.0.0",
@@ -391,11 +390,11 @@ defmodule AshReplicant.Upgrade.CheckpointIntegrationTest do
       binding
     ]
 
-    dry_output = assert_cmd!(:dry_run, runtime, args ++ ["--dry-run"], temp, env)
+    dry_output = assert_cmd!(:dry_run, mix, args ++ ["--dry-run"], temp, env)
     assert source_digest(temp) == before_dry_run
     assert_redacted!(dry_output)
 
-    apply_output = assert_cmd!(:apply, runtime, args ++ ["--yes"], temp, env)
+    apply_output = assert_cmd!(:apply, mix, args ++ ["--yes"], temp, env)
     assert_redacted!(apply_output)
 
     refute File.read!(Path.join(temp, "lib/upgrade_fixture/legacy_sink.ex")) =~ "apply_ledger"
@@ -444,8 +443,8 @@ defmodule AshReplicant.Upgrade.CheckpointIntegrationTest do
     migration_output =
       assert_cmd!(
         :migration_round_trip,
-        runtime,
-        ["mix", "run", "--no-start", "-e", migration_probe],
+        mix,
+        ["run", "--no-start", "-e", migration_probe],
         temp,
         [{"ASH_REPLICANT_PIPELINES_STOPPED", "1"} | env]
       )
