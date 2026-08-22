@@ -58,6 +58,13 @@ defmodule AshReplicant.Upgrade.CheckpointIntegrationTest do
              Checkpoint.up(TestRepo, options(prefix))
   end
 
+  test "recognizes the canonical fresh-install current column order", %{prefix: prefix} do
+    canonical_current!(prefix)
+
+    assert {:ok, %Report{state: :already_upgraded, bound_rows: 0, dormant_bindings: 1}} =
+             Checkpoint.check(TestRepo, options(prefix))
+  end
+
   test "refuses shared, foreign, interrupted, and already-written rollback states", %{
     prefix: prefix
   } do
@@ -481,6 +488,36 @@ defmodule AshReplicant.Upgrade.CheckpointIntegrationTest do
     """)
   end
 
+  defp canonical_current!(prefix) do
+    q!("""
+    CREATE TABLE "#{prefix}".ash_replicant_checkpoints (
+      source_system_id text NOT NULL,
+      source_database text NOT NULL,
+      slot_name text NOT NULL,
+      source_timeline bigint,
+      publication_contract bytea,
+      publication_fingerprint bytea,
+      commit_lsn bigint,
+      snapshot_progress bytea,
+      snapshot_state bytea,
+      origin_floor bigint,
+      inserted_at timestamp without time zone NOT NULL DEFAULT (now() AT TIME ZONE 'utc'),
+      updated_at timestamp without time zone NOT NULL DEFAULT (now() AT TIME ZONE 'utc'),
+      PRIMARY KEY (source_system_id, source_database, slot_name)
+    )
+    """)
+
+    q!("""
+    CREATE UNIQUE INDEX ash_replicant_checkpoints_source_slot_index
+    ON "#{prefix}".ash_replicant_checkpoints (source_system_id, source_database, slot_name)
+    """)
+
+    q!("""
+    CREATE UNIQUE INDEX ash_replicant_checkpoints_unique_slot_index
+    ON "#{prefix}".ash_replicant_checkpoints (slot_name)
+    """)
+  end
+
   defp assert_cmd!(runtime, args, directory, env) do
     case System.cmd(runtime, args,
            cd: directory,
@@ -499,7 +536,8 @@ defmodule AshReplicant.Upgrade.CheckpointIntegrationTest do
     for secret <- [
           "consumer-connection-secret-sentinel",
           "consumer-system-secret-sentinel",
-          "consumer-database-secret-sentinel"
+          "consumer-database-secret-sentinel",
+          "consumer_upgrade_slot"
         ] do
       refute output =~ secret
     end

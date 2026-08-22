@@ -243,6 +243,7 @@ defmodule AshReplicant.UpgradeTaskTest do
     previous = Application.get_env(:ash_replicant, repo)
 
     Application.put_env(:ash_replicant, repo,
+      priv: "priv/custom_repo",
       snapshots_path: snapshot_root,
       url: "postgres://postgres@localhost/unused"
     )
@@ -269,7 +270,7 @@ defmodule AshReplicant.UpgradeTaskTest do
       "lib/my_app/legacy_sink.ex" => sink,
       "lib/my_app/application.ex" => @application,
       "config/config.exs" => "import Config\n",
-      "priv/repo/migrations/20260101000000_install.exs" => "# existing\n",
+      "priv/custom_repo/migrations/20260101000000_install.exs" => "# existing\n",
       Path.join(
         snapshot_root,
         "custom_snapshot_repo/ash_replicant_checkpoints/20260101000000.json"
@@ -288,6 +289,16 @@ defmodule AshReplicant.UpgradeTaskTest do
       )
 
     assert Igniter.exists?(upgraded, current_path)
+
+    assert Igniter.exists?(
+             upgraded,
+             "priv/custom_repo/migrations/20260101000001_upgrade_ash_replicant_0_4_0_to_1_0_0.exs"
+           )
+
+    refute Igniter.exists?(
+             upgraded,
+             "priv/repo/migrations/20260101000001_upgrade_ash_replicant_0_4_0_to_1_0_0.exs"
+           )
 
     refute Igniter.exists?(
              upgraded,
@@ -336,6 +347,44 @@ defmodule AshReplicant.UpgradeTaskTest do
     assert content(refused, "lib/my_app/application.ex") == @dynamic_application
     assert content(refused, "lib/my_app/legacy_sink.ex") == @sink
     refute Igniter.exists?(refused, "lib/my_app/replicant/pipeline.ex")
+  end
+
+  test "non-relocatable legacy connection calls refuse before changing source" do
+    literal_connection =
+      ~s(connection: [hostname: "destination.invalid", password: "connection-secret"])
+
+    for expression <- [
+          "build_connection()",
+          "MyApp.DevOnly.Config.replication_connection()"
+        ] do
+      application = String.replace(@application, literal_connection, "connection: #{expression}")
+      before = project(application)
+      refused = upgrade(before)
+
+      assert Enum.any?(refused.issues, &String.contains?(&1, "legacy supervision"))
+      assert content(refused, "lib/my_app/application.ex") == application
+      assert content(refused, "lib/my_app/legacy_sink.ex") == @sink
+      refute Igniter.exists?(refused, "lib/my_app/replicant/pipeline.ex")
+    end
+  end
+
+  test "System environment reads remain relocatable" do
+    literal_connection =
+      ~s(connection: [hostname: "destination.invalid", password: "connection-secret"])
+
+    application =
+      String.replace(
+        @application,
+        literal_connection,
+        "connection: System.fetch_env!(\"REPLICANT_CONNECTION\")"
+      )
+
+    upgraded = project(application) |> upgrade()
+
+    assert upgraded.issues == []
+
+    config = upgraded |> apply_igniter!() |> content("config/runtime.exs")
+    assert config =~ "System.fetch_env!(\"REPLICANT_CONNECTION\")"
   end
 
   test "composition refuses before identity-bearing changes can reach Igniter raw diff output" do

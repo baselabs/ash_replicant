@@ -420,8 +420,8 @@ defmodule AshReplicant.Upgrade.Checkpoint do
       %{relkind: "r", columns: @legacy_columns, indexes: @legacy_indexes} ->
         %{schema: :legacy, rows: legacy_rows!(repo, config), bindings: config.bindings}
 
-      %{relkind: "r", columns: @current_columns, indexes: @current_indexes} ->
-        %{schema: :current, rows: current_identity_rows!(repo, config), bindings: config.bindings}
+      %{relkind: "r", columns: columns, indexes: @current_indexes} ->
+        current_facts(repo, config, columns)
 
       %{columns: columns} ->
         schema = if upgrade_column_present?(columns), do: :interrupted, else: :foreign
@@ -435,6 +435,21 @@ defmodule AshReplicant.Upgrade.Checkpoint do
       _other -> false
     end
   end
+
+  defp current_facts(repo, config, columns) do
+    if current_columns?(columns) do
+      %{
+        schema: :current,
+        rows: current_identity_rows!(repo, config),
+        bindings: config.bindings
+      }
+    else
+      schema = if upgrade_column_present?(columns), do: :interrupted, else: :foreign
+      %{schema: schema, rows: [], bindings: config.bindings}
+    end
+  end
+
+  defp current_columns?(columns), do: Enum.sort(columns) == Enum.sort(@current_columns)
 
   defp verify_destination(repo, config) do
     if destination_matches?(repo, config), do: :ok, else: error(:destination_mismatch)

@@ -75,7 +75,19 @@ defmodule AshReplicant.ErrorTest do
     "lib/mix/tasks/ash_replicant.upgrade.ex"
   ]
 
-  @runtime_error_reference ~r/(?:alias\s+AshReplicant\.Error|AshReplicant\.Error\.(?:exception|scrub)|%AshReplicant\.Error\{)/
+  @runtime_error_reference ~r/(?:AshReplicant\.Error\b|alias\s+AshReplicant\.\{[^}]*\bError\b)/
+
+  test "the planner exclusion guard recognizes runtime error reference forms" do
+    for source <- [
+          "raise AshReplicant.Error, reason: :new_reason",
+          "alias AshReplicant.{Error, Upgrade}",
+          "%AshReplicant.Error{reason: :new_reason}"
+        ] do
+      assert source =~ @runtime_error_reference
+    end
+
+    refute "alias AshReplicant.Upgrade.Checkpoint.Error" =~ @runtime_error_reference
+  end
 
   test "the closed reason set equals every reason minted in lib (live pin)" do
     Enum.each(@planner_error_sources, fn path ->

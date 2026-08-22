@@ -249,17 +249,18 @@ if Code.ensure_loaded?(Igniter) do
     defp pipeline_module(name), do: name |> String.split(".") |> Module.concat()
 
     defp legacy_source_plan(igniter, plan) do
-      case checkpoint_snapshot_root(plan.repo) do
-        {:ok, snapshot_root} ->
+      case {checkpoint_snapshot_root(plan.repo), checkpoint_migration_root(plan.repo)} do
+        {{:ok, snapshot_root}, {:ok, migration_root}} ->
           igniter =
             igniter
-            |> Igniter.include_glob("priv/repo/migrations/*.exs")
+            |> Igniter.include_glob(Path.join(migration_root, "*.exs"))
             |> Igniter.include_glob(Path.join(snapshot_root, "**/*.json"))
 
           legacy_source_plan(igniter, plan, snapshot_root)
 
-        :error ->
-          {:error, "the repo snapshot path is unreadable or invalid; no source was changed"}
+        _error ->
+          {:error,
+           "the repo migration or snapshot path is unreadable or invalid; no source was changed"}
       end
     end
 
@@ -310,20 +311,45 @@ if Code.ensure_loaded?(Igniter) do
     end
 
     defp checkpoint_snapshot_root(repo) do
+      project_source_root(repo, :snapshots_path, "priv/resource_snapshots")
+    end
+
+    defp checkpoint_migration_root(repo) do
+      default = Path.join("priv", repo |> Module.split() |> List.last() |> Macro.underscore())
+
+      with {:ok, priv_root} <- project_source_root(repo, :priv, default) do
+        {:ok, Path.join(priv_root, "migrations")}
+      end
+    end
+
+    defp project_source_root(repo, key, default) do
       if Code.ensure_loaded?(repo) and function_exported?(repo, :config, 0) do
-        case repo.config()[:snapshots_path] do
-          nil -> {:ok, "priv/resource_snapshots"}
-          path when is_binary(path) and path != "" -> {:ok, path}
-          _invalid -> :error
-        end
+        repo.config()
+        |> Keyword.get(key)
+        |> then(&(&1 || default))
+        |> validate_project_source_root()
       else
-        {:ok, "priv/resource_snapshots"}
+        validate_project_source_root(default)
       end
     rescue
       _error -> :error
     catch
       _kind, _reason -> :error
     end
+
+    defp validate_project_source_root(path) when is_binary(path) and path != "" do
+      segments = Path.split(path)
+
+      if String.valid?(path) and Path.type(path) == :relative and
+           Enum.all?(segments, &(&1 not in ["", ".", ".."])) and
+           not Regex.match?(~r/[\x00-\x1F\x7F]/u, path) do
+        {:ok, path}
+      else
+        :error
+      end
+    end
+
+    defp validate_project_source_root(_path), do: :error
 
     defp checkpoint_snapshot_plan(igniter, repo, snapshot_root) do
       folder =
@@ -477,8 +503,15 @@ if Code.ensure_loaded?(Igniter) do
           {:@, _meta, _args} = node, _relocatable? ->
             {node, false}
 
-          {:__aliases__, _meta, [part]} = node, _relocatable?
-          when part not in [:System, :Application] ->
+          {:__aliases__, _meta, parts} = node, relocatable?
+          when parts in [[:System], [:Application]] ->
+            {node, relocatable?}
+
+          {:__aliases__, _meta, _parts} = node, _relocatable? ->
+            {node, false}
+
+          {name, _meta, args} = node, _relocatable?
+          when is_atom(name) and is_list(args) and name not in [:__block__, :%{}, :{}, :.] ->
             {node, false}
 
           {name, _meta, context} = node, _relocatable?
@@ -547,8 +580,12 @@ if Code.ensure_loaded?(Igniter) do
     defp replace_legacy_children(igniter, application, conversions) do
       ProjectModule.find_and_update_module!(igniter, application, fn module_body ->
         case move_to_children_list(module_body) do
-          {:ok, children} -> replace_legacy_children(conversions, children)
-          :error -> :error
+          {:ok, children} ->
+            replace_legacy_children(conversions, children)
+
+          :error ->
+            {:error,
+             "legacy supervision changed before its static rewrite; no source was changed"}
         end
       end)
     end
@@ -557,8 +594,11 @@ if Code.ensure_loaded?(Igniter) do
 
     defp replace_legacy_children([conversion | rest], children) do
       case replace_legacy_child(children, conversion) do
-        {:ok, children} -> replace_legacy_children(rest, children)
-        :error -> :error
+        {:ok, children} ->
+          replace_legacy_children(rest, children)
+
+        :error ->
+          {:error, "legacy supervision changed before its static rewrite; no source was changed"}
       end
     end
 
@@ -678,14 +718,27 @@ if Code.ensure_loaded?(Igniter) do
     end
 
     defp create_migration(igniter, plan) do
-      igniter = Igniter.include_glob(igniter, "priv/repo/migrations/*.exs")
+      case checkpoint_migration_root(plan.repo) do
+        {:ok, migration_root} ->
+          create_migration(igniter, plan, migration_root)
+
+        :error ->
+          Igniter.add_issue(
+            igniter,
+            "the repo migration path changed or became invalid; no source was changed"
+          )
+      end
+    end
+
+    defp create_migration(igniter, plan, migration_root) do
+      igniter = Igniter.include_glob(igniter, Path.join(migration_root, "*.exs"))
 
       paths = igniter.rewrite |> Rewrite.sources() |> Enum.map(& &1.path)
 
       case Enum.find(paths, &String.ends_with?(&1, "_#{@migration_suffix}")) do
         nil ->
           number = Upgrade.next_migration_number(paths)
-          path = "priv/repo/migrations/#{number}_#{@migration_suffix}"
+          path = Path.join(migration_root, "#{number}_#{@migration_suffix}")
           migration_module = Module.concat([plan.repo, Migrations, UpgradeAshReplicant040To100])
           Igniter.create_new_file(igniter, path, Upgrade.render_migration(plan, migration_module))
 
@@ -730,8 +783,15 @@ if Code.ensure_loaded?(Igniter) do
     defp maybe_write(igniter, yes?) do
       if yes? or Mix.shell().yes?("Apply the reported AshReplicant upgrade changes?") do
         case Rewrite.write_all(igniter.rewrite) do
-          {:ok, _rewrite} -> :changes_made
-          {:error, _error, _rewrite} -> exit({:shutdown, 1})
+          {:ok, _rewrite} ->
+            :changes_made
+
+          {:error, _error, _rewrite} ->
+            Mix.shell().error(
+              "AshReplicant upgrade source write failed; inspect the working tree before rerunning"
+            )
+
+            exit({:shutdown, 1})
         end
       else
         :dry_run_with_changes
