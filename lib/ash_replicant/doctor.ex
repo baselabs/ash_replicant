@@ -19,8 +19,9 @@ defmodule AshReplicant.Doctor do
 
   Three independent legs, none of which trusts the other:
 
-    1. Every source statement passes `AshReplicant.Doctor.Probe.admit!/1`, a
-       fail-closed read-only admission that holds with no database present.
+    1. Every source statement passes a fail-closed read-only admission — leading
+       `SELECT` only, no statement separator, no write verb, no row lock, and no
+       session-escaping function — which holds with no database present.
     2. The probe connection is opened `default_transaction_read_only=on`, so
        PostgreSQL refuses a write the admission missed.
     3. The destination checkpoint is read through the resource's `:read` action
@@ -47,7 +48,7 @@ defmodule AshReplicant.Doctor do
   alias AshReplicant.Destination.Generation
   alias AshReplicant.Doctor.{Check, Probe, Report}
   alias AshReplicant.Error
-  alias AshReplicant.Snapshot.State
+  alias AshReplicant.Snapshot.{Provenance, State}
 
   # Duplicated from `mix.exs` because `mix.exs` is not loadable from a release.
   # `AshReplicant.DoctorTest` asserts the literals are equal, so changing one
@@ -218,9 +219,6 @@ defmodule AshReplicant.Doctor do
       {:ok, contract} ->
         {pass(:sink_configuration, :runtime, :ok), contract}
 
-      {:error, %Error{} = error} ->
-        {from_error(:sink_configuration, :runtime, error), nil}
-
       {:error, reason} ->
         {fail(:sink_configuration, :runtime, structural_reason(reason)), nil}
     end
@@ -241,9 +239,16 @@ defmodule AshReplicant.Doctor do
     _kind, _reason -> fail(:destination_repo, :runtime, :destination_unavailable)
   end
 
+  # Admission errors arrive in several structural shapes — a bare atom, the
+  # `{:invalid_destination_config, tag}` tuple, and the destination admission's
+  # richer `{tag, resource}` / `{tag, resource, action}` tuples. The reason is
+  # the LEADING tag in every case; the payload is dropped rather than rendered,
+  # because a diagnosis report is not the place to decide whether a tuple's tail
+  # is a module name or something else.
   defp structural_reason({:invalid_destination_config, tag}) when is_atom(tag), do: tag
-  defp structural_reason(reason) when is_atom(reason), do: reason
-  defp structural_reason(_other), do: :config_invalid
+
+  defp structural_reason(reason) when is_tuple(reason) and tuple_size(reason) > 0,
+    do: elem(reason, 0)
 
   # --- source leg ---
 
@@ -281,11 +286,22 @@ defmodule AshReplicant.Doctor do
         tables: probed.table_privileges
       }),
       check_source_identity(Coverage.probe_identity_check(probed.identity, plan.identity)),
-      check_coverage(coverage.evaluate),
+      check_coverage(coverage.evaluate, stale_ignores(contract, probed)),
       check_replica_identity(coverage.replica_identity),
       check_slot(probed.slot),
       check_retention(probed.slot, nil)
     ]
+  end
+
+  # Declared ignores that match no live publication table. Structural
+  # identifiers from the sink's own configuration — never a row value.
+  defp stale_ignores(nil, _probed), do: []
+
+  defp stale_ignores(contract, probed) do
+    contract.manifest
+    |> Map.get(:ignores, [])
+    |> Enum.reject(&Map.has_key?(probed.tables, {&1.schema, &1.table}))
+    |> Enum.map(&"#{&1.schema}.#{&1.table}")
   end
 
   # A contract that could not be built takes the coverage rules out of reach:
@@ -382,7 +398,7 @@ defmodule AshReplicant.Doctor do
   end
 
   defp provenance_keys do
-    case AshReplicant.Snapshot.Provenance.keys() do
+    case Provenance.keys() do
       {:ok, keys} -> keys
       :error -> []
     end
@@ -513,26 +529,41 @@ defmodule AshReplicant.Doctor do
     do: from_error(:source_identity, :source, error)
 
   @doc """
-  The strict source-coverage verdict (`AshReplicant.Coverage.evaluate/3`).
+  The strict source-coverage verdict (the strict source-coverage rules).
 
   A replica-identity violation reported here is NOT counted twice: it has its
   own check, judged independently, because `evaluate/3` short-circuits and would
   otherwise hide replica identity behind an earlier coverage rule.
   """
-  @spec check_coverage(:ok | :unjudgeable | {:error, Error.t()}) :: Check.t()
-  def check_coverage(:ok), do: pass(:source_coverage, :source, :ok)
+  @spec check_coverage(:ok | :unjudgeable | {:error, Error.t()}, [String.t()]) :: Check.t()
+  def check_coverage(verdict, stale_ignores \\ [])
 
-  def check_coverage(:unjudgeable),
+  def check_coverage(:ok, []), do: pass(:source_coverage, :source, :ok)
+
+  # A declared ignore is standing operator intent. One that matches no live
+  # table is a typo or a table that has since gone — either way the operator is
+  # carrying a rule that protects nothing, which is silent without this.
+  def check_coverage(:ok, stale_ignores) when is_list(stale_ignores) do
+    warn(
+      :source_coverage,
+      :source,
+      :ignore_never_matches,
+      stale_ignores |> Enum.sort() |> Enum.join(",")
+    )
+  end
+
+  def check_coverage(:unjudgeable, _stale_ignores),
     do: skipped_check(:source_coverage, :source, :coverage_unjudgeable)
 
-  def check_coverage({:error, %Error{reason: :source_replica_identity}}),
-    do: pass(:source_coverage, :source, :ok)
+  def check_coverage({:error, %Error{reason: :source_replica_identity}}, stale_ignores),
+    do: check_coverage(:ok, stale_ignores)
 
-  def check_coverage({:error, %Error{} = error}), do: from_error(:source_coverage, :source, error)
+  def check_coverage({:error, %Error{} = error}, _stale_ignores),
+    do: from_error(:source_coverage, :source, error)
 
   @doc """
   The replica-identity rule, judged independently of the rest of coverage
-  (`AshReplicant.Coverage.replica_identity_check/2`).
+  (the same rule body activation enforces, reached alone).
   """
   @spec check_replica_identity(:ok | :unjudgeable | {:error, Error.t()}) :: Check.t()
   def check_replica_identity(:ok), do: pass(:source_replica_identity, :source, :ok)
@@ -620,7 +651,7 @@ defmodule AshReplicant.Doctor do
 
   @doc """
   Contract drift, through the SAME set-monotone classifier activation binds with
-  (`AshReplicant.Checkpoint.Identity.classify_stored_contract/3`) — a doctor that
+  (the same set-monotone contract classifier) — a doctor that
   judged drift by its own rule could disagree with the runtime it diagnoses.
 
   Set-monotone growth WARNS rather than fails, because activation admits it.
@@ -665,8 +696,8 @@ defmodule AshReplicant.Doctor do
     end
   end
 
-  defp warn(name, domain, reason),
-    do: %Check{name: name, domain: domain, status: :warn, reason: reason}
+  defp warn(name, domain, reason, detail \\ nil),
+    do: %Check{name: name, domain: domain, status: :warn, reason: reason, detail: detail}
 
   defp fail(name, domain, reason, detail \\ nil),
     do: %Check{name: name, domain: domain, status: :fail, reason: reason, detail: detail}

@@ -211,6 +211,37 @@ defmodule AshReplicant.DoctorTest do
       assert coverage.reason != rif.reason
     end
 
+    # `usage-rules.md` promises the diagnosis surface reports never-matching
+    # ignores. A declared ignore is standing operator intent; one that matches no
+    # live table is either a typo or a table that has gone — silent either way.
+    test "an ignore that matches no live table warns even when coverage passes" do
+      check = Doctor.check_coverage(:ok, ["public.audit_events"])
+
+      assert check.name == :source_coverage
+      assert check.status == :warn
+      assert check.reason == :ignore_never_matches
+      assert check.detail == "public.audit_events"
+    end
+
+    test "coverage with no stale ignore still passes" do
+      assert Doctor.check_coverage(:ok, []).status == :pass
+    end
+
+    test "a real coverage violation outranks a stale ignore" do
+      error =
+        Error.exception(
+          reason: :source_column_unmapped,
+          resource: nil,
+          op: :preflight,
+          shape: "public.orders(note)"
+        )
+
+      check = Doctor.check_coverage({:error, error}, ["public.audit_events"])
+
+      assert check.status == :fail
+      assert check.reason == :source_column_unmapped
+    end
+
     test "a replica-identity verdict reported through coverage does not double-count" do
       rif_error =
         Error.exception(

@@ -8,8 +8,8 @@ defmodule AshReplicant.DoctorProbeTest do
   """
   use ExUnit.Case, async: true
 
+  alias AshReplicant.Doctor.Error, as: DoctorError
   alias AshReplicant.Doctor.Probe
-  alias AshReplicant.Doctor.ReadOnlyViolation
 
   describe "admit!/1 rejects every write shape" do
     test "a bare data-modifying statement is refused" do
@@ -32,16 +32,16 @@ defmodule AshReplicant.DoctorProbeTest do
             "CALL some_procedure()",
             "DO $$ BEGIN PERFORM 1; END $$"
           ] do
-        assert_raise ReadOnlyViolation, fn -> Probe.admit!(sql) end
+        assert_raise DoctorError, fn -> Probe.admit!(sql) end
       end
     end
 
     test "a data-modifying CTE hiding behind a leading SELECT is refused" do
-      assert_raise ReadOnlyViolation, fn ->
+      assert_raise DoctorError, fn ->
         Probe.admit!("WITH gone AS (DELETE FROM orders RETURNING id) SELECT count(*) FROM gone")
       end
 
-      assert_raise ReadOnlyViolation, fn ->
+      assert_raise DoctorError, fn ->
         Probe.admit!("SELECT count(*) FROM (INSERT INTO orders (id) VALUES (1) RETURNING id) s")
       end
     end
@@ -54,12 +54,12 @@ defmodule AshReplicant.DoctorProbeTest do
             "SELECT 1 FROM orders FOR KEY SHARE",
             "SELECT 1 FROM orders\n  FOR   UPDATE"
           ] do
-        assert_raise ReadOnlyViolation, fn -> Probe.admit!(sql) end
+        assert_raise DoctorError, fn -> Probe.admit!(sql) end
       end
     end
 
     test "a second statement smuggled past the separator is refused" do
-      assert_raise ReadOnlyViolation, fn -> Probe.admit!("SELECT 1; DROP TABLE orders") end
+      assert_raise DoctorError, fn -> Probe.admit!("SELECT 1; DROP TABLE orders") end
     end
 
     # The leading-SELECT rule alone cannot catch these: the statement really is a
@@ -81,7 +81,7 @@ defmodule AshReplicant.DoctorProbeTest do
             "REINDEX TABLE orders",
             "COMMIT"
           ] do
-        assert_raise ReadOnlyViolation, fn ->
+        assert_raise DoctorError, fn ->
           Probe.admit!("SELECT host_maintenance_hook('#{inner}')")
         end
       end
@@ -98,12 +98,12 @@ defmodule AshReplicant.DoctorProbeTest do
             "SELECT lo_import('/etc/passwd')",
             "SELECT pg_read_file('postgresql.conf')"
           ] do
-        assert_raise ReadOnlyViolation, fn -> Probe.admit!(sql) end
+        assert_raise DoctorError, fn -> Probe.admit!(sql) end
       end
     end
 
     test "SELECT ... INTO materializes a table and is refused" do
-      assert_raise ReadOnlyViolation, fn -> Probe.admit!("SELECT id INTO copy_of FROM orders") end
+      assert_raise DoctorError, fn -> Probe.admit!("SELECT id INTO copy_of FROM orders") end
     end
 
     test "a statement that does not begin with SELECT is refused" do
@@ -114,7 +114,7 @@ defmodule AshReplicant.DoctorProbeTest do
             "-- SELECT 1",
             "WITH p AS (SELECT 1) SELECT * FROM p"
           ] do
-        assert_raise ReadOnlyViolation, fn -> Probe.admit!(sql) end
+        assert_raise DoctorError, fn -> Probe.admit!(sql) end
       end
     end
   end

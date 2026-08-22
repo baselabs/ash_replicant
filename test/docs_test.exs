@@ -224,4 +224,56 @@ defmodule AshReplicant.DocsTest do
     refute usage =~ "Capture each row's `(slot_name, commit_lsn)`"
     refute readme =~ "then capture,\ndelete, migrate"
   end
+
+  test "the published docs carry the read-only diagnosis commands" do
+    readme = File.read!("README.md")
+    usage = File.read!("usage-rules.md")
+    agents = File.read!("AGENTS.md")
+    changelog = File.read!("CHANGELOG.md")
+
+    for content <- [readme, usage, agents, changelog] do
+      assert content =~ "mix ash_replicant.preflight"
+      assert content =~ "mix ash_replicant.doctor"
+    end
+
+    # The no-writes guarantee and its three legs are the first thing an
+    # operator must be able to trust without reading the source.
+    assert readme =~ "performs no writes"
+    assert readme =~ "default_transaction_read_only"
+
+    # Both public functions, and the honest node-local limit of runtime
+    # readiness — a doc that implied otherwise would be the silent lie the
+    # command exists to prevent.
+    for content <- [readme, usage] do
+      assert content =~ "AshReplicant.preflight/1"
+      assert content =~ "AshReplicant.doctor/1"
+    end
+
+    assert usage =~ "node-local"
+
+    # Every class the commands DISTINGUISH is named in the operator docs;
+    # collapsing two of them in the code without noticing here would ship a
+    # diagnosis an operator cannot act on.
+    for reason <- [
+          "privilege_replication_missing",
+          "privilege_select_missing",
+          "checkpoint_state_unknown",
+          "source_replica_identity",
+          "retention_at_risk",
+          "retention_lost",
+          "contract_drift",
+          "dependency_version_mismatch",
+          "source_release_unsupported"
+        ] do
+      assert readme =~ reason
+    end
+
+    # The exit-code contract is what a monitoring caller branches on.
+    for code <- ["`0`", "`1`", "`2`", "`3`"] do
+      assert readme =~ code
+    end
+
+    assert readme =~ "--format json"
+    assert agents =~ "The read-only diagnosis surface never writes"
+  end
 end

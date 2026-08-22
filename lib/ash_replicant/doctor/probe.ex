@@ -1,4 +1,4 @@
-defmodule AshReplicant.Doctor.ReadOnlyViolation do
+defmodule AshReplicant.Doctor.Error do
   @moduledoc """
   Raised when a statement that is not provably read-only reaches the operator
   diagnosis probes. This is a programmer error, never operator input: the
@@ -32,7 +32,7 @@ defmodule AshReplicant.Doctor.Probe do
   # name binds `$1`. No row data crosses (Critical Rule 4).
 
   alias AshReplicant.Coverage
-  alias AshReplicant.Doctor.ReadOnlyViolation
+  alias AshReplicant.Doctor.Error
   alias Replicant.Decoder.OidDatabase
 
   # Any of these appearing as a WHOLE WORD refuses the statement. The set is a
@@ -69,10 +69,10 @@ defmodule AshReplicant.Doctor.Probe do
   """
   @spec admit!(String.t()) :: String.t()
   def admit!(sql) when is_binary(sql) do
-    if read_only?(sql), do: sql, else: raise(ReadOnlyViolation)
+    if read_only?(sql), do: sql, else: raise(Error)
   end
 
-  def admit!(_sql), do: raise(ReadOnlyViolation)
+  def admit!(_sql), do: raise(Error)
 
   defp read_only?(sql) do
     Regex.match?(@leading_select_pattern, sql) and

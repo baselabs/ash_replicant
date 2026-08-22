@@ -9,6 +9,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Read-only operator preflight and doctor commands** (roadmap D2).
+  `mix ash_replicant.preflight --pipeline MyApp.Replicant.Pipeline` answers
+  whether a pipeline may start — dependency requirements, sink configuration,
+  destination admission, source reachability, PostgreSQL release, the
+  connecting role's REPLICATION and per-table `SELECT` privileges, source
+  identity, strict coverage, replica identity, slot shape, and the retention
+  horizon — reading no checkpoint, so it is correct on a fresh install.
+  `mix ash_replicant.doctor` adds the durable-state classes: checkpoint state,
+  contract drift, and runtime readiness. Both resolve the generated pipeline's
+  own admitted start options, and the same diagnosis is available in-process as
+  `AshReplicant.preflight/1` and `AshReplicant.doctor/1`.
+
+  The commands perform **no writes**, on three independent legs: a fail-closed
+  read-only statement admission (leading `SELECT` only, no separator, no write
+  verb, no row lock, no session-escaping function such as `set_config` or
+  `dblink*`); a probe connection opened `default_transaction_read_only=on`, so
+  PostgreSQL itself refuses a write the admission missed; and a destination
+  checkpoint read through its `:read` action with `authorize?: false` and no
+  lock. They never start a repo, a pipeline, or a service.
+
+  Machine (`--format json`) and operator output are both total functions of one
+  canonical `AshReplicant.Doctor.Report`, so they cannot disagree. Missing
+  privileges, unknown checkpoint state, replica identity, the retention horizon
+  (`retention_extended` → `retention_at_risk` → `retention_lost`), contract
+  drift, and the dependency/source version axes each carry their own reason
+  atom. Reasons are a closed vocabulary and `detail` is a fail-closed allowlist
+  of catalog identifiers, so no connection option, publication name, source
+  identity, slot name, watermark, or row value reaches either format. A leg
+  that could not be judged is reported `skipped` with the reason, never passed.
+  Exit codes are `0` clean, `1` a failed check, `2` warnings only, and `3` an
+  invocation that could not be diagnosed at all — distinct from `1` so a
+  monitoring caller can tell an unhealthy deployment from a bad invocation.
+  A never-matching `ignored_sources` entry now warns (`ignore_never_matches`).
+
+  Coverage rules are reused, never re-implemented: `Coverage.evaluate/3`,
+  the new `Coverage.replica_identity_check/2` and
+  `Coverage.probe_identity_check/2` delegates to the existing private rules
+  (so replica identity is reported even when an earlier rule short-circuits),
+  and `Identity.classify_stored_contract/3` for drift.
+
 - **Guarded 0.4.0 to 1.0.0 package upgrade and rollback.**
   `mix ash_replicant.upgrade 0.4.0 1.0.0` requires explicit per-sink source
   identity bindings, classifies the selected destination without printing
