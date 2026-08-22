@@ -272,6 +272,69 @@ defmodule AshReplicant.InstallTaskTest do
     end
   end
 
+  describe "formatter contract" do
+    defp public_replicant_locals do
+      AshReplicant.Resource.sections()
+      |> Enum.flat_map(fn section ->
+        [{section.name, 1} | Enum.map(Keyword.keys(section.schema), &{&1, 1})]
+      end)
+      |> Enum.sort()
+    end
+
+    defp formatter_config(source) do
+      {config, _binding} = Code.eval_string(source)
+      config
+    end
+
+    defp package_exported_locals do
+      {package_formatter, _binding} = Code.eval_file(".formatter.exs")
+
+      package_formatter
+      |> Keyword.get(:export, [])
+      |> Keyword.get(:locals_without_parens, [])
+      |> Enum.sort()
+    end
+
+    test "exports every public Replicant DSL local" do
+      assert package_exported_locals() == public_replicant_locals()
+    end
+
+    test "the actual install imports and consumes the package formatter export" do
+      igniter = project() |> install()
+      host_formatter = formatter_config(content(igniter, ".formatter.exs"))
+      assert :ash_replicant in Keyword.fetch!(host_formatter, :import_deps)
+
+      imported_locals =
+        host_formatter
+        |> Keyword.fetch!(:import_deps)
+        |> Enum.flat_map(fn
+          :ash_replicant -> package_exported_locals()
+          _other -> []
+        end)
+
+      formatted =
+        """
+        replicant do
+          source_table "orders"
+          tenant_attribute :org_id
+          sensitive [:pan]
+        end
+        """
+        |> Code.format_string!(locals_without_parens: imported_locals)
+        |> IO.iodata_to_binary()
+        |> String.trim_trailing()
+
+      assert formatted ==
+               String.trim_trailing("""
+               replicant do
+                 source_table "orders"
+                 tenant_attribute :org_id
+                 sensitive [:pan]
+               end
+               """)
+    end
+  end
+
   describe "pre-existing project state" do
     test "appends to an existing ash_domains list instead of replacing it" do
       igniter =
@@ -294,6 +357,12 @@ defmodule AshReplicant.InstallTaskTest do
     test "joins an existing Ash domain rather than refusing it" do
       igniter =
         project(%{
+          ".formatter.exs" => """
+          [
+            inputs: ["{mix,.formatter}.exs", "{config,lib,test}/**/*.{ex,exs}"],
+            locals_without_parens: [resource: 1]
+          ]
+          """,
           "lib/my_app/replicant.ex" => """
           defmodule MyApp.Replicant do
             use Ash.Domain
@@ -309,13 +378,20 @@ defmodule AshReplicant.InstallTaskTest do
 
       source = content(igniter, "lib/my_app/replicant.ex")
 
-      assert source =~ ~r/resource\(?MyApp\.Replicant\.Something\)?/
-      assert source =~ ~r/resource\(?MyApp\.Replicant\.Checkpoint\)?/
+      assert source =~ ~r/resource(?:\(|\s+)MyApp\.Replicant\.Something\)?/
+      assert source =~ ~r/resource(?:\(|\s+)MyApp\.Replicant\.Checkpoint\)?/
     end
 
     test "leaves an existing domain untouched when the checkpoint is already listed" do
       igniter =
         project(%{
+          ".formatter.exs" => """
+          [
+            import_deps: [:ash_replicant],
+            inputs: ["{mix,.formatter}.exs", "{config,lib,test}/**/*.{ex,exs}"],
+            locals_without_parens: [resource: 1]
+          ]
+          """,
           "lib/my_app/replicant.ex" => """
           defmodule MyApp.Replicant do
             use Ash.Domain
@@ -357,6 +433,31 @@ defmodule AshReplicant.InstallTaskTest do
 
       assert issue =~ "AshPostgres"
       assert issue =~ "--repo"
+    end
+
+    test "refuses a plain Ecto repo instead of treating it as AshPostgres" do
+      issue =
+        test_project(
+          app_name: :my_app,
+          files: %{
+            "lib/my_app/repo.ex" => """
+            defmodule MyApp.Repo do
+              use Ecto.Repo, otp_app: :my_app
+            end
+            """
+          }
+        )
+        |> refuse()
+
+      assert issue =~ "AshPostgres"
+      assert issue =~ "--repo"
+    end
+
+    test "refuses an explicit repo that is not an AshPostgres repo in the project" do
+      issue = refuse(project(), ["--repo", "MyApp.TypoRepo"])
+
+      assert issue =~ "--repo"
+      refute issue =~ "TypoRepo"
     end
 
     test "refuses when the project has several repos and none was named" do
@@ -436,6 +537,138 @@ defmodule AshReplicant.InstallTaskTest do
       assert issue =~ "MyApp.Repo"
       assert issue =~ "MyApp.MirrorRepo"
       assert issue =~ "watermark"
+    end
+
+    for {label, prelude, use_line} <- [
+          {"a module attribute", "@binding MyApp.Repo",
+           "use AshReplicant.Checkpoint, repo: @binding, domain: MyApp.Replicant"},
+          {"a computed expression", "",
+           "use AshReplicant.Checkpoint, repo: Module.concat(MyApp, Repo), domain: MyApp.Replicant"},
+          {"a wrong-type literal", "",
+           ~s(use AshReplicant.Checkpoint, repo: "MyApp.Repo", domain: MyApp.Replicant)},
+          {"a missing key", "", "use AshReplicant.Checkpoint, domain: MyApp.Replicant"},
+          {"a missing options argument", "", "use AshReplicant.Checkpoint"}
+        ] do
+      test "refuses checkpoint binding expressed as #{label}" do
+        issue =
+          project(%{
+            "lib/my_app/replicant/checkpoint.ex" => """
+            defmodule MyApp.Replicant.Checkpoint do
+              #{unquote(prelude)}
+              #{unquote(use_line)}
+            end
+            """
+          })
+          |> refuse()
+
+        assert issue =~ "MyApp.Replicant.Checkpoint"
+        assert issue =~ "--checkpoint"
+        assert issue =~ "literal"
+      end
+    end
+
+    for {label, prelude, use_line} <- [
+          {"a module attribute", ~s(@binding "my_app_replicant"),
+           "use AshReplicant.Sink, slot_name: @binding"},
+          {"a computed expression", "",
+           ~s|use AshReplicant.Sink, slot_name: String.downcase("MY_APP_REPLICANT")|},
+          {"a wrong-type literal", "", "use AshReplicant.Sink, slot_name: :my_app_replicant"},
+          {"a missing key", "", "use AshReplicant.Sink, repo: MyApp.Repo"},
+          {"a missing options argument", "", "use AshReplicant.Sink"}
+        ] do
+      test "refuses sink binding expressed as #{label}" do
+        issue =
+          project(%{
+            "lib/my_app/replicant/sink.ex" => """
+            defmodule MyApp.Replicant.Sink do
+              #{unquote(prelude)}
+              #{unquote(use_line)}
+            end
+            """
+          })
+          |> refuse()
+
+        assert issue =~ "MyApp.Replicant.Sink"
+        assert issue =~ "--sink"
+        assert issue =~ "literal"
+      end
+    end
+
+    for {role, path, module, use_target, flag} <- [
+          {:domain, "lib/my_app/replicant.ex", "MyApp.Replicant", "Ash.Domain", "--domain"},
+          {:checkpoint, "lib/my_app/replicant/checkpoint.ex", "MyApp.Replicant.Checkpoint",
+           "AshReplicant.Checkpoint", "--checkpoint"},
+          {:sink, "lib/my_app/replicant/sink.ex", "MyApp.Replicant.Sink", "AshReplicant.Sink",
+           "--sink"},
+          {:pipeline, "lib/my_app/replicant/pipeline.ex", "MyApp.Replicant.Pipeline",
+           "AshReplicant.Pipeline", "--pipeline"}
+        ] do
+      test "a nested #{role} use does not legitimize the foreign target module" do
+        path = unquote(path)
+        module = unquote(module)
+
+        issue =
+          project(%{
+            path => """
+            defmodule #{module} do
+              defmodule Nested do
+                use #{unquote(use_target)}
+              end
+            end
+            """
+          })
+          |> refuse()
+
+        assert issue =~ module
+        assert issue =~ unquote(flag)
+      end
+    end
+
+    test "a later module's use does not legitimize the foreign target module" do
+      issue =
+        project(%{
+          "lib/my_app/replicant/checkpoint.ex" => """
+          defmodule MyApp.Replicant.Checkpoint do
+            def foreign, do: true
+          end
+
+          defmodule MyApp.LaterCheckpoint do
+            use AshReplicant.Checkpoint, repo: MyApp.Repo, domain: MyApp.Replicant
+          end
+          """
+        })
+        |> refuse()
+
+      assert issue =~ "MyApp.Replicant.Checkpoint"
+      assert issue =~ "--checkpoint"
+    end
+
+    test "a later module's resource call does not fake a tied-out target domain" do
+      igniter =
+        project(%{
+          "lib/my_app/replicant.ex" => """
+          defmodule MyApp.Replicant do
+            use Ash.Domain
+          end
+
+          defmodule MyApp.LaterDomain do
+            use Ash.Domain
+
+            resources do
+              resource MyApp.Replicant.Checkpoint
+            end
+          end
+          """
+        })
+        |> install()
+        |> apply_igniter!()
+
+      target = content(igniter, "lib/my_app/replicant.ex")
+
+      [target_module, _later_module] =
+        String.split(target, "defmodule MyApp.LaterDomain", parts: 2)
+
+      assert target_module =~ ~r/resource(?:\(|\s+)MyApp\.Replicant\.Checkpoint\)?/
     end
 
     test "a refused run exits non-zero instead of reporting success" do
@@ -611,7 +844,13 @@ defmodule AshReplicant.InstallTaskTest do
 
     test "the four generated modules load and expose the real contract" do
       igniter =
-        project()
+        project(%{
+          "lib/ash_replicant/test_repo.ex" => """
+          defmodule AshReplicant.TestRepo do
+            use AshPostgres.Repo, otp_app: :ash_replicant
+          end
+          """
+        })
         |> install([
           "--repo",
           "AshReplicant.TestRepo",

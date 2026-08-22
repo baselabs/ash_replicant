@@ -87,18 +87,19 @@ mix igniter.install ash_replicant
 ```
 
 That adds the dependency and runs `mix ash_replicant.install`, which generates the
-domain, checkpoint, sink, and pipeline supervisor, registers the domain, supervises
-the pipeline, and queues `mix ash.codegen install_ash_replicant` for the checkpoint
-migration. In an app that already has `ash_replicant` as a dependency, run the
-installer directly:
+domain, checkpoint, sink, and pipeline supervisor; registers the domain; supervises
+the pipeline; imports AshReplicant's formatter metadata; and queues
+`mix ash.codegen install_ash_replicant` for the checkpoint migration. In an app
+that already has `ash_replicant` as a dependency, run the installer directly:
 
 ```bash
 mix ash_replicant.install --repo MyApp.Repo --slot shop_orders
 ```
 
-`--repo` is needed only when the project has zero or several repos; `--slot`
-defaults to `<otp_app>_replicant`. `--domain`, `--checkpoint`, `--sink`, and
-`--pipeline` rename individual artifacts.
+`--repo` selects among several discovered AshPostgres repos; when none exists,
+generate one with `mix ash_postgres.install` first. `--slot` defaults to
+`<otp_app>_replicant`. `--domain`, `--checkpoint`, `--sink`, and `--pipeline`
+rename individual artifacts.
 
 **It writes no connection, publication, source identity, or key material.** Those
 are operator facts, and a plausible-looking placeholder is worse than an absent
@@ -106,13 +107,14 @@ one — so the generated pipeline supervises *nothing* until you configure it, a
 fresh install compiles and boots as a no-op. Re-running the installer over an
 installed project changes nothing.
 
-**It stops rather than guess.** An illegal slot name, a missing or ambiguous repo, a
-module it did not generate sitting at a target name, a checkpoint already bound to
-another repo, a sink already bound to another slot, or a pipeline already wired to
-another sink each stop the install — writing nothing — with a message naming the
-flag that resolves it. Re-keying a live sink onto a different slot would abandon its
-durable checkpoint row and re-deliver from the new slot's position; that is exactly
-the kind of quiet, expensive wrongness the installer refuses to perform silently.
+**It stops rather than guess.** Malformed module names; an illegal slot name; a
+missing, ambiguous, unknown, or non-AshPostgres repo; incomplete project facts; a
+module it did not generate at a target name; an unreadable existing binding; or a
+checkpoint, sink, or pipeline bound to a different identity each stop the install —
+writing nothing — with a structural message naming the resolving flag. Re-keying a
+live sink onto a different slot would abandon its durable checkpoint row and
+re-deliver from the new slot's position; that is exactly the kind of quiet,
+expensive wrongness the installer refuses to perform silently.
 
 Igniter is an **optional** dependency. Without it, `mix ash_replicant.install` prints
 the instruction to add it, and the manual path below reaches the identical contract.
@@ -159,7 +161,16 @@ end
 ```
 <!-- ash-replicant-manual-install-modules:end -->
 
-Then three edits and one command:
+Then add the formatter import, register and supervise the generated modules, and
+generate the checkpoint migration:
+
+```elixir
+# .formatter.exs
+[
+  import_deps: [:ash_replicant],
+  inputs: ["{mix,.formatter}.exs", "{config,lib,test}/**/*.{ex,exs}"]
+]
+```
 
 ```elixir
 # config/config.exs — register the domain

@@ -13,15 +13,24 @@ defmodule AshReplicant.InstallPlanTest do
   alias AshReplicant.Install
   alias AshReplicant.Install.Error
 
+  @absent_existing %{
+    domain: :absent,
+    checkpoint: :absent,
+    sink: :absent,
+    pipeline: :absent
+  }
+
   defp plan(overrides \\ []) do
+    existing = Map.merge(@absent_existing, Keyword.get(overrides, :existing, %{}))
+
     [
       otp_app: :my_app,
       prefix: MyApp,
       options: %{},
       repos: [MyApp.Repo],
-      existing: %{}
+      existing: existing
     ]
-    |> Keyword.merge(overrides)
+    |> Keyword.merge(Keyword.delete(overrides, :existing))
     |> Install.plan()
   end
 
@@ -56,6 +65,16 @@ defmodule AshReplicant.InstallPlanTest do
       assert %{sink: MyApp.Mirror.OrdersSink} =
                Install.artifacts(MyApp, %{sink: "Elixir.MyApp.Mirror.OrdersSink"})
     end
+
+    test "an interior Elixir segment remains part of the requested module" do
+      assert %{sink: MyApp.Elixir.OrdersSink} =
+               Install.artifacts(MyApp, %{sink: "MyApp.Elixir.OrdersSink"})
+    end
+
+    test "an Elixir segment after the absolute prefix remains part of the module" do
+      assert %{sink: Elixir.Elixir.OrdersSink} =
+               Install.artifacts(MyApp, %{sink: "Elixir.Elixir.OrdersSink"})
+    end
   end
 
   describe "a clean project" do
@@ -77,8 +96,13 @@ defmodule AshReplicant.InstallPlanTest do
       assert plan.slot_name == "shop_orders"
     end
 
-    test "an explicit --repo wins over discovery" do
-      assert {:ok, plan} = plan(options: %{repo: "MyApp.Mirror.Repo"}, repos: [MyApp.Repo])
+    test "an explicit --repo selects a discovered AshPostgres repo" do
+      assert {:ok, plan} =
+               plan(
+                 options: %{repo: "MyApp.Mirror.Repo"},
+                 repos: [MyApp.Repo, MyApp.Mirror.Repo]
+               )
+
       assert plan.repo == MyApp.Mirror.Repo
     end
   end
@@ -134,11 +158,42 @@ defmodule AshReplicant.InstallPlanTest do
       assert message =~ "MyApp.OtherRepo"
     end
 
-    test "an explicit --repo resolves both refusals" do
-      assert {:ok, %{repo: MyApp.Repo}} = plan(repos: [], options: %{repo: "MyApp.Repo"})
+    test "an explicit --repo resolves ambiguity only when it was discovered" do
+      assert {:ok, %{repo: MyApp.Repo}} =
+               plan(repos: [MyApp.Repo], options: %{repo: "MyApp.Repo"})
 
       assert {:ok, %{repo: MyApp.OtherRepo}} =
                plan(repos: [MyApp.Repo, MyApp.OtherRepo], options: %{repo: "MyApp.OtherRepo"})
+    end
+
+    test "refuses an explicit repo that was not discovered" do
+      assert {:error, %Error{reason: :repo_unknown} = error} =
+               plan(repos: [MyApp.Repo], options: %{repo: "MyApp.TypoRepo"})
+
+      message = Exception.message(error)
+      assert message =~ "--repo"
+      refute message =~ "TypoRepo"
+    end
+  end
+
+  describe "module option refusal" do
+    for {flag, role, value} <- [
+          {"--repo", :repo, ""},
+          {"--domain", :domain, "MyApp..Mirror"},
+          {"--checkpoint", :checkpoint, "Elixir"},
+          {"--sink", :sink, "my_app.Sink"},
+          {"--pipeline", :pipeline, "MyApp.Pipeline!"}
+        ] do
+      test "refuses malformed #{flag} without echoing its value" do
+        value = unquote(value)
+
+        assert {:error, %Error{reason: :module_name_invalid} = error} =
+                 plan(options: %{unquote(role) => value})
+
+        message = Exception.message(error)
+        assert message =~ unquote(flag)
+        refute message =~ inspect(value)
+      end
     end
   end
 
@@ -180,19 +235,36 @@ defmodule AshReplicant.InstallPlanTest do
       assert plan.pipeline == %{module: MyApp.Replicant.Pipeline, create?: false}
     end
 
-    test "an existing artifact whose binding cannot be read is reused, not rewritten" do
-      assert {:ok, plan} =
-               plan(
-                 existing: %{
-                   checkpoint: {:ash_replicant, nil},
-                   sink: {:ash_replicant, nil},
-                   pipeline: {:ash_replicant, nil}
-                 }
+    for role <- [:checkpoint, :sink, :pipeline] do
+      test "refuses an existing #{role} whose binding cannot be read" do
+        role = unquote(role)
+
+        assert {:error, %Error{reason: :binding_unreadable, detail: %{role: ^role}} = error} =
+                 plan(existing: %{role => {:ash_replicant, nil}})
+
+        assert Exception.message(error) =~
+                 Map.fetch!(
+                   %{checkpoint: "--checkpoint", sink: "--sink", pipeline: "--pipeline"},
+                   role
+                 )
+      end
+    end
+  end
+
+  describe "fact completeness" do
+    test "refuses a project-state map that omits a target role" do
+      assert {:error, %Error{reason: :project_state_incomplete} = error} =
+               Install.plan(
+                 otp_app: :my_app,
+                 prefix: MyApp,
+                 options: %{},
+                 repos: [MyApp.Repo],
+                 existing: %{domain: :absent, checkpoint: :absent, sink: :absent}
                )
 
-      assert plan.checkpoint.create? == false
-      assert plan.sink.create? == false
-      assert plan.pipeline.create? == false
+      message = Exception.message(error)
+      assert message =~ "pipeline"
+      refute message =~ "MyApp"
     end
   end
 
@@ -201,6 +273,7 @@ defmodule AshReplicant.InstallPlanTest do
       assert {:error, %Error{reason: :checkpoint_repo_mismatch} = error} =
                plan(
                  options: %{repo: "MyApp.OtherRepo"},
+                 repos: [MyApp.Repo, MyApp.OtherRepo],
                  existing: %{checkpoint: {:ash_replicant, MyApp.Repo}}
                )
 

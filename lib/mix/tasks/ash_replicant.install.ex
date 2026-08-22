@@ -32,9 +32,10 @@ defmodule Mix.Tasks.AshReplicant.Install.Docs do
     | Pipeline | `MyApp.Replicant.Pipeline` | `use AshReplicant.Pipeline` |
 
     It also adds the domain to `:ash_domains`, supervises the pipeline in the
-    application tree, and queues `mix ash.codegen install_ash_replicant` so the
-    checkpoint migration comes from your resource snapshots rather than from a
-    template that could drift.
+    application tree, imports AshReplicant's public DSL formatter metadata, and
+    queues `mix ash.codegen install_ash_replicant` so the checkpoint migration
+    comes from your resource snapshots rather than from a template that could
+    drift.
 
     ## What it deliberately does NOT do
 
@@ -48,7 +49,8 @@ defmodule Mix.Tasks.AshReplicant.Install.Docs do
     ## Options
 
     * `--repo` - the AshPostgres repo the mirror and checkpoint commit through.
-      Required only when the project has zero or several repos.
+      Use it to select among several discovered repos; when none exists,
+      generate one with `mix ash_postgres.install` first.
     * `--slot` - the PostgreSQL replication slot name. Defaults to
       `<otp_app>_replicant`.
     * `--domain` - name for the generated Ash domain.
@@ -59,10 +61,12 @@ defmodule Mix.Tasks.AshReplicant.Install.Docs do
     ## Refusals
 
     The installer stops — writing nothing — rather than guess about anything whose
-    wrongness is quiet: an illegal slot name, an ambiguous or missing repo, a
-    module it did not generate sitting at a target name, an existing checkpoint
-    bound to another repo, an existing sink bound to another slot, or an existing
-    pipeline wired to another sink. Each refusal names the flag that resolves it.
+    wrongness is quiet: a malformed module name, an illegal slot name, an
+    ambiguous, missing, unknown, or non-AshPostgres repo; incomplete project
+    facts; a module it did not generate sitting at a target name; an unreadable
+    existing binding; an existing checkpoint bound to another repo; an existing
+    sink bound to another slot; or an existing pipeline wired to another sink.
+    Each refusal names the flag or structural fact that resolves it.
     """
   end
 end
@@ -79,10 +83,11 @@ if Code.ensure_loaded?(Igniter) do
     alias Igniter.Code.Function
     alias Igniter.Code.Keyword, as: CodeKeyword
     alias Igniter.Code.List, as: CodeList
-    alias Igniter.Libs.Ecto, as: EctoLib
+    alias Igniter.Code.Module, as: CodeModule
     alias Igniter.Mix.Task.Info
     alias Igniter.Project.Application, as: ProjectApplication
     alias Igniter.Project.Config, as: ProjectConfig
+    alias Igniter.Project.Formatter, as: ProjectFormatter
     alias Igniter.Project.Module, as: ProjectModule
     alias Mix.Tasks.AshReplicant.Install.Docs
     alias Sourceror.Zipper
@@ -126,26 +131,38 @@ if Code.ensure_loaded?(Igniter) do
       prefix = ProjectModule.module_name_prefix(igniter)
       options = options(igniter)
 
-      artifacts = Install.artifacts(prefix, options)
+      {igniter, repos} = ash_postgres_repos(igniter)
 
-      {igniter, repos} = EctoLib.list_repos(igniter)
-      {igniter, existing} = existing_state(igniter, artifacts)
+      case Install.validate_options(options) do
+        {:error, error} ->
+          Igniter.add_issue(igniter, Exception.message(error))
 
-      plan =
-        Install.plan(
-          otp_app: otp_app,
-          prefix: prefix,
-          options: options,
-          repos: repos,
-          existing: existing
-        )
+        :ok ->
+          artifacts = Install.artifacts(prefix, options)
+          {igniter, existing} = existing_state(igniter, artifacts)
 
-      case plan do
-        # A refusal writes NOTHING: the operator fixes one named thing and
-        # re-runs against an untouched project.
-        {:error, error} -> Igniter.add_issue(igniter, Exception.message(error))
-        {:ok, plan} -> apply_plan(igniter, plan)
+          plan =
+            Install.plan(
+              otp_app: otp_app,
+              prefix: prefix,
+              options: options,
+              repos: repos,
+              existing: existing
+            )
+
+          case plan do
+            # A refusal writes NOTHING: the operator fixes one named thing and
+            # re-runs against an untouched project.
+            {:error, error} -> Igniter.add_issue(igniter, Exception.message(error))
+            {:ok, plan} -> apply_plan(igniter, plan)
+          end
       end
+    end
+
+    defp ash_postgres_repos(igniter) do
+      ProjectModule.find_all_matching_modules(igniter, fn _module, module_body ->
+        match?({:ok, _use}, CodeModule.move_to_use(module_body, AshPostgres.Repo))
+      end)
     end
 
     defp options(igniter) do
@@ -163,6 +180,7 @@ if Code.ensure_loaded?(Igniter) do
       |> create_pipeline(plan)
       |> register_domain(plan)
       |> supervise_pipeline(plan)
+      |> ProjectFormatter.import_dep(:ash_replicant)
       |> Ash.Igniter.codegen("install_ash_replicant")
       |> Igniter.add_notice(notice(plan))
     end
@@ -231,16 +249,20 @@ if Code.ensure_loaded?(Igniter) do
       end
     end
 
-    # A deep search, not a current-scope one: this runs against whatever zipper
-    # position `find_module/2` hands back, which is not necessarily inside the
-    # module body.
     defp move_to_resource(zipper, resource) do
-      Function.move_to_function_call(
-        zipper,
-        :resource,
-        [1, 2],
-        &Function.argument_equals?(&1, 0, resource)
-      )
+      with {:ok, module_body} <- Common.move_to_do_block(zipper),
+           {:ok, resources} <-
+             Function.move_to_function_call_in_current_scope(module_body, :resources, 1),
+           {:ok, resources_body} <- Common.move_to_do_block(resources) do
+        Function.move_to_function_call_in_current_scope(
+          resources_body,
+          :resource,
+          [1, 2],
+          &Function.argument_equals?(&1, 0, resource)
+        )
+      else
+        _not_found -> :error
+      end
     end
 
     defp create_checkpoint(igniter, %{checkpoint: %{create?: false}}), do: igniter
@@ -375,9 +397,9 @@ if Code.ensure_loaded?(Igniter) do
     defp pipeline_binding(zipper),
       do: generated_binding(zipper, AshReplicant.Pipeline, :sink, &module_value/1)
 
-    # An existing module that carries our `use` is ours to reuse. The binding may
-    # still be unreadable (a module attribute, a computed value); `nil` says "we
-    # cannot prove drift", and the planner then reuses rather than rewrites.
+    # An existing module that carries our top-level `use` is ours to reuse. An
+    # unreadable binding is reported as nil and the planner refuses it; inability
+    # to prove identity is never proof that the binding matches.
     defp generated_binding(zipper, macro, key, decode) do
       case move_to_use(zipper, macro) do
         :error -> :foreign
@@ -386,9 +408,10 @@ if Code.ensure_loaded?(Igniter) do
     end
 
     defp move_to_use(zipper, module) do
-      Function.move_to_function_call(zipper, :use, [1, 2], fn call ->
-        Function.argument_equals?(call, 0, module)
-      end)
+      case Common.move_to_do_block(zipper) do
+        {:ok, module_body} -> CodeModule.move_to_use(module_body, module)
+        _not_a_module -> :error
+      end
     end
 
     defp use_option(use_call, key, decode) do

@@ -9,10 +9,14 @@ defmodule AshReplicant.Install.Error do
   """
 
   @type reason ::
-          :slot_name_invalid
+          :module_name_invalid
+          | :slot_name_invalid
           | :repo_required
           | :repo_ambiguous
+          | :repo_unknown
+          | :project_state_incomplete
           | :module_conflict
+          | :binding_unreadable
           | :checkpoint_repo_mismatch
           | :sink_slot_mismatch
           | :pipeline_sink_mismatch
@@ -22,6 +26,16 @@ defmodule AshReplicant.Install.Error do
   defexception reason: nil, artifact: nil, detail: %{}
 
   @impl Exception
+  def message(%__MODULE__{reason: :module_name_invalid, detail: detail}) do
+    """
+    #{detail.flag} must name an Elixir module.
+
+    Use a conventional alias made of upper-case segments, for example:
+
+        mix ash_replicant.install #{detail.flag} MyApp.Replicant
+    """
+  end
+
   def message(%__MODULE__{reason: :slot_name_invalid, detail: detail}) do
     """
     the replication slot name #{inspect(detail.slot_name)} is not a legal PostgreSQL \
@@ -57,12 +71,42 @@ defmodule AshReplicant.Install.Error do
     """
   end
 
+  def message(%__MODULE__{reason: :repo_unknown}) do
+    """
+    --repo must name an AshPostgres repo defined in this project.
+
+    AshReplicant cannot generate a checkpoint against an unknown or non-Postgres repo. \
+    Name one of the project's `use AshPostgres.Repo` modules and re-run.
+    """
+  end
+
+  def message(%__MODULE__{reason: :project_state_incomplete, detail: detail}) do
+    """
+    the installer could not classify every target module; missing roles: \
+    #{inspect(detail.missing)}.
+
+    No source was changed. Re-run after the project can be parsed completely.
+    """
+  end
+
   def message(%__MODULE__{reason: :module_conflict, artifact: artifact, detail: detail}) do
     """
     #{inspect(artifact)} already exists and is not #{detail.description}.
 
     The installer never overwrites a module it did not generate. Rename or remove the \
     existing module, or generate this one under a different name:
+
+        mix ash_replicant.install #{detail.flag} #{inspect(detail.suggestion)}
+    """
+  end
+
+  def message(%__MODULE__{reason: :binding_unreadable, artifact: artifact, detail: detail}) do
+    """
+    #{inspect(artifact)} uses the expected AshReplicant module, but its \
+    #{detail.binding} binding is not a literal the installer can verify.
+
+    The installer never evaluates host source and never assumes an unreadable binding \
+    matches. Make the binding a literal, or generate a separate artifact:
 
         mix ash_replicant.install #{detail.flag} #{inspect(detail.suggestion)}
     """
@@ -156,6 +200,7 @@ defmodule AshReplicant.Install do
   alias AshReplicant.Install.Error
 
   @slot_name_format ~r/\A[a-z0-9_]{1,63}\z/
+  @module_name_format ~r/\A(?:Elixir\.)?[A-Z][A-Za-z0-9_]*(?:\.[A-Z][A-Za-z0-9_]*)*\z/
 
   @roles [:domain, :checkpoint, :sink, :pipeline]
 
@@ -164,6 +209,14 @@ defmodule AshReplicant.Install do
     checkpoint: "--checkpoint",
     sink: "--sink",
     pipeline: "--pipeline"
+  }
+
+  @module_flags Map.put(@flags, :repo, "--repo")
+
+  @bindings %{
+    checkpoint: "repo",
+    sink: "slot name",
+    pipeline: "sink"
   }
 
   @descriptions %{
@@ -211,8 +264,10 @@ defmodule AshReplicant.Install do
   defstruct [:otp_app, :repo, :slot_name, :domain, :checkpoint, :sink, :pipeline]
 
   @doc """
-  The module name for every artifact, from the project's module prefix and the
-  name-override flags. Total: it never fails and never consults the project.
+  The module name for every artifact, from the project's module prefix and
+  already-validated name-override flags. `validate_options/1` is the admission
+  boundary; after it succeeds this function is total and never consults the
+  project.
   """
   @spec artifacts(module(), map()) :: %{
           domain: module(),
@@ -241,9 +296,8 @@ defmodule AshReplicant.Install do
   * `:otp_app` — the host's OTP application name (required).
   * `:prefix` — the host's module prefix, e.g. `MyApp` (required).
   * `:options` — the parsed CLI flags, as a map of atom keys to string values.
-  * `:repos` — every repo module discovered in the project.
-  * `:existing` — a map of role to `t:existing/0`; anything absent from the map
-    is treated as `:absent`.
+  * `:repos` — every AshPostgres repo module discovered in the project.
+  * `:existing` — a complete map of every role to `t:existing/0`.
   """
   @spec plan(keyword()) :: {:ok, t()} | {:error, Error.t()}
   def plan(opts) do
@@ -253,9 +307,10 @@ defmodule AshReplicant.Install do
     repos = Keyword.get(opts, :repos, [])
     existing = Keyword.get(opts, :existing, %{})
 
-    artifacts = artifacts(prefix, options)
-
-    with {:ok, slot_name} <- resolve_slot_name(otp_app, options),
+    with :ok <- validate_options(options),
+         :ok <- validate_existing(existing),
+         artifacts = artifacts(prefix, options),
+         {:ok, slot_name} <- resolve_slot_name(otp_app, options),
          {:ok, repo} <- resolve_repo(repos, options),
          :ok <- refuse_conflicts(artifacts, existing),
          :ok <- refuse_drift(artifacts, existing, repo, slot_name) do
@@ -270,6 +325,26 @@ defmodule AshReplicant.Install do
          pipeline: artifact(artifacts, existing, :pipeline)
        }}
     end
+  end
+
+  @doc false
+  @spec validate_options(map()) :: :ok | {:error, Error.t()}
+  def validate_options(options) do
+    Enum.find_value(@module_flags, :ok, fn {role, flag} ->
+      case Map.fetch(options, role) do
+        :error ->
+          false
+
+        {:ok, value} ->
+          validate_module_flag(value, role, flag)
+      end
+    end)
+  end
+
+  defp validate_module_flag(value, role, flag) do
+    if valid_module_name?(value),
+      do: false,
+      else: {:error, %Error{reason: :module_name_invalid, detail: %{role: role, flag: flag}}}
   end
 
   defp artifact(artifacts, existing, role) do
@@ -291,9 +366,30 @@ defmodule AshReplicant.Install do
   defp parse_module(value) when is_binary(value) do
     value
     |> String.trim()
-    |> String.split(".", trim: true)
-    |> Enum.reject(&(&1 == "Elixir"))
+    |> String.split(".")
     |> Module.concat()
+  end
+
+  defp valid_module_name?(value) when is_atom(value) do
+    value
+    |> Atom.to_string()
+    |> valid_module_name?()
+  end
+
+  defp valid_module_name?(value) when is_binary(value) do
+    value = String.trim(value)
+    value != "Elixir" and Regex.match?(@module_name_format, value)
+  end
+
+  defp valid_module_name?(_value), do: false
+
+  defp validate_existing(existing) do
+    missing = @roles -- Map.keys(existing)
+
+    case missing do
+      [] -> :ok
+      missing -> {:error, %Error{reason: :project_state_incomplete, detail: %{missing: missing}}}
+    end
   end
 
   defp resolve_slot_name(otp_app, options) do
@@ -321,8 +417,14 @@ defmodule AshReplicant.Install do
            detail: %{repos: repos, suggestion: List.first(repos)}
          }}
 
-      {named, _repos} ->
-        {:ok, parse_module(named)}
+      {named, repos} ->
+        repo = parse_module(named)
+
+        if repo in repos do
+          {:ok, repo}
+        else
+          {:error, %Error{reason: :repo_unknown, detail: %{}}}
+        end
     end
   end
 
@@ -330,9 +432,25 @@ defmodule AshReplicant.Install do
     Enum.reduce_while(@roles, :ok, fn role, :ok ->
       case Map.get(existing, role, :absent) do
         :foreign -> {:halt, {:error, conflict(artifacts, role)}}
+        {:ash_replicant, nil} -> {:halt, {:error, binding_unreadable(artifacts, role)}}
         _admissible -> {:cont, :ok}
       end
     end)
+  end
+
+  defp binding_unreadable(artifacts, role) do
+    module = Map.fetch!(artifacts, role)
+
+    %Error{
+      reason: :binding_unreadable,
+      artifact: module,
+      detail: %{
+        role: role,
+        binding: Map.fetch!(@bindings, role),
+        flag: Map.fetch!(@flags, role),
+        suggestion: Module.concat(module, "Secondary")
+      }
+    }
   end
 
   defp conflict(artifacts, role) do

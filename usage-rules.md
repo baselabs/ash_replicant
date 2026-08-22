@@ -23,10 +23,11 @@ _An Ash adapter for the `replicant` CDC framework — the "`ash_postgres` of
 
 `mix igniter.install ash_replicant` (or, when the dependency is already present,
 `mix ash_replicant.install`) generates the domain, checkpoint, sink, and pipeline
-supervisor, registers the domain in `:ash_domains`, supervises the pipeline, and
-queues `mix ash.codegen install_ash_replicant`. Igniter is an **optional**
-dependency; the manual equivalent is in the README under "Manual installation" and
-is tied to the installer's real output by a test.
+supervisor, registers the domain in `:ash_domains`, supervises the pipeline,
+imports AshReplicant's formatter metadata, and queues
+`mix ash.codegen install_ash_replicant`. Igniter is an **optional** dependency;
+the manual equivalent is in the README under "Manual installation" and is tied
+to the installer's real output by a test.
 
 Two properties matter when reasoning about a generated project:
 
@@ -37,12 +38,13 @@ Two properties matter when reasoning about a generated project:
   present but missing `:connection`, `:publication`, or `:source_identity` RAISES,
   naming the missing keys and never their values; supervising nothing would be a
   silent outage.
-- **The installer refuses rather than guesses.** An illegal slot name, a missing or
-  ambiguous repo, a foreign module at a target name, a checkpoint bound to another
-  repo, a sink bound to another slot, or a pipeline wired to another sink each stop
-  the install having written nothing. Never route around a refusal by deleting the
-  existing module: a sink's slot name keys its durable checkpoint identity, and
-  re-keying it abandons the watermark.
+- **The installer refuses rather than guesses.** Malformed module names; an
+  illegal slot; a missing, ambiguous, unknown, or non-AshPostgres repo;
+  incomplete project facts; a foreign target module; an unreadable existing
+  binding; or a checkpoint, sink, or pipeline bound to another identity each
+  stop the install having written nothing. Never route around a refusal by
+  deleting the existing module: a sink's slot name keys its durable checkpoint
+  identity, and re-keying it abandons the watermark.
 
 Re-running the installer over an installed project changes nothing.
 

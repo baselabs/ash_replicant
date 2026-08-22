@@ -13,7 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   D1/I01). `mix ash_replicant.install` — reachable as
   `mix igniter.install ash_replicant` — generates the Ash domain, the checkpoint
   resource, the sink, and the pipeline supervisor; registers the domain in
-  `:ash_domains`; supervises the pipeline; and queues
+  `:ash_domains`; supervises the pipeline; imports AshReplicant's public DSL
+  formatter metadata; and queues
   `mix ash.codegen install_ash_replicant`, so the checkpoint migration comes
   from the host's own resource snapshots rather than a shipped template that
   could drift. `--repo`, `--slot`, `--domain`, `--checkpoint`, `--sink`, and
@@ -31,18 +32,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     present-but-incomplete configuration rather than supervising nothing (a
     silent outage). Its owner child stays `:temporary`, so a halt remains
     permanent (ADR-0014). Its messages name missing KEYS, never their values.
-  - **Seven structural refusals, each writing nothing:** an illegal PostgreSQL
-    slot name, no repo, an ambiguous repo, a module the installer did not
-    generate sitting at a target name, a checkpoint already bound to another
-    repo, a sink already bound to another slot, and a pipeline already wired to
-    another sink. Re-keying a live sink would abandon its durable checkpoint row
-    and re-deliver from the new slot's position, so the installer stops and
-    names the flag that resolves it.
+  - **A closed structural refusal set, each writing nothing:** malformed module
+    names; an illegal PostgreSQL slot; no, ambiguous, unknown, or non-AshPostgres
+    repo; incomplete project facts; a foreign target module; an unreadable
+    existing binding; and checkpoint, sink, or pipeline identity drift.
+    Re-keying a live sink would abandon its durable checkpoint row and
+    re-deliver from the new slot's position, so the installer stops and names
+    the resolving flag or structural fact.
   - The README's "Manual installation" block is tied to the installer's actual
     output by a test comparing parsed module/`use` contracts, so the documented
-    hand path cannot drift from the generated one. Twenty-three mutation proofs
-    cover every refusal, the fail-closed pipeline admission, the idempotency
-    short-circuits, and the doc tie-out itself.
+    hand path cannot drift from the generated one. Red-capable tripwires cover
+    every refusal, the fail-closed pipeline admission, exact AST ownership,
+    formatter import/export, the idempotency short-circuits, and the doc tie-out.
 - **Continuous invariant census** (ADR-0019, roadmap C5/C01). The existing
   temporary `PipelineOwner` now schedules one jittered, bounded worker that
   enters through the same owner-liveness, destination-generation, and pinned

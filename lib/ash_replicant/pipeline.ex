@@ -221,16 +221,16 @@ defmodule AshReplicant.Pipeline do
     """
   end
 
-  defp sink_message(module, declared, configured) do
+  defp sink_message(module, declared, _configured) do
     """
-    #{inspect(module)} declares sink #{inspect(declared)}, but its configuration sets \
-    `sink: #{inspect(configured)}`.
+    #{inspect(module)} declares sink #{inspect(declared)}, but its configuration sets a \
+    different `sink:` value.
 
     One generated pipeline supervises one sink's owner, and the declared sink is what \
     fixes the replication slot this pipeline serves. Remove the `sink:` key from \
-    configuration, or generate a second pipeline for #{inspect(configured)}:
+    configuration, or generate a second pipeline for the other sink:
 
-        mix ash_replicant.install --sink #{inspect(configured)} --pipeline #{inspect(module)}.Secondary
+        mix ash_replicant.install --sink MyApp.OtherSink --pipeline #{inspect(module)}.Secondary
     """
   end
 end

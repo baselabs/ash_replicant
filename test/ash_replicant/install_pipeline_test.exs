@@ -180,7 +180,8 @@ defmodule AshReplicant.InstallPipelineTest do
       message = Exception.message(error)
 
       assert message =~ inspect(Sink)
-      assert message =~ inspect(OtherSink)
+      assert message =~ "different `sink:` value"
+      refute message =~ inspect(OtherSink)
     end
 
     test "refuses a configuration that is not a keyword list" do
@@ -209,6 +210,18 @@ defmodule AshReplicant.InstallPipelineTest do
       error = assert_raise(ArgumentError, fn -> Pipeline.start_options() end)
       message = Exception.message(error)
 
+      refute message =~ "hunter2"
+      refute message =~ "password"
+    end
+
+    test "a sink mismatch does not inspect the configured term" do
+      configure(@complete ++ [sink: [password: "hunter2"]])
+
+      error = assert_raise(ArgumentError, fn -> Pipeline.start_options() end)
+      message = Exception.message(error)
+
+      assert message =~ inspect(Pipeline)
+      assert message =~ inspect(Sink)
       refute message =~ "hunter2"
       refute message =~ "password"
     end
