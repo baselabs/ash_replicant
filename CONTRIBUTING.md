@@ -51,9 +51,10 @@ scripts/with-release-runtime.sh scripts/run-mutation-gates.py
 ```
 
 The last command is the data-boundary guard-mutation gate (ADR-0003): it
-removes one production guard at a time in an isolated temporary copy of the
-project and requires the named no-database focused test to go red for the
-property-specific reason. It compiles the project once per mutant, so expect
+removes one production guard or reorders one notifier guard after its first
+effect at a time in an isolated temporary copy of the project, and requires
+the named no-database focused test to go red for the property-specific reason.
+It compiles the project once per mutant, so expect
 a long serial run; CI executes it once in the no-database job. Its
 `--self-test` mode runs only the runner's own fixture/sentinel battery, and
 `--cells <prefix>` runs a subset while iterating on one guard family.

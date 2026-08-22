@@ -3,9 +3,10 @@
 
 Proves the fail-closed data-boundary guards are OBSERVED by the no-database
 focused tests: each matrix cell removes exactly ONE production guard (or one
-sibling call site of a shared guard) in an ISOLATED temporary copy of the
-project and requires the named focused selector to fail for the cell's
-property-specific reason. A guard whose removal keeps every test green is a
+sibling call site of a shared guard), or moves one notifier guard after its
+first effect, in an ISOLATED temporary copy of the project and requires the
+named focused selector to fail for the cell's property-specific reason. A
+guard whose removal keeps every test green is a
 vacuous guard; this runner is the repeatable evidence that none of the
 covered guards is.
 
@@ -924,6 +925,304 @@ MATRIX = [
             }
         ],
     },
+    {
+        "id": "notifier_order.mirror_upsert",
+        "file": APPLY,
+        "mode": "source",
+        "replacements": [
+            ["    Context.verify_notifier_loads!(config, resource, action, :upsert)\n", ""],
+            [
+                "      return_notifications?: true\n"
+                "    )\n\n"
+                "    :ok\n"
+                "  rescue\n"
+                "    e -> reraise Error.scrub(e, resource, :upsert), __STACKTRACE__\n",
+                "      return_notifications?: true\n"
+                "    )\n\n"
+                "    Context.verify_notifier_loads!(config, resource, action, :upsert)\n"
+                "    :ok\n"
+                "  rescue\n"
+                "    e -> reraise Error.scrub(e, resource, :upsert), __STACKTRACE__\n",
+            ],
+        ],
+        "runs": [
+            {
+                "file": T_NOTIFIER,
+                "red": [
+                    "mirror_upsert: notifier guard must run before its first destination effect"
+                ],
+                "absent": [],
+            }
+        ],
+    },
+    {
+        "id": "notifier_order.mirror_destroy",
+        "file": APPLY,
+        "mode": "source",
+        "replacements": [
+            ["    Context.verify_notifier_loads!(config, resource, action, :destroy)\n", ""],
+            [
+                "      return_errors?: true\n"
+                "    )\n\n"
+                "    :ok\n"
+                "  rescue\n"
+                "    e -> reraise Error.scrub(e, resource, :destroy), __STACKTRACE__\n",
+                "      return_errors?: true\n"
+                "    )\n\n"
+                "    Context.verify_notifier_loads!(config, resource, action, :destroy)\n"
+                "    :ok\n"
+                "  rescue\n"
+                "    e -> reraise Error.scrub(e, resource, :destroy), __STACKTRACE__\n",
+            ],
+        ],
+        "runs": [
+            {
+                "file": T_NOTIFIER,
+                "red": [
+                    "mirror_destroy: notifier guard must run before its first destination effect"
+                ],
+                "absent": [],
+            }
+        ],
+    },
+    {
+        "id": "notifier_order.scd2_close",
+        "file": SCD2,
+        "mode": "source",
+        "replacements": [
+            [
+                "    action = Info.replicant_history_close_action!(resource)\n"
+                "    Context.preflight_onetime!(config, tenant, resource, action, :upsert)\n"
+                "    Context.verify_notifier_loads!(config, resource, action, :upsert)\n",
+                "    action = Info.replicant_history_close_action!(resource)\n"
+                "    Context.preflight_onetime!(config, tenant, resource, action, :upsert)\n",
+            ],
+            [
+                "      return_errors?: true\n"
+                "    )\n\n"
+                "    :ok\n"
+                "  end\n\n"
+                "  defp open_version",
+                "      return_errors?: true\n"
+                "    )\n\n"
+                "    Context.verify_notifier_loads!(config, resource, action, :upsert)\n"
+                "    :ok\n"
+                "  end\n\n"
+                "  defp open_version",
+            ],
+        ],
+        "runs": [
+            {
+                "file": T_NOTIFIER,
+                "red": [
+                    "scd2_close: notifier guard must run before its first destination effect"
+                ],
+                "absent": [],
+            }
+        ],
+    },
+    {
+        "id": "notifier_order.scd2_open",
+        "file": SCD2,
+        "mode": "source",
+        "replacements": [
+            [
+                "    action = Resolver.upsert_action(resource)\n"
+                "    Context.preflight_onetime!(config, tenant, resource, action, :upsert)\n"
+                "    Context.verify_notifier_loads!(config, resource, action, :upsert)\n",
+                "    action = Resolver.upsert_action(resource)\n"
+                "    Context.preflight_onetime!(config, tenant, resource, action, :upsert)\n",
+            ],
+            [
+                "      return_notifications?: true\n"
+                "    )\n\n"
+                "    :ok\n"
+                "  end\n\n"
+                "  @doc \"\"\"\n"
+                "  The window-column input",
+                "      return_notifications?: true\n"
+                "    )\n\n"
+                "    Context.verify_notifier_loads!(config, resource, action, :upsert)\n"
+                "    :ok\n"
+                "  end\n\n"
+                "  @doc \"\"\"\n"
+                "  The window-column input",
+            ],
+        ],
+        "runs": [
+            {
+                "file": T_NOTIFIER,
+                "red": [
+                    "scd2_open: notifier guard must run before its first destination effect"
+                ],
+                "absent": [],
+            }
+        ],
+    },
+    {
+        "id": "notifier_order.append",
+        "file": APPEND,
+        "mode": "source",
+        "replacements": [
+            ["      Context.verify_notifier_loads!(config, resource, action, :append)\n", ""],
+            [
+                "        return_notifications?: true\n"
+                "      )\n"
+                "    end)\n\n"
+                "    :ok\n",
+                "        return_notifications?: true\n"
+                "      )\n"
+                "      Context.verify_notifier_loads!(config, resource, action, :append)\n"
+                "    end)\n\n"
+                "    :ok\n",
+            ],
+        ],
+        "runs": [
+            {
+                "file": T_NOTIFIER,
+                "red": ["append: notifier guard must run before its first destination effect"],
+                "absent": [],
+            }
+        ],
+    },
+    {
+        "id": "notifier_order.message",
+        "file": MESSAGES,
+        "mode": "source",
+        "replacements": [
+            [
+                "    DeliveryContext.verify_notifier_loads!(\n"
+                "      config,\n"
+                "      route.resource,\n"
+                "      route.action,\n"
+                "      :message\n"
+                "    )\n\n",
+                "",
+            ],
+            [
+                "        context: action_context(config, operation)\n"
+                "      )\n"
+                "    end)\n\n"
+                "    :ok\n",
+                "        context: action_context(config, operation)\n"
+                "      )\n"
+                "    end)\n\n"
+                "    DeliveryContext.verify_notifier_loads!(\n"
+                "      config,\n"
+                "      route.resource,\n"
+                "      route.action,\n"
+                "      :message\n"
+                "    )\n"
+                "    :ok\n",
+            ],
+        ],
+        "runs": [
+            {
+                "file": T_NOTIFIER,
+                "red": ["message: notifier guard must run before its first destination effect"],
+                "absent": [],
+            }
+        ],
+    },
+    {
+        "id": "notifier_order.snapshot_bulk",
+        "file": IMPL,
+        "mode": "source",
+        "replacements": [
+            [
+                "      Apply.Context.verify_notifier_loads!(\n"
+                "        config,\n"
+                "        resource,\n"
+                "        Resolver.upsert_action(resource),\n"
+                "        :snapshot\n"
+                "      )\n\n",
+                "",
+            ],
+            [
+                "          )\n"
+                "        end)\n\n"
+                "      guard_generation!(config)\n",
+                "          )\n"
+                "        end)\n\n"
+                "      Apply.Context.verify_notifier_loads!(\n"
+                "        config,\n"
+                "        resource,\n"
+                "        Resolver.upsert_action(resource),\n"
+                "        :snapshot\n"
+                "      )\n\n"
+                "      guard_generation!(config)\n",
+            ],
+        ],
+        "runs": [
+            {
+                "file": T_NOTIFIER,
+                "red": [
+                    "snapshot_bulk: notifier guard must run before its first destination effect"
+                ],
+                "absent": [],
+            }
+        ],
+    },
+    {
+        "id": "notifier_order.snapshot_mark",
+        "file": ROWS,
+        "mode": "source",
+        "replacements": [
+            [
+                "    Context.verify_notifier_loads!(config, resource, action, :snapshot_mark)\n",
+                "",
+            ],
+            [
+                "        return_notifications?: true\n"
+                "      )\n\n"
+                "    # A mark that stamped no row",
+                "        return_notifications?: true\n"
+                "      )\n\n"
+                "    Context.verify_notifier_loads!(config, resource, action, :snapshot_mark)\n\n"
+                "    # A mark that stamped no row",
+            ],
+        ],
+        "runs": [
+            {
+                "file": T_NOTIFIER,
+                "red": [
+                    "snapshot_mark: notifier guard must run before its first destination effect"
+                ],
+                "absent": [],
+            }
+        ],
+    },
+    {
+        "id": "notifier_order.snapshot_retire",
+        "file": RETIREMENT,
+        "mode": "source",
+        "replacements": [
+            [
+                "    Context.verify_notifier_loads!(config, resource, action, :snapshot_retire)\n",
+                "",
+            ],
+            [
+                "    end\n\n"
+                "    :ok\n"
+                "  rescue\n"
+                "    e in AshReplicant.Error -> reraise e, __STACKTRACE__\n",
+                "    end\n\n"
+                "    Context.verify_notifier_loads!(config, resource, action, :snapshot_retire)\n"
+                "    :ok\n"
+                "  rescue\n"
+                "    e in AshReplicant.Error -> reraise e, __STACKTRACE__\n",
+            ],
+        ],
+        "runs": [
+            {
+                "file": T_NOTIFIER,
+                "red": [
+                    "snapshot_retire: notifier guard must run before its first destination effect"
+                ],
+                "absent": [],
+            }
+        ],
+    },
     # ---------------------------------------------------- provenance collision
     {
         "id": "provenance_collision.length_prefix",
@@ -1212,6 +1511,15 @@ REQUIRED_CELL_IDS = [
     "notifier_drift.site_snapshot_bulk",
     "notifier_drift.site_snapshot_mark",
     "notifier_drift.site_snapshot_retire",
+    "notifier_order.mirror_upsert",
+    "notifier_order.mirror_destroy",
+    "notifier_order.scd2_close",
+    "notifier_order.scd2_open",
+    "notifier_order.append",
+    "notifier_order.message",
+    "notifier_order.snapshot_bulk",
+    "notifier_order.snapshot_mark",
+    "notifier_order.snapshot_retire",
     "provenance_collision.length_prefix",
     "provenance_collision.type_tag",
     "provenance_collision.list_count",

@@ -11,9 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Data-boundary guard-mutation gates** (roadmap D7 / SEC01, ADR-0003).
   `scripts/run-mutation-gates.py` proves the fail-closed data-boundary guards
-  are OBSERVED by the no-database focused tests: each of its 44 matrix cells
-  removes exactly one production guard — or one sibling call site of a shared
-  guard — across tenant absence, tenant reassignment, replica identity,
+  are OBSERVED by the no-database focused tests: each of its 53 matrix cells
+  removes exactly one production guard, removes one sibling call site of a
+  shared guard, or moves one notifier guard after its first effect — across
+  tenant absence, tenant reassignment, replica identity,
   sensitive type shape, sink-action multitenancy bypass, dynamic destination
   participants, notifier load drift, snapshot fingerprint collisions, and
   append identity, and requires the named focused selector to go red with a

@@ -65,9 +65,10 @@ Release evidence is separated by what it proves:
 
 8. `scripts/run-mutation-gates.py` proves the fail-closed data-boundary
    guards are observed by the no-database focused tests. Each matrix cell
-   removes exactly one production guard — or one sibling call site of a
-   shared guard — across the nine SEC01 families (tenant absence, tenant
-   reassignment, replica identity, sensitive type shape, sink-action
+   removes exactly one production guard, removes one sibling call site of a
+   shared guard, or moves one notifier guard after its first effect — across
+   the nine SEC01 families (tenant absence, tenant reassignment, replica
+   identity, sensitive type shape, sink-action
    multitenancy bypass, dynamic destination participants, notifier load
    drift, snapshot fingerprint collisions, append identity) in an isolated
    `mktemp` copy of the tracked working tree, and requires the named focused
