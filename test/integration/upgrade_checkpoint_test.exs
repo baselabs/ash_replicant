@@ -344,6 +344,7 @@ defmodule AshReplicant.Upgrade.CheckpointIntegrationTest do
     end)
 
     File.cp_r!(fixture, temp)
+    File.cp!(Path.join(root, "mix.lock"), Path.join(temp, "mix.lock"))
     legacy!(prefix)
 
     q!(~s|INSERT INTO "#{prefix}".ash_replicant_checkpoints VALUES ($1, 42)|, [
