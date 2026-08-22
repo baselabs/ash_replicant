@@ -1,5 +1,44 @@
+replicant_locals_without_parens = [
+  append_action: 1,
+  append_attempt_attribute: 1,
+  append_commit_lsn_attribute: 1,
+  append_identity: 1,
+  append_log: 1,
+  append_message_content_attribute: 1,
+  append_message_prefix_attribute: 1,
+  append_operation_attribute: 1,
+  append_ordinal_attribute: 1,
+  append_origin_attribute: 1,
+  append_slot_attribute: 1,
+  append_source_database_attribute: 1,
+  append_source_system_attribute: 1,
+  history_business_key: 1,
+  history_close_action: 1,
+  history_current_attribute: 1,
+  history_strategy: 1,
+  history_valid_from_lsn_attribute: 1,
+  history_valid_from_timestamp_attribute: 1,
+  history_valid_to_lsn_attribute: 1,
+  history_valid_to_timestamp_attribute: 1,
+  on_schema_change: 1,
+  on_truncate: 1,
+  replicant: 1,
+  sensitive: 1,
+  skip: 1,
+  snapshot_mark_action: 1,
+  snapshot_provenance: 1,
+  snapshot_retire_action: 1,
+  snapshot_tenant_scope_action: 1,
+  source_schema: 1,
+  source_table: 1,
+  tenant_attribute: 1,
+  tenant_mfa: 1,
+  upsert_identity: 1
+]
+
 [
   import_deps: [:ash, :ash_postgres, :ash_cloak],
   inputs: ["{mix,.formatter}.exs", "{config,lib,test}/**/*.{ex,exs}", "scripts/*.exs"],
-  locals_without_parens: []
+  locals_without_parens: replicant_locals_without_parens,
+  export: [locals_without_parens: replicant_locals_without_parens]
 ]

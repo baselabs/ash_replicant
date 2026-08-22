@@ -272,6 +272,25 @@ transaction, one trailing watermark write per flushed batch, ADR-0016),
 incremental snapshot progress (`snapshot_progress/0`, ADR-0017), and append-log
 delivery (`sink_kind/0` + `handle_slot_origin/2`, ADR-0018) are live.
 
+**9. The install path generates host-owned code and never guesses (I01).**
+`mix ash_replicant.install` (`Mix.Tasks.AshReplicant.Install`, behind an
+**optional** Igniter dependency) writes four host modules — an Ash domain, the
+checkpoint resource, the sink, and an `AshReplicant.Pipeline` supervisor — then
+registers the domain, supervises the pipeline, imports AshReplicant's formatter
+metadata, and queues `mix ash.codegen`. It writes **no** connection, publication,
+source identity, or key material, so a
+fresh install compiles and boots as a no-op; the generated pipeline supervises
+nothing until the operator configures it, and a present-but-incomplete
+configuration RAISES (naming keys, never values) rather than supervising nothing.
+Every refusal — malformed module name, illegal slot, missing/ambiguous/unknown or
+non-AshPostgres repo, incomplete facts, foreign target, unreadable binding, or a
+checkpoint/sink/pipeline bound to another identity — writes nothing and names
+the resolving flag or structural fact. Refusal decisions live in the
+Igniter-free `AshReplicant.Install` planner so each one carries a unit test; the
+Mix task only gathers facts and renders. The README's "Manual installation"
+block is tied to the installer's real output by a test — change one and the other
+must change.
+
 ## Development workflow
 
 The supported release foundation is Elixir 1.20.3 on Erlang/OTP 29 with Ash

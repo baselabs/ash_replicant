@@ -45,6 +45,10 @@ defmodule AshReplicant.MixProject do
       {:ash_onetime, "~> 0.6.0"},
       {:ash_cloak, "~> 0.1"},
       {:replicant, replicant_requirement()},
+      # The install codemod surface (I01). OPTIONAL for consumers and at
+      # runtime: `mix ash_replicant.install` compiles to an actionable stub when
+      # Igniter is absent, so no shipped library code depends on it.
+      {:igniter, ">= 0.8.3 and < 1.0.0-0", optional: true},
       {:spark, "~> 2.7.0"},
       {:splode, "~> 0.3"},
       {:jason, "~> 1.4"},

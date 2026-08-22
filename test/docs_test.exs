@@ -175,4 +175,36 @@ defmodule AshReplicant.DocsTest do
     assert adr6 =~ "Amendment (roadmap B6 / U3"
     assert adr6 =~ "per-invocation label"
   end
+
+  test "the published docs carry the I01 install path and its manual equivalent" do
+    readme = File.read!("README.md")
+
+    assert readme =~ "mix igniter.install ash_replicant"
+    assert readme =~ "mix ash_replicant.install"
+    assert readme =~ "### Manual installation"
+
+    # The tied-out block the installer's own test compares against. Exactly one,
+    # both markers present — an unclosed or duplicated block would silently
+    # narrow what the tie-out compares.
+    assert length(String.split(readme, "<!-- ash-replicant-manual-install-modules:start -->")) ==
+             2
+
+    assert length(String.split(readme, "<!-- ash-replicant-manual-install-modules:end -->")) == 2
+
+    # The refusals and the no-op-until-configured posture are the two facts an
+    # adopter must not have to discover by running it.
+    assert readme =~ "supervises *nothing* until you configure it"
+    assert readme =~ "It stops rather than guess."
+    assert readme =~ ~r/preserving\s+every existing formatter entry/
+
+    usage = File.read!("usage-rules.md")
+    assert usage =~ "## Installing"
+    assert usage =~ "The installer refuses rather than guesses."
+
+    agents = File.read!("AGENTS.md")
+    assert agents =~ "The install path generates host-owned code and never guesses"
+
+    changelog = File.read!("CHANGELOG.md")
+    assert changelog =~ "Fresh-install Igniter path"
+  end
 end
