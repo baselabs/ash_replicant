@@ -162,7 +162,8 @@ defmodule AshReplicant.ReleaseContract do
       {:run, "mix credo --strict"},
       {:run, "mix deps.audit"},
       {:run,
-       "env -u ASH_REPLICANT_TEST_URL scripts/run-structural-tests.sh --allow-excluded --exclude integration"}
+       "env -u ASH_REPLICANT_TEST_URL scripts/run-structural-tests.sh --allow-excluded --exclude integration"},
+      {:run, "scripts/run-mutation-gates.py"}
     ],
     "compatibility" => [
       {:uses, @checkout, :absent},

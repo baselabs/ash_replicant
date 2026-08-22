@@ -52,6 +52,9 @@ jobs:
       - name: Test without a Repo
         run: env -u ASH_REPLICANT_TEST_URL scripts/run-structural-tests.sh --allow-excluded --exclude integration
 
+      - name: Guard-mutation gates
+        run: scripts/run-mutation-gates.py
+
   compatibility:
     name: Dependencies ${{ matrix.label }} / PostgreSQL 16
     runs-on: ubuntu-latest

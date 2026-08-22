@@ -86,7 +86,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       "scripts/test-release-contract.sh",
       "mix credo --strict",
       "mix deps.audit",
-      "env -u ASH_REPLICANT_TEST_URL scripts/run-structural-tests.sh --allow-excluded --exclude integration"
+      "env -u ASH_REPLICANT_TEST_URL scripts/run-structural-tests.sh --allow-excluded --exclude integration",
+      "scripts/run-mutation-gates.py"
     ],
     "compatibility" => [
       String.trim(@postgres_run),
