@@ -106,6 +106,7 @@ defmodule AshReplicant.Sink do
     domains = Keyword.fetch!(opts, :domains)
     checkpoint_resource = Keyword.fetch!(opts, :checkpoint_resource)
     slot_name = Keyword.fetch!(opts, :slot_name)
+    legacy_apply_ledger? = Keyword.has_key?(opts, :apply_ledger)
 
     # Fail closed on removed or unknown options: a previously-valid key (e.g. the
     # removed `apply_ledger`) must surface as a compile-time failure on the host,
@@ -119,7 +120,8 @@ defmodule AshReplicant.Sink do
            :message_routes,
            :ignored_message_prefixes,
            :sink_kind,
-           :initial_state
+           :initial_state,
+           :apply_ledger
          ]) do
       [] ->
         :ok
@@ -129,8 +131,7 @@ defmodule AshReplicant.Sink do
               "unknown AshReplicant.Sink option(s) #{inspect(Keyword.keys(extra))} — " <>
                 "the sink admits only :repo, :domains, :checkpoint_resource, :slot_name, " <>
                 ":ignored_sources, :message_routes, :ignored_message_prefixes, :sink_kind, " <>
-                ":initial_state " <>
-                "(apply_ledger was removed; a removed option must not silently no-op)"
+                ":initial_state, and the compile-only legacy :apply_ledger marker"
     end
 
     # ADR-0018 §1: a generated sink is EXCLUSIVELY one kind. Replicant reads
@@ -297,7 +298,8 @@ defmodule AshReplicant.Sink do
           message_routes: unquote(Macro.escape(message_routes)),
           ignored_message_prefixes: unquote(Macro.escape(ignored_message_prefixes)),
           sink_kind: unquote(sink_kind),
-          initial_state: unquote(initial_state)
+          initial_state: unquote(initial_state),
+          legacy_apply_ledger?: unquote(legacy_apply_ledger?)
         }
       end
 

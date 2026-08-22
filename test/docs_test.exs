@@ -207,4 +207,21 @@ defmodule AshReplicant.DocsTest do
     changelog = File.read!("CHANGELOG.md")
     assert changelog =~ "Fresh-install Igniter path"
   end
+
+  test "the published 0.4 to 1.0 upgrade path is the guarded package task" do
+    readme = File.read!("README.md")
+    usage = File.read!("usage-rules.md")
+    adr = File.read!("docs/adr/0007-source-bound-checkpoint-effect-once.md")
+    changelog = File.read!("CHANGELOG.md")
+
+    for content <- [readme, usage, adr, changelog] do
+      assert content =~ "mix ash_replicant.upgrade"
+    end
+
+    assert usage =~ "ASH_REPLICANT_PIPELINES_STOPPED=1"
+    assert usage =~ "restore from backup or remain on 1.0"
+    assert usage =~ "never infers"
+    refute usage =~ "Capture each row's `(slot_name, commit_lsn)`"
+    refute readme =~ "then capture,\ndelete, migrate"
+  end
 end

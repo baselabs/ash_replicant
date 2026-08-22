@@ -51,7 +51,9 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   trap 'rm -rf "$package_dir"' EXIT
   env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION mix hex.build --unpack --output "$package_dir"
 
-  for required in lib .formatter.exs mix.exs README.md LICENSE NOTICE CHANGELOG.md usage-rules.md; do
+  for required in lib .formatter.exs mix.exs README.md LICENSE NOTICE CHANGELOG.md usage-rules.md \\
+    lib/ash_replicant/upgrade.ex lib/ash_replicant/upgrade/checkpoint.ex \\
+    lib/mix/tasks/ash_replicant.upgrade.ex; do
     test -e "$package_dir/$required" || {
       echo "::error::Missing package path: $required"
       exit 1
@@ -223,6 +225,39 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     {"lib/ash_replicant/telemetry.ex", "[:ash_replicant, :census, :halted]"}
   ]
 
+  @upgrade_doc_contracts [
+    {"README.md", "### 1. Define the checkpoint resource",
+     [
+       "mix ash_replicant.upgrade 0.4.0 1.0.0",
+       "It never infers ownership from a slot-only row."
+     ]},
+    {"usage-rules.md", "## Upgrading from the slot-only checkpoint",
+     [
+       "the 1.0.0 upgrader never infers ownership",
+       "the generated migration\nrefuses without that explicit assertion",
+       "restore from backup or remain on 1.0"
+     ]},
+    {"AGENTS.md", "## Critical rules",
+     ["**10. The 0.4.0 to 1.0.0 upgrade never infers checkpoint ownership.**"]},
+    {"docs/adr/0007-source-bound-checkpoint-effect-once.md", "## Decision",
+     ["mix ash_replicant.upgrade 0.4.0 1.0.0", "checksummed rollback ledger"]},
+    {"CHANGELOG.md", "### Added", ["**Guarded 0.4.0 to 1.0.0 package upgrade and rollback.**"]}
+  ]
+
+  @upgrade_source_contracts [
+    {"lib/ash_replicant/upgrade/checkpoint.ex", "def up(repo, opts)"},
+    {"lib/ash_replicant/upgrade/checkpoint.ex", "def down(repo, opts)"},
+    {"lib/ash_replicant/upgrade/checkpoint.ex", "pg_advisory_xact_lock"},
+    {"lib/ash_replicant/upgrade/checkpoint.ex", "IN ACCESS EXCLUSIVE MODE"},
+    {"lib/ash_replicant/upgrade/checkpoint.ex",
+     "defp verify_rollback_state(repo, config, ledger)"},
+    {"lib/ash_replicant/upgrade.ex", "def render_checkpoint_snapshot(repo)"},
+    {"lib/mix/tasks/ash_replicant.upgrade.ex", "use Igniter.Mix.Task"},
+    {"lib/mix/tasks/ash_replicant.upgrade.ex", "Mix.Task.run(\"compile\")"},
+    {"lib/mix/tasks/ash_replicant.upgrade.ex", "Application.ensure_all_started(:postgrex)"},
+    {"lib/mix/tasks/ash_replicant.upgrade.ex", "Checkpoint.check(plan.repo"}
+  ]
+
   @checkout "actions/checkout@11d5960a326750d5838078e36cf38b85af677262"
   @setup_beam "erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236"
   @cache "actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830"
@@ -252,6 +287,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       documentation_probes()
       b1_documentation_probes()
       census_contract_probes()
+      upgrade_contract_probes()
     end)
 
     IO.puts("release contract self-tests: PASS")
@@ -308,7 +344,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     replace_once!(@workflow, "name: CI", "name: CI\n# Example text: uses: actions/setup-node@v4")
     assert_valid!()
 
-    # A third, non-allowlisted apply_ledger occurrence anywhere in lib/ fails
+    # A ninth, non-allowlisted apply_ledger occurrence anywhere in lib/ fails
     # the B5 absence scan (the gate's red direction).
     prepare_fixture()
     rogue = fixture_path(Path.join(["lib", "ash_replicant", "rogue.ex"]))
@@ -974,6 +1010,26 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     end)
   end
 
+  defp upgrade_contract_probes do
+    Enum.each(@upgrade_doc_contracts, fn {path, heading, required_texts} ->
+      prepare_fixture()
+      replace_once!(path, heading, "#{heading} changed")
+      assert_invalid!()
+
+      Enum.each(required_texts, fn required ->
+        prepare_fixture()
+        replace_once!(path, required, "upgrade contract text removed")
+        assert_invalid!()
+      end)
+    end)
+
+    Enum.each(@upgrade_source_contracts, fn {path, required} ->
+      prepare_fixture()
+      replace_once!(path, required, "upgrade package contract removed")
+      assert_invalid!()
+    end)
+  end
+
   defp mix_contract_probes do
     Enum.each(@mix_contracts, fn required ->
       prepare_fixture()
@@ -1277,17 +1333,23 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     for path <- [
           "README.md",
+          "CHANGELOG.md",
           "CONTRIBUTING.md",
           "AGENTS.md",
           "usage-rules.md",
           "docs/CHARTER.md",
+          "docs/adr/0007-source-bound-checkpoint-effect-once.md",
           "mix.exs",
           "mix.lock",
           "scripts/test-release-checkers.sh",
           "lib/ash_replicant.ex",
+          "lib/ash_replicant/sink.ex",
           "lib/ash_replicant/census.ex",
           "lib/ash_replicant/pipeline_owner.ex",
-          "lib/ash_replicant/telemetry.ex"
+          "lib/ash_replicant/telemetry.ex",
+          "lib/ash_replicant/upgrade.ex",
+          "lib/ash_replicant/upgrade/checkpoint.ex",
+          "lib/mix/tasks/ash_replicant.upgrade.ex"
         ] do
       File.mkdir_p!(Path.dirname(fixture_path(path)))
       File.cp!(Path.join(@source_root, path), fixture_path(path))
@@ -1304,22 +1366,6 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       File.mkdir_p!(Path.dirname(destination))
       File.cp!(Path.join([@source_root, "deps/replicant", path]), destination)
     end
-
-    # The B5 ledger gate scans lib/ for the removed `apply_ledger` option and
-    # admits only the two exact fail-closed lines in sink.ex. The synthetic
-    # fixture deliberately places them at unrelated line numbers: line drift is
-    # harmless, while content or path drift and a third occurrence remain red.
-    sink_dir = fixture_path(Path.join(["lib", "ash_replicant"]))
-    File.mkdir_p!(sink_dir)
-
-    sink_fixture =
-      Enum.map(1..20, fn
-        7 -> "  # removed `apply_ledger`) must surface as a compile-time failure on the host,"
-        19 -> "  \"(apply_ledger was removed; a removed option must not silently no-op)\""
-        ix -> "  # fixture line #{ix}"
-      end)
-
-    File.write!(Path.join(sink_dir, "sink.ex"), Enum.join(sink_fixture, "\n") <> "\n")
   end
 
   defp insert_after_first_checkout!(addition) do

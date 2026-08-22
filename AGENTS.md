@@ -291,6 +291,18 @@ Mix task only gathers facts and renders. The README's "Manual installation"
 block is tied to the installer's real output by a test — change one and the other
 must change.
 
+**10. The 0.4.0 to 1.0.0 upgrade never infers checkpoint ownership.**
+`mix ash_replicant.upgrade 0.4.0 1.0.0` is the only generated upgrade path for
+the published slot-only checkpoint. Every populated legacy row must have exactly
+one operator-declared sink/source binding; dormant bindings are allowed, while
+unbound, duplicate, foreign, interrupted, dynamically unreadable, or wrong-
+destination state writes nothing. Dry-run and apply share the same classifier
+and print only structural counts. The generated migration requires an explicit
+all-node stop assertion, converts the table and writes its checksummed rollback
+ledger in one locked transaction, and refuses down after any 1.0-only durable
+state or watermark change. Roll the database migration back before downgrading
+the package; once 1.0 state exists, restore from backup or remain on 1.0.
+
 ## Development workflow
 
 The supported release foundation is Elixir 1.20.3 on Erlang/OTP 29 with Ash

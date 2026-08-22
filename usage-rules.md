@@ -943,23 +943,83 @@ Operator recovery surfaces:
 
 ## Upgrading from the slot-only checkpoint
 
-Pre-0.4.0-shaped tables (slot-only primary key) carry no recorded source
-identity, so no automatic adoption is possible — the shipped rows are exactly
-the ambiguous class:
+AshReplicant 0.4.0 keyed checkpoints only by `slot_name`. Those rows contain no
+machine-derivable source identity, so the 1.0.0 upgrader never infers ownership
+or provenance. The supported transition is exactly `0.4.0 -> 1.0.0`; use the
+package task, not a hand-written capture/delete/adopt sequence.
 
-1. Stop the pipeline. Call
-   `AshReplicant.Checkpoint.Identity.legacy_checkpoint_row_count/1` — a
-   non-zero count blocks the migration (the migration itself also refuses
-   surviving rows).
-2. Capture each row's `(slot_name, commit_lsn)`.
-3. Delete the legacy rows.
-4. Regenerate and run your migration (`mix ash.codegen` + `mix ecto.migrate`).
-5. Per slot, `AshReplicant.adopt_checkpoint/3` with the captured watermark and
-   the source's ACTUAL identity (`SELECT system_identifier::text,
-   current_database() FROM pg_control_system()`). A slot that should
-   re-snapshot from zero is simply not adopted.
-6. Restart; the first connect fills the contract without touching the adopted
-   watermark.
+Before changing anything, back up the destination database and stop the
+AshReplicant pipeline on **every node**. The database lock makes the schema
+transition atomic, but it cannot prove an idle old node has been stopped.
+Update the dependency to 1.0.0 and add Igniter as a development dependency if
+the host does not already have it. Current code accepts 0.4.0's `apply_ledger`
+option only as a compile-time upgrade marker and refuses to activate a sink
+that still carries it.
+
+Run a redacted dry-run first. Repeat `--binding` once for every configured sink;
+each JSON object names the sink, the generated pipeline module, and the source
+identity the operator has independently verified:
+
+```bash
+mix ash_replicant.upgrade 0.4.0 1.0.0 \
+  --repo MyApp.Repo \
+  --destination-database destination_db \
+  --binding '{"sink":"MyApp.ReplicantSink","pipeline":"MyApp.Replicant.Pipeline","source_system_id":"...","source_database":"..."}' \
+  --dry-run
+```
+
+The task reads the selected destination, verifies the exact legacy/current
+table shape, ties every populated row to exactly one binding, permits dormant
+configured sinks with no row, and reports only structural state and counts. It
+halts without source changes for missing, shared, ambiguous, foreign, or
+partially upgraded checkpoints; unreadable or dynamic legacy supervision; a
+non-default effective dynamic Repo; an unsupported version range; or a missing
+or foreign resource snapshot. Slot names, identities, watermarks, connection
+options, and source diffs are never printed.
+
+Apply the same plan, inspect and commit the generated host migration, current
+resource snapshot, pipeline module, supervision change, runtime configuration,
+and removed `apply_ledger` marker, then run the migration while the all-node stop
+assertion remains true:
+
+```bash
+mix ash_replicant.upgrade 0.4.0 1.0.0 \
+  --repo MyApp.Repo \
+  --destination-database destination_db \
+  --binding '{"sink":"MyApp.ReplicantSink","pipeline":"MyApp.Replicant.Pipeline","source_system_id":"...","source_database":"..."}' \
+  --yes
+
+ASH_REPLICANT_PIPELINES_STOPPED=1 mix ecto.migrate
+```
+
+The required migration invocation is
+`ASH_REPLICANT_PIPELINES_STOPPED=1 mix ecto.migrate`; the generated migration
+refuses without that explicit assertion.
+
+The migration takes a destination-scoped advisory transaction lock and an
+`ACCESS EXCLUSIVE` checkpoint-table lock, records a checksummed private rollback
+ledger, binds each legacy row to its declared identity, and converts the schema
+in one transaction. An exact already-current database and matching generated
+source are idempotent no-ops. After migration, deploy/start the 1.0.0 host and
+verify the pipeline binds the expected source before accepting it as healthy.
+
+### Rollback boundary
+
+Stop every pipeline node again and roll the generated database migration back
+**before** restoring the 0.4.0 host artifact or dependency:
+
+```bash
+ASH_REPLICANT_PIPELINES_STOPPED=1 mix ecto.rollback --step 1
+```
+
+Rollback succeeds only when the checkpoint rows still match the migration's
+checksummed ledger and no 1.0-only timeline, contract, snapshot, origin, new-row,
+removed-row, or advanced-watermark state exists. Timestamp-only migration
+metadata does not block it. A missing, malformed, or tampered ledger also
+refuses. If 1.0 has written durable state, restore from backup or remain on 1.0;
+discarding that state to force a downgrade is unsupported. After a successful
+database rollback, restore the exact pre-upgrade host source/artifact and only
+then restart the old pipeline.
 
 ## Source coverage, ignores, and replica identity
 

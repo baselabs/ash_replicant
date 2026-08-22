@@ -211,7 +211,9 @@ jobs:
           trap 'rm -rf "$package_dir"' EXIT
           env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION mix hex.build --unpack --output "$package_dir"
 
-          for required in lib .formatter.exs mix.exs README.md LICENSE NOTICE CHANGELOG.md usage-rules.md; do
+          for required in lib .formatter.exs mix.exs README.md LICENSE NOTICE CHANGELOG.md usage-rules.md \
+            lib/ash_replicant/upgrade.ex lib/ash_replicant/upgrade/checkpoint.ex \
+            lib/mix/tasks/ash_replicant.upgrade.ex; do
             test -e "$package_dir/$required" || {
               echo "::error::Missing package path: $required"
               exit 1
