@@ -278,11 +278,13 @@ default). Hosts that already front the resource with their own authorization can
 reproduce the earlier unguarded shape with `authorizers: []`
 ([ADR-0014](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0014-internal-trust-and-lifecycle-ownership.md)).
 
-**Upgrading from the slot-only shape:** the generated resource changed (see the
-[upgrade runbook](usage-rules.md#upgrading-from-the-slot-only-checkpoint)). With
-existing slot-only rows, run `AshReplicant.Checkpoint.Identity.refuse_ambiguous_legacy_rows!/1`
-before migrating — the migration itself refuses surviving rows — then capture,
-delete, migrate, and `AshReplicant.adopt_checkpoint/3` per slot.
+**Upgrading 0.4.0's slot-only shape to 1.0.0:** use the guarded package task,
+`mix ash_replicant.upgrade 0.4.0 1.0.0`. It requires one explicit source-identity
+binding per configured sink, classifies the live destination read-only before it
+writes host source, and generates the atomic checkpoint bridge plus its exact
+resource snapshot. It never infers ownership from a slot-only row. Follow the
+[upgrade and rollback procedure](usage-rules.md#upgrading-from-the-slot-only-checkpoint);
+do not use the former capture/delete/adopt sequence.
 
 ### 2. Define the sink
 

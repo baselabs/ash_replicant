@@ -76,13 +76,14 @@ watermark.
   slot-name index is the cross-node race backstop), a changed timeline
   (`:source_timeline_changed`), a watermark beyond the session's WAL flush
   position (`:source_behind_watermark`), an incompatible contract.
-- Legacy slot-only rows admit NO automatic migration evidence (they record
-  only `{slot_name, commit_lsn}` — no machine-derivable source): the
-  structural migration refuses surviving rows by construction (NOT NULL
-  identity columns abort `ecto.migrate`), a count-only refusal guard makes
-  the blockage actionable, and adoption is an explicit offline operator act
-  (`AshReplicant.adopt_checkpoint/3`) anchored to the operator-declared actual
-  identity, idempotent, conflict-refusing. A timeline-change halt resolves
+- Legacy slot-only rows admit NO inferred migration evidence (they record only
+  `{slot_name, commit_lsn}` — no machine-derivable source). The canonical
+  `mix ash_replicant.upgrade 0.4.0 1.0.0` task therefore requires an explicit
+  operator-declared binding for every populated row and refuses unbound,
+  multiply bound, foreign, or interrupted state. Its generated migration binds
+  the rows and converts the schema atomically under the destination advisory
+  lock and checkpoint-table lock, retaining a checksummed rollback ledger. A
+  timeline-change halt resolves
   through the operator's continuity assertion
   (`AshReplicant.acknowledge_checkpoint_timeline/3` — correct for a
   same-primary crash restart whose new timeline replays the old WAL) or a
@@ -107,8 +108,10 @@ watermark.
   for runtime schema-change classification; C1–C3 compose their frontiers on
   the same row. C3 retains the exact `snapshot_progress` token and replaces the
   reserved `snapshot_generation` placeholder with ADR-0017's versioned
-  `snapshot_state` envelope. D1 templates the capture/delete/migrate/adopt runbook into
-  generated upgrade paths; D4/D6 own live fault-injection and the PG15–18
+  `snapshot_state` envelope. The guarded package task discharges the generated
+  upgrade path: dry-run and apply share one classifier, the output is redacted,
+  and rollback refuses after any 1.0-only state is written. D4/D6 own live
+  fault-injection and the PG15–18
   standby/failover matrix cells.
 
 ## Evidence
@@ -122,8 +125,13 @@ watermark.
   monotonic admission; monotonic snapshot handoff).
 - `AshReplicant` (`adopt_checkpoint/3`, `reset_checkpoint/2`,
   `acknowledge_checkpoint_timeline/3`; generation-threaded contract).
+- `AshReplicant.Upgrade.Checkpoint` and `mix ash_replicant.upgrade` (exact
+  legacy/current/foreign/interrupted classification, atomic bridge, guarded
+  rollback, host codemod, and current resource snapshot).
 - `test/integration/checkpoint_binding_test.exs` (the acceptance marquees),
-  `test/ash_replicant/checkpoint_identity_test.exs` (classifier matrix).
+  `test/ash_replicant/checkpoint_identity_test.exs` (classifier matrix), and
+  `test/integration/upgrade_checkpoint_test.exs` (populated, empty,
+  interrupted, current, concurrent-writer, consumer-task, and rollback proofs).
 - Executed probes on the live substrate: `FOR UPDATE` serialization blocks a
   second transaction until the holder's COMMIT; `ADD COLUMN … NOT NULL`
   aborts on legacy rows.

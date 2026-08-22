@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Guarded 0.4.0 to 1.0.0 package upgrade and rollback.**
+  `mix ash_replicant.upgrade 0.4.0 1.0.0` requires explicit per-sink source
+  identity bindings, classifies the selected destination without printing
+  identity-bearing source diffs, converts static 0.4 supervision to the
+  generated `AshReplicant.Pipeline`, removes only the compile-time
+  `apply_ledger` marker, and writes the guarded host migration plus the exact
+  current AshPostgres resource snapshot (including a Repo-configured custom
+  snapshot path). The migration upgrades populated or empty legacy tables in
+  one locked transaction, refuses shared/ambiguous/foreign/interrupted state,
+  and retains a checksummed rollback ledger. Down refuses after any durable
+  1.0-only state or watermark change; the published procedure requires database
+  rollback before package downgrade and otherwise says to restore from backup
+  or remain on 1.0. A real consumer-process fixture proves redacted dry-run,
+  apply, migration up/down, and no host application or pipeline start.
+
 - **Data-boundary guard-mutation gates** (roadmap D7 / SEC01, ADR-0003).
   `scripts/run-mutation-gates.py` proves the fail-closed data-boundary guards
   are OBSERVED by the no-database focused tests: each of its 53 matrix cells
@@ -494,7 +509,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `commit_lsn`, reserved snapshot-frontier columns, timestamps, the
   `:source_slot` identity, and a named `:operator_reset` destroy action. The
   slot-only `:unique_slot` identity is gone and the shape change requires a
-  migration; see the upgrade runbook (usage-rules.md).
+  migration; use `mix ash_replicant.upgrade 0.4.0 1.0.0` and follow the
+  rollback boundary in `usage-rules.md`.
 - The sink binds the checkpoint row inside `handle_session_identity/2` (now a
   mutating, lease-held callback) on every connect: a foreign same-slot
   identity, a changed timeline, a watermark ahead of the session's WAL flush

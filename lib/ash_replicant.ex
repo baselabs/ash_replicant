@@ -746,14 +746,23 @@ defmodule AshReplicant do
   end
 
   defp validate_sink(opts) do
-    with sink when is_atom(sink) <- Keyword.get(opts, :sink),
-         true <- Code.ensure_loaded?(sink),
-         true <- function_exported?(sink, :__ash_replicant_config__, 0),
-         %{domains: domains, slot_name: slot_name} = config <- safe_sink_config(sink),
-         true <- is_list(domains) and is_binary(slot_name) and slot_name != "" do
-      {:ok, sink, config}
+    sink = Keyword.get(opts, :sink)
+
+    if is_atom(sink) and Code.ensure_loaded?(sink) and
+         function_exported?(sink, :__ash_replicant_config__, 0) do
+      case safe_sink_config(sink) do
+        %{legacy_apply_ledger?: true} ->
+          {:error, :legacy_upgrade_required}
+
+        %{domains: domains, slot_name: slot_name} = config
+        when is_list(domains) and is_binary(slot_name) and slot_name != "" ->
+          {:ok, sink, config}
+
+        _invalid ->
+          {:error, :sink_required}
+      end
     else
-      _other -> {:error, :sink_required}
+      {:error, :sink_required}
     end
   end
 

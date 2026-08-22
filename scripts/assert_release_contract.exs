@@ -71,7 +71,9 @@ defmodule AshReplicant.ReleaseContract do
   trap 'rm -rf "$package_dir"' EXIT
   env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION mix hex.build --unpack --output "$package_dir"
 
-  for required in lib .formatter.exs mix.exs README.md LICENSE NOTICE CHANGELOG.md usage-rules.md; do
+  for required in lib .formatter.exs mix.exs README.md LICENSE NOTICE CHANGELOG.md usage-rules.md \\
+    lib/ash_replicant/upgrade.ex lib/ash_replicant/upgrade/checkpoint.ex \\
+    lib/mix/tasks/ash_replicant.upgrade.ex; do
     test -e "$package_dir/$required" || {
       echo "::error::Missing package path: $required"
       exit 1
@@ -324,6 +326,39 @@ defmodule AshReplicant.ReleaseContract do
     {"lib/ash_replicant/telemetry.ex", "[:ash_replicant, :census, :halted]"}
   ]
 
+  @upgrade_doc_contracts [
+    {"README.md", "### 1. Define the checkpoint resource",
+     [
+       "mix ash_replicant.upgrade 0.4.0 1.0.0",
+       "It never infers ownership from a slot-only row."
+     ]},
+    {"usage-rules.md", "## Upgrading from the slot-only checkpoint",
+     [
+       "the 1.0.0 upgrader never infers ownership",
+       "the generated migration\nrefuses without that explicit assertion",
+       "restore from backup or remain on 1.0"
+     ]},
+    {"AGENTS.md", "## Critical rules",
+     ["**10. The 0.4.0 to 1.0.0 upgrade never infers checkpoint ownership.**"]},
+    {"docs/adr/0007-source-bound-checkpoint-effect-once.md", "## Decision",
+     ["mix ash_replicant.upgrade 0.4.0 1.0.0", "checksummed rollback ledger"]},
+    {"CHANGELOG.md", "### Added", ["**Guarded 0.4.0 to 1.0.0 package upgrade and rollback.**"]}
+  ]
+
+  @upgrade_source_contracts [
+    {"lib/ash_replicant/upgrade/checkpoint.ex", "def up(repo, opts)"},
+    {"lib/ash_replicant/upgrade/checkpoint.ex", "def down(repo, opts)"},
+    {"lib/ash_replicant/upgrade/checkpoint.ex", "pg_advisory_xact_lock"},
+    {"lib/ash_replicant/upgrade/checkpoint.ex", "IN ACCESS EXCLUSIVE MODE"},
+    {"lib/ash_replicant/upgrade/checkpoint.ex",
+     "defp verify_rollback_state(repo, config, ledger)"},
+    {"lib/ash_replicant/upgrade.ex", "def render_checkpoint_snapshot(repo)"},
+    {"lib/mix/tasks/ash_replicant.upgrade.ex", "use Igniter.Mix.Task"},
+    {"lib/mix/tasks/ash_replicant.upgrade.ex", "Mix.Task.run(\"compile\")"},
+    {"lib/mix/tasks/ash_replicant.upgrade.ex", "Application.ensure_all_started(:postgrex)"},
+    {"lib/mix/tasks/ash_replicant.upgrade.ex", "Checkpoint.check(plan.repo"}
+  ]
+
   # The exact package-inspection bytes the contract enforces on the workflow.
   # The package-inspection self-test executes these bytes against staged
   # fixtures (leak + clean), so the shipped predicate is proven to REJECT, not
@@ -348,15 +383,15 @@ defmodule AshReplicant.ReleaseContract do
     assert_b1_examples(root)
     assert_no_b1_positive_contradictions(root)
     assert_census_contract(root)
+    assert_upgrade_contract(root)
     assert_b5_absence_scans(root)
   rescue
     _error in [YamlElixir.ParsingError, File.Error] -> fail("release contract input is invalid")
   end
 
-  # U3/B5 (D6): the durable effect ledger stays ABSENT from lib/ — the only
-  # permitted occurrences are the removed-option fail-closed compile error
-  # (exactly the two allowlisted lines in sink.ex) — and no secret-shaped
-  # literal ships in lib/.
+  # U3/B5 (D6): the durable effect ledger stays ABSENT from lib/. The only
+  # permitted occurrences are the exact compile-only legacy marker, activation
+  # refusal, and upgrade codemod surface. No secret-shaped literal ships in lib/.
   defp assert_b5_absence_scans(root) do
     lib =
       Path.wildcard(Path.join(root, "lib/*.ex")) ++
@@ -379,19 +414,31 @@ defmodule AshReplicant.ReleaseContract do
       end)
 
     sink_path = root |> Path.join(Path.join(["lib", "ash_replicant", "sink.ex"])) |> Path.expand()
+    root_path = root |> Path.join(Path.join(["lib", "ash_replicant.ex"])) |> Path.expand()
+
+    task_path =
+      root
+      |> Path.join(Path.join(["lib", "mix", "tasks", "ash_replicant.upgrade.ex"]))
+      |> Path.expand()
 
     allowed_hits =
       MapSet.new([
+        {sink_path, "legacy_apply_ledger? = Keyword.has_key?(opts, :apply_ledger)"},
         {sink_path,
          "# removed `apply_ledger`) must surface as a compile-time failure on the host,"},
-        {sink_path, "\"(apply_ledger was removed; a removed option must not silently no-op)\""}
+        {sink_path, ":apply_ledger"},
+        {sink_path, "\":initial_state, and the compile-only legacy :apply_ledger marker\""},
+        {sink_path, "legacy_apply_ledger?: unquote(legacy_apply_ledger?)"},
+        {root_path, "%{legacy_apply_ledger?: true} ->"},
+        {task_path, "compile-only `apply_ledger` marker from each explicitly bound legacy sink."},
+        {task_path, "{:ok, options} <- CodeKeyword.remove_keyword_key(options, :apply_ledger) do"}
       ])
 
     actual_hits = MapSet.new(ledger_hits, fn {path, _line, content} -> {path, content} end)
 
     assert(
-      length(ledger_hits) == 2 and actual_hits == allowed_hits,
-      "apply_ledger must appear ONLY in the two exact fail-closed lines of lib/ash_replicant/sink.ex, found: #{inspect(ledger_hits)}"
+      length(ledger_hits) == 8 and actual_hits == allowed_hits,
+      "apply_ledger must appear ONLY in the exact compile-only upgrade compatibility surface, found: #{inspect(ledger_hits)}"
     )
 
     secret_hits =
@@ -912,6 +959,28 @@ defmodule AshReplicant.ReleaseContract do
     end)
   rescue
     _error in [File.Error] -> fail("continuous-census package contract input is invalid")
+  end
+
+  defp assert_upgrade_contract(root) do
+    Enum.each(@upgrade_doc_contracts, fn {path, heading, required_texts} ->
+      visible = root |> Path.join(path) |> File.read!() |> visible_markdown()
+      section = section(visible, heading)
+
+      assert(section != nil, "published upgrade contract section is missing")
+      normalized_section = normalize_markdown(section)
+
+      assert(
+        Enum.all?(required_texts, &String.contains?(normalized_section, normalize_markdown(&1))),
+        "published upgrade contract is incomplete"
+      )
+    end)
+
+    Enum.each(@upgrade_source_contracts, fn {path, required} ->
+      source = root |> Path.join(path) |> File.read!()
+      assert(String.contains?(source, required), "upgrade package contract is incomplete")
+    end)
+  rescue
+    _error in [File.Error] -> fail("upgrade package contract input is invalid")
   end
 
   defp visible_markdown(content) do

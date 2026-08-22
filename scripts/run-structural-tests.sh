@@ -12,6 +12,7 @@ trap 'rm -f "$raw_output"' EXIT
 preserve_failure() {
   preserved="${TMPDIR:-/tmp}/ash-replicant-structural-failure.$$.log"
   grep '^FAILED: ' "$raw_output" >&2 || true
+  grep '^CONSUMER-COMMAND: ' "$raw_output" >&2 || true
   mv "$raw_output" "$preserved"
   echo "raw output preserved at: $preserved" >&2
 }

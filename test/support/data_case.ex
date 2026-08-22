@@ -12,8 +12,14 @@ defmodule AshReplicant.DataCase do
   end
 
   setup tags do
-    pid = Sandbox.start_owner!(AshReplicant.TestRepo, shared: not tags[:async])
-    on_exit(fn -> Sandbox.stop_owner(pid) end)
+    if tags[:no_sandbox] do
+      :ok = Sandbox.mode(AshReplicant.TestRepo, :auto)
+      on_exit(fn -> Sandbox.mode(AshReplicant.TestRepo, :manual) end)
+    else
+      pid = Sandbox.start_owner!(AshReplicant.TestRepo, shared: not tags[:async])
+      on_exit(fn -> Sandbox.stop_owner(pid) end)
+    end
+
     :ok
   end
 end

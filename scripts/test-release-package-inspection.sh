@@ -27,7 +27,10 @@ run_inspection() {
 
 mkdir -p "$fixture_root/clean/lib"
 
-for required in .formatter.exs mix.exs README.md LICENSE NOTICE CHANGELOG.md usage-rules.md; do
+for required in .formatter.exs mix.exs README.md LICENSE NOTICE CHANGELOG.md usage-rules.md \
+  lib/ash_replicant/upgrade.ex lib/ash_replicant/upgrade/checkpoint.ex \
+  lib/mix/tasks/ash_replicant.upgrade.ex; do
+  mkdir -p "$(dirname "$fixture_root/clean/$required")"
   touch "$fixture_root/clean/$required"
 done
 

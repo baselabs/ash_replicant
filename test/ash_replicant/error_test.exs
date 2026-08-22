@@ -64,22 +64,41 @@ defmodule AshReplicant.ErrorTest do
     assert err.shape == nil
   end
 
-  # I01's install planner mints INSTALL-time refusal reasons on its OWN
-  # `AshReplicant.Install.Error` — a Mix-task exception raised before anything
-  # runs, not the runtime value-free boundary taxonomy ADR-0011 freezes. It is
-  # excluded from the census below, and the exclusion is GUARDED: the moment that
-  # file touches the runtime error, the guard reds rather than letting a real
-  # boundary reason slip past the pin.
-  @install_planner "lib/ash_replicant/install.ex"
+  # Install and upgrade planning mint refusal reasons on their OWN value-free
+  # exception modules, outside the runtime halt taxonomy ADR-0011 freezes. The
+  # exclusions are guarded: if one of these files ever touches the runtime error
+  # boundary, it must rejoin this census rather than hiding a new halt reason.
+  @planner_error_sources [
+    "lib/ash_replicant/install.ex",
+    "lib/ash_replicant/upgrade.ex",
+    "lib/ash_replicant/upgrade/checkpoint.ex",
+    "lib/mix/tasks/ash_replicant.upgrade.ex"
+  ]
+
+  @runtime_error_reference ~r/(?:AshReplicant\.Error\b|alias\s+AshReplicant\.\{[^}]*\bError\b)/
+
+  test "the planner exclusion guard recognizes runtime error reference forms" do
+    for source <- [
+          "raise AshReplicant.Error, reason: :new_reason",
+          "alias AshReplicant.{Error, Upgrade}",
+          "%AshReplicant.Error{reason: :new_reason}"
+        ] do
+      assert source =~ @runtime_error_reference
+    end
+
+    refute "alias AshReplicant.Upgrade.Checkpoint.Error" =~ @runtime_error_reference
+  end
 
   test "the closed reason set equals every reason minted in lib (live pin)" do
-    refute File.read!(@install_planner) =~ "AshReplicant.Error",
-           "#{@install_planner} now references the runtime error — it can no longer be " <>
-             "excluded from the reason census"
+    Enum.each(@planner_error_sources, fn path ->
+      refute File.read!(path) =~ @runtime_error_reference,
+             "#{path} now references the runtime error — it can no longer be excluded " <>
+               "from the reason census"
+    end)
 
     minted =
       Path.wildcard("lib/**/*.ex")
-      |> Enum.reject(&(&1 == @install_planner))
+      |> Enum.reject(&(&1 in @planner_error_sources))
       |> Enum.flat_map(fn path ->
         File.read!(path)
         |> String.split("\n")
