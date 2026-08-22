@@ -88,6 +88,8 @@ CONTROL_REGRESSED = "control_regressed"
 RESTORE_COMPILE_FAILED = "restore_compile_failed"
 RESTORE_IDENTITY = "restore_identity"
 TIMEOUT = "timeout"
+DESCENDANT_LEAK = "descendant_leak"
+PROCESS_CLEANUP_FAILED = "process_cleanup_failed"
 LIVE_TREE_MUTATED = "live_tree_mutated"
 INTERNAL_ERROR = "internal_error"
 
@@ -1320,11 +1322,46 @@ class ChildTimeout(Exception):
     pass
 
 
+class ChildDescendantLeak(Exception):
+    pass
+
+
+class ChildCleanupFailed(Exception):
+    pass
+
+
+def process_group_exists(pgid):
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def kill_and_confirm_process_group(pgid, reap=None):
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    except OSError as error:
+        raise ChildCleanupFailed() from error
+    if reap:
+        reap()
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        if not process_group_exists(pgid):
+            return
+        time.sleep(0.1)
+    raise ChildCleanupFailed()
+
+
 def run_child(argv, cwd, env, timeout, log_path):
     """Run one child in its own session; capture output to log_path.
 
-    On timeout the WHOLE process group is killed and reaped before this
-    function returns (raising ChildTimeout). Child output is never echoed.
+    The whole process group must be absent before this function returns or
+    raises a classified, cleanup-safe outcome. Child output is never echoed.
     """
     with open(log_path, "wb") as log:
         proc = subprocess.Popen(
@@ -1339,19 +1376,11 @@ def run_child(argv, cwd, env, timeout, log_path):
         try:
             code = proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            proc.wait()
-            deadline = time.monotonic() + 15
-            while time.monotonic() < deadline:
-                try:
-                    os.killpg(proc.pid, 0)
-                except ProcessLookupError:
-                    break
-                time.sleep(0.1)
+            kill_and_confirm_process_group(proc.pid, reap=proc.wait)
             raise ChildTimeout()
+        if process_group_exists(proc.pid):
+            kill_and_confirm_process_group(proc.pid)
+            raise ChildDescendantLeak()
     with open(log_path, "rb") as handle:
         return code, handle.read()
 
@@ -1427,6 +1456,7 @@ class Workspace:
         self.logs = None
         self.log_count = 0
         self.stamp = int(time.time()) + 120
+        self.cleanup_safe = True
 
     def build(self):
         root = self.config["root"]
@@ -1488,6 +1518,11 @@ class Workspace:
             return run_child(argv, self.project, self.child_env(), timeout, self.next_log())
         except ChildTimeout:
             raise StructuralFailure(scope, TIMEOUT)
+        except ChildDescendantLeak:
+            raise StructuralFailure(scope, DESCENDANT_LEAK)
+        except ChildCleanupFailed:
+            self.cleanup_safe = False
+            raise StructuralFailure(scope, PROCESS_CLEANUP_FAILED)
         except OSError:
             raise StructuralFailure(scope, INTERNAL_ERROR)
 
@@ -1512,7 +1547,7 @@ class Workspace:
         os.utime(os.path.join(self.project, rel), (stamp, stamp))
 
     def destroy(self):
-        if not self.base:
+        if not self.base or not self.cleanup_safe:
             return
         real_base = os.path.realpath(self.base)
         real_tmp = os.path.realpath(tempfile.gettempdir())
@@ -1643,6 +1678,8 @@ def run_gates(config, cells, label="mutation-gates"):
                     RESTORE_COMPILE_FAILED,
                     RESTORE_IDENTITY,
                     TIMEOUT,
+                    DESCENDANT_LEAK,
+                    PROCESS_CLEANUP_FAILED,
                     INTERNAL_ERROR,
                 ):
                     # The scratch build can no longer be trusted for the
@@ -1804,6 +1841,18 @@ print("{SENTINEL}", flush=True)
 sys.stderr.write("{SENTINEL}\\n")
 sys.stderr.flush()
 time.sleep(300)
+"""
+
+TEST_BASELINE_DESCENDANT = f"""
+import os, pathlib, subprocess, sys
+src = pathlib.Path("src.txt").read_text()
+if "GUARD_LINE_A" in src:
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(300)"])
+    pathlib.Path(os.environ["FIXTURE_PID_FILE"]).write_text(str(child.pid))
+    print("{FIXTURE_MARKER}", flush=True)
+    sys.exit(0)
+print("{FIXTURE_RED}", flush=True)
+sys.exit(1)
 """
 
 TEST_SENTINEL_GREEN = f"""
@@ -2006,6 +2055,88 @@ def self_test():
         "control-regressed",
         SRC_DEFAULT, COMPILE_DEFAULT, TEST_CONTROL_REGRESSED, [fixture_cell()],
         1, ["FAIL fixture.guard control_regressed"],
+    )
+
+    normal_pid_dir = tempfile.mkdtemp(prefix="mutation-gates-selftest-normal-pid.")
+    normal_pid_file = os.path.join(normal_pid_dir, "descendant.pid")
+    normal_descendant_ok = False
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix="mutation-gates-selftest-normal-descendant."
+        ) as base:
+            config_path = build_fixture(
+                base,
+                SRC_DEFAULT,
+                COMPILE_DEFAULT,
+                TEST_BASELINE_DESCENDANT,
+                [fixture_cell()],
+                env_set={"FIXTURE_PID_FILE": normal_pid_file},
+            )
+            code, out = run_fixture(config_path)
+            normal_descendant_ok = (
+                code == 1
+                and "FAIL baseline descendant_leak" in out
+                and os.path.isfile(normal_pid_file)
+            )
+            if normal_descendant_ok:
+                pid = int(open(normal_pid_file).read().strip())
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    pass
+                else:
+                    normal_descendant_ok = False
+    finally:
+        if os.path.isfile(normal_pid_file):
+            pid = int(open(normal_pid_file).read().strip())
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        shutil.rmtree(normal_pid_dir, ignore_errors=True)
+    checks.append(("normal-exit-descendant", normal_descendant_ok))
+    print(
+        f"{label}: {'PASS' if normal_descendant_ok else 'FAIL'} "
+        "normal-exit-descendant"
+    )
+
+    cleanup_workspace = Workspace({"env_delete": [], "env_set": {}})
+    cleanup_workspace.base = tempfile.mkdtemp(
+        prefix="mutation-gates-selftest-cleanup-failure."
+    )
+    cleanup_workspace.project = os.path.join(cleanup_workspace.base, "project")
+    cleanup_workspace.logs = os.path.join(cleanup_workspace.base, "logs")
+    os.makedirs(cleanup_workspace.project)
+    os.makedirs(cleanup_workspace.logs)
+    cleanup_base = cleanup_workspace.base
+    original_group_cleanup = kill_and_confirm_process_group
+
+    def forced_cleanup_failure(pgid, reap=None):
+        original_group_cleanup(pgid, reap=reap)
+        raise ChildCleanupFailed()
+
+    cleanup_failure_ok = False
+    try:
+        globals()["kill_and_confirm_process_group"] = forced_cleanup_failure
+        try:
+            cleanup_workspace.run(
+                [sys.executable, "-c", "import time; time.sleep(300)"],
+                0.1,
+                "cleanup",
+            )
+        except StructuralFailure as failure:
+            cleanup_failure_ok = failure.cls == PROCESS_CLEANUP_FAILED
+    finally:
+        globals()["kill_and_confirm_process_group"] = original_group_cleanup
+    cleanup_workspace.destroy()
+    cleanup_failure_ok = cleanup_failure_ok and os.path.isdir(cleanup_base)
+    cleanup_workspace.cleanup_safe = True
+    cleanup_workspace.destroy()
+    cleanup_failure_ok = cleanup_failure_ok and not os.path.exists(cleanup_base)
+    checks.append(("cleanup-failure-refused", cleanup_failure_ok))
+    print(
+        f"{label}: {'PASS' if cleanup_failure_ok else 'FAIL'} "
+        "cleanup-failure-refused"
     )
 
     pid_dir = tempfile.mkdtemp(prefix="mutation-gates-selftest-pid.")
