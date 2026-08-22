@@ -1356,6 +1356,43 @@ def run_child(argv, cwd, env, timeout, log_path):
         return code, handle.read()
 
 
+def validate_relative_path(path):
+    """Accept only a normalized relative descendant path from fixture JSON."""
+    if not isinstance(path, str) or not path or "\0" in path:
+        return False
+    normalized = os.path.normpath(path)
+    return (
+        normalized == path
+        and normalized != os.curdir
+        and not os.path.isabs(path)
+        and normalized != os.pardir
+        and not normalized.startswith(os.pardir + os.sep)
+    )
+
+
+def validate_config_paths(config, cells):
+    """Reject config-derived filesystem paths before any workspace operation."""
+    for key in ("copy_files", "deps_dirs", "build_purge"):
+        paths = config.get(key, [])
+        if not isinstance(paths, list) or not all(
+            validate_relative_path(path) for path in paths
+        ):
+            raise StructuralFailure("matrix", CONFIG_INVALID)
+
+    for key in ("build_copy", "beam_dir"):
+        path = config.get(key)
+        if path is not None and not validate_relative_path(path):
+            raise StructuralFailure("matrix", CONFIG_INVALID)
+
+    for cell in cells:
+        if not isinstance(cell, dict) or not validate_relative_path(cell.get("file")):
+            raise StructuralFailure("matrix", CONFIG_INVALID)
+        for run in cell.get("runs", []):
+            path = run.get("file")
+            if path is not None and not validate_relative_path(path):
+                raise StructuralFailure(cell.get("id") or "matrix", CONFIG_INVALID)
+
+
 def validate_cells(cells, require_full_inventory):
     seen = set()
     for cell in cells:
@@ -1495,6 +1532,7 @@ def run_test(workspace, config, run, scope):
 
 def run_gates(config, cells, label="mutation-gates"):
     try:
+        validate_config_paths(config, cells)
         validate_cells(cells, config.get("require_full_inventory", False))
     except StructuralFailure as failure:
         print(f"{label}: FAIL {failure.scope} {failure.cls}")
@@ -1884,6 +1922,50 @@ def self_test():
         [fixture_cell(), fixture_cell()],
         1, ["config_invalid"],
     )
+
+    with tempfile.TemporaryDirectory(prefix="mutation-gates-selftest-path.") as base:
+        outside = os.path.join(base, "outside.txt")
+        with open(outside, "w") as handle:
+            handle.write(SRC_DEFAULT)
+
+        path_escape_ok = True
+        cases = (
+            ("copy_files", outside),
+            ("deps_dirs", outside),
+            ("build_copy", outside),
+            ("build_purge", outside),
+            ("beam_dir", outside),
+            ("cell_file", outside),
+            ("run_file", outside),
+            ("copy_files", "../outside.txt"),
+        )
+        for index, (field, value) in enumerate(cases):
+            fixture_base = os.path.join(base, str(index))
+            config_path = build_fixture(
+                fixture_base,
+                SRC_DEFAULT,
+                COMPILE_DEFAULT,
+                TEST_DEFAULT,
+                [fixture_cell()],
+            )
+            with open(config_path) as handle:
+                config = json.load(handle)
+            if field in ("copy_files", "deps_dirs", "build_purge"):
+                config[field] = [value]
+            elif field == "cell_file":
+                config["cells"][0]["file"] = value
+            elif field == "run_file":
+                config["cells"][0]["runs"][0]["file"] = value
+            else:
+                config[field] = value
+            with open(config_path, "w") as handle:
+                json.dump(config, handle)
+            code, out = run_fixture(config_path)
+            path_escape_ok = path_escape_ok and code == 1 and "config_invalid" in out
+        path_escape_ok = path_escape_ok and open(outside).read() == SRC_DEFAULT
+        checks.append(("path-escape", path_escape_ok))
+        print(f"{label}: {'PASS' if path_escape_ok else 'FAIL'} path-escape")
+
     scenario(
         "inert-replacement",
         SRC_DEFAULT, COMPILE_DEFAULT, TEST_DEFAULT,
