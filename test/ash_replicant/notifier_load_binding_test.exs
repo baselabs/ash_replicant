@@ -506,16 +506,18 @@ defmodule AshReplicant.NotifierLoadBindingTest do
 
     test "every sink-driven HOST action call site is guarded (live source pin)" do
       # The live half of this suite drives the upsert, destroy and snapshot
-      # sites end-to-end. The SCD2 close/open and message-route sites share
-      # the same guard; this pin is what keeps them wired — deleting a call
-      # turns it red. Counts are call sites, not mentions: the guard name
-      # appears nowhere else in these modules.
+      # sites end-to-end. The SCD2 close/open, message-route, snapshot-mark,
+      # and snapshot-retire sites share the same guard; this pin is what keeps
+      # them wired — deleting a call turns it red. Counts are call sites, not
+      # mentions: the guard name appears nowhere else in these modules.
       for {path, expected} <- [
             {"lib/ash_replicant/apply.ex", 2},
             {"lib/ash_replicant/append.ex", 1},
             {"lib/ash_replicant/apply/scd2.ex", 2},
             {"lib/ash_replicant/sink/impl.ex", 1},
-            {"lib/ash_replicant/messages.ex", 1}
+            {"lib/ash_replicant/messages.ex", 1},
+            {"lib/ash_replicant/snapshot/rows.ex", 1},
+            {"lib/ash_replicant/snapshot/retirement.ex", 1}
           ] do
         calls =
           path

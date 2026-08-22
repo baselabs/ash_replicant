@@ -10,6 +10,7 @@ defmodule AshReplicant.ResolverTest do
     MfaOrder,
     NoSourceDomain,
     Order,
+    RaisingMfaOrder,
     Secret,
     TenantOrder
   }
@@ -123,16 +124,201 @@ defmodule AshReplicant.ResolverTest do
                Resolver.resolve_tenant(MfaOrder, %{"tenant_key" => "  "})
     end
 
-    test "a boolean-false resolved tenant fails closed for BOTH sources (falsy tenant = UNSCOPED — tripwire)" do
-      # Ash treats a falsy tenant as NO scoping: `handle_attribute_multitenancy` guards on
-      # `if changeset.tenant` (create.ex) and `validate_changeset_multitenancy` keys on
-      # `is_nil(changeset.tenant)` (helpers.ex) — so `false` is neither force-set NOR
-      # rejected, and the mirror write lands UNSCOPED across tenants. Both a `tenant_attribute`
-      # column holding `false` and a `tenant_mfa` returning `false` must fail closed here.
+    # Ash treats a falsy tenant as NO scoping: `handle_attribute_multitenancy` guards on
+    # `if changeset.tenant` (create.ex) and `validate_changeset_multitenancy` keys on
+    # `is_nil(changeset.tenant)` (helpers.ex) — so `false` is neither force-set NOR
+    # rejected, and the mirror write lands UNSCOPED across tenants. Both a `tenant_attribute`
+    # column holding `false` and a `tenant_mfa` returning `false` must fail closed. One test
+    # per source: each path is an independent observation channel for the mutation matrix
+    # (ExUnit reports only a test's first failing assertion).
+    test "a boolean-false tenant_attribute value fails closed (falsy tenant = UNSCOPED — tripwire)" do
       assert {:error, :tenant_required} = Resolver.resolve_tenant(Account, %{"org_id" => false})
+    end
 
+    test "a boolean-false tenant_mfa result fails closed (falsy tenant = UNSCOPED — tripwire)" do
       assert {:error, :tenant_required} =
                Resolver.resolve_tenant(MfaOrder, %{"tenant_key" => false})
+    end
+  end
+
+  describe "require_tenant_pair!/3 (B4 tri-modal tenant transition)" do
+    # Pure no-database observers (resource reflection + record maps, no Repo):
+    # the mutation matrix drives these against the fail-closed reassignment
+    # guards. The live relocate/close behavior stays in the integration suite.
+    test ":same update keeps the upsert path (old side resolved, no relocate)" do
+      change = %Replicant.Change{
+        op: :update,
+        schema: "public",
+        table: "tenant_orders",
+        record: %{"id" => "1", "org_id" => "org-a", "note" => "n"},
+        old_record: %{"id" => "1", "org_id" => "org-a"}
+      }
+
+      assert {:ok, :same, "org-a", "org-a"} =
+               Resolver.require_tenant_pair!(TenantOrder, change, :upsert)
+    end
+
+    test ":reassigned transition classifies (old side resolved, differs)" do
+      change = %Replicant.Change{
+        op: :update,
+        schema: "public",
+        table: "tenant_orders",
+        record: %{"id" => "1", "org_id" => "org-b"},
+        old_record: %{"id" => "1", "org_id" => "org-a"}
+      }
+
+      assert {:ok, :reassigned, "org-a", "org-b"} =
+               Resolver.require_tenant_pair!(TenantOrder, change, :upsert)
+    end
+
+    test "an update with NO old tuple on a tenant-scoped resource halts :tenant_required side=old (tripwire)" do
+      # The DEFAULT-replica-identity pgoutput shape: no old tuple at all. On a
+      # tenant-scoped resource the old side is structurally REQUIRED — silently
+      # treating the update as :same would let a tenant reassignment keep the
+      # row under the old tenant. Must halt BEFORE any write.
+      change = %Replicant.Change{
+        op: :update,
+        schema: "public",
+        table: "tenant_orders",
+        record: %{"id" => "1", "org_id" => "org-b"},
+        old_record: nil
+      }
+
+      err =
+        assert_raise AshReplicant.Error, fn ->
+          Resolver.require_tenant_pair!(TenantOrder, change, :update)
+        end
+
+      assert err.reason == :tenant_required
+      assert err.shape == "side=old"
+    end
+
+    test "missing old tenant halts :tenant_required side=old BEFORE any write" do
+      change = %Replicant.Change{
+        op: :update,
+        schema: "public",
+        table: "tenant_orders",
+        record: %{"id" => "1", "org_id" => "org-b"},
+        old_record: %{"id" => "1"}
+      }
+
+      err =
+        assert_raise AshReplicant.Error, fn ->
+          Resolver.require_tenant_pair!(TenantOrder, change, :upsert)
+        end
+
+      assert err.reason == :tenant_required
+      assert err.shape == "side=old"
+    end
+
+    test "blank/false old tenant halts :tenant_required side=old" do
+      for blank <- ["", false] do
+        change = %Replicant.Change{
+          op: :update,
+          schema: "public",
+          table: "tenant_orders",
+          record: %{"id" => "1", "org_id" => "org-b"},
+          old_record: %{"id" => "1", "org_id" => blank}
+        }
+
+        err =
+          assert_raise AshReplicant.Error, fn ->
+            Resolver.require_tenant_pair!(TenantOrder, change, :upsert)
+          end
+
+        assert err.reason == :tenant_required
+        assert err.shape == "side=old"
+      end
+    end
+
+    test "a raising tenant_mfa on the old side halts :tenant_resolution_failed" do
+      change = %Replicant.Change{
+        op: :update,
+        schema: "public",
+        table: "raising_mfa_orders",
+        record: %{"id" => "1", "tenant_key" => "k2"},
+        old_record: %{"id" => "1"}
+      }
+
+      err =
+        assert_raise AshReplicant.Error, fn ->
+          Resolver.require_tenant_pair!(RaisingMfaOrder, change, :upsert)
+        end
+
+      assert err.reason == :tenant_resolution_failed
+      assert err.shape == "side=old"
+
+      # The raising message never escapes (value-free): the rendered error
+      # carries only reason/resource/op/shape.
+      refute Exception.message(err) =~ "raising resolver"
+    end
+
+    test "insert resolves only the new side (:same)" do
+      change = %Replicant.Change{
+        op: :insert,
+        schema: "public",
+        table: "tenant_orders",
+        record: %{"id" => "1", "org_id" => "org-a"}
+      }
+
+      assert {:ok, :same, nil, "org-a"} =
+               Resolver.require_tenant_pair!(TenantOrder, change, :create)
+    end
+
+    test "a non-tenant resource always resolves :same with nil tenants" do
+      change = %Replicant.Change{
+        op: :update,
+        schema: "public",
+        table: "orders",
+        record: %{"id" => "1"},
+        old_record: %{"id" => "1"}
+      }
+
+      assert {:ok, :same, nil, nil} =
+               Resolver.require_tenant_pair!(Order, change, :upsert)
+    end
+  end
+
+  describe "the delivery paths enter the tenant-pair prelude (live source pins)" do
+    # The B4 prelude is only a guard if both delivery paths actually CALL it
+    # before their first effect. A deleted or reordered prelude silently
+    # reopens the indeterminate-tenant window with every behavioral test
+    # above still green, so each call site is pinned against the live source:
+    # present exactly once, ahead of the first effect of its clause.
+    test "Apply enters require_tenant_pair!/3 before the mirror upsert (live source pin)" do
+      source = File.read!("lib/ash_replicant/apply.ex")
+
+      calls =
+        count_lines_containing(source, "Resolver.require_tenant_pair!(resource, change, op)")
+
+      assert calls == 1,
+             "lib/ash_replicant/apply.ex carries #{calls} tenant-pair preludes, expected 1"
+
+      {prelude, _} =
+        :binary.match(source, "Resolver.require_tenant_pair!(resource, change, op)")
+
+      {effect, _} = :binary.match(source, "upsert(config, resource, change)")
+
+      assert prelude < effect,
+             "the Apply tenant-pair prelude must run before the mirror upsert effect"
+    end
+
+    test "Apply.Scd2 enters require_tenant_pair!/3 before the version close/open (live source pin)" do
+      source = File.read!("lib/ash_replicant/apply/scd2.ex")
+
+      calls =
+        count_lines_containing(source, "Resolver.require_tenant_pair!(resource, change, op)")
+
+      assert calls == 1,
+             "lib/ash_replicant/apply/scd2.ex carries #{calls} tenant-pair preludes, expected 1"
+
+      {prelude, _} =
+        :binary.match(source, "Resolver.require_tenant_pair!(resource, change, op)")
+
+      {effect, _} = :binary.match(source, "close_current(")
+
+      assert prelude < effect,
+             "the Apply.Scd2 tenant-pair prelude must run before the version close/open effects"
     end
   end
 
@@ -189,6 +375,12 @@ defmodule AshReplicant.ResolverTest do
       assert Resolver.upsert_action(Order) == :create
       assert Resolver.upsert_identity(Order) == nil
     end
+  end
+
+  defp count_lines_containing(source, needle) do
+    source
+    |> String.split("\n")
+    |> Enum.count(&String.contains?(&1, needle))
   end
 
   describe "SCD2 helpers" do
