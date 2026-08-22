@@ -63,6 +63,32 @@ Release evidence is separated by what it proves:
    paths, and rejects test, Forge, build, environment, and credential-shaped
    residue.
 
+8. `scripts/run-mutation-gates.py` proves the fail-closed data-boundary
+   guards are observed by the no-database focused tests. Each matrix cell
+   removes exactly one production guard — or one sibling call site of a
+   shared guard — across the nine SEC01 families (tenant absence, tenant
+   reassignment, replica identity, sensitive type shape, sink-action
+   multitenancy bypass, dynamic destination participants, notifier load
+   drift, snapshot fingerprint collisions, append identity) in an isolated
+   `mktemp` copy of the tracked working tree, and requires the named focused
+   selector to fail with the cell's property-specific fingerprint — never
+   merely its test name. Dependencies are copied (never symlinked) and made
+   read-only; every child process runs in its own session with
+   `ASH_REPLICANT_TEST_URL` deleted and the green baseline asserts zero
+   `TestRepo` start attempts; build identity is proven by strictly
+   increasing source stamps plus BEAM digests (the mutant's differs from
+   pristine, the restoration returns to it exactly), with `File.read!`
+   source-pin cells declaring that observation mode instead. The runner's
+   output is structural and value-free; its sentinel self-test drives every
+   failure class (missing/duplicate anchor, duplicate cell id, inert
+   replacement, stale build, restoration drift, baseline failure, vacuous
+   mutant, wrong red, regressed green control, timeout with a live
+   descendant, internal error) and fails if an injected value-shaped
+   sentinel from child output ever reaches the runner's own output. The
+   matrix runs once in the no-database job and is pinned by the release
+   contract; the compatibility matrices keep running the focused tests on
+   their own dependency builds without repeating the mutations.
+
 Every new gate needs a red-capable probe against the exact checked-in command or
 script used by CI. A separately implemented “test of the idea” is not evidence
 for the production gate.
@@ -91,3 +117,7 @@ for the production gate.
   results, assertion and background-process failures, nonmatching dependency
   requirements, workflow mutations, stale runtime documentation, and
   migration-resource drift.
+- Guard-mutation gates: `scripts/run-mutation-gates.py` (the per-guard/per-path
+  matrix, its isolation and build-identity machinery, and the sentinel
+  self-test), wired as the no-database job's final step and pinned by
+  `scripts/assert_release_contract.exs` / `scripts/test_release_contract.exs`.

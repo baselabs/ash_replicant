@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Data-boundary guard-mutation gates** (roadmap D7 / SEC01, ADR-0003).
+  `scripts/run-mutation-gates.py` proves the fail-closed data-boundary guards
+  are OBSERVED by the no-database focused tests: each of its 42 matrix cells
+  removes exactly one production guard — or one sibling call site of a shared
+  guard — across tenant absence, tenant reassignment, replica identity,
+  sensitive type shape, sink-action multitenancy bypass, dynamic destination
+  participants, notifier load drift, snapshot fingerprint collisions, and
+  append identity, and requires the named focused selector to go red with a
+  property-specific fingerprint. Mutants run serially in an isolated
+  temporary project copy (dependencies copied and made read-only, mutant and
+  restored BEAM digests proving build identity, `ASH_REPLICANT_TEST_URL`
+  deleted from every child, zero `TestRepo` starts asserted); runner output
+  is structural and value-free, and a sentinel self-test drives every
+  failure class — missing/duplicate anchors, stale builds, restoration
+  drift, baseline failures, vacuous mutants, wrong reds, timeouts with live
+  descendants, and internal errors — proving no child byte reaches the
+  runner's own output. The matrix runs once in the no-database CI job and is
+  pinned by the release contract.
+  - The pure B4 tri-modal tenant-transition tests moved from the
+    `:integration`-tagged apply suite into `resolver_test.exs` so the
+    reassignment guards have a no-database observation channel, gaining a
+    tripwire for an update with NO old tuple on a tenant-scoped resource;
+    live source pins now hold the `Apply`/`Apply.Scd2` tenant-pair preludes
+    and extend the notifier-load guard count to the snapshot mark and retire
+    call sites.
+
 - **Fresh-install Igniter path with a tied-out manual equivalent** (roadmap
   D1/I01). `mix ash_replicant.install` — reachable as
   `mix igniter.install ash_replicant` — generates the Ash domain, the checkpoint
