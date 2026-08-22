@@ -365,7 +365,7 @@ defmodule AshReplicant.Upgrade.CheckpointIntegrationTest do
       {"MIX_ENV", "test"}
     ]
 
-    assert_cmd!(runtime, ["mix", "deps.get"], temp, env)
+    assert_cmd!(:deps_get, runtime, ["mix", "deps.get"], temp, env)
     before_dry_run = source_digest(temp)
 
     binding =
@@ -391,11 +391,11 @@ defmodule AshReplicant.Upgrade.CheckpointIntegrationTest do
       binding
     ]
 
-    dry_output = assert_cmd!(runtime, args ++ ["--dry-run"], temp, env)
+    dry_output = assert_cmd!(:dry_run, runtime, args ++ ["--dry-run"], temp, env)
     assert source_digest(temp) == before_dry_run
     assert_redacted!(dry_output)
 
-    apply_output = assert_cmd!(runtime, args ++ ["--yes"], temp, env)
+    apply_output = assert_cmd!(:apply, runtime, args ++ ["--yes"], temp, env)
     assert_redacted!(apply_output)
 
     refute File.read!(Path.join(temp, "lib/upgrade_fixture/legacy_sink.ex")) =~ "apply_ledger"
@@ -443,6 +443,7 @@ defmodule AshReplicant.Upgrade.CheckpointIntegrationTest do
 
     migration_output =
       assert_cmd!(
+        :migration_round_trip,
         runtime,
         ["mix", "run", "--no-start", "-e", migration_probe],
         temp,
@@ -520,16 +521,20 @@ defmodule AshReplicant.Upgrade.CheckpointIntegrationTest do
     """)
   end
 
-  defp assert_cmd!(runtime, args, directory, env) do
+  defp assert_cmd!(stage, runtime, args, directory, env) do
+    IO.puts("CONSUMER-COMMAND: #{stage} start")
+
     case System.cmd(runtime, args,
            cd: directory,
            env: env,
            stderr_to_stdout: true
          ) do
       {output, 0} ->
+        IO.puts("CONSUMER-COMMAND: #{stage} ok")
         output
 
       {output, status} ->
+        IO.puts("CONSUMER-COMMAND: #{stage} exit=#{status}")
         flunk("consumer command exited #{status}:\n#{output}")
     end
   end
