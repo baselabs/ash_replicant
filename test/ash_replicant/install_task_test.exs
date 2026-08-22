@@ -1,3 +1,19 @@
+defmodule AshReplicant.InstallTaskTest.RepoBase do
+  defmacro __using__(opts) do
+    quote do
+      use AshPostgres.Repo, unquote(opts)
+    end
+  end
+end
+
+defmodule AshReplicant.InstallTaskTest.IndirectRepo do
+  use AshReplicant.InstallTaskTest.RepoBase,
+    otp_app: :ash_replicant,
+    warn_on_missing_ash_functions?: false
+
+  def min_pg_version, do: %Version{major: 16, minor: 0, patch: 0}
+end
+
 defmodule AshReplicant.InstallTaskTest do
   @moduledoc """
   `mix ash_replicant.install` (I01) against Igniter's in-memory project harness.
@@ -223,6 +239,23 @@ defmodule AshReplicant.InstallTaskTest do
 
       assert content(igniter, "lib/my_app/replicant/checkpoint.ex") =~ "repo: MyApp.MirrorRepo"
       assert content(igniter, "lib/my_app/replicant/sink.ex") =~ "repo: MyApp.MirrorRepo"
+    end
+
+    test "--repo accepts a compiled AshPostgres repo defined through a wrapper macro" do
+      repo = AshReplicant.InstallTaskTest.IndirectRepo
+
+      igniter =
+        project(%{
+          "lib/my_app/indirect_repo.ex" => """
+          defmodule #{inspect(repo)} do
+            use AshReplicant.InstallTaskTest.RepoBase, otp_app: :ash_replicant
+          end
+          """
+        })
+        |> install(["--repo", inspect(repo)])
+        |> apply_igniter!()
+
+      assert content(igniter, "lib/my_app/replicant/checkpoint.ex") =~ "repo: #{inspect(repo)}"
     end
 
     test "each artifact name is individually overridable" do
@@ -453,6 +486,23 @@ defmodule AshReplicant.InstallTaskTest do
       assert issue =~ "--repo"
     end
 
+    test "does not discover an AshPostgres repo defined only under test support" do
+      issue =
+        test_project(
+          app_name: :my_app,
+          files: %{
+            "test/support/test_repo.ex" => """
+            defmodule MyApp.TestRepo do
+              use AshPostgres.Repo, otp_app: :my_app
+            end
+            """
+          }
+        )
+        |> refuse()
+
+      assert issue =~ "no AshPostgres repo"
+    end
+
     test "refuses an explicit repo that is not an AshPostgres repo in the project" do
       issue = refuse(project(), ["--repo", "MyApp.TypoRepo"])
 
@@ -565,6 +615,39 @@ defmodule AshReplicant.InstallTaskTest do
         assert issue =~ "--checkpoint"
         assert issue =~ "literal"
       end
+    end
+
+    test "resolves a bare repo alias before comparing an existing checkpoint binding" do
+      igniter =
+        project(%{
+          "lib/my_app/replicant/checkpoint.ex" => """
+          defmodule MyApp.Replicant.Checkpoint do
+            alias MyApp.Repo
+            use AshReplicant.Checkpoint, repo: Repo, domain: MyApp.Replicant
+          end
+          """
+        })
+        |> install()
+
+      assert igniter.issues == []
+      assert_unchanged(igniter, "lib/my_app/replicant/checkpoint.ex")
+    end
+
+    test "refuses a __MODULE__-relative binding without crashing" do
+      issue =
+        project(%{
+          "lib/my_app/replicant/checkpoint.ex" => """
+          defmodule MyApp.Replicant.Checkpoint do
+            use AshReplicant.Checkpoint,
+              repo: __MODULE__.Repo,
+              domain: MyApp.Replicant
+          end
+          """
+        })
+        |> refuse()
+
+      assert issue =~ "--checkpoint"
+      assert issue =~ "literal"
     end
 
     for {label, prelude, use_line} <- [

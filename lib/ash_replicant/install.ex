@@ -36,10 +36,9 @@ defmodule AshReplicant.Install.Error do
     """
   end
 
-  def message(%__MODULE__{reason: :slot_name_invalid, detail: detail}) do
+  def message(%__MODULE__{reason: :slot_name_invalid}) do
     """
-    the replication slot name #{inspect(detail.slot_name)} is not a legal PostgreSQL \
-    replication slot name.
+    --slot must name a legal PostgreSQL replication slot.
 
     PostgreSQL admits 1 to 63 characters drawn from lower-case letters, digits, and \
     the underscore. Re-run naming a legal slot:
@@ -430,10 +429,22 @@ defmodule AshReplicant.Install do
 
   defp refuse_conflicts(artifacts, existing) do
     Enum.reduce_while(@roles, :ok, fn role, :ok ->
-      case Map.get(existing, role, :absent) do
-        :foreign -> {:halt, {:error, conflict(artifacts, role)}}
-        {:ash_replicant, nil} -> {:halt, {:error, binding_unreadable(artifacts, role)}}
-        _admissible -> {:cont, :ok}
+      case {role, Map.get(existing, role, :absent)} do
+        {_role, :foreign} ->
+          {:halt, {:error, conflict(artifacts, role)}}
+
+        {:domain, {:ash_replicant, _binding}} ->
+          {:halt, {:error, conflict(artifacts, role)}}
+
+        {:sink, {:ash_replicant, binding}} when not is_binary(binding) ->
+          {:halt, {:error, binding_unreadable(artifacts, role)}}
+
+        {role, {:ash_replicant, binding}}
+        when role in [:checkpoint, :pipeline] and (is_nil(binding) or not is_atom(binding)) ->
+          {:halt, {:error, binding_unreadable(artifacts, role)}}
+
+        _admissible ->
+          {:cont, :ok}
       end
     end)
   end

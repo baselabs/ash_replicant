@@ -161,13 +161,14 @@ end
 ```
 <!-- ash-replicant-manual-install-modules:end -->
 
-Then add the formatter import, register and supervise the generated modules, and
-generate the checkpoint migration:
+Then add `:ash_replicant` to the formatter's existing `import_deps`, preserving
+every existing formatter entry; register and supervise the generated modules;
+and generate the checkpoint migration:
 
 ```elixir
-# .formatter.exs
+# .formatter.exs — merge into the existing list; keep every other key
 [
-  import_deps: [:ash_replicant],
+  import_deps: [:ash, :ash_postgres, :ash_replicant],
   inputs: ["{mix,.formatter}.exs", "{config,lib,test}/**/*.{ex,exs}"]
 ]
 ```

@@ -88,11 +88,22 @@ if Code.ensure_loaded?(Igniter) do
     alias Igniter.Project.Application, as: ProjectApplication
     alias Igniter.Project.Config, as: ProjectConfig
     alias Igniter.Project.Formatter, as: ProjectFormatter
+    alias Igniter.Project.IgniterConfig
     alias Igniter.Project.Module, as: ProjectModule
     alias Mix.Tasks.AshReplicant.Install.Docs
     alias Sourceror.Zipper
 
     @flags [:repo, :slot, :domain, :checkpoint, :sink, :pipeline]
+
+    @ash_postgres_repo_contract [
+      __adapter__: 0,
+      default_constraint_match_type: 2,
+      from_ecto: 1,
+      installed_extensions: 0,
+      on_transaction_begin: 1,
+      prefer_transaction?: 0,
+      to_ecto: 1
+    ]
 
     # Igniter's default `run/1` prints the issues and returns `:issues`, leaving
     # the Mix task to exit 0 — so `mix ash_replicant.install && mix ecto.migrate`
@@ -160,8 +171,59 @@ if Code.ensure_loaded?(Igniter) do
     end
 
     defp ash_postgres_repos(igniter) do
-      ProjectModule.find_all_matching_modules(igniter, fn _module, module_body ->
-        match?({:ok, _use}, CodeModule.move_to_use(module_body, AshPostgres.Repo))
+      production_folders =
+        igniter
+        |> IgniterConfig.get(:source_folders)
+        |> Enum.reject(&non_production_folder?/1)
+
+      {igniter, candidates} =
+        ProjectModule.find_all_matching_modules(igniter, fn module, module_body ->
+          match?({:ok, _use}, CodeModule.move_to_use(module_body, AshPostgres.Repo)) or
+            compiled_ash_postgres_repo?(module)
+        end)
+
+      candidates
+      |> Enum.reduce({igniter, []}, fn module, {igniter, repos} ->
+        maybe_add_repo(igniter, module, repos, production_folders)
+      end)
+      |> then(fn {igniter, repos} -> {igniter, Enum.reverse(repos)} end)
+    end
+
+    defp maybe_add_repo(igniter, module, repos, production_folders) do
+      case ProjectModule.find_module(igniter, module) do
+        {:ok, {igniter, source, _zipper}} ->
+          repos =
+            if production_source?(source.path, production_folders),
+              do: [module | repos],
+              else: repos
+
+          {igniter, repos}
+
+        {:error, igniter} ->
+          {igniter, repos}
+      end
+    end
+
+    defp compiled_ash_postgres_repo?(module) do
+      Code.ensure_loaded?(module) and
+        Enum.all?(@ash_postgres_repo_contract, fn {name, arity} ->
+          function_exported?(module, name, arity)
+        end) and
+        module.__adapter__() == Ecto.Adapters.Postgres
+    rescue
+      _ -> false
+    end
+
+    defp non_production_folder?(folder) do
+      Enum.any?(Path.split(folder), &(&1 in ["test", "config"]))
+    end
+
+    defp production_source?(source, folders) do
+      source = Path.expand(source)
+
+      Enum.any?(folders, fn folder ->
+        folder = Path.expand(folder)
+        source == folder or String.starts_with?(source, folder <> "/")
       end)
     end
 
@@ -389,21 +451,23 @@ if Code.ensure_loaded?(Igniter) do
     end
 
     defp checkpoint_binding(zipper),
-      do: generated_binding(zipper, AshReplicant.Checkpoint, :repo, &module_value/1)
+      do: generated_binding(zipper, AshReplicant.Checkpoint, :repo, &module_value/2)
 
     defp sink_binding(zipper),
-      do: generated_binding(zipper, AshReplicant.Sink, :slot_name, &string_value/1)
+      do: generated_binding(zipper, AshReplicant.Sink, :slot_name, &string_value/2)
 
     defp pipeline_binding(zipper),
-      do: generated_binding(zipper, AshReplicant.Pipeline, :sink, &module_value/1)
+      do: generated_binding(zipper, AshReplicant.Pipeline, :sink, &module_value/2)
 
     # An existing module that carries our top-level `use` is ours to reuse. An
     # unreadable binding is reported as nil and the planner refuses it; inability
     # to prove identity is never proof that the binding matches.
     defp generated_binding(zipper, macro, key, decode) do
+      aliases = literal_aliases_before_use(zipper, macro)
+
       case move_to_use(zipper, macro) do
         :error -> :foreign
-        {:ok, use_call} -> {:ash_replicant, use_option(use_call, key, decode)}
+        {:ok, use_call} -> {:ash_replicant, use_option(use_call, key, aliases, decode)}
       end
     end
 
@@ -414,21 +478,92 @@ if Code.ensure_loaded?(Igniter) do
       end
     end
 
-    defp use_option(use_call, key, decode) do
+    defp use_option(use_call, key, aliases, decode) do
       with {:ok, options} <- Function.move_to_nth_argument(use_call, 1),
            {:ok, value} <- CodeKeyword.get_key(options, key) do
-        decode.(value)
+        decode.(value, aliases)
       else
         _unreadable -> nil
       end
     end
 
-    defp module_value(%Zipper{node: node}), do: ProjectModule.to_module_name(unwrap(node))
+    defp module_value(%Zipper{node: node}, aliases) do
+      node
+      |> unwrap()
+      |> literal_module(aliases)
+    end
 
-    defp string_value(%Zipper{node: node}) do
+    defp literal_module(value, _aliases) when is_atom(value) and not is_nil(value), do: value
+
+    defp literal_module({:__aliases__, _meta, parts}, aliases) do
+      if Enum.all?(parts, &is_atom/1), do: resolve_alias(parts, aliases), else: nil
+    end
+
+    defp literal_module(_value, _aliases), do: nil
+
+    defp string_value(%Zipper{node: node}, _aliases) do
       case unwrap(node) do
         value when is_binary(value) -> value
         _other -> nil
+      end
+    end
+
+    defp literal_aliases_before_use(zipper, macro) do
+      case Common.move_to_do_block(zipper) do
+        {:ok, body} -> collect_literal_aliases(body, macro)
+        _not_a_module -> %{}
+      end
+    end
+
+    defp collect_literal_aliases(body, macro) do
+      body
+      |> Zipper.node()
+      |> top_level_expressions()
+      |> Enum.reduce_while(%{}, fn expression, aliases ->
+        if use_target?(expression, macro),
+          do: {:halt, aliases},
+          else: {:cont, add_literal_alias(aliases, expression)}
+      end)
+    end
+
+    defp top_level_expressions({:__block__, _meta, expressions}), do: expressions
+    defp top_level_expressions(expression), do: [expression]
+
+    defp use_target?({:use, _meta, [target | _options]}, macro) do
+      literal_module(target, %{}) == macro
+    end
+
+    defp use_target?(_expression, _macro), do: false
+
+    defp add_literal_alias(aliases, {:alias, _meta, [target | options]}) do
+      with {:__aliases__, _target_meta, target_parts} <- unwrap(target),
+           true <- Enum.all?(target_parts, &is_atom/1),
+           target_module when not is_nil(target_module) <- resolve_alias(target_parts, aliases),
+           {:ok, local_name} <- alias_local_name(target_parts, alias_options(options)) do
+        Map.put(aliases, local_name, target_module)
+      else
+        _unreadable -> aliases
+      end
+    end
+
+    defp add_literal_alias(aliases, _expression), do: aliases
+
+    defp alias_options([]), do: []
+    defp alias_options([options]) when is_list(options), do: options
+    defp alias_options(_unreadable), do: []
+
+    defp alias_local_name(target_parts, options) do
+      case Keyword.get(options, :as) do
+        nil -> {:ok, List.last(target_parts)}
+        {:__aliases__, _meta, [name]} when is_atom(name) -> {:ok, name}
+        _unreadable -> :error
+      end
+    end
+
+    defp resolve_alias([first | rest] = parts, aliases) do
+      case Map.fetch(aliases, first) do
+        {:ok, prefix} -> Module.concat([prefix | rest])
+        :error -> Module.concat(parts)
       end
     end
 

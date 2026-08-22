@@ -134,6 +134,15 @@ defmodule AshReplicant.InstallPlanTest do
       assert plan.slot_name == String.duplicate("a", 63)
     end
 
+    test "does not echo a secret-bearing illegal slot value" do
+      secret = "postgres://operator:do-not-print@example.invalid/source"
+
+      assert {:error, %Error{reason: :slot_name_invalid} = error} =
+               plan(options: %{slot: secret})
+
+      refute Exception.message(error) =~ secret
+    end
+
     test "accepts the legal alphabet" do
       assert {:ok, plan} = plan(options: %{slot: "shop_orders_9"})
       assert plan.slot_name == "shop_orders_9"
@@ -248,6 +257,16 @@ defmodule AshReplicant.InstallPlanTest do
                    role
                  )
       end
+    end
+
+    test "refuses a non-binary sink binding as unreadable" do
+      assert {:error, %Error{reason: :binding_unreadable, detail: %{role: :sink}}} =
+               plan(existing: %{sink: {:ash_replicant, :not_a_slot_literal}})
+    end
+
+    test "refuses an impossible generated-domain classification without crashing" do
+      assert {:error, %Error{reason: :module_conflict, detail: %{role: :domain}}} =
+               plan(existing: %{domain: {:ash_replicant, nil}})
     end
   end
 

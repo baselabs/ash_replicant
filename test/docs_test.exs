@@ -195,6 +195,7 @@ defmodule AshReplicant.DocsTest do
     # adopter must not have to discover by running it.
     assert readme =~ "supervises *nothing* until you configure it"
     assert readme =~ "It stops rather than guess."
+    assert readme =~ ~r/preserving\s+every existing formatter entry/
 
     usage = File.read!("usage-rules.md")
     assert usage =~ "## Installing"
