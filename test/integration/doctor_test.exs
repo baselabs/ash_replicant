@@ -152,6 +152,39 @@ defmodule AshReplicant.Integration.DoctorTest do
       assert source_shape(conn) == before_shape
     end
 
+    # The cross-check only `:doctor` can make: a durable watermark whose slot has
+    # disappeared means the WAL behind that position is unrecoverable. It needs
+    # the checkpoint row and the slot row in the SAME run, so the orchestration
+    # has to read the checkpoint BEFORE it judges retention — passing a `nil`
+    # watermark there would make the whole rule unreachable in a real run.
+    test "a durable watermark whose slot is gone is reported as lost retention" do
+      identity = Marquee.source_identity()
+
+      Marquee.q!(
+        "INSERT INTO ash_replicant_checkpoints " <>
+          "(source_system_id, source_database, slot_name, commit_lsn, inserted_at, updated_at) " <>
+          "VALUES ($1, $2, $3, $4, now(), now())",
+        [identity[:system_identifier], identity[:database], @slot, 4_294_967_296]
+      )
+
+      on_exit(fn ->
+        Marquee.q!("DELETE FROM ash_replicant_checkpoints WHERE slot_name = $1", [@slot])
+      end)
+
+      report = Doctor.run(:doctor, diagnosis_opts())
+
+      checkpoint = Enum.find(report.checks, &(&1.name == :checkpoint_state))
+      retention = Enum.find(report.checks, &(&1.name == :slot_retention))
+
+      # The row really was read — otherwise the retention verdict below could be
+      # satisfied vacuously by an unavailable destination.
+      assert checkpoint.status == :pass
+      assert checkpoint.reason == :checkpoint_bound
+
+      assert retention.status == :fail
+      assert retention.reason == :retention_lost
+    end
+
     test "a live diagnosis reaches a real verdict, not a skipped one" do
       report = Doctor.run(:preflight, diagnosis_opts())
 

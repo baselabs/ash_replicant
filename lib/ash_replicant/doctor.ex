@@ -201,15 +201,27 @@ defmodule AshReplicant.Doctor do
   defp checks(mode, plan) do
     {configuration, contract} = check_sink_configuration(plan)
 
+    # The durable state is read FIRST in `:doctor` mode, because the retention
+    # verdict needs it: a watermark whose slot has disappeared is already lost,
+    # and that cross-check is unreachable if the slot is judged before the
+    # checkpoint is known.
+    durable = durable_state(mode, plan)
+
     base =
       [check_dependency_requirements(), configuration, check_destination_repo(plan)] ++
-        source_checks(plan, contract)
+        source_checks(plan, contract, watermark(durable))
 
     case mode do
       :preflight -> base
-      :doctor -> base ++ durable_checks(plan, contract)
+      :doctor -> base ++ durable_checks(plan, contract, durable)
     end
   end
+
+  defp durable_state(:preflight, _plan), do: :not_applicable
+  defp durable_state(:doctor, plan), do: checkpoint_row(plan)
+
+  defp watermark({:ok, row}) when is_map(row), do: Map.get(row, :commit_lsn)
+  defp watermark(_other), do: nil
 
   # The contract is built from the sink's own domains and publication — the same
   # `Identity.build_contract/2` activation admits — so a resolver conflict or an
@@ -262,10 +274,10 @@ defmodule AshReplicant.Doctor do
     :slot_retention
   ]
 
-  defp source_checks(plan, contract) do
+  defp source_checks(plan, contract, watermark) do
     case Probe.gather(plan.connection, plan.publication, plan.config.slot_name) do
       {:ok, probed} ->
-        [check_source_reachable(:ok) | judged_source_checks(plan, contract, probed)]
+        [check_source_reachable(:ok) | judged_source_checks(plan, contract, probed, watermark)]
 
       {:error, _unreachable} ->
         [
@@ -275,7 +287,7 @@ defmodule AshReplicant.Doctor do
     end
   end
 
-  defp judged_source_checks(plan, contract, probed) do
+  defp judged_source_checks(plan, contract, probed, watermark) do
     coverage = coverage_verdicts(plan, contract, probed)
 
     [
@@ -289,7 +301,7 @@ defmodule AshReplicant.Doctor do
       check_coverage(coverage.evaluate, stale_ignores(contract, probed)),
       check_replica_identity(coverage.replica_identity),
       check_slot(probed.slot),
-      check_retention(probed.slot, nil)
+      check_retention(probed.slot, watermark)
     ]
   end
 
@@ -331,19 +343,17 @@ defmodule AshReplicant.Doctor do
 
   # --- durable leg (doctor only) ---
 
-  defp durable_checks(plan, contract) do
-    checkpoint_leg(plan, contract) ++ [check_runtime_generation(plan.config.slot_name)]
+  # `durable` is the ALREADY-READ checkpoint state: the row is read once per
+  # run, before the source leg, and both consumers see the same read.
+  defp durable_checks(plan, contract, durable) do
+    checkpoint_leg(contract, durable) ++ [check_runtime_generation(plan.config.slot_name)]
   end
 
-  defp checkpoint_leg(plan, contract) do
-    case checkpoint_row(plan) do
-      {:ok, row} ->
-        [check_checkpoint(row, provenance_keys()), contract_check(row, contract)]
+  defp checkpoint_leg(contract, {:ok, row}),
+    do: [check_checkpoint(row, provenance_keys()), contract_check(row, contract)]
 
-      :unavailable ->
-        skipped([:checkpoint_state, :contract_drift], :destination_unavailable)
-    end
-  end
+  defp checkpoint_leg(_contract, _unavailable),
+    do: skipped([:checkpoint_state, :contract_drift], :destination_unavailable)
 
   defp contract_check(_row, nil),
     do: skipped_check(:contract_drift, :contract, :contract_unjudgeable)
