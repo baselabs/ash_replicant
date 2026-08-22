@@ -33,6 +33,7 @@ defmodule AshReplicant.Doctor.Probe do
 
   alias AshReplicant.Coverage
   alias AshReplicant.Doctor.ReadOnlyViolation
+  alias Replicant.Decoder.OidDatabase
 
   # Any of these appearing as a WHOLE WORD refuses the statement. The set is a
   # fail-closed superset: `ANALYZE`, `SET`, and `LOCK` are harmless in isolation
@@ -144,6 +145,158 @@ defmodule AshReplicant.Doctor.Probe do
     "SELECT slot_type, plugin, active, wal_status, " <>
       "(safe_wal_size IS NOT NULL AND safe_wal_size <= 0) AS exhausted " <>
       "FROM pg_replication_slots WHERE slot_name = $1"
+  end
+
+  @doc """
+  Gather every source-side fact the diagnosis needs, on ONE short-lived
+  read-only connection: the identity/release probe, the publication census
+  (tables, columns, primary keys, replica identity), the connecting role's
+  capability, per-table `SELECT` privilege, and the slot row.
+
+  Returns `{:error, :unreachable}` for every connection-level outcome — an
+  unresolvable database (classified BEFORE a pool exists, so no retry storm and
+  no uncontrolled log output), a refused connection, or a fault mid-probe. The
+  caller reports that as a failed reachability check and SKIPS everything it
+  could not judge; it never guesses a verdict.
+  """
+  @spec gather(keyword(), [String.t()], String.t()) :: {:ok, map()} | {:error, :unreachable}
+  def gather(connection_opts, publication, slot_name) do
+    opts = connection_options(connection_opts || [])
+
+    case open(opts) do
+      {:ok, conn} ->
+        try do
+          collect(conn, publication, slot_name)
+        after
+          GenServer.stop(conn)
+        end
+
+      {:error, :unreachable} = error ->
+        error
+    end
+  end
+
+  # Postgrex only discovers an unresolvable `:database` inside the pool's
+  # connect callback: the start returns `{:ok, pool}`, every retry logs, and the
+  # first query burns the checkout timeout. Mirror `AshReplicant.Coverage`'s
+  # admission and classify that BEFORE any pool exists, using postgrex's own
+  # resolution so the probe and the replication stream can never disagree.
+  defp open(opts) do
+    if is_nil(resolved_database(opts)) do
+      {:error, :unreachable}
+    else
+      case Postgrex.start_link(opts) do
+        {:ok, conn} -> {:ok, conn}
+        {:error, _reason} -> {:error, :unreachable}
+      end
+    end
+  rescue
+    _error -> {:error, :unreachable}
+  end
+
+  defp resolved_database(opts) do
+    case Keyword.fetch(opts, :database) do
+      {:ok, database} -> database
+      :error -> System.get_env("PGDATABASE")
+    end
+  end
+
+  defp collect(conn, publication, slot_name) do
+    with {:ok, %{rows: [[release, system_identifier, database]]}} <-
+           query(conn, Coverage.sql_identity_probe()),
+         {:ok, pub_rows} <-
+           framework_query(conn, publication, fn ->
+             Replicant.QueryBuilder.publication_tables(publication)
+           end),
+         {:ok, column_rows} <-
+           framework_query(conn, publication, fn -> Replicant.QueryBuilder.table_columns() end),
+         {:ok, pk_rows} <-
+           framework_query(conn, publication, fn -> Replicant.QueryBuilder.pk_columns() end),
+         {:ok, ident_rows} <- query(conn, Coverage.sql_relreplident(), [publication]),
+         {:ok, role_rows} <- query(conn, sql_role_privileges()),
+         {:ok, privilege_rows} <- query(conn, sql_table_privileges(), [publication]),
+         {:ok, slot_rows} <- query(conn, sql_replication_slot(), [slot_name]) do
+      {:ok,
+       %{
+         release: release,
+         identity: %{system_identifier: system_identifier, database: database},
+         tables: census(pub_rows, column_rows, pk_rows, ident_rows),
+         role: role(role_rows),
+         table_privileges: table_privileges(privilege_rows),
+         slot: slot(slot_rows)
+       }}
+    else
+      _fault -> {:error, :unreachable}
+    end
+  end
+
+  defp census(pub_rows, column_rows, pk_rows, ident_rows) do
+    columns_by_table =
+      Map.new(column_rows.rows, fn [schema, table, _qualified, raw, _quoted, oids] ->
+        columns =
+          raw
+          |> Enum.zip(oids)
+          |> Enum.map(fn {name, oid} ->
+            %{name: name, type: OidDatabase.name_for_type_id(oid)}
+          end)
+
+        {{schema, table}, columns}
+      end)
+
+    pk_by_table =
+      Map.new(pk_rows.rows, fn [schema, table, _qualified, raw, _quoted] ->
+        {{schema, table}, Enum.map(raw, &to_string/1)}
+      end)
+
+    ident_by_table =
+      Map.new(ident_rows.rows, fn [schema, table, ident] -> {{schema, table}, ident} end)
+
+    Map.new(pub_rows.rows, fn [schema, table, _qualified] ->
+      {{schema, table},
+       %{
+         columns: columns_by_table[{schema, table}] || [],
+         relreplident: ident_by_table[{schema, table}] || "d",
+         pk: pk_by_table[{schema, table}] || []
+       }}
+    end)
+  end
+
+  defp role(%{rows: [[superuser?, replication?] | _]}),
+    do: %{superuser?: superuser? == true, replication?: replication? == true}
+
+  defp role(_rows), do: %{superuser?: false, replication?: false}
+
+  defp table_privileges(%{rows: rows}),
+    do: Enum.map(rows, fn [schema, table, allowed?] -> {schema, table, allowed? == true} end)
+
+  defp slot(%{rows: [[slot_type, plugin, active, wal_status, exhausted] | _]}) do
+    %{
+      slot_type: slot_type,
+      plugin: plugin,
+      active: active == true,
+      wal_status: wal_status,
+      exhausted: exhausted == true
+    }
+  end
+
+  defp slot(_no_row), do: nil
+
+  defp framework_query(conn, publication, builder) do
+    case framework_sql(builder) do
+      nil -> :error
+      sql -> query(conn, sql, [publication])
+    end
+  end
+
+  # `admit!/1` is the gate: an unadmitted statement raises before it can reach
+  # the wire, so there is no path from this module to a write.
+  defp query(conn, sql, params \\ []) do
+    case Postgrex.query(conn, admit!(sql), params) do
+      {:ok, %Postgrex.Result{} = result} -> {:ok, result}
+      {:error, _reason} -> :error
+    end
+  rescue
+    _error -> :error
   end
 
   @doc """

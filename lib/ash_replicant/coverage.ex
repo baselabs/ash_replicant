@@ -231,6 +231,19 @@ defmodule AshReplicant.Coverage do
     end
   end
 
+  @doc """
+  Rule 10 (replica identity) evaluated ALONE, over the same census and facts
+  `evaluate/3` takes.
+
+  `evaluate/3` short-circuits and runs this rule last, so an earlier coverage
+  violation hides the replica-identity verdict entirely. The operator diagnosis
+  surface (`AshReplicant.Doctor`) must report the two as distinct checks, so it
+  reaches the rule through here — the same body, never a second copy that could
+  drift from what activation enforces.
+  """
+  @spec replica_identity_check(census(), relation_facts()) :: :ok | {:error, Error.t()}
+  def replica_identity_check(census, facts), do: check_replica_identity(census, facts)
+
   defp check_replica_identity(census, facts) do
     Enum.find_value(facts, :ok, fn {{schema, table}, fact} ->
       live = Map.fetch!(census, {schema, table})
@@ -883,6 +896,18 @@ defmodule AshReplicant.Coverage do
       {:error, _} = error -> error
     end
   end
+
+  @doc """
+  The probe-identity rule reachable on its own, over the same probed and
+  configured identity maps `preflight/6` compares.
+
+  The operator diagnosis surface (`AshReplicant.Doctor`) reports source identity
+  as its own check and must apply exactly this rule — including the pre-PG17
+  database-only leg — rather than a second copy that could drift from what
+  activation enforces.
+  """
+  @spec probe_identity_check(map(), map()) :: :ok | {:error, Error.t()}
+  def probe_identity_check(probed, expected), do: verify_probe_identity(probed, expected)
 
   # The identity the preflight connection reports must equal the CONFIGURED
   # identity (the same triple the replication session separately proves).

@@ -281,6 +281,51 @@ defmodule AshReplicant.CoverageTest do
     end
   end
 
+  describe "replica_identity_check/2 — rule 10 judged on its own" do
+    # `evaluate/3` short-circuits and runs rule 10 LAST, so any earlier
+    # violation hides the replica-identity verdict. The operator diagnosis
+    # surface must distinguish the two, so rule 10 is reachable alone — the
+    # SAME rule body, never a second copy.
+    test "a violation earlier in evaluate/3 hides the replica-identity verdict" do
+      facts = put_in(facts(), [@table, :tenant?], true)
+
+      census =
+        put_in(census(), [@table, :columns], [
+          %{name: "id", type: "text"},
+          %{name: "note", type: "text"},
+          %{name: "external_code", type: "text"},
+          %{name: "audit_note", type: "text"},
+          %{name: "added_later", type: "text"}
+        ])
+
+      assert {:error, %AshReplicant.Error{reason: :source_column_unmapped}} =
+               Coverage.evaluate(census, facts, [])
+
+      assert {:error,
+              %AshReplicant.Error{reason: :source_replica_identity, shape: "public.orders=d"}} =
+               Coverage.replica_identity_check(census, facts)
+    end
+
+    test "it agrees with evaluate/3 when replica identity is the only violation" do
+      facts = put_in(facts(), [@table, :tenant?], true)
+
+      # Splode stamps each exception with its own stacktrace, so compare the
+      # structural verdict rather than the struct.
+      assert {:error, %AshReplicant.Error{reason: alone, shape: alone_shape}} =
+               Coverage.replica_identity_check(census(), facts)
+
+      assert {:error, %AshReplicant.Error{reason: ^alone, shape: ^alone_shape}} =
+               Coverage.evaluate(census(), facts, [])
+    end
+
+    test "a satisfied replica identity passes" do
+      facts = put_in(facts(), [@table, :tenant?], true)
+      census = put_in(census(), [@table, :relreplident], "f")
+
+      assert :ok = Coverage.replica_identity_check(census, facts)
+    end
+  end
+
   describe "assert_change!/3 — streaming column accounting" do
     test "an all-accounted change passes" do
       change = %Replicant.Change{

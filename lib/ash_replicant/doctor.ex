@@ -43,6 +43,7 @@ defmodule AshReplicant.Doctor do
   """
 
   alias AshReplicant.Checkpoint.Identity
+  alias AshReplicant.Coverage
   alias AshReplicant.Destination.Generation
   alias AshReplicant.Doctor.{Check, Probe, Report}
   alias AshReplicant.Error
@@ -111,6 +112,281 @@ defmodule AshReplicant.Doctor do
   @spec check_names(Report.mode()) :: [atom()]
   def check_names(:preflight), do: @preflight_checks
   def check_names(:doctor), do: @preflight_checks ++ @doctor_only_checks
+
+  @doc """
+  Run one diagnosis. `opts` is the same keyword list
+  `AshReplicant.PipelineOwner` takes — `:sink`, `:connection`, `:publication`,
+  `:source_identity` — so an operator diagnoses with the configuration the
+  pipeline actually runs, never a hand-copied second one.
+
+  An invocation this cannot build a plan from returns
+  `AshReplicant.Doctor.Report.invalid/1` (exit `3`), never a health verdict.
+  """
+  @spec run(Report.mode(), keyword()) :: Report.t()
+  def run(mode, opts) when mode in [:preflight, :doctor] and is_list(opts) do
+    case plan(opts) do
+      {:ok, plan} -> Report.new(mode, checks(mode, plan))
+      {:error, reason} -> Report.invalid(reason)
+    end
+  end
+
+  # --- planning ---
+
+  defp plan(opts) do
+    with {:ok, sink, config} <- planned_sink(opts),
+         {:ok, identity} <- planned_identity(Keyword.get(opts, :source_identity)),
+         {:ok, publication} <- planned_publication(Keyword.get(opts, :publication)) do
+      {:ok,
+       %{
+         sink: sink,
+         config: config,
+         identity: identity,
+         publication: publication,
+         connection: Keyword.get(opts, :connection) || []
+       }}
+    end
+  end
+
+  defp planned_sink(opts) do
+    sink = Keyword.get(opts, :sink)
+
+    if is_atom(sink) and not is_nil(sink) and Code.ensure_loaded?(sink) and
+         function_exported?(sink, :__ash_replicant_config__, 0) do
+      admit_sink_config(sink)
+    else
+      {:error, :sink_required}
+    end
+  end
+
+  defp admit_sink_config(sink) do
+    case sink.__ash_replicant_config__() do
+      %{domains: domains, slot_name: slot_name} = config
+      when is_list(domains) and is_binary(slot_name) and slot_name != "" ->
+        {:ok, sink, config}
+
+      _invalid ->
+        {:error, :sink_required}
+    end
+  rescue
+    _error -> {:error, :sink_required}
+  catch
+    _kind, _reason -> {:error, :sink_required}
+  end
+
+  defp planned_identity(identity) when is_list(identity) do
+    system_identifier = Keyword.get(identity, :system_identifier)
+    database = Keyword.get(identity, :database)
+
+    if is_binary(system_identifier) and system_identifier != "" and is_binary(database) and
+         database != "" do
+      {:ok, %{system_identifier: system_identifier, database: database}}
+    else
+      {:error, :source_identity_required}
+    end
+  end
+
+  defp planned_identity(_identity), do: {:error, :source_identity_required}
+
+  defp planned_publication(publication) when is_binary(publication) and publication != "",
+    do: {:ok, [publication]}
+
+  defp planned_publication(publication) when is_list(publication) and publication != [],
+    do: {:ok, publication}
+
+  defp planned_publication(_publication), do: {:error, :config_invalid}
+
+  # --- the run ---
+
+  defp checks(mode, plan) do
+    {configuration, contract} = check_sink_configuration(plan)
+
+    base =
+      [check_dependency_requirements(), configuration, check_destination_repo(plan)] ++
+        source_checks(plan, contract)
+
+    case mode do
+      :preflight -> base
+      :doctor -> base ++ durable_checks(plan, contract)
+    end
+  end
+
+  # The contract is built from the sink's own domains and publication — the same
+  # `Identity.build_contract/2` activation admits — so a resolver conflict or an
+  # unmappable resource surfaces here rather than at the first connect.
+  defp check_sink_configuration(plan) do
+    case Identity.build_contract(plan.config, plan.publication) do
+      {:ok, contract} ->
+        {pass(:sink_configuration, :runtime, :ok), contract}
+
+      {:error, %Error{} = error} ->
+        {from_error(:sink_configuration, :runtime, error), nil}
+
+      {:error, reason} ->
+        {fail(:sink_configuration, :runtime, structural_reason(reason)), nil}
+    end
+  rescue
+    _error -> {fail(:sink_configuration, :runtime, :config_invalid), nil}
+  catch
+    _kind, _reason -> {fail(:sink_configuration, :runtime, :config_invalid), nil}
+  end
+
+  defp check_destination_repo(plan) do
+    case AshReplicant.Destination.manifest(plan.config) do
+      {:ok, _manifest} -> pass(:destination_repo, :runtime, :ok)
+      {:error, reason} -> fail(:destination_repo, :runtime, structural_reason(reason))
+    end
+  rescue
+    _error -> fail(:destination_repo, :runtime, :destination_unavailable)
+  catch
+    _kind, _reason -> fail(:destination_repo, :runtime, :destination_unavailable)
+  end
+
+  defp structural_reason({:invalid_destination_config, tag}) when is_atom(tag), do: tag
+  defp structural_reason(reason) when is_atom(reason), do: reason
+  defp structural_reason(_other), do: :config_invalid
+
+  # --- source leg ---
+
+  @source_check_names [
+    :source_release,
+    :source_privileges,
+    :source_identity,
+    :source_coverage,
+    :source_replica_identity,
+    :slot_presence,
+    :slot_retention
+  ]
+
+  defp source_checks(plan, contract) do
+    case Probe.gather(plan.connection, plan.publication, plan.config.slot_name) do
+      {:ok, probed} ->
+        [check_source_reachable(:ok) | judged_source_checks(plan, contract, probed)]
+
+      {:error, _unreachable} ->
+        [
+          check_source_reachable({:error, :unreachable})
+          | skipped(@source_check_names, :source_unreachable)
+        ]
+    end
+  end
+
+  defp judged_source_checks(plan, contract, probed) do
+    coverage = coverage_verdicts(plan, contract, probed)
+
+    [
+      check_source_release(probed.release),
+      check_privileges(%{
+        superuser?: probed.role.superuser?,
+        replication?: probed.role.replication?,
+        tables: probed.table_privileges
+      }),
+      check_source_identity(Coverage.probe_identity_check(probed.identity, plan.identity)),
+      check_coverage(coverage.evaluate),
+      check_replica_identity(coverage.replica_identity),
+      check_slot(probed.slot),
+      check_retention(probed.slot, nil)
+    ]
+  end
+
+  # A contract that could not be built takes the coverage rules out of reach:
+  # there are no declared relation facts to judge the census against. Both are
+  # skipped rather than reported from nothing.
+  defp coverage_verdicts(_plan, nil, _probed),
+    do: %{evaluate: :unjudgeable, replica_identity: :unjudgeable}
+
+  defp coverage_verdicts(plan, contract, probed) do
+    case AshReplicant.Resolver.build_index(plan.config.domains) do
+      {:ok, index} ->
+        facts = Coverage.relation_facts(index, contract.manifest)
+
+        %{
+          evaluate: Coverage.evaluate(probed.tables, facts, contract.manifest.ignores),
+          replica_identity: Coverage.replica_identity_check(probed.tables, facts)
+        }
+
+      _unbuildable ->
+        %{evaluate: :unjudgeable, replica_identity: :unjudgeable}
+    end
+  rescue
+    _error -> %{evaluate: :unjudgeable, replica_identity: :unjudgeable}
+  catch
+    _kind, _reason -> %{evaluate: :unjudgeable, replica_identity: :unjudgeable}
+  end
+
+  # --- durable leg (doctor only) ---
+
+  defp durable_checks(plan, contract) do
+    checkpoint_leg(plan, contract) ++ [check_runtime_generation(plan.config.slot_name)]
+  end
+
+  defp checkpoint_leg(plan, contract) do
+    case checkpoint_row(plan) do
+      {:ok, row} ->
+        [check_checkpoint(row, provenance_keys()), contract_check(row, contract)]
+
+      :unavailable ->
+        skipped([:checkpoint_state, :contract_drift], :destination_unavailable)
+    end
+  end
+
+  defp contract_check(_row, nil),
+    do: skipped_check(:contract_drift, :contract, :contract_unjudgeable)
+
+  defp contract_check(row, contract), do: check_contract(row, contract)
+
+  # The destination read: the checkpoint resource's own `:read`, `authorize?:
+  # false`, and NO lock — `lock: :for_update` is write intent and is the one
+  # option this path may never pass. The repo must ALREADY be running; a
+  # diagnosis never starts one.
+  defp checkpoint_row(plan) do
+    repo = Map.get(plan.config, :repo)
+
+    if is_atom(repo) and not is_nil(repo) and is_pid(Process.whereis(repo)) do
+      read_checkpoint(plan)
+    else
+      :unavailable
+    end
+  end
+
+  defp read_checkpoint(plan) do
+    require Ash.Query
+
+    system_identifier = plan.identity.system_identifier
+    database = plan.identity.database
+    slot_name = plan.config.slot_name
+
+    rows =
+      plan.config.checkpoint_resource
+      |> Ash.Query.filter(
+        source_system_id == ^system_identifier and source_database == ^database and
+          slot_name == ^slot_name
+      )
+      |> Ash.read!(authorize?: false)
+
+    {:ok, rows |> List.wrap() |> List.first() |> checkpoint_fields()}
+  rescue
+    _error -> :unavailable
+  catch
+    _kind, _reason -> :unavailable
+  end
+
+  defp checkpoint_fields(nil), do: nil
+
+  defp checkpoint_fields(row) do
+    %{
+      commit_lsn: Map.get(row, :commit_lsn),
+      snapshot_state: Map.get(row, :snapshot_state),
+      publication_contract: Map.get(row, :publication_contract),
+      publication_fingerprint: Map.get(row, :publication_fingerprint)
+    }
+  end
+
+  defp provenance_keys do
+    case AshReplicant.Snapshot.Provenance.keys() do
+      {:ok, keys} -> keys
+      :error -> []
+    end
+  end
 
   # --- runtime and dependency classes ---
 
@@ -243,8 +519,11 @@ defmodule AshReplicant.Doctor do
   own check, judged independently, because `evaluate/3` short-circuits and would
   otherwise hide replica identity behind an earlier coverage rule.
   """
-  @spec check_coverage(:ok | {:error, Error.t()}) :: Check.t()
+  @spec check_coverage(:ok | :unjudgeable | {:error, Error.t()}) :: Check.t()
   def check_coverage(:ok), do: pass(:source_coverage, :source, :ok)
+
+  def check_coverage(:unjudgeable),
+    do: skipped_check(:source_coverage, :source, :coverage_unjudgeable)
 
   def check_coverage({:error, %Error{reason: :source_replica_identity}}),
     do: pass(:source_coverage, :source, :ok)
@@ -255,8 +534,11 @@ defmodule AshReplicant.Doctor do
   The replica-identity rule, judged independently of the rest of coverage
   (`AshReplicant.Coverage.replica_identity_check/2`).
   """
-  @spec check_replica_identity(:ok | {:error, Error.t()}) :: Check.t()
+  @spec check_replica_identity(:ok | :unjudgeable | {:error, Error.t()}) :: Check.t()
   def check_replica_identity(:ok), do: pass(:source_replica_identity, :source, :ok)
+
+  def check_replica_identity(:unjudgeable),
+    do: skipped_check(:source_replica_identity, :source, :coverage_unjudgeable)
 
   def check_replica_identity({:error, %Error{} = error}),
     do: from_error(:source_replica_identity, :source, error)
@@ -362,6 +644,26 @@ defmodule AshReplicant.Doctor do
 
   defp pass(name, domain, reason),
     do: %Check{name: name, domain: domain, status: :pass, reason: reason}
+
+  # A leg that could not be JUDGED is skipped with the reason it could not be —
+  # never passed (which would claim health nothing established) and never failed
+  # (which would blame the deployment for an absent probe).
+  defp skipped_check(name, domain, reason),
+    do: %Check{name: name, domain: domain, status: :skipped, reason: reason}
+
+  defp skipped(names, reason) when is_list(names),
+    do: Enum.map(names, &skipped_check(&1, domain_of(&1), reason))
+
+  defp domain_of(name) do
+    cond do
+      name in [:checkpoint_state] -> :checkpoint
+      name in [:contract_drift] -> :contract
+      name in [:slot_presence, :slot_retention] -> :slot
+      name in [:dependency_requirements, :sink_configuration, :destination_repo] -> :runtime
+      name == :runtime_generation -> :runtime
+      true -> :source
+    end
+  end
 
   defp warn(name, domain, reason),
     do: %Check{name: name, domain: domain, status: :warn, reason: reason}

@@ -117,6 +117,45 @@ defmodule AshReplicant do
   end
 
   @doc """
+  Diagnose whether a pipeline may START, without writing anything and without
+  starting it.
+
+  Takes the same options `start_link/1` takes — `:sink`, `:connection`,
+  `:publication`, `:source_identity` — so an operator preflights the exact
+  configuration the pipeline runs. Returns an `AshReplicant.Doctor.Report`
+  carrying one typed check per class: dependency requirements, sink
+  configuration, destination admission, source reachability, PostgreSQL release,
+  privileges, source identity, coverage, replica identity, slot shape, and the
+  retention horizon.
+
+  Reads only. Every source statement passes a fail-closed read-only admission
+  and the probe connection is opened `default_transaction_read_only=on`;
+  anything it cannot judge is reported `:skipped`, never inferred.
+
+  `report.exit_code` is `0` all-pass, `1` any failure, `2` warnings only, `3`
+  the options could not be diagnosed at all.
+  """
+  @spec preflight(keyword()) :: AshReplicant.Doctor.Report.t()
+  def preflight(opts) when is_list(opts), do: AshReplicant.Doctor.run(:preflight, opts)
+
+  @doc """
+  Diagnose a DEPLOYED pipeline. Everything `preflight/1` covers plus the durable
+  state a running deployment has: checkpoint state (including an envelope that
+  will not decode, which fails closed), contract drift through the same
+  set-monotone classifier activation binds with, and runtime readiness.
+
+  Runtime readiness is NODE-LOCAL (`:persistent_term`), so call this from inside
+  the running application — a remote console or a health endpoint — for a real
+  answer. `mix ash_replicant.doctor` runs in its own OS process and always
+  reports the generation absent.
+
+  Reads only, on the same three legs as `preflight/1`; the checkpoint is read
+  through its `:read` action with `authorize?: false` and no lock.
+  """
+  @spec doctor(keyword()) :: AshReplicant.Doctor.Report.t()
+  def doctor(opts) when is_list(opts), do: AshReplicant.Doctor.run(:doctor, opts)
+
+  @doc """
   Adopt a legacy slot-only watermark into a source-bound checkpoint row (the
   explicit operator choice of roadmap B2's legacy policy). Offline: refuses
   while the slot has a live pipeline generation, stamps the operator-declared
