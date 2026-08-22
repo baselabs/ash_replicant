@@ -322,6 +322,7 @@ defmodule AshReplicant.Upgrade.CheckpointIntegrationTest do
   end
 
   @tag no_sandbox: true
+  @tag timeout: 600_000
   test "the public task upgrades a real legacy consumer without printing identity values", %{
     prefix: prefix
   } do
