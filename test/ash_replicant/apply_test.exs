@@ -1,20 +1,9 @@
-defmodule AshReplicant.Test.RaisingTenantMfa do
-  @moduledoc false
-  # Raises ONLY on the old side shape (no tenant_key key present) — the B4
-  # :tenant_resolution_failed cell.
-  def resolve(record, "tenant_key") when is_map_key(record, "tenant_key"),
-    do: Map.get(record, "tenant_key")
-
-  def resolve(_record, "tenant_key"), do: raise(ArgumentError, "raising resolver fixture")
-end
-
 defmodule AshReplicant.ApplyTest do
   use AshReplicant.DataCase, async: false
 
   @moduletag :integration
 
   alias AshReplicant.Apply
-  alias AshReplicant.Resolver
   alias AshReplicant.Test.Order
   alias AshReplicant.Test.TenantOrder
   alias Ecto.Adapters.SQL
@@ -467,116 +456,9 @@ defmodule AshReplicant.ApplyTest do
     assert err3.reason == :source_table_unmapped
   end
 
-  describe "B4 tri-modal tenant transition (roadmap B4)" do
-    test ":same update keeps the upsert path (old side resolved, no relocate)" do
-      change = %Replicant.Change{
-        op: :update,
-        schema: "public",
-        table: "tenant_orders",
-        record: %{"id" => "1", "org_id" => "org-a", "note" => "n"},
-        old_record: %{"id" => "1", "org_id" => "org-a"}
-      }
-
-      assert {:ok, :same, "org-a", "org-a"} =
-               Resolver.require_tenant_pair!(AshReplicant.Test.TenantOrder, change, :upsert)
-    end
-
-    test ":reassigned transition classifies (old side resolved, differs)" do
-      change = %Replicant.Change{
-        op: :update,
-        schema: "public",
-        table: "tenant_orders",
-        record: %{"id" => "1", "org_id" => "org-b"},
-        old_record: %{"id" => "1", "org_id" => "org-a"}
-      }
-
-      assert {:ok, :reassigned, "org-a", "org-b"} =
-               Resolver.require_tenant_pair!(AshReplicant.Test.TenantOrder, change, :upsert)
-    end
-
-    test "missing old tenant halts :tenant_required side=old BEFORE any write" do
-      change = %Replicant.Change{
-        op: :update,
-        schema: "public",
-        table: "tenant_orders",
-        record: %{"id" => "1", "org_id" => "org-b"},
-        old_record: %{"id" => "1"}
-      }
-
-      err =
-        assert_raise AshReplicant.Error, fn ->
-          Resolver.require_tenant_pair!(AshReplicant.Test.TenantOrder, change, :upsert)
-        end
-
-      assert err.reason == :tenant_required
-      assert err.shape == "side=old"
-    end
-
-    test "blank/false old tenant halts :tenant_required side=old" do
-      for blank <- ["", false] do
-        change = %Replicant.Change{
-          op: :update,
-          schema: "public",
-          table: "tenant_orders",
-          record: %{"id" => "1", "org_id" => "org-b"},
-          old_record: %{"id" => "1", "org_id" => blank}
-        }
-
-        err =
-          assert_raise AshReplicant.Error, fn ->
-            Resolver.require_tenant_pair!(AshReplicant.Test.TenantOrder, change, :upsert)
-          end
-
-        assert err.reason == :tenant_required
-        assert err.shape == "side=old"
-      end
-    end
-
-    test "a raising tenant_mfa on the old side halts :tenant_resolution_failed" do
-      change = %Replicant.Change{
-        op: :update,
-        schema: "public",
-        table: "raising_mfa_orders",
-        record: %{"id" => "1", "tenant_key" => "k2"},
-        old_record: %{"id" => "1"}
-      }
-
-      err =
-        assert_raise AshReplicant.Error, fn ->
-          Resolver.require_tenant_pair!(AshReplicant.Test.RaisingMfaOrder, change, :upsert)
-        end
-
-      assert err.reason == :tenant_resolution_failed
-      assert err.shape == "side=old"
-
-      # The raising message never escapes (value-free): the rendered error
-      # carries only reason/resource/op/shape.
-      refute Exception.message(err) =~ "raising resolver"
-    end
-
-    test "insert resolves only the new side (:same)" do
-      change = %Replicant.Change{
-        op: :insert,
-        schema: "public",
-        table: "tenant_orders",
-        record: %{"id" => "1", "org_id" => "org-a"}
-      }
-
-      assert {:ok, :same, nil, "org-a"} =
-               Resolver.require_tenant_pair!(AshReplicant.Test.TenantOrder, change, :create)
-    end
-
-    test "a non-tenant resource always resolves :same with nil tenants" do
-      change = %Replicant.Change{
-        op: :update,
-        schema: "public",
-        table: "orders",
-        record: %{"id" => "1"},
-        old_record: %{"id" => "1"}
-      }
-
-      assert {:ok, :same, nil, nil} =
-               Resolver.require_tenant_pair!(AshReplicant.Test.Order, change, :upsert)
-    end
-  end
+  # The B4 tri-modal tenant-transition tests are PURE (resource reflection +
+  # record maps, no Repo) and observe the fail-closed tenancy guards, so they
+  # live with the other no-database observers in
+  # `test/ash_replicant/resolver_test.exs` — the mutation matrix drives them
+  # without a live substrate. The live relocate/close behavior stays here.
 end

@@ -506,16 +506,18 @@ defmodule AshReplicant.NotifierLoadBindingTest do
 
     test "every sink-driven HOST action call site is guarded (live source pin)" do
       # The live half of this suite drives the upsert, destroy and snapshot
-      # sites end-to-end. The SCD2 close/open and message-route sites share
-      # the same guard; this pin is what keeps them wired — deleting a call
-      # turns it red. Counts are call sites, not mentions: the guard name
-      # appears nowhere else in these modules.
+      # sites end-to-end. The SCD2 close/open, message-route, snapshot-mark,
+      # and snapshot-retire sites share the same guard; this pin is what keeps
+      # them wired — deleting a call turns it red. Counts are call sites, not
+      # mentions: the guard name appears nowhere else in these modules.
       for {path, expected} <- [
             {"lib/ash_replicant/apply.ex", 2},
             {"lib/ash_replicant/append.ex", 1},
             {"lib/ash_replicant/apply/scd2.ex", 2},
             {"lib/ash_replicant/sink/impl.ex", 1},
-            {"lib/ash_replicant/messages.ex", 1}
+            {"lib/ash_replicant/messages.ex", 1},
+            {"lib/ash_replicant/snapshot/rows.ex", 1},
+            {"lib/ash_replicant/snapshot/retirement.ex", 1}
           ] do
         calls =
           path
@@ -525,6 +527,53 @@ defmodule AshReplicant.NotifierLoadBindingTest do
 
         assert calls == expected,
                "#{path} carries #{calls} notifier-load guards, expected #{expected}"
+      end
+    end
+
+    test "every notifier-load guard runs before its first destination effect (live source pin)" do
+      sites = [
+        {:mirror_upsert, "lib/ash_replicant/apply.ex", 0,
+         "Context.verify_notifier_loads!(config, resource, action, :upsert)",
+         "Ash.create!(resource, inputs,"},
+        {:mirror_destroy, "lib/ash_replicant/apply.ex", 0,
+         "Context.verify_notifier_loads!(config, resource, action, :destroy)",
+         "Ash.bulk_destroy!(query, action, %{},"},
+        {:scd2_close, "lib/ash_replicant/apply/scd2.ex", 0,
+         "Context.verify_notifier_loads!(config, resource, action, :upsert)",
+         "Ash.bulk_update!(\n      query,\n      action,"},
+        {:scd2_open, "lib/ash_replicant/apply/scd2.ex", 1,
+         "Context.verify_notifier_loads!(config, resource, action, :upsert)",
+         "Ash.create!(resource, inputs,"},
+        {:append, "lib/ash_replicant/append.ex", 0,
+         "Context.verify_notifier_loads!(config, resource, action, :append)",
+         "Ash.create!(resource, Map.merge(inputs, structural),"},
+        {:message, "lib/ash_replicant/messages.ex", 0,
+         "DeliveryContext.verify_notifier_loads!(\n" <>
+           "      config,\n      route.resource,\n      route.action,\n      :message\n    )",
+         "Ash.create!(route.resource, %{content: message.content || \"\"},"},
+        {:snapshot_bulk, "lib/ash_replicant/sink/impl.ex", 0,
+         "Apply.Context.verify_notifier_loads!(\n" <>
+           "        config,\n        resource,\n        Resolver.upsert_action(resource),\n" <>
+           "        :snapshot\n      )",
+         "Ash.bulk_create(inputs, resource, Resolver.upsert_action(resource),"},
+        {:snapshot_mark, "lib/ash_replicant/snapshot/rows.ex", 0,
+         "Context.verify_notifier_loads!(config, resource, action, :snapshot_mark)",
+         "|> Ash.bulk_update!(action, %{},"},
+        {:snapshot_retire, "lib/ash_replicant/snapshot/retirement.ex", 0,
+         "Context.verify_notifier_loads!(config, resource, action, :snapshot_retire)",
+         "Ash.bulk_update!(query, action, Scd2.close_input(resource, snapshot_lsn, nil),"}
+      ]
+
+      for {site, path, guard_index, guard_anchor, effect_anchor} <- sites do
+        source = File.read!(path)
+
+        {guard_position, _length} =
+          source |> :binary.matches(guard_anchor) |> Enum.fetch!(guard_index)
+
+        {effect_position, _length} = :binary.match(source, effect_anchor)
+
+        assert guard_position < effect_position,
+               "#{site}: notifier guard must run before its first destination effect"
       end
     end
   end

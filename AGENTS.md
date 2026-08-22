@@ -315,7 +315,11 @@ scripts/with-release-runtime.sh mix hex.build
 
 The complete release battery also includes the live PostgreSQL integration,
 explicit integration discovery, resource-snapshot drift, checker self-tests,
-and release-contract tests listed in `CONTRIBUTING.md`. `mix quality` covers only
+release-contract tests, and the data-boundary guard-mutation gates
+(`scripts/run-mutation-gates.py`, ADR-0003 — one guard removed, or one notifier
+guard moved after its first effect, at a time in an isolated project copy must
+turn its named no-database focused test red) listed
+in `CONTRIBUTING.md`. `mix quality` covers only
 format, Credo, and Dialyzer. Changes are recorded under `[Unreleased]` in
 `CHANGELOG.md`.
 

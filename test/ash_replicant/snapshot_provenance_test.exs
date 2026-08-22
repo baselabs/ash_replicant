@@ -232,6 +232,26 @@ defmodule AshReplicant.SnapshotProvenanceTest do
                canonical!(Orders, "t", %{x: [[["a"]]]})
     end
 
+    test "tuple ELEMENT COUNTS are explicit — differently-shaped tuples do not collide" do
+      # Without tuple counts, both sides are three opening tuple tags followed
+      # by one encoded binary. The outer tuple has two elements on the left
+      # and one on the right; only the count preserves that boundary.
+      refute canonical!(Orders, "t", %{x: {{}, {"a"}}}) ==
+               canonical!(Orders, "t", %{x: {{{"a"}}}})
+    end
+
+    test "map PAIR COUNTS are explicit — sibling pairs do not collapse into nesting" do
+      # Without map pair counts, the left side's sibling `"b"` pair is
+      # indistinguishable from the right side's nested `"b"` pair. Both
+      # flatten to the same three map tags and a/b/c/d key/value stream.
+      refute canonical!(Orders, "t", %{
+               x: %{"a" => %{}, "b" => %{"c" => "d"}}
+             }) ==
+               canonical!(Orders, "t", %{
+                 x: %{"a" => %{"b" => %{"c" => "d"}}}
+               })
+    end
+
     test "container boundaries are explicit — an embedded map is not its flattened pairs" do
       refute canonical!(Orders, "t", %{x: %{"a" => "b"}}) ==
                canonical!(Orders, "t", %{x: ["a", "b"]})
