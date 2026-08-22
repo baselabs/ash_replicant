@@ -903,6 +903,55 @@ on it for redo-safety now keeps rows the source has dropped. Declare
 `snapshot_provenance true` with the two attributes and the private mark/retire
 actions to get retirement back, on the fenced completion path described above.
 
+## Diagnosing a pipeline without touching it
+
+```bash
+mix ash_replicant.preflight --pipeline MyApp.Replicant.Pipeline
+mix ash_replicant.doctor --pipeline MyApp.Replicant.Pipeline --format json
+```
+
+`preflight` answers *may this start?* and reads no checkpoint, so it is correct
+on a fresh install. `doctor` adds the durable-state classes a deployed pipeline
+has: checkpoint state, contract drift, and runtime readiness. Both resolve the
+generated pipeline's own admitted start options — never restate configuration
+the application already carries. In-process, the same diagnosis is
+`AshReplicant.preflight/1` and `AshReplicant.doctor/1`. The Mix task checks the
+generated-pipeline marker in the BEAM export table before loading the named
+module, so an arbitrary module cannot run `@on_load` or `start_options/0`.
+
+**The commands perform no writes.** Every source statement passes a fail-closed
+read-only admission, the probe connection is opened
+`default_transaction_read_only=on` (so PostgreSQL refuses a write the admission
+missed), and the checkpoint is read through its `:read` action with no lock. The
+commands never start a repo, a pipeline, or a service.
+
+Rules for reading a report:
+
+- **Every class has its own reason.** Missing privileges
+  (`privilege_replication_missing` / `privilege_select_missing` /
+  `privilege_probe_missing`), unknown
+  checkpoint state (`checkpoint_state_unknown`), replica identity
+  (`source_replica_identity`, judged independently of the rest of coverage),
+  the retention horizon, contract drift, and version mismatch are never
+  collapsed into one bucket.
+- **`skipped` is not `pass`.** An unreachable source or an unavailable
+  destination skips what it could not judge and says why; reachability itself
+  still fails, so the verdict stays closed. A statement fault after a source
+  connection succeeds keeps reachability passed and marks the affected checks
+  `source_probe_failed` instead of calling a responding server unreachable.
+- **Act on `retention_at_risk` before `retention_lost`.** The first warns while
+  the WAL is still there; the second means recovery is already impossible. A
+  durable watermark whose slot has disappeared is `retention_lost`.
+- **Exit codes:** `0` clean, `1` a failed check, `2` warnings only, `3` the
+  invocation could not be diagnosed at all. Branch monitoring on `3` separately
+  — it means the command was invoked wrong, not that the deployment is sick.
+- **Runtime readiness is node-local.** `:persistent_term` is per-node, so the
+  Mix command — its own OS process — always reports `generation_absent`. Call
+  `AshReplicant.doctor/1` from inside the running application for the real
+  answer.
+- Output carries no connection option, publication name, source identity, slot
+  name, watermark, or row value, in either format.
+
 ## Source-bound checkpoints, binding, and operator recovery
 
 The durable checkpoint row is keyed by the ACTUAL replication session's
@@ -1035,8 +1084,10 @@ connection and re-runs the table-membership check at every reconnect.
   Strictly qualified `schema.table` strings; bare names and duplicates are
   compile errors; an ignore colliding with a mapped resource fails
   activation. Column-level ignoring is the resource-level `skip` list.
-  Ignores are standing intent — their hygiene is yours; the doctor surface
-  (roadmap D2) will report never-matching entries as a warning.
+  Ignores are standing intent — their hygiene is yours. `mix
+  ash_replicant.doctor` reports a never-matching entry as a warning
+  (`ignore_never_matches`) so an ignore that protects nothing does not stay
+  silent.
 - **Source columns** must all be mapped or skipped. A source `ADD COLUMN`
   halts the first changed row (`:source_column_unmapped`) until you map or
   skip it. A declared column that vanishes, or a `skip` naming a column that

@@ -303,6 +303,32 @@ ledger in one locked transaction, and refuses down after any 1.0-only durable
 state or watermark change. Roll the database migration back before downgrading
 the package; once 1.0 state exists, restore from backup or remain on 1.0.
 
+**11. The read-only diagnosis surface never writes, and never guesses.**
+`mix ash_replicant.preflight` / `mix ash_replicant.doctor` (and their in-process
+twins `AshReplicant.preflight/1` / `AshReplicant.doctor/1`) diagnose source,
+slot, checkpoint, contract, retention, and runtime readiness through
+`AshReplicant.Doctor`. The no-writes guarantee rests on THREE independent legs:
+`Doctor.Probe.admit!/1` refuses any statement that is not provably read-only
+(leading `SELECT`, no separator, no write verb, no row lock, no
+session-escaping function); the probe connection carries
+`default_transaction_read_only=on` so PostgreSQL refuses what admission missed;
+and the destination read uses the checkpoint's `:read` action with
+`authorize?: false` and NEVER a lock. Adding a statement means adding it to
+`Probe.statements/1`, which the non-vacuity test admits and the live gate
+executes.
+
+The doctor is an ADAPTER over the rules activation already runs — `Coverage`,
+`Identity.classify_stored_contract/3`, `Destination.manifest/1`,
+`Pipeline.start_options/3`. Never re-implement a rule here: a diagnosis that
+disagrees with the runtime it diagnoses is worse than none. Where a rule is
+private and short-circuiting, expose a delegate to the SAME body
+(`Coverage.replica_identity_check/2`, `Coverage.probe_identity_check/2`), never
+a copy. Results are one canonical `%Doctor.Check{}` with a closed reason
+vocabulary; `detail` is a fail-closed ALLOWLIST of reasons whose `%Error{}.shape`
+is a catalog identifier, so an identity-class shape (which embeds the source
+database) can never reach operator output. Anything unjudgeable is `:skipped`
+with the reason it could not be judged — never `:pass`.
+
 ## Development workflow
 
 The supported release foundation is Elixir 1.20.3 on Erlang/OTP 29 with Ash

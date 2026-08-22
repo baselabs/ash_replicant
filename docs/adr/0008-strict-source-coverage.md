@@ -34,8 +34,8 @@ auto-applies `:additive` Relation changes with no sink callback, so a source
   snapshotter's precedent). It is NOT the ADR-0007 TOCTOU class: nothing
   durable binds from it (the manifest comes from the compiled DSL via the
   identity-verified bind path), and its own identity probe
-  (`pg_control_system().system_identifier::text` + `current_database()` on
-  PG17+; database-only below — the documented PG16 floor is preserved)
+  (`pg_control_system().system_identifier::text` + `current_database()` across
+  the supported PostgreSQL 15 through 18 matrix)
   must equal the CONFIGURED identity the replication session separately
   proves. A wrong-node catalog read can only delay a halt to the first
   affected change (the per-change guard), never silently advance past one.

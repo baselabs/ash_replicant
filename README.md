@@ -544,6 +544,95 @@ AshReplicant.start_link(
   mapped resource to declare `snapshot_provenance true`; otherwise start fails
   closed with `:snapshot_unsupported`.
 
+## Operator diagnosis — preflight and doctor
+
+Two commands answer *may this start?* and *what is the state of this deployment?*
+without touching anything:
+
+```bash
+# Before the first activation — no checkpoint is read, so this is correct on a
+# fresh install.
+mix ash_replicant.preflight --pipeline MyApp.Replicant.Pipeline
+
+# Once deployed — everything above, plus checkpoint state, contract drift, and
+# runtime readiness.
+mix ash_replicant.doctor --pipeline MyApp.Replicant.Pipeline
+
+# The same report as JSON, for a monitoring caller.
+mix ash_replicant.doctor --pipeline MyApp.Replicant.Pipeline --format json
+```
+
+Both resolve the generated pipeline's **own** admitted start options, so you
+never restate configuration the application already carries. The same diagnosis
+is available in-process as `AshReplicant.preflight/1` and
+`AshReplicant.doctor/1`, which take the option list `AshReplicant.start_link/1`
+takes and return an `AshReplicant.Doctor.Report`. The Mix tasks verify the
+generated-pipeline marker from the BEAM export table before loading the named
+module, so an arbitrary `--pipeline` module cannot run `@on_load` or
+`start_options/0` through a read-only command.
+
+### It performs no writes
+
+Three independent legs, none of which trusts the other:
+
+1. Every source statement passes a fail-closed read-only admission — leading
+   `SELECT` only, no statement separator, no write verb, no row lock, and no
+   session-escaping function (`set_config`, `dblink*`).
+2. The probe connection is opened with `default_transaction_read_only=on`, so
+   PostgreSQL itself refuses a write the admission missed. The live integration
+   gate asserts exactly that, with the server's own `read_only_sql_transaction`
+   SQLSTATE.
+3. The destination checkpoint is read through its `:read` action with
+   `authorize?: false` and **no lock** — `lock: :for_update` is write intent and
+   is never passed.
+
+The commands never start a repo, a pipeline, or a service.
+
+### What the report distinguishes
+
+Machine and operator output are both total functions of one canonical result, so
+they cannot disagree. Every class carries its own reason atom rather than a
+single "failed" bucket:
+
+| Class | Reasons |
+|---|---|
+| Missing privileges | `privilege_replication_missing`, `privilege_select_missing`, `privilege_probe_missing` |
+| Unknown checkpoint state | `checkpoint_state_unknown`, `checkpoint_state_key_unknown` |
+| Replica identity | `source_replica_identity`, judged independently of the rest of coverage |
+| Retention horizon | `retention_extended` → `retention_at_risk` → `retention_lost` |
+| Contract drift | `contract_drift` reports the classifier's own reason (`publication`, `relation_removed`, `stored_contract_invalid`, …) |
+| Version mismatch | `dependency_version_mismatch`, `dependency_missing`, `source_release_unsupported`, `source_release_untested` |
+
+Reasons come from a closed vocabulary, and no connection option, publication
+name, source identity, slot name, watermark, or row value ever appears. A leg
+that could not be judged — an unreachable source, a repo that is not running —
+is reported `skipped` with the reason it could not be judged, never passed.
+If a connected server rejects or faults a catalog statement, reachability stays
+passed; the affected checks are `source_probe_failed` rather than falsely
+reported as unreachable.
+
+Retention is the alert that must fire **before** recovery becomes impossible:
+`retention_at_risk` warns while the WAL is still there, `retention_lost` fails
+once it is not. A durable watermark whose slot has disappeared is already lost.
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | Every check passed. |
+| `1` | At least one check failed. |
+| `2` | Warnings only. |
+| `3` | The invocation could not be diagnosed — missing, unknown, or unconfigured `--pipeline`, or an unknown flag. |
+
+`3` is separate from `1` so a monitoring caller can tell "this deployment is
+unhealthy" from "you invoked me wrong".
+
+> **Runtime readiness is node-local.** The generation index is
+> `:persistent_term`, so `mix ash_replicant.doctor` — its own OS process —
+> always reports `generation_absent`. Call `AshReplicant.doctor/1` from inside
+> the running application (a remote console or a health endpoint) for the real
+> answer.
+
 ## Strict source coverage
 
 Every publication table is mapped, explicitly ignored

@@ -231,6 +231,24 @@ defmodule AshReplicant.Coverage do
     end
   end
 
+  @doc """
+  Rule 10 (replica identity) evaluated ALONE, over the same census and facts
+  `evaluate/3` takes. A missing declared table remains the structural rule-2
+  failure because there is no live relation whose identity can be judged.
+
+  `evaluate/3` short-circuits and runs this rule last, so an earlier coverage
+  violation hides the replica-identity verdict entirely. The operator diagnosis
+  surface (`AshReplicant.Doctor`) must report the two as distinct checks, so it
+  reaches the rule through here — the same body, never a second copy that could
+  drift from what activation enforces.
+  """
+  @spec replica_identity_check(census(), relation_facts()) :: :ok | {:error, Error.t()}
+  def replica_identity_check(census, facts) do
+    with :ok <- check_missing_expected(census, facts) do
+      check_replica_identity(census, facts)
+    end
+  end
+
   defp check_replica_identity(census, facts) do
     Enum.find_value(facts, :ok, fn {{schema, table}, fact} ->
       live = Map.fetch!(census, {schema, table})
@@ -668,21 +686,18 @@ defmodule AshReplicant.Coverage do
     {:error, %Error{reason: reason}}
   end
 
-  # --- catalog SQL (identity probe is version-conditional; the rest reuse
-  # --- the framework's public QueryBuilder strings verbatim) ---
+  # --- catalog SQL (the framework's public QueryBuilder strings are reused
+  # --- verbatim where they already expose the required census) ---
 
   @doc """
-  ONE round-trip identity + version probe. pg_control_system() exists only on
-  PG17+ (the documented floor and CI run PG16; D6's matrix is PG15-18), so the
-  system identifier is read conditionally: below 170000 the probe compares the
-  DATABASE only — the weaker pre-PG17 leg, bounded by the B2 session gate
-  (configured == actual session on the stream) and the per-change guard.
+  ONE round-trip identity + version probe. `pg_control_system()` exposes the
+  system identifier across the supported PostgreSQL 15 through 18 matrix, so
+  every supported release verifies the same system-and-database pair.
   """
   @spec sql_identity_probe() :: String.t()
   def sql_identity_probe do
     "SELECT current_setting('server_version_num')::int, " <>
-      "CASE WHEN current_setting('server_version_num')::int >= 170000 " <>
-      "THEN (SELECT system_identifier::text FROM pg_control_system()) ELSE NULL END, " <>
+      "(SELECT system_identifier::text FROM pg_control_system()), " <>
       "current_database()"
   end
 
@@ -884,17 +899,25 @@ defmodule AshReplicant.Coverage do
     end
   end
 
+  @doc """
+  The probe-identity rule reachable on its own, over the same probed and
+  configured identity maps `preflight/6` compares.
+
+  The operator diagnosis surface (`AshReplicant.Doctor`) reports source identity
+  as its own check and must apply exactly this rule rather than a second copy
+  that could drift from what activation enforces.
+  """
+  @spec probe_identity_check(map(), map()) :: :ok | {:error, Error.t()}
+  def probe_identity_check(probed, expected), do: verify_probe_identity(probed, expected)
+
   # The identity the preflight connection reports must equal the CONFIGURED
   # identity (the same triple the replication session separately proves).
   defp verify_probe_identity(%{system_identifier: system_id, database: db}, %{
          system_identifier: expected_system,
          database: expected_db
        }) do
-    # Below PG17 the system identifier is NULL (pg_control_system is PG17+) —
-    # the database-only leg, bounded by the B2 session gate + per-change guard.
     identity_ok? =
-      db == expected_db and
-        (is_nil(system_id) or version_compares_nil(system_id, expected_system))
+      db == expected_db and system_identifier_matches?(system_id, expected_system)
 
     if identity_ok? do
       :ok
@@ -909,7 +932,7 @@ defmodule AshReplicant.Coverage do
     end
   end
 
-  defp version_compares_nil(system_id, expected_system),
+  defp system_identifier_matches?(system_id, expected_system),
     do: to_string(system_id) == expected_system
 
   defp emit_preflight_failed(%Error{reason: reason}) do
