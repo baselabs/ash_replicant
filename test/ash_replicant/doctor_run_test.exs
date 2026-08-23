@@ -190,7 +190,11 @@ defmodule AshReplicant.DoctorRunTest do
     test "the in-process public doctor fails a generation whose owner died" do
       owner = spawn(fn -> :ok end)
       monitor = Process.monitor(owner)
-      assert_receive {:DOWN, ^monitor, :process, ^owner, :normal}
+
+      # Either exit flavor proves the owner is gone: `:normal` when the
+      # monitor won the race, `:noproc` when the spawned fun exited first
+      # (the latest-dependency cell's timing surfaces the latter).
+      assert_receive {:DOWN, ^monitor, :process, ^owner, _reason}
 
       AdmittedGeneration.put!(DiagnosisSink, owner: owner)
 
