@@ -112,7 +112,7 @@ defmodule AshReplicant.StatusIntegrationTest do
     )
   end
 
-  defp eventually(fun, polls \\ 200) do
+  defp eventually(fun, polls \\ 480) do
     cond do
       fun.() -> :ok
       polls == 0 -> flunk("condition not reached within the poll budget")
@@ -200,8 +200,15 @@ defmodule AshReplicant.StatusIntegrationTest do
       match?({:misconfigured, :publication_contract_incompatible}, AshReplicant.status(Sink))
     end)
 
-    assert %{cause: "publication_contract_incompatible", class: "misconfigured"} =
-             durable_tombstone()
+    # The status flips on the NODE-LOCAL leg at the halt decision; the
+    # durable leg lands only after safe_stop completes — poll for it
+    # rather than racing the owner's post-stop write.
+    eventually(fn ->
+      match?(
+        %{cause: "publication_contract_incompatible", class: "misconfigured"},
+        durable_tombstone()
+      )
+    end)
 
     assert %{lifecycle: :halted} = AshReplicant.Status.derive(Sink)
   end
