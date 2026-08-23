@@ -48,6 +48,7 @@ defmodule AshReplicant.Doctor do
   alias AshReplicant.Destination.Generation
   alias AshReplicant.Doctor.{Check, Probe, Report}
   alias AshReplicant.Error
+  alias AshReplicant.Horizon
   alias AshReplicant.Snapshot.{Provenance, State}
 
   # Duplicated from `mix.exs` because `mix.exs` is not loadable from a release.
@@ -89,7 +90,8 @@ defmodule AshReplicant.Doctor do
     :source_coverage,
     :source_replica_identity,
     :slot_presence,
-    :slot_retention
+    :slot_retention,
+    :retention_horizon
   ]
 
   @doctor_only_checks [
@@ -209,7 +211,7 @@ defmodule AshReplicant.Doctor do
 
     base =
       [check_dependency_requirements(), configuration, check_destination_repo(plan)] ++
-        source_checks(plan, contract, watermark(durable))
+        source_checks(plan, contract, durable)
 
     case mode do
       :preflight -> base
@@ -280,13 +282,14 @@ defmodule AshReplicant.Doctor do
     :source_coverage,
     :source_replica_identity,
     :slot_presence,
-    :slot_retention
+    :slot_retention,
+    :retention_horizon
   ]
 
-  defp source_checks(plan, contract, watermark) do
+  defp source_checks(plan, contract, durable) do
     case Probe.gather(plan.connection, plan.publication, plan.config.slot_name) do
       {:ok, probed} ->
-        [check_source_reachable(:ok) | judged_source_checks(plan, contract, probed, watermark)]
+        [check_source_reachable(:ok) | judged_source_checks(plan, contract, probed, durable)]
 
       {:error, :unreachable} ->
         [
@@ -317,7 +320,7 @@ defmodule AshReplicant.Doctor do
   def source_probe_failure_checks(:query_failed),
     do: [check_source_reachable(:ok) | skipped(@source_check_names, :source_probe_failed)]
 
-  defp judged_source_checks(plan, contract, probed, watermark) do
+  defp judged_source_checks(plan, contract, probed, durable) do
     coverage = coverage_verdicts(plan, contract, probed)
 
     [
@@ -331,9 +334,43 @@ defmodule AshReplicant.Doctor do
       check_coverage(coverage.evaluate, stale_ignores(contract, probed)),
       check_replica_identity(coverage.replica_identity),
       check_slot(probed.slot),
-      check_retention(probed.slot, watermark)
+      check_retention(probed.slot, watermark(durable)),
+      check_recovery_horizon(plan, probed.slot, durable)
     ]
   end
+
+  # O03 (ADR-0020): the recovery-horizon diagnosis — an ADAPTER over the one
+  # classification body in AshReplicant.Horizon (rule 11: never a copy). The
+  # static leg compares the manifest's retention floor against the declared
+  # horizon; the halted leg compares the durable tombstone's duration and the
+  # live slot facts against the same floor. No claim-backed routes is
+  # :skipped with the reason — never :pass.
+  defp check_recovery_horizon(plan, slot, durable) do
+    case AshReplicant.Destination.manifest(plan.config) do
+      {:ok, manifest} ->
+        with :ok <- Horizon.preflight_static(manifest, plan.config),
+             {:ok, min} <- Horizon.min_route_retention(manifest),
+             true <- is_integer(min) do
+          resume_verdict(min, slot, terminal_at(durable))
+        else
+          {:error, %Error{reason: reason}} -> fail(:retention_horizon, :slot, reason)
+          _no_claim_routes -> skipped_check(:retention_horizon, :slot, :no_claim_routes)
+        end
+
+      {:error, reason} ->
+        fail(:retention_horizon, :slot, structural_reason(reason))
+    end
+  end
+
+  defp resume_verdict(min, slot, halted_since) do
+    case Horizon.classify_resume(halted_since, DateTime.utc_now(), min, slot) do
+      :ok -> pass(:retention_horizon, :slot, :retention_within_horizon)
+      {:error, reason} -> fail(:retention_horizon, :slot, reason)
+    end
+  end
+
+  defp terminal_at({:ok, %{} = row}) when is_map(row), do: Map.get(row, :terminal_at)
+  defp terminal_at(_other), do: nil
 
   # Declared ignores that match no live publication table. Structural
   # identifiers from the sink's own configuration — never a row value.
@@ -747,7 +784,7 @@ defmodule AshReplicant.Doctor do
     cond do
       name in [:checkpoint_state] -> :checkpoint
       name in [:contract_drift] -> :contract
-      name in [:slot_presence, :slot_retention] -> :slot
+      name in [:slot_presence, :slot_retention, :retention_horizon] -> :slot
       name in [:dependency_requirements, :sink_configuration, :destination_repo] -> :runtime
       name == :runtime_generation -> :runtime
       true -> :source

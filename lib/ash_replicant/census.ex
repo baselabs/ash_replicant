@@ -298,6 +298,19 @@ defmodule AshReplicant.Census do
       config.source_contract.manifest
     )
     |> classify_coverage_result()
+    |> then(fn verdict ->
+      # O03 (ADR-0020): the WAL-side horizon rides the coverage check — the
+      # source is reachable exactly when the slot probe can run. `lost` is a
+      # drift halt; at-risk emits the retention event and CONTINUES (an
+      # at-risk state must be observable without halting, or the alert
+      # cannot precede the halt); the verdict stays as coverage classified it.
+      if verdict == :pass do
+        {slot_verdict, _detail} = Horizon.census_slot_verdict(config)
+        slot_verdict
+      else
+        verdict
+      end
+    end)
   end
 
   defp checkpoint_filter(config) do

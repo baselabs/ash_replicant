@@ -23,6 +23,7 @@ defmodule AshReplicant.Horizon do
   alias AshReplicant.Destination
   alias AshReplicant.Error
   alias AshReplicant.Horizon.KeyState
+  alias AshReplicant.Telemetry
 
   @min_provenance_key_bytes 16
 
@@ -189,6 +190,137 @@ defmodule AshReplicant.Horizon do
 
   def classify_stored_key_state(_stored, _keys, _configured, _now, _retention),
     do: {:error, :digest_key_state_invalid}
+
+  @doc """
+  The slot-fact risk classifier (the WAL side of the horizon): `reserved` /
+  `extended` with headroom are `{:ok, :ok}`; `unreserved` (WAL about to be
+  removed at the next checkpoint but still recoverable) or an exhausted
+  `safe_wal_size` are `{:ok, {:at_risk, kind}}` — the alert that must fire
+  BEFORE recovery becomes impossible; `lost` is
+  `{:error, :source_wal_lost}` — recovery is already impossible, a census
+  drift halt. No slot row or an unreadable status defers to
+  `{:ok, :unknown}`.
+  """
+  @spec classify_slot_risk(map() | nil) ::
+          {:ok, :ok | :unknown | {:at_risk, :wal_unreserved | :wal_exhausted}}
+          | {:error, :source_wal_lost}
+  def classify_slot_risk(%{wal_status: "reserved", exhausted: false}), do: {:ok, :ok}
+  def classify_slot_risk(%{wal_status: "extended", exhausted: false}), do: {:ok, :ok}
+
+  def classify_slot_risk(%{wal_status: "unreserved", exhausted: false}),
+    do: {:ok, {:at_risk, :wal_unreserved}}
+
+  def classify_slot_risk(%{wal_status: status, exhausted: true}) when status != "lost",
+    do: {:ok, {:at_risk, :wal_exhausted}}
+
+  def classify_slot_risk(%{wal_status: "lost"}), do: {:error, :source_wal_lost}
+  def classify_slot_risk(_unknown), do: {:ok, :unknown}
+
+  @doc """
+  The activation resume gate: a prior halt (`halted_since` — the durable
+  tombstone's `terminal_at`) whose duration crossed the minimum claim
+  retention while the slot still retains WAL refuses with
+  `:retention_horizon_crossed` — the un-acked standalone messages whose
+  claims expired would re-execute on re-delivery; the operator must
+  reconcile consciously (the standing no-unproven-zero posture). A `lost`
+  slot defers to the stream's own failure (that is data loss, not
+  duplication); an unreachable probe never blocks recovery; no prior halt
+  or no claim-backed routes proceed.
+  """
+  @spec classify_resume(
+          DateTime.t() | nil,
+          DateTime.t(),
+          pos_integer() | nil,
+          map() | nil | :unreachable
+        ) ::
+          :ok | {:error, :retention_horizon_crossed}
+  def classify_resume(nil, _now, _retention, _slot), do: :ok
+  def classify_resume(_halted_since, _now, nil, _slot), do: :ok
+  def classify_resume(_halted_since, _now, _retention, :unreachable), do: :ok
+  def classify_resume(_halted_since, _now, _retention, nil), do: :ok
+
+  def classify_resume(halted_since, now, retention, slot) do
+    with true <- is_map(slot),
+         false <- slot.wal_status == "lost",
+         true <- DateTime.diff(now, halted_since, :second) >= retention do
+      {:error, :retention_horizon_crossed}
+    else
+      _other -> :ok
+    end
+  end
+
+  @doc """
+  The census's slot-fact leg: probe the slot on a short-lived read-only
+  connection (the doctor's own `probe_slot`), classify, and on at-risk emit
+  `[:ash_replicant, :retention, :at_risk]` — META ONLY (`slot_name` + the
+  structural `kind`; no measurement: `byte_size` is C1-reserved and a
+  non-positive `safe_wal_size` would fail measurement validation and mask
+  the alert as a checker fault). Returns the census-verdict pair.
+  """
+  @spec census_slot_verdict(map()) :: {:pass | {:drift, atom()}, :ok | :unknown | nil}
+  def census_slot_verdict(config) do
+    slot = AshReplicant.Doctor.Probe.probe_slot(config.source_connection, config.slot_name)
+
+    case classify_slot_risk(slot) do
+      {:ok, :ok} -> {:pass, :ok}
+      {:ok, :unknown} -> {:pass, :unknown}
+      {:ok, {:at_risk, kind}} -> emit_at_risk(config, kind)
+      {:error, :source_wal_lost} -> {{:drift, :source_wal_lost}, nil}
+    end
+  end
+
+  defp emit_at_risk(config, kind) do
+    Telemetry.event(
+      [:ash_replicant, :retention, :at_risk],
+      %{},
+      %{slot_name: config.slot_name, kind: kind}
+    )
+
+    {:pass, {:at_risk, kind}}
+  end
+
+  @doc """
+  The activation preflight leg: the resume gate — read the slot facts, read
+  the durable tombstone time, compare against the retention floor. Never
+  blocks on an unreachable probe.
+  """
+  @spec preflight_resume(keyword(), String.t(), map(), Destination.Manifest.t()) ::
+          :ok | {:error, Error.t()}
+  def preflight_resume(connection_opts, slot_name, config, manifest) do
+    with {:ok, min} <- min_route_retention(manifest),
+         true <- is_integer(min) do
+      halted_since = durable_terminal_at(config)
+      slot = AshReplicant.Doctor.Probe.probe_slot(connection_opts, slot_name)
+
+      classify_resume(halted_since, DateTime.utc_now(), min, slot)
+      |> case do
+        :ok -> :ok
+        {:error, reason} -> {:error, Error.exception(reason: reason, op: :activation)}
+      end
+    else
+      _no_claim_routes -> :ok
+    end
+  end
+
+  defp durable_terminal_at(config) do
+    context = Map.get(config, :data_layer_context, %{repo: config.repo})
+
+    config.checkpoint_resource
+    |> Ash.Query.filter(
+      slot_name == ^config.slot_name and
+        source_system_id == ^config.source_identity.system_identifier and
+        source_database == ^config.source_identity.database
+    )
+    |> Ash.read(authorize?: false, context: context)
+    |> case do
+      {:ok, [%{terminal_at: %DateTime{} = at}]} -> at
+      _absent_or_no_tombstone -> nil
+    end
+  rescue
+    _error -> nil
+  catch
+    _kind, _reason -> nil
+  end
 
   @doc """
   The census's witness verdict: `:skip` when the sink carries no claim-backed

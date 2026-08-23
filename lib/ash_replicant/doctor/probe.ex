@@ -138,12 +138,16 @@ defmodule AshReplicant.Doctor.Probe do
   The slot's type, plugin, liveness, and retention horizon. `wal_status` and
   `safe_wal_size` exist from PostgreSQL 13, so this is portable across the whole
   PostgreSQL 15 through 18 support matrix — unlike `invalidation_reason` (PG18), `conflicting`
-  (PG16), and `inactive_since` (PG17). The slot name binds `$1`.
+  (PG16), and `inactive_since` (PG17). O03 (ADR-0020) added `safe_wal_size`
+  itself (not just its exhaustion) so `AshReplicant.Horizon` reads byte
+  headroom from the SAME statement — one SQL home (rule 11). The slot name
+  binds `$1`.
   """
   @spec sql_replication_slot() :: String.t()
   def sql_replication_slot do
     "SELECT slot_type, plugin, active, wal_status, " <>
-      "(safe_wal_size IS NOT NULL AND safe_wal_size <= 0) AS exhausted " <>
+      "(safe_wal_size IS NOT NULL AND safe_wal_size <= 0) AS exhausted, " <>
+      "safe_wal_size " <>
       "FROM pg_replication_slots WHERE slot_name = $1"
   end
 
@@ -201,6 +205,35 @@ defmodule AshReplicant.Doctor.Probe do
     case Keyword.fetch(opts, :database) do
       {:ok, database} -> database
       :error -> System.get_env("PGDATABASE")
+    end
+  end
+
+  @doc """
+  O03 (ADR-0020): the one slot-fact probe the runtime (census + the
+  activation resume gate) shares with the doctor — a short-lived read-only
+  connection, `admit!/1`, and the SAME `sql_replication_slot/0` statement
+  (rule 11: one SQL home, never a copy). Returns the slot fact map, `nil`
+  for no slot row, or `:unreachable` for any connection- or statement-level
+  fault (the runtime cannot act on the finer classes the doctor reports).
+  """
+  @spec probe_slot(keyword(), String.t()) :: map() | nil | :unreachable
+  def probe_slot(connection_opts, slot_name) when is_binary(slot_name) do
+    opts = connection_options(connection_opts || [])
+
+    case open(opts) do
+      {:ok, conn} ->
+        try do
+          case query(conn, sql_replication_slot(), [slot_name]) do
+            {:ok, %{rows: []}} -> nil
+            {:ok, result} -> slot(result)
+            {:error, _reason} -> :unreachable
+          end
+        after
+          GenServer.stop(conn)
+        end
+
+      {:error, :unreachable} ->
+        :unreachable
     end
   end
 
@@ -276,13 +309,14 @@ defmodule AshReplicant.Doctor.Probe do
   defp table_privileges(%{rows: rows}),
     do: Enum.map(rows, fn [schema, table, allowed?] -> {schema, table, allowed? == true} end)
 
-  defp slot(%{rows: [[slot_type, plugin, active, wal_status, exhausted] | _]}) do
+  defp slot(%{rows: [[slot_type, plugin, active, wal_status, exhausted, safe_wal_size] | _]}) do
     %{
       slot_type: slot_type,
       plugin: plugin,
       active: active == true,
       wal_status: wal_status,
-      exhausted: exhausted == true
+      exhausted: exhausted == true,
+      safe_wal_size: safe_wal_size
     }
   end
 

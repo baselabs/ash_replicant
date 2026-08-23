@@ -51,6 +51,7 @@ defmodule AshReplicant.Error do
           | :retention_below_recovery_horizon
           | :digest_key_horizon_violated
           | :digest_key_state_invalid
+          | :retention_horizon_crossed
           # Destination admission re-uses this tuple shape with its own
           # structural sub-reasons; their closed set is enumerated in
           # `AshReplicant.Destination`'s own @type.
@@ -176,7 +177,11 @@ defmodule AshReplicant.Error do
     # re-deliverable; replay would halt), and an undecodable, tampered, or
     # impossible witness envelope (fail closed, never a silent fresh one).
     :digest_key_horizon_violated,
-    :digest_key_state_invalid
+    :digest_key_state_invalid,
+    # O03 (ADR-0020): the resume gate — re-activating after a halt whose
+    # duration crossed the minimum claim retention while the slot still
+    # retains WAL would re-execute expired-claim standalone messages.
+    :retention_horizon_crossed
   ]
 
   for reason <- @closed_reasons do

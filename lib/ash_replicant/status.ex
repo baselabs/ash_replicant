@@ -121,6 +121,7 @@ defmodule AshReplicant.Status do
     :census_source_unreachable,
     :census_unverifiable,
     :digest_key_state_invalid,
+    :retention_horizon_crossed,
     :pipeline_terminated,
     :owner_lost,
     :operator_stopped,

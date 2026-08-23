@@ -554,6 +554,11 @@ defmodule AshReplicant.DoctorTest do
       refute :contract_drift in names
     end
 
+    test "the O03 recovery-horizon check is in both modes' vocabulary" do
+      assert :retention_horizon in Doctor.check_names(:preflight)
+      assert :retention_horizon in Doctor.check_names(:doctor)
+    end
+
     test "doctor is a strict superset that adds the durable-state classes" do
       preflight = Doctor.check_names(:preflight)
       doctor = Doctor.check_names(:doctor)
