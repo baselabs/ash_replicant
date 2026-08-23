@@ -49,6 +49,8 @@ defmodule AshReplicant.Error do
           | :census_source_unreachable
           | :census_unverifiable
           | :retention_below_recovery_horizon
+          | :digest_key_horizon_violated
+          | :digest_key_state_invalid
           # Destination admission re-uses this tuple shape with its own
           # structural sub-reasons; their closed set is enumerated in
           # `AshReplicant.Destination`'s own @type.
@@ -167,7 +169,14 @@ defmodule AshReplicant.Error do
     # message route's declared retention does not cover the operator's
     # declared supported outage/replay window, so an in-window outage would
     # expire the standalone message's only dedup. Misconfiguration class.
-    :retention_below_recovery_horizon
+    :retention_below_recovery_horizon,
+    # O03 (ADR-0020): the digest-key horizon halt classes — a key version
+    # removed from the configured set within the retention horizon of the
+    # last observation containing it (claims minted under it may still be
+    # re-deliverable; replay would halt), and an undecodable, tampered, or
+    # impossible witness envelope (fail closed, never a silent fresh one).
+    :digest_key_horizon_violated,
+    :digest_key_state_invalid
   ]
 
   for reason <- @closed_reasons do

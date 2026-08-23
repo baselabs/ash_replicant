@@ -28,6 +28,7 @@ defmodule AshReplicant.Sink.Impl do
     Apply,
     Destination,
     Error,
+    Horizon,
     Messages,
     Resolver,
     Snapshot,
@@ -417,6 +418,15 @@ defmodule AshReplicant.Sink.Impl do
   end
 
   defp write_bound_contract!(config, identity, contract, extra) do
+    # O03 (ADR-0020): the bind records the CURRENT digest-key observation —
+    # the witness that bounds later key-version removals. Computed under the
+    # bind (the activation lock is held); an encode failure fails the bind.
+    witness =
+      case Horizon.observe_key_state() do
+        {:ok, encoded} -> encoded
+        {:error, %Error{} = error} -> raise error
+      end
+
     Ash.create!(
       config.checkpoint_resource,
       Map.merge(
@@ -425,6 +435,7 @@ defmodule AshReplicant.Sink.Impl do
           source_timeline: identity.timeline_id,
           publication_contract: contract.encoded,
           publication_fingerprint: contract.fingerprint,
+          digest_key_state: witness,
           # O02 (design D6): the bind is an admitted checkpoint write on
           # EVERY connect — the terminal-clear here is what guarantees a
           # successor generation's row carries no stale cause even when it
@@ -441,6 +452,7 @@ defmodule AshReplicant.Sink.Impl do
         :source_timeline,
         :publication_contract,
         :publication_fingerprint,
+        :digest_key_state,
         :terminal_cause,
         :terminal_class,
         :terminal_at

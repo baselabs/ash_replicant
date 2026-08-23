@@ -4,7 +4,7 @@ defmodule AshReplicant.Census do
   require Ash.Query
 
   alias AshReplicant.Checkpoint.Identity
-  alias AshReplicant.{Coverage, Error}
+  alias AshReplicant.{Coverage, Error, Horizon}
 
   @min_interval_ms 50
   @max_interval_ms 86_400_000
@@ -227,10 +227,43 @@ defmodule AshReplicant.Census do
            }
          ) do
       {:ok, rows} ->
-        classify_checkpoint(rows, checkpoint_filter(config), config.source_contract.manifest)
+        case classify_checkpoint(rows, checkpoint_filter(config), config.source_contract.manifest) do
+          :pass -> classify_witness(config, rows)
+          verdict -> verdict
+        end
 
       {:error, _reason} ->
         {:fault, :census_checker_fault}
+    end
+  end
+
+  # O03 (ADR-0020): the digest-key witness rides the checkpoint check — the
+  # one admitted, budgeted place the sink re-observes its own durable row.
+  # A rebind WRITES (set change or a pre-O03 NULL envelope — the upgrade
+  # posture mints rather than halts); a violation or an undecodable witness
+  # drifts fail-closed.
+  defp classify_witness(config, rows) do
+    with {:ok, retention} <- Horizon.max_route_retention(config.manifest),
+         true <- is_nil(retention) or is_integer(retention),
+         {:ok, keys} <- Horizon.provenance_keys(),
+         {:ok, digest_keys} <- AshReplicant.Messages.digest_keys() do
+      versions = Enum.map(digest_keys, &elem(&1, 0))
+      stored = rows |> List.first() |> then(&Map.get(&1, :digest_key_state))
+
+      case Horizon.classify_witness(stored, keys, versions, DateTime.utc_now(), retention) do
+        {:ok, verdict} when verdict in [:ok, :skip] -> :pass
+        {:ok, :rebind} -> rebind_witness(config)
+        {:error, reason} -> {:drift, reason}
+      end
+    else
+      _unavailable -> {:fault, :census_checker_fault}
+    end
+  end
+
+  defp rebind_witness(config) do
+    case Horizon.rebind_key_state(config) do
+      :ok -> :pass
+      {:error, _reason} -> {:fault, :census_checker_fault}
     end
   end
 

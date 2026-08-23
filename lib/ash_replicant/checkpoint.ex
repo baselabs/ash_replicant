@@ -95,6 +95,10 @@ defmodule AshReplicant.Checkpoint do
     # untouched. `authorizers: []` opts out to the pre-B7 unguarded shape.
     authorizers = Keyword.get(opts, :authorizers, [Ash.Policy.Authorizer])
 
+    # One resource template: the attributes/identities/actions sections are
+    # inherently cohesive (a host reads them as one generated file); the
+    # O02 tombstone and O03 witness columns pushed it past the line budget.
+    # credo:disable-for-lines:165 Credo.Check.Refactor.LongQuoteBlocks
     quote do
       use Ash.Resource,
         domain: unquote(domain),
@@ -204,6 +208,18 @@ defmodule AshReplicant.Checkpoint do
           allow_nil? true
         end
 
+        # O03 (issue #13 / ADR-0020): the authenticated digest-key-set
+        # witness (`AshReplicant.Horizon.KeyState`) — the last-observed
+        # message-digest key versions, active version, and observation time,
+        # MAC'd under the orthogonal :horizon_provenance_keys family. NULL
+        # until the first bind of a claim-routed sink. Like the tombstone it
+        # is control-plane state: written at bind and on census-observed key
+        # set changes only, value-free (version integers + a timestamp, never
+        # key bytes).
+        attribute :digest_key_state, Ash.Type.Binary do
+          allow_nil? true
+        end
+
         timestamps()
       end
 
@@ -231,7 +247,8 @@ defmodule AshReplicant.Checkpoint do
             :origin_floor,
             :terminal_cause,
             :terminal_class,
-            :terminal_at
+            :terminal_at,
+            :digest_key_state
           ]
         end
 
