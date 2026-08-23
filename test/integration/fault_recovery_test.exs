@@ -145,6 +145,12 @@ defmodule AshReplicant.FaultRecoveryTest do
     {:ok, run_id: run_id}
   end
 
+  # The walsender kill deliberately lets the replication connection die
+  # under the live pipeline — Replicant.Connection logs its protocol-level
+  # [error] "is reconnecting" line as expected behavior (the
+  # checkpoint_binding_test precedent), but that line matches the
+  # structural battery's no-error grep. Capture it (shown only on failure).
+  @tag capture_log: true
   test "source disconnect mid-stream reconnects in-process and continues exactly-once",
        %{run_id: run_id} do
     ref = attach_delivery_events()
