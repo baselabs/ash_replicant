@@ -203,9 +203,14 @@ defmodule AshReplicant.StatusLifecycleTest do
           match?({:halted, :pipeline_terminated}, AshReplicant.status(LifecycleSink))
         end)
 
+        # 20s budget (the suite's poll standard): the status answer comes
+        # from the node-local leg, which precedes the durable attempt's
+        # telemetry — under a loaded full battery that transaction can out-
+        # run a 5s window without any behavior change (the flake O02 fought;
+        # the event itself is deterministic in both environments).
         assert_receive {:telemetry, [:ash_replicant, :status, :tombstone_write_failed],
                         %{slot_name: @slot, reason: reason}},
-                       5_000
+                       20_000
 
         # DB-free (this suite): the repo is not running, so the guard
         # itself refuses (:destination_unavailable). Under the live
