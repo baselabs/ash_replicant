@@ -109,6 +109,11 @@ defmodule AshReplicant.StatusTest do
       assert :misconfigured = AshReplicant.Status.classify(:retention_below_recovery_horizon)
     end
 
+    test "the O03 :source_wal_lost cause round-trips over the durable tombstone (cross-vendor)" do
+      assert {:halt, :source_wal_lost} =
+               Status.decode_cause(Status.encode_cause(:source_wal_lost))
+    end
+
     test "an unknown persisted cause decodes to the closed fallback" do
       put_tombstone(:tombstone_unknown, :halt)
 

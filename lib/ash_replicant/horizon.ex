@@ -161,6 +161,15 @@ defmodule AshReplicant.Horizon do
       missing == [] ->
         {:ok, :rebind}
 
+      # The envelope's ACTIVE version minted claims until ~now (minting is
+      # continuous under the active version) — its retention clock has not
+      # started; removal is a violation regardless of set stability
+      # (cross-vendor: a stable set must not age the ACTIVE version's guard
+      # out). A NON-active version minted no later than the observation
+      # itself, so elapsed-since-observation is the sound bound there.
+      state.active in missing ->
+        {:error, :digest_key_horizon_violated}
+
       elapsed < retention ->
         {:error, :digest_key_horizon_violated}
 
@@ -290,12 +299,12 @@ defmodule AshReplicant.Horizon do
   # blocks on an unreachable probe.
   #
   @doc false
-  @spec preflight_resume(keyword(), String.t(), map(), Destination.Manifest.t()) ::
+  @spec preflight_resume(keyword(), String.t(), map(), map(), Destination.Manifest.t()) ::
           :ok | {:error, Error.t()}
-  def preflight_resume(connection_opts, slot_name, config, manifest) do
+  def preflight_resume(connection_opts, slot_name, config, source_identity, manifest) do
     with {:ok, min} <- min_route_retention(manifest),
          true <- is_integer(min) do
-      halted_since = durable_terminal_at(config)
+      halted_since = durable_terminal_at(config, source_identity)
       slot = AshReplicant.Doctor.Probe.probe_slot(connection_opts, slot_name)
 
       classify_resume(halted_since, DateTime.utc_now(), min, slot)
@@ -308,14 +317,20 @@ defmodule AshReplicant.Horizon do
     end
   end
 
-  defp durable_terminal_at(config) do
+  # The baked sink config carries NO :source_identity (cross-vendor F2: the
+  # original draft read it from config, the rescue swallowed the KeyError,
+  # and the resume gate was vacuous) — the activation passes its own
+  # verified identity explicitly.
+  defp durable_terminal_at(config, source_identity) do
     context = Map.get(config, :data_layer_context, %{repo: config.repo})
+    system_id = source_identity.system_identifier
+    database = source_identity.database
 
     config.checkpoint_resource
     |> Ash.Query.filter(
       slot_name == ^config.slot_name and
-        source_system_id == ^config.source_identity.system_identifier and
-        source_database == ^config.source_identity.database
+        source_system_id == ^system_id and
+        source_database == ^database
     )
     |> Ash.read(authorize?: false, context: context)
     |> case do

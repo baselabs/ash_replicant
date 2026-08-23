@@ -52,6 +52,7 @@ defmodule AshReplicant.Error do
           | :digest_key_horizon_violated
           | :digest_key_state_invalid
           | :retention_horizon_crossed
+          | :source_wal_lost
           # Destination admission re-uses this tuple shape with its own
           # structural sub-reasons; their closed set is enumerated in
           # `AshReplicant.Destination`'s own @type.
@@ -166,22 +167,25 @@ defmodule AshReplicant.Error do
     :census_checker_fault,
     :census_source_unreachable,
     :census_unverifiable,
-    # O03 (ADR-0020): the static recovery-horizon refusal — a claim-backed
+    # O03 (ADR-0022): the static recovery-horizon refusal — a claim-backed
     # message route's declared retention does not cover the operator's
     # declared supported outage/replay window, so an in-window outage would
     # expire the standalone message's only dedup. Misconfiguration class.
     :retention_below_recovery_horizon,
-    # O03 (ADR-0020): the digest-key horizon halt classes — a key version
+    # O03 (ADR-0022): the digest-key horizon halt classes — a key version
     # removed from the configured set within the retention horizon of the
     # last observation containing it (claims minted under it may still be
     # re-deliverable; replay would halt), and an undecodable, tampered, or
     # impossible witness envelope (fail closed, never a silent fresh one).
     :digest_key_horizon_violated,
     :digest_key_state_invalid,
-    # O03 (ADR-0020): the resume gate — re-activating after a halt whose
+    # O03 (ADR-0022): the resume gate — re-activating after a halt whose
     # duration crossed the minimum claim retention while the slot still
     # retains WAL would re-execute expired-claim standalone messages.
-    :retention_horizon_crossed
+    :retention_horizon_crossed,
+    # O03 (ADR-0022): the census's WAL-loss drift halt — the slot no longer
+    # retains the WAL the checkpoint needs.
+    :source_wal_lost
   ]
 
   for reason <- @closed_reasons do

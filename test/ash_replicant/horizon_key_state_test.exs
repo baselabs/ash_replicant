@@ -109,6 +109,16 @@ defmodule AshReplicant.HorizonKeyStateTest do
                Horizon.classify_key_state(state, [2], DateTime.add(@now, 86_400), 86_400)
     end
 
+    test "removing the envelope's ACTIVE version violates regardless of set stability (cross-vendor)" do
+      # A stable {v1} set observed 10 days ago (retention 7d): v1 minted
+      # claims until ~the removal — its retention clock never started. The
+      # elapsed-since-observation rule alone would wrongly legitimize this.
+      state = %KeyState{versions: [1], active: 1, recorded_at: @now, key_version: 1}
+
+      assert {:error, :digest_key_horizon_violated} =
+               Horizon.classify_key_state(state, [], DateTime.add(@now, 86_400 * 10), 86_400)
+    end
+
     test "clock regression fails closed" do
       state = %KeyState{versions: [1], active: 1, recorded_at: @now, key_version: 1}
 

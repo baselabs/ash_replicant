@@ -237,13 +237,13 @@ defmodule AshReplicant.Census do
     end
   end
 
-  # O03 (ADR-0020): the digest-key witness rides the checkpoint check — the
+  # O03 (ADR-0022): the digest-key witness rides the checkpoint check — the
   # one admitted, budgeted place the sink re-observes its own durable row.
   # A rebind WRITES (set change or a pre-O03 NULL envelope — the upgrade
   # posture mints rather than halts); a violation or an undecodable witness
   # drifts fail-closed.
   defp classify_witness(config, rows) do
-    with {:ok, retention} <- Horizon.max_route_retention(config.manifest),
+    with {:ok, retention} <- Horizon.max_route_retention(config.destination_manifest),
          true <- is_nil(retention) or is_integer(retention),
          {:ok, keys} <- Horizon.provenance_keys(),
          {:ok, digest_keys} <- AshReplicant.Messages.digest_keys() do
@@ -299,7 +299,7 @@ defmodule AshReplicant.Census do
     )
     |> classify_coverage_result()
     |> then(fn verdict ->
-      # O03 (ADR-0020): the WAL-side horizon rides the coverage check — the
+      # O03 (ADR-0022): the WAL-side horizon rides the coverage check — the
       # source is reachable exactly when the slot probe can run. `lost` is a
       # drift halt; at-risk emits the retention event and CONTINUES (an
       # at-risk state must be observable without halting, or the alert

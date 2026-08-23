@@ -709,6 +709,7 @@ defmodule AshReplicant do
              Keyword.get(opts, :connection),
              sink_config.slot_name,
              sink_config,
+             source_identity,
              manifest
            ),
          :ok <- Provenance.preflight(sink_config),

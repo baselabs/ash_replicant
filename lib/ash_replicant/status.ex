@@ -85,7 +85,7 @@ defmodule AshReplicant.Status do
     :source_column_unmapped,
     :source_type_invalid,
     :source_replica_identity,
-    # O03 (ADR-0020): the retention-below-recovery-horizon refusal is a
+    # O03 (ADR-0022): the retention-below-recovery-horizon refusal is a
     # declared-configuration failure, not a runtime halt; so is a digest-key
     # version removed within its retention horizon.
     :retention_below_recovery_horizon,
@@ -122,6 +122,7 @@ defmodule AshReplicant.Status do
     :census_unverifiable,
     :digest_key_state_invalid,
     :retention_horizon_crossed,
+    :source_wal_lost,
     :pipeline_terminated,
     :owner_lost,
     :operator_stopped,
