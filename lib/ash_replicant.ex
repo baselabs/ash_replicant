@@ -708,6 +708,12 @@ defmodule AshReplicant do
          {:ok, code_fingerprint} <- AshReplicant.Destination.code_fingerprint(code_modules) do
       reference = make_ref()
 
+      # The node-local tombstone clears BEFORE the entry exists: from that
+      # ordering, a node-local tombstone coexisting with a live entry can
+      # only be THIS generation's halt decision, which is what lets the
+      # derivation close the healthy-while-halting window.
+      :ok = Status.clear_node_local(sink_config.slot_name)
+
       runtime = %Generation{
         reference: reference,
         sink: sink,
@@ -739,10 +745,6 @@ defmodule AshReplicant do
 
       case result do
         {:ok, pipeline_pid} ->
-          # The live generation is the newer fact: the previous terminal
-          # cause's node-local leg must not outlive its successor (O02).
-          :ok = Status.clear_node_local(sink_config.slot_name)
-
           {:ok,
            %{
              slot_name: sink_config.slot_name,

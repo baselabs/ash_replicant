@@ -167,6 +167,45 @@ defmodule AshReplicant.StatusLifecycleTest do
       end)
     end
 
+    test "when the durable leg cannot write, the value-free telemetry IS the record" do
+      # The repo is not running in this suite — exactly the destination-down
+      # halt condition. The node-local leg still answers, and the durable
+      # leg's failure fires the closed typed event that makes the loss
+      # observable instead of silent.
+      events = self()
+
+      :telemetry.attach_many(
+        {__MODULE__, :durable_failure},
+        [
+          [:ash_replicant, :status, :tombstone_write_failed],
+          [:ash_replicant, :sink, :halted]
+        ],
+        fn name, _measurements, metadata, _config ->
+          send(events, {:telemetry, name, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach({__MODULE__, :durable_failure}) end)
+
+      capture_log(fn ->
+        assert {:ok, _owner} =
+                 AshReplicant.start_link(start_opts(census: [enabled?: false]))
+
+        eventually(fn -> match?(%Generation{}, :persistent_term.get(@entry, :none)) end)
+
+        :ok = Replicant.Supervisor.halt(@slot, :status_durable_record_test)
+
+        eventually(fn ->
+          match?({:halted, :pipeline_terminated}, AshReplicant.status(LifecycleSink))
+        end)
+
+        assert_receive {:telemetry, [:ash_replicant, :status, :tombstone_write_failed],
+                        %{slot_name: @slot, reason: :destination_unavailable}},
+                       5_000
+      end)
+    end
+
     test "a precise recorded cause is not stomped by the generic writer" do
       capture_log(fn ->
         assert {:ok, _owner} =

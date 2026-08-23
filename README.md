@@ -676,8 +676,15 @@ generation that superseded it.
 
 Two documented edges: a halt while the destination is unreachable persists
 only the node-local leg (after a node restart the slot reports
-`:not_started`; the halt telemetry is the durable record), and a host-tree
-shutdown writes no tombstone at all (no database writes during app teardown).
+`:not_started`; the halt telemetry plus the `:status, :tombstone_write_failed`
+event is the durable record — the destination was down at the only moment
+the fact existed), and a host-tree shutdown writes no tombstone at all (no
+database writes during app teardown; a `:stopped` tombstone would map to the
+same public `:not_started` anyway). The halt window itself is closed: a
+status call made after any halt decision answers that halt's cause, never
+`:healthy` — activation clears the node-local leg before the generation
+entry exists, so a node-local tombstone under a live entry can only be that
+generation's own halt or stop decision, and it outranks the owner's facts.
 Replicant discards halt reasons at teardown, so a pipeline death nothing
 else explained records the generic `{:halted, :pipeline_terminated}` —
 over-alerting by design.

@@ -180,28 +180,35 @@ defmodule AshReplicant.Status do
 
     case :persistent_term.get(key, :none) do
       %Generation{owner: owner} when is_pid(owner) ->
-        derive_entry(owner, checkpoint, timeout)
+        derive_entry(config, owner, checkpoint, timeout)
 
       _absent ->
         derive_tombstone(checkpoint)
     end
   end
 
-  # A live entry outranks every tombstone: the owner is asked, and only a
-  # CONFIRMED dead owner falls to the fault reading.
-  defp derive_entry(owner, checkpoint, timeout) do
-    if owner_alive?(owner) do
-      case owner_facts(owner, timeout) do
-        {:ok, facts} ->
-          lifecycle = live_lifecycle(facts, checkpoint)
-          evidence = %{owner: :live, census: facts, checkpoint: checkpoint}
-          %{status: public_of(lifecycle), lifecycle: lifecycle, evidence: evidence}
+  # A live entry outranks every DURABLE tombstone (a stale predecessor
+  # cause must not outlive its successor) — but the NODE-LOCAL leg is
+  # cleared BEFORE the entry exists (activation ordering), so one present
+  # HERE can only be THIS generation's halt or stop decision: it outranks
+  # the owner's own facts and closes the healthy-while-halting window.
+  defp derive_entry(config, owner, checkpoint, timeout) do
+    cond do
+      node_local(config.slot_name) -> derive_tombstone(checkpoint)
+      not owner_alive?(owner) -> superseded()
+      true -> live_entry(owner, checkpoint, timeout)
+    end
+  end
 
-        :unresponsive ->
-          unresponsive(owner)
-      end
-    else
-      superseded()
+  defp live_entry(owner, checkpoint, timeout) do
+    case owner_facts(owner, timeout) do
+      {:ok, facts} ->
+        lifecycle = live_lifecycle(facts, checkpoint)
+        evidence = %{owner: :live, census: facts, checkpoint: checkpoint}
+        %{status: public_of(lifecycle), lifecycle: lifecycle, evidence: evidence}
+
+      :unresponsive ->
+        unresponsive(owner)
     end
   end
 

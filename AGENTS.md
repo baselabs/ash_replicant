@@ -339,7 +339,11 @@ walks the live owner's own facts (a `handle_call` seam the owner answers in
 BOTH pending and admitted phases — an unmatched call would kill a healthy
 activation), then the generation entry (a DEAD owner is the fault
 `{:halted, :owner_lost}` — never ready, never `:not_started`), then the
-tombstone legs (node-local first, durable second), then nothing. `:healthy`
+tombstone legs (node-local first, durable second), then nothing. Because
+activation clears the node-local leg BEFORE the entry exists, a node-local
+tombstone under a live or dead entry is necessarily THAT generation's own
+halt/stop decision and outranks every other reading — the
+healthy-while-halting window cannot open. `:healthy`
 requires a live owner AND pipeline AND an enabled census whose last run passed
 AND no in-flight snapshot — owner liveness alone is insufficient. A call
 TIMEOUT on a live owner is `:catching_up` (the conservative bucket), not owner

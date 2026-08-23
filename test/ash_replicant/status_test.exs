@@ -112,11 +112,10 @@ defmodule AshReplicant.StatusTest do
     end
   end
 
-  describe "precedence — the generation entry outranks a tombstone" do
-    test "a dead owner is a fault (superseded), never ready and never not started" do
+  describe "precedence — the generation entry outranks a durable tombstone" do
+    test "a dead owner with no recorded cause is a fault (superseded), never ready and never not started" do
       dead = spawn(fn -> :ok end)
       AdmittedGeneration.put!(StatusSink, owner: dead)
-      put_tombstone(:operator_stopped, :stopped)
 
       assert {:halted, :owner_lost} = AshReplicant.status(StatusSink)
       assert %{status: {:halted, :owner_lost}, lifecycle: :superseded} = derive()
@@ -128,10 +127,50 @@ defmodule AshReplicant.StatusTest do
       silent = spawn(:timer, :sleep, [:infinity])
 
       AdmittedGeneration.put!(StatusSink, owner: silent)
-      put_tombstone(:census_unverifiable, :halt)
 
       assert :catching_up = AshReplicant.status(StatusSink)
       assert %{lifecycle: :degraded} = derive()
+    end
+  end
+
+  describe "precedence — a node-local tombstone under a LIVE entry means the generation is halting" do
+    test "healthy owner facts do not outrank the tombstone this generation just wrote" do
+      # Activation clears the node-local leg BEFORE the entry exists, so a
+      # tombstone coexisting with a live entry can only belong to THIS
+      # generation — the halt decision has been made and the pipeline is
+      # dying. The healthy-while-halting window must close: the tombstone
+      # outranks the owner's own (stale-by-decision) facts.
+      {:ok, owner} =
+        FactsOwner.start(%{
+          phase: :admitted,
+          pipeline_alive: true,
+          last_census: :healthy,
+          census_enabled?: true,
+          consecutive_faults: 0
+        })
+
+      AdmittedGeneration.put!(StatusSink, owner: owner)
+      put_tombstone(:census_unverifiable, :halt)
+
+      assert {:halted, :census_unverifiable} = AshReplicant.status(StatusSink)
+      assert %{status: {:halted, :census_unverifiable}, lifecycle: :halted} = derive()
+    end
+
+    test "an operator-stopped tombstone under a live entry reports not started" do
+      {:ok, owner} =
+        FactsOwner.start(%{
+          phase: :admitted,
+          pipeline_alive: true,
+          last_census: :healthy,
+          census_enabled?: true,
+          consecutive_faults: 0
+        })
+
+      AdmittedGeneration.put!(StatusSink, owner: owner)
+      put_tombstone(:operator_stopped, :stopped)
+
+      assert :not_started = AshReplicant.status(StatusSink)
+      assert %{lifecycle: :stopped} = derive()
     end
   end
 
