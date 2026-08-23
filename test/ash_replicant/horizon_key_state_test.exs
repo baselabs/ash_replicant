@@ -9,8 +9,11 @@ defmodule AshReplicant.HorizonKeyStateTest do
 
   use ExUnit.Case, async: true
 
+  alias Ash.Resource.Info
+  alias AshReplicant.Destination
   alias AshReplicant.Horizon
   alias AshReplicant.Horizon.KeyState
+  alias AshReplicant.Test.{Checkpoint, Messages}
 
   @keys [{1, :crypto.strong_rand_bytes(16)}, {2, :crypto.strong_rand_bytes(16)}]
   @now ~U[2026-08-23 12:00:00Z]
@@ -134,17 +137,14 @@ defmodule AshReplicant.HorizonKeyStateTest do
 
   describe "the retention bound" do
     test "max_route_retention walks the manifest's message protections" do
-      alias AshReplicant.Destination
-      alias AshReplicant.Test.Messages, as: Fixtures
-
       {:ok, manifest} =
         Destination.manifest(%{
           repo: AshReplicant.TestRepo,
-          domains: [Fixtures.Domain],
+          domains: [Messages.Domain],
           checkpoint_resource: AshReplicant.Test.Checkpoint,
           message_routes: [
-            {"outbox", Fixtures.Outbox, :record},
-            {"transient", Fixtures.TransientOutbox, :record}
+            {"outbox", Messages.Outbox, :record},
+            {"transient", Messages.TransientOutbox, :record}
           ]
         })
 
@@ -154,7 +154,7 @@ defmodule AshReplicant.HorizonKeyStateTest do
 
   describe "the checkpoint column" do
     test "the generated checkpoint resource carries the nullable binary attribute" do
-      attribute = Ash.Resource.Info.attribute(AshReplicant.Test.Checkpoint, :digest_key_state)
+      attribute = Info.attribute(Checkpoint, :digest_key_state)
 
       assert %{} = attribute
       assert attribute.type == Ash.Type.Binary

@@ -21,6 +21,7 @@ defmodule AshReplicant.Horizon do
   require Ash.Query
 
   alias AshReplicant.Destination
+  alias AshReplicant.Doctor.Probe
   alias AshReplicant.Error
   alias AshReplicant.Horizon.KeyState
   alias AshReplicant.Telemetry
@@ -272,7 +273,7 @@ defmodule AshReplicant.Horizon do
   """
   @spec census_slot_verdict(map()) :: {:pass | {:drift, atom()}, :ok | :unknown | nil}
   def census_slot_verdict(config) do
-    slot = AshReplicant.Doctor.Probe.probe_slot(config.source_connection, config.slot_name)
+    slot = Probe.probe_slot(config.source_connection, config.slot_name)
 
     case classify_slot_risk(slot) do
       {:ok, :ok} -> {:pass, :ok}
@@ -305,7 +306,7 @@ defmodule AshReplicant.Horizon do
     with {:ok, min} <- min_route_retention(manifest),
          true <- is_integer(min) do
       halted_since = durable_terminal_at(config, source_identity)
-      slot = AshReplicant.Doctor.Probe.probe_slot(connection_opts, slot_name)
+      slot = Probe.probe_slot(connection_opts, slot_name)
 
       classify_resume(halted_since, DateTime.utc_now(), min, slot)
       |> case do
