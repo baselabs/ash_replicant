@@ -100,7 +100,8 @@ use AshReplicant.Sink,
   checkpoint_resource: MyApp.ReplicantCheckpoint,
   slot_name: "shop_orders",
   message_routes: [{"mail", MyApp.MailOutbox, :record}],
-  ignored_message_prefixes: ["telemetry_noise"]
+  ignored_message_prefixes: ["telemetry_noise"],
+  recovery_horizon: {24, :hour}
 ```
 
 Rules that are enforced, not advisory:
@@ -116,6 +117,18 @@ Rules that are enforced, not advisory:
   unique positive versions and keys ≥ 16 bytes). The active version (highest)
   mints new digests; RETAIN the old versions through the claim/recovery
   lifetime — re-delivery replays through them after rotation.
+- Declare `recovery_horizon: {count, unit}` (required whenever
+  `message_routes` is non-empty on a state-mirror sink; rejected otherwise —
+  append-log routes dedup structurally): the supported outage/replay window
+  every route's retention must cover, or activation refuses
+  `:retention_below_recovery_horizon`
+  ([ADR-0022](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0022-recovery-horizon-and-typed-telemetry.md)).
+- Set `:ash_replicant, :horizon_provenance_keys` (the same `{version, key}`
+  shape) before starting a message-routed sink: the ORTHOGONAL family
+  authenticating the checkpoint's digest-key witness. Retiring a message
+  digest key version is safe only once `max(route retention)` has elapsed
+  since it was last observed in the configured set — earlier removal halts
+  `:digest_key_horizon_violated` instead of silently blocking replays.
 - A **transactional** message rides its transaction, interleaved with the row
   changes by ordinal. A **standalone** message applies effect + claim +
   watermark in one destination transaction (local route) or through recovery

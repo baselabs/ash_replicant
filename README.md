@@ -689,6 +689,63 @@ Replicant discards halt reasons at teardown, so a pipeline death nothing
 else explained records the generic `{:halted, :pipeline_terminated}` —
 over-alerting by design.
 
+## Observability and recovery horizons
+
+Telemetry is **value-free by construction**: every event's metadata passes a
+typed allowlist (an off-allowlist key or an off-type value raises at the
+enforcement point), and the measurement key set is closed
+(`count`, `change_count`, `duration`, `byte_size`). `emitted_event_names/0`
+lists the whole inventory; `AshReplicant.Telemetry`'s moduledoc ships two
+executable examples — a dependency-free metrics reporter and an OpenTelemetry
+bridge whose mapping table is test-pinned complete against that inventory.
+The data-boundary mutation matrix carries one mutant per typed key, so a
+vacuous telemetry gate cannot ship.
+
+Message-routed sinks additionally declare a **recovery horizon** — the
+outage/replay window every route's AshOnetime claim retention must cover:
+
+```elixir
+use AshReplicant.Sink,
+  ...,
+  message_routes: [{"mail", MyApp.MailOutbox, :record}],
+  recovery_horizon: {24, :hour}
+```
+
+Activation refuses `:retention_below_recovery_horizon` when any routed
+create's declared retention is shorter than the horizon: an in-window outage
+would expire a standalone message's only dedup while its WAL is still
+recoverable. The digest-key rotation window is witnessed durably: the
+checkpoint's authenticated `digest_key_state` envelope records the
+last-observed key set (under the orthogonal
+`:ash_replicant, :horizon_provenance_keys` family), and removing a key
+version within the retention horizon of the last observation that contained
+it halts `:digest_key_horizon_violated` instead of silently blocking future
+replays.
+
+### The alert table (what fires, what to do)
+
+| Signal | Meaning | Operator action |
+|---|---|---|
+| `[:ash_replicant, :retention, :at_risk]` (`kind: :wal_unreserved` or `:wal_exhausted`) | The slot's WAL retention is being consumed while the pipeline runs — recovery is still possible but the window is shrinking | Find the lag (`mix ash_replicant.doctor`), resume or scale the sink before WAL is dropped |
+| `{:halted, :source_wal_lost}` (census drift) | The slot no longer retains the WAL the checkpoint needs — recovery through the slot is impossible | Restore the source from backup or re-snapshot; the slot cannot be resumed |
+| activation refusal `:retention_horizon_crossed` | The pipeline was down longer than the shortest claim retention while the slot still had the WAL — re-delivery would re-execute standalone messages | Reconcile the affected message routes (inspect for duplicates), then raise retention or restart with a fresh checkpoint decision |
+| `{:halted, :digest_key_horizon_violated}` / `:misconfigured, :digest_key_horizon_violated` | A message-digest key version was removed while claims minted under it could still be re-delivered | Restore the removed key version to config, let the pipeline replay, retire it only past the retention horizon |
+| `:misconfigured, :retention_below_recovery_horizon` (activation/doctor) | A route's declared retention is shorter than the declared horizon | Raise the route's `retention({count, unit})` or lower `recovery_horizon` |
+
+The at-risk push fires from the census while the pipeline runs; while
+**halted**, nothing in the library watches the clock (the supervision
+contract owns no idle watcher) — run `mix ash_replicant.doctor` on the
+operator's own scheduler (cron, Kubernetes CronJob, or your alerting loop)
+as the periodic pull; its `:slot_retention` and `:retention_horizon` checks
+carry the same classes with per-check detail. That doctor cadence is the
+runbook: at-risk → resume before WAL drops; lost → restore; crossed →
+reconcile; violated → restore the key.
+
+Upgrading to this surface: hosts run `mix ash.codegen` (the checkpoint
+gains the nullable `digest_key_state` column) and configure
+`:ash_replicant, :horizon_provenance_keys` (a `{version, key}` list, keys
+of at least 16 bytes) before starting a message-routed sink.
+
 ## Strict source coverage
 
 Every publication table is mapped, explicitly ignored

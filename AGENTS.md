@@ -121,7 +121,12 @@ the halt path.** Assume every value is PII or a secret. Errors are scrubbed to a
 structural reason (operator + field) before Ash inspects them into logs. Column
 names are strings, never atoms. Telemetry metadata is allowlisted AND TYPED
 per key (LSNs, table names, counts, durations, error classes) with a closed
-measurement-key set — never row values (ADR-0009). All nine sink boundary bodies
+measurement-key set — never row values (ADR-0009); the data-boundary mutation
+matrix carries one mutant per typed metadata key and per measurement key, with
+a completeness tripwire test, so a key whose gate is vacuous cannot ship
+(ADR-0022). The moduledoc's metrics and OpenTelemetry examples are executable
+(test-extracted) and the OTel mapping table is pinned complete against
+`emitted_event_names/0`. All nine sink boundary bodies
 (including C1's `handle_message/2`, C2's `handle_batch/1`, and C3's
 `snapshot_progress/0`)
 catch `:throw`/`:exit` into the same scrub (the schema-change body fires the
@@ -367,6 +372,33 @@ tree shutdown writes nothing; an unexplained pipeline death records
 `:pipeline_terminated` only when no tombstone is already present. One writer
 home: `AshReplicant.Status` — never re-derive the walk in the doctor, the
 owner, or a host health endpoint.
+
+**13. Recovery horizons alert BEFORE recovery becomes impossible (O03,
+ADR-0022).** A claim-backed message route's AshOnetime claim is the standalone
+message's ONLY dedup, and it dies at `retain_until` — so a sink with
+`message_routes` on a state-mirror sink MUST declare `recovery_horizon:
+{count, unit}` (compile-required; rejected on route-less and `:append_log`
+sinks, whose routes dedup structurally), and activation refuses
+`:retention_below_recovery_horizon` when the manifest's minimum route
+retention does not cover it. The digest-key rotation window is witnessed by the
+checkpoint's authenticated `digest_key_state` envelope (under the ORTHOGONAL
+`:ash_replicant, :horizon_provenance_keys` family — never the rotating digest
+keys), rebound at bind AND on every census-observed key-set change (a bind-only
+witness goes blind on long-lived connections); a version removed within
+`max(route retention)` of the last observation containing it is
+`:digest_key_horizon_violated`, tampered/impossible state is
+`:digest_key_state_invalid` (both fail closed). The WAL side has three alert
+legs: the census classifies slot facts through `Doctor.Probe.probe_slot/2` (the
+ONE extended `sql_replication_slot/0` statement — `lost` drifts
+`:source_wal_lost`; `unreserved`/exhausted emits
+`[:ash_replicant, :retention, :at_risk]` — META ONLY, no measurement — and
+continues); a resume after a halt longer than the minimum retention while WAL
+is retained refuses `:retention_horizon_crossed` (never block on an
+unreachable probe; a lost slot defers to the stream's own failure); and the
+doctor's `:retention_horizon` check DELEGATES to `AshReplicant.Horizon` — the
+one classification body (rule 11: no copies). While halted nothing in the
+library watches the clock — the doctor on the operator's scheduler is the
+documented pull channel.
 
 ## Development workflow
 

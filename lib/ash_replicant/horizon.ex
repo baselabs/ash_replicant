@@ -1,6 +1,6 @@
 defmodule AshReplicant.Horizon do
   @moduledoc """
-  The recovery-horizon classification home (O03, ADR-0020): ONE body consumed
+  The recovery-horizon classification home (O03, ADR-0022): ONE body consumed
   by activation, the census, and the doctor — Critical Rule 11 forbids any of
   them re-implementing the other's copy.
 
@@ -59,11 +59,13 @@ defmodule AshReplicant.Horizon do
 
   defp valid_provenance_key?(_other), do: false
 
-  @doc """
-  The smallest declared claim retention across the manifest's C1 message
-  routes (`role == :message` with a protection). `nil` when the sink has no
-  claim-backed routes — nothing to compare.
-  """
+  # Hidden-module spec (Destination.Manifest) — the 65ea3a0 pattern; the
+  # contract lives in these lines and ADR-0022.
+  # # The smallest declared claim retention across the manifest's C1 message
+  # routes (`role == :message` with a protection). `nil` when the sink has no
+  # claim-backed routes — nothing to compare.
+  #
+  @doc false
   @spec min_route_retention(Destination.Manifest.t()) ::
           {:ok, pos_integer() | nil} | {:error, Error.t()}
   def min_route_retention(%Destination.Manifest{entries: entries}) do
@@ -87,13 +89,15 @@ defmodule AshReplicant.Horizon do
     end
   end
 
-  @doc """
-  The LARGEST declared claim retention across the manifest's C1 message
-  routes — the longest any claim can live, and therefore the bound the
-  digest-key witness compares a removal against (conservative direction: a
-  version may leave the configured set only once no claim minted under it can
-  possibly remain).
-  """
+  # Hidden-module spec (Destination.Manifest) — the 65ea3a0 pattern; the
+  # contract lives in these lines and ADR-0022.
+  # # The LARGEST declared claim retention across the manifest's C1 message
+  # routes — the longest any claim can live, and therefore the bound the
+  # digest-key witness compares a removal against (conservative direction: a
+  # version may leave the configured set only once no claim minted under it can
+  # possibly remain).
+  #
+  @doc false
   @spec max_route_retention(Destination.Manifest.t()) ::
           {:ok, pos_integer() | nil} | {:error, Error.t()}
   def max_route_retention(%Destination.Manifest{entries: entries}) do
@@ -279,11 +283,13 @@ defmodule AshReplicant.Horizon do
     {:pass, {:at_risk, kind}}
   end
 
-  @doc """
-  The activation preflight leg: the resume gate — read the slot facts, read
-  the durable tombstone time, compare against the retention floor. Never
-  blocks on an unreachable probe.
-  """
+  # Hidden-module spec (Destination.Manifest) — the 65ea3a0 pattern; the
+  # contract lives in these lines and ADR-0022.
+  # # The activation preflight leg: the resume gate — read the slot facts, read
+  # the durable tombstone time, compare against the retention floor. Never
+  # blocks on an unreachable probe.
+  #
+  @doc false
   @spec preflight_resume(keyword(), String.t(), map(), Destination.Manifest.t()) ::
           :ok | {:error, Error.t()}
   def preflight_resume(connection_opts, slot_name, config, manifest) do
@@ -434,13 +440,15 @@ defmodule AshReplicant.Horizon do
 
   def classify_retention(_retention, _horizon), do: {:error, :retention_below_recovery_horizon}
 
-  @doc """
-  The activation preflight leg: compare the manifest's retention floor against
-  the sink config's declared horizon. Claim-backed routes without an
-  admissible horizon fail closed (the compile tier already rejected this for
-  DSL sinks; a config-map caller bypassing the DSL meets the same refusal).
-  Value-free — the error carries the structural reason only.
-  """
+  # Hidden-module spec (Destination.Manifest) — the 65ea3a0 pattern; the
+  # contract lives in these lines and ADR-0022.
+  # # The activation preflight leg: compare the manifest's retention floor against
+  # the sink config's declared horizon. Claim-backed routes without an
+  # admissible horizon fail closed (the compile tier already rejected this for
+  # DSL sinks; a config-map caller bypassing the DSL meets the same refusal).
+  # Value-free — the error carries the structural reason only.
+  #
+  @doc false
   @spec preflight_static(Destination.Manifest.t(), map()) :: :ok | {:error, Error.t()}
   def preflight_static(%Destination.Manifest{} = manifest, config) do
     case min_route_retention(manifest) do

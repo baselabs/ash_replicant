@@ -34,6 +34,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   identity); a stray horizon in either posture is a compile error.
   Classification lives in the new `AshReplicant.Horizon` — one body the
   doctor and census will delegate to.
+- **Typed operations telemetry, part 2 — the recovery-horizon alert legs**
+  (roadmap D3 / issue #13 / O03 / ADR-0022). Three legs because the census
+  dies with the pipeline and the primary horizon scenario is halted: (1) the
+  census classifies slot facts through the doctor's own probe —
+  `wal_status` `lost` halts `:source_wal_lost`, `unreserved`/exhausted
+  `safe_wal_size` emits the new `[:ash_replicant, :retention, :at_risk]`
+  event (meta only) and continues; (2) a new **activation resume gate**
+  refuses `:retention_horizon_crossed` when re-activating after a halt
+  longer than the shortest claim retention while the slot still retains
+  WAL — the operator reconciles instead of silently re-executing
+  expired-claim standalone messages; (3) the doctor's new
+  `:retention_horizon` check delegates to the same body (static
+  retention-vs-horizon plus halted-duration classes; `:skipped
+  :no_claim_routes` for route-less sinks, never `:pass`). The slot
+  statement itself (`sql_replication_slot/0`) gained `safe_wal_size` so the
+  runtime and doctor share ONE SQL home (rule 11).
+- **Digest-key horizon witness** (issue #13 / O03 / ADR-0022). The
+  checkpoint gains a nullable `digest_key_state` column (run
+  `mix ash.codegen` after upgrading): an authenticated envelope recording
+  the last-observed message-digest key set under the orthogonal
+  `:ash_replicant, :horizon_provenance_keys` family (configure it — same
+  `{version, key}` shape — before starting a message-routed sink). Because
+  the claim stores only a hash of the versioned digest, the witness is the
+  only durable bound on "a key version still backs potentially-live
+  claims": it rebinds at bind and on every census-observed key-set change
+  (claims mint continuously — a bind-only witness goes blind on
+  long-lived connections), and removing a version within `max(route
+  retention)` of the last observation containing it halts
+  `:digest_key_horizon_violated`; tampered/undecodable/clock-regressed
+  state fails closed as `:digest_key_state_invalid`. The README's new
+  "Observability and recovery horizons" section carries the alert table
+  and the operator runbook (the doctor on the operator's scheduler is the
+  periodic pull channel while halted).
 
 - **Coherent runtime status and lifecycle tombstones** (roadmap D3-status /
   issue #12 / ADR-0019). `AshReplicant.status/1` answers with the closed
