@@ -24,13 +24,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   healthy (it is the fault `{:halted, :owner_lost}`).
 
   When a generation ends, the party that knows the cause records a terminal
-  tombstone: the sink's halt paths (the scrubbed reason), the owner's census
-  halt, and an operator stop (`:operator_stopped`). The tombstone is bounded
-  (latest per slot) and value-free (closed reason atoms, a class, a
+  tombstone: every error leaving a sink callback (Replicant halts the
+  pipeline on any non-ok sink return, so the scrubbed reason riding the
+  return is recorded at that one boundary — covering the halt funnels and
+  the bind/session-identity/slot-origin error paths alike), the owner's
+  census halt, and an operator stop (`:operator_stopped`). The tombstone is
+  bounded (latest per slot) and value-free (closed reason atoms, a class, a
   timestamp); its durable leg lives in three new nullable checkpoint columns
   (`terminal_cause`, `terminal_class`, `terminal_at` — regenerate with
   `mix ash.codegen` and migrate), written only when the row already exists.
-  Every admitted checkpoint write (bind and advance) clears the durable leg,
+  Every admitted checkpoint write (bind — including the otherwise
+  verify-only steady-state reconnect — and advance) clears the durable leg,
   so a stale cause cannot outlive the generation that superseded it. A halt
   while the destination is unreachable persists only the node-local leg; a
   host-tree shutdown writes no tombstone; an unexplained pipeline death

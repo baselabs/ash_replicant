@@ -104,7 +104,9 @@ defmodule AshReplicant.Census do
 
   @spec run(String.t(), module()) :: Report.t()
   def run(slot_name, sink) when is_binary(slot_name) and is_atom(sink) do
-    case AshReplicant.run_callback(slot_name, sink, :read, &run_guarded/1) do
+    # terminal?: false (O02): a census fault feeds the consecutive-fault
+    # budget — it is not a terminal pipeline cause and records no tombstone.
+    case AshReplicant.run_callback(slot_name, sink, :read, &run_guarded/1, terminal?: false) do
       %Report{} = report -> report
       {:error, _reason} -> report(destination: {:drift, :config_invalid})
       _other -> report(destination: {:fault, :census_checker_fault})

@@ -351,10 +351,14 @@ prefix, or progress token; decode is closed-set with a fixed fallback and
 NEVER mints atoms from persisted bytes. The durable leg lives on the checkpoint
 row (`terminal_cause`/`terminal_class`/`terminal_at`), is written ONLY when the
 row already exists (a tombstone never creates watermark-less rows), is cleared
-by EVERY admitted checkpoint write (bind AND advance — a stale cause must not
-outlive its successor), and is written by the party that knows the cause (the
-sink's scrubbed halt reason; the owner's census halt — node-local at the
-decision, durable AFTER `safe_stop`; `stop_supervised` before it stops). A
+by EVERY admitted checkpoint write (bind AND advance, including the
+otherwise-verify-only steady-state `:equal` reconnect — a stale cause must not
+outlive its successor), and is written by the party that knows the cause: the
+GENERATED sink callbacks' boundary (`Status.record_callback_error/2` — every
+`{:error, %Error{}}` leaving a callback halts the pipeline, so the halt
+funnels AND the bind-conflict/session-identity/slot-origin paths all cross
+this one home); the owner's census halt — node-local at the decision, durable
+AFTER `safe_stop`; `stop_supervised` before it stops. A
 tree shutdown writes nothing; an unexplained pipeline death records
 `:pipeline_terminated` only when no tombstone is already present. One writer
 home: `AshReplicant.Status` — never re-derive the walk in the doctor, the

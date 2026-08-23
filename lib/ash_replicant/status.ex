@@ -40,6 +40,7 @@ defmodule AshReplicant.Status do
   """
 
   alias AshReplicant.Destination.Generation
+  alias AshReplicant.Error
   alias AshReplicant.Snapshot.{Provenance, State}
   alias AshReplicant.Telemetry
 
@@ -197,11 +198,21 @@ defmodule AshReplicant.Status do
           %{status: public_of(lifecycle), lifecycle: lifecycle, evidence: evidence}
 
         :unresponsive ->
-          # The call timed out or answered garbage while the owner is alive
-          # (typically blocked stopping the pipeline): the conservative
-          # live bucket, never the owner-lost fault.
-          %{status: :catching_up, lifecycle: :degraded, evidence: %{owner: :unresponsive}}
+          unresponsive(owner)
       end
+    else
+      superseded()
+    end
+  end
+
+  # An unanswered `:status` call is re-checked against the entry's owner
+  # liveness: the call may have failed because the owner DIED between the
+  # pre-check and the call (a :noproc exit is confirmation of death, not a
+  # busy owner); a timeout on a live owner (typically one blocked stopping
+  # the pipeline) keeps the conservative live bucket — never owner loss.
+  defp unresponsive(owner) do
+    if owner_alive?(owner) do
+      %{status: :catching_up, lifecycle: :degraded, evidence: %{owner: :unresponsive}}
     else
       superseded()
     end
@@ -213,7 +224,7 @@ defmodule AshReplicant.Status do
          %{phase: :admitted, pipeline_alive: true, census_enabled?: true, last_census: :healthy},
          checkpoint
        ) do
-    if snapshot_in_flight?(checkpoint), do: :degraded, else: :ready
+    if checkpoint[:snapshot_in_flight?], do: :degraded, else: :ready
   end
 
   defp live_lifecycle(%{phase: :admitted}, _checkpoint), do: :degraded
@@ -373,6 +384,30 @@ defmodule AshReplicant.Status do
   end
 
   @doc """
+  The generated sink callbacks' boundary writer: Replicant halts the
+  pipeline on ANY non-ok sink return, so every `{:error, %Error{}}` leaving
+  a callback is terminal — and the scrubbed reason it carries is the
+  precise cause. This is the ONE sink-side home (the internal error paths
+  — bind conflicts, session-identity mismatch, slot-origin gaps, halt
+  funnels — need no writers of their own). The durable leg resolves the
+  identity from the live entry; an absent entry records node-local only.
+  """
+  @spec record_callback_error(String.t(), term()) :: term()
+  def record_callback_error(slot_name, {:error, %Error{reason: reason}} = result)
+      when is_binary(slot_name) do
+    {sink, identity} =
+      case :persistent_term.get({AshReplicant, slot_name}, :none) do
+        %Generation{sink: sink, source_identity: identity} -> {sink, identity}
+        _absent -> {nil, nil}
+      end
+
+    record_terminal(slot_name, sink, identity, reason)
+    result
+  end
+
+  def record_callback_error(_slot_name, result), do: result
+
+  @doc """
   The durable leg on the checkpoint row — only when that row already
   exists (locked read; a tombstone never creates a watermark-less row).
   A sink or identity the caller cannot resolve (nothing live to ask) is a
@@ -474,10 +509,13 @@ defmodule AshReplicant.Status do
 
   defp node_local(_other), do: nil
 
-  # One guarded destination read serving both the durable tombstone leg and
-  # the in-flight snapshot leg. A down or absent repo skips the legs — the
-  # census remains the authority on destination validity, and status never
-  # starts a repo.
+  # One guarded destination read serving the durable tombstone leg and the
+  # DERIVED in-flight snapshot fact. The raw `snapshot_state` envelope
+  # never enters the evidence (cross-vendor F4): its framing carries
+  # attempt ids, delivery-run ids, and token hashes that the value-free
+  # contract keeps out of any rendered surface — presence/status only. A
+  # down or absent repo skips the legs — the census remains the authority
+  # on destination validity, and status never starts a repo.
   defp durable_facts(config) do
     repo = Map.get(config, :repo)
 
@@ -499,7 +537,7 @@ defmodule AshReplicant.Status do
       [row] ->
         %{
           slot_name: config.slot_name,
-          snapshot_state: Map.get(row, :snapshot_state),
+          snapshot_in_flight?: snapshot_in_flight?(Map.get(row, :snapshot_state)),
           tombstone: durable_tombstone_from(row)
         }
 
@@ -527,23 +565,21 @@ defmodule AshReplicant.Status do
   end
 
   # In-flight snapshot evidence: `:armed`/`:active` attempts mean the
-  # pipeline is still catching up. Presence WITHOUT a decodable envelope is
+  # pipeline is still catching up. The envelope is decoded to its status
+  # HERE and never leaves this function — no framing bytes, attempt ids,
+  # or token hashes reach the evidence map. An undecodable envelope is
   # skipped (fail-closed on readiness is the census's call, not a guess
-  # here); no progress-token bytes ever leave this function.
-  defp snapshot_in_flight?(checkpoint) do
-    case Map.get(checkpoint, :snapshot_state) do
-      binary when is_binary(binary) ->
-        with {:ok, keys} <- Provenance.keys(),
-             {:ok, %State{} = state} <- State.decode(binary, keys) do
-          state.status in [:armed, :active]
-        else
-          _undecodable -> false
-        end
-
-      _nil ->
-        false
+  # here).
+  defp snapshot_in_flight?(binary) when is_binary(binary) do
+    with {:ok, keys} <- Provenance.keys(),
+         {:ok, %State{} = state} <- State.decode(binary, keys) do
+      state.status in [:armed, :active]
+    else
+      _undecodable -> false
     end
   end
+
+  defp snapshot_in_flight?(_nil), do: false
 
   # --- shared config admission (the operator-function shape) ---
 

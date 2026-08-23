@@ -662,14 +662,17 @@ census is currently faulting below the halt budget.
 When a generation ends, the party that knows the cause records a **terminal
 tombstone** — bounded (latest per slot), value-free (a closed reason atom, a
 class, a timestamp; never a row value, message prefix, or progress token).
-The sink's halt paths record the scrubbed halt reason; the owner's census
-halt records the census reason; an operator stop records
+Every error leaving a sink callback records the scrubbed reason (Replicant
+halts the pipeline on any non-ok sink return, so that one boundary covers the
+halt funnels and the bind/session-identity/slot-origin error paths alike);
+the owner's census halt records the census reason; an operator stop records
 `:operator_stopped`. The tombstone has two legs: a node-local one (always
 writable) and a durable one on the checkpoint row (`terminal_cause`,
 `terminal_class`, `terminal_at` — added by `mix ash.codegen` + migrate),
 written only when the row already exists. Every admitted checkpoint write
-(bind and advance) clears the durable leg, so a stale cause never outlives
-the generation that superseded it.
+(bind — including the otherwise verify-only steady-state reconnect — and
+advance) clears the durable leg, so a stale cause never outlives the
+generation that superseded it.
 
 Two documented edges: a halt while the destination is unreachable persists
 only the node-local leg (after a node restart the slot reports

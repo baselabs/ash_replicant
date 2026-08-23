@@ -32,7 +32,6 @@ defmodule AshReplicant.Sink.Impl do
     Resolver,
     Snapshot,
     Sql,
-    Status,
     Telemetry
   }
 
@@ -395,7 +394,13 @@ defmodule AshReplicant.Sink.Impl do
         :ok
 
       :equal when row.source_timeline == identity.timeline_id ->
-        # Steady-state reconnect: verify-only, NO write.
+        # Steady-state reconnect is normally verify-only (no write) — but a
+        # surviving terminal tombstone must not outlive the live generation
+        # (O02 design D6), so clearing one is the single write this path
+        # still owes. Without it, the COMMON restart path (unchanged
+        # contract, unchanged timeline) would resurface a previous
+        # generation's cause after the next clean shutdown.
+        clear_terminal_tombstone!(config, row)
         :ok
 
       {:incompatible, reason} ->
@@ -444,6 +449,32 @@ defmodule AshReplicant.Sink.Impl do
       context: action_context(config),
       return_notifications?: true
     )
+
+    :ok
+  end
+
+  # O02 (design D6): the steady-state `:equal` reconnect writes nothing
+  # except when a terminal tombstone survived — this narrow clear keeps
+  # "verify-only" true for the common case while closing the stale-cause
+  # resurfacing path (cross-vendor F1).
+  defp clear_terminal_tombstone!(config, row) do
+    if Map.get(row, :terminal_cause) do
+      Ash.create!(
+        config.checkpoint_resource,
+        Map.merge(checkpoint_filter(config), %{
+          terminal_cause: nil,
+          terminal_class: nil,
+          terminal_at: nil
+        }),
+        action: :upsert,
+        upsert?: true,
+        upsert_identity: :source_slot,
+        upsert_fields: [:terminal_cause, :terminal_class, :terminal_at],
+        authorize?: false,
+        context: action_context(config),
+        return_notifications?: true
+      )
+    end
 
     :ok
   end
@@ -2036,6 +2067,9 @@ defmodule AshReplicant.Sink.Impl do
   # The schema-change fault containment: same scrub as `halt/2` plus the
   # sink's OWN halted event — on this path (and only here) the framework's
   # wrapper would otherwise misclassify a sink fault as stream corruption.
+  # The terminal tombstone is recorded at the GENERATED CALLBACK boundary
+  # (O02 cross-vendor F3): every `{:error, %Error{}}` leaving a sink
+  # callback halts the pipeline, and the scrubbed reason rides the return.
   defp halt_schema_change_fault(reason, config) do
     error = Error.scrub(reason, config.checkpoint_resource, :schema_change)
 
@@ -2044,7 +2078,6 @@ defmodule AshReplicant.Sink.Impl do
       error_class: error.class
     })
 
-    record_terminal_cause(config, error)
     {:error, error}
   end
 
@@ -2058,24 +2091,7 @@ defmodule AshReplicant.Sink.Impl do
       error_class: error.class
     })
 
-    record_terminal_cause(config, error)
     {:error, error}
-  end
-
-  # O02: the halt path is the one party that KNOWS the cause (Replicant 1.x
-  # discards it at teardown), so the tombstone is recorded here — node-local
-  # always, durable best-effort — before the error stops the pipeline.
-  defp record_terminal_cause(config, error) do
-    Status.record_terminal(
-      config.slot_name,
-      Map.get(config, :sink),
-      Map.get(config, :source_identity),
-      error.reason
-    )
-  rescue
-    _error -> :ok
-  catch
-    _kind, _reason -> :ok
   end
 
   # Mechanical triple rekey (source-bound checkpoint, B2). The identity comes from the

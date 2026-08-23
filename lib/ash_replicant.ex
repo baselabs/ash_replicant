@@ -512,16 +512,29 @@ defmodule AshReplicant do
   end
 
   @doc false
-  @spec run_callback(String.t(), module(), :read | :mutate, (map() -> term())) :: term()
-  def run_callback(slot_name, sink, mode, effect)
+  @spec run_callback(String.t(), module(), :read | :mutate, (map() -> term()), keyword()) ::
+          term()
+  def run_callback(slot_name, sink, mode, effect, opts \\ [])
       when is_binary(slot_name) and is_atom(sink) and mode in [:read, :mutate] and
-             is_function(effect, 1) do
+             is_function(effect, 1) and is_list(opts) do
     runner = fn -> run_admitted_callback(slot_name, sink, effect) end
 
-    case mode do
-      :read -> runner.()
-      :mutate -> activation_lock(slot_name, runner)
-    end
+    result =
+      case mode do
+        :read -> runner.()
+        :mutate -> activation_lock(slot_name, runner)
+      end
+
+    # O02 (cross-vendor F3): this is the ONE boundary every generated sink
+    # callback crosses, and Replicant halts the pipeline on ANY non-ok sink
+    # return — so an error leaving it is terminal, and the scrubbed reason
+    # it carries is the precise cause. That covers the halt funnels AND the
+    # bind-conflict/session-identity/slot-origin paths that never pass
+    # through them. The census opts out (`terminal?: false`): its faults
+    # feed the consecutive-fault budget, not a tombstone.
+    if Keyword.get(opts, :terminal?, true),
+      do: Status.record_callback_error(slot_name, result),
+      else: result
   end
 
   @doc false

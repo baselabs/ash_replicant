@@ -143,20 +143,28 @@ defmodule AshReplicant.StatusIntegrationTest do
     assert :not_started = AshReplicant.status(Sink)
 
     # The successor generation's BIND is an admitted checkpoint write: the
-    # stale terminal columns clear with it, even before any advance.
+    # stale terminal columns clear with it — INCLUDING on the steady-state
+    # reconnect path (unchanged contract, unchanged timeline), which is
+    # otherwise verify-only (cross-vendor F1).
     assert {:ok, _owner2} = start()
     eventually(fn -> match?(:catching_up, AshReplicant.status(Sink)) end)
     eventually(fn -> is_nil(durable_tombstone()[:cause]) end)
+    eventually(fn -> match?(:healthy, AshReplicant.status(Sink)) end)
 
-    # The ADVANCE clear: a seeded terminal cause must not outlive the next
-    # committed delivery (the delivery's checkpoint write clears it).
+    # The ADVANCE clear: a seeded terminal cause (no live generation — a
+    # live one outranks every tombstone) is answered as the halt it
+    # records, and must not outlive the next committed delivery.
+    assert :ok = AshReplicant.stop_supervised(@slot)
+
     Marquee.q!(
       "UPDATE ash_replicant_checkpoints SET terminal_cause = $1, terminal_class = $2 WHERE slot_name = $3",
       ["census_unverifiable", "halt", @slot]
     )
 
-    assert %{cause: "census_unverifiable", class: "halt"} = durable_tombstone()
     assert {:halted, :census_unverifiable} = AshReplicant.status(Sink)
+    assert %{lifecycle: :halted} = AshReplicant.Status.derive(Sink)
+
+    assert {:ok, _owner3} = start()
 
     Marquee.q!("INSERT INTO #{@src} VALUES ($1, $2)", ["o02-1", "note"])
 

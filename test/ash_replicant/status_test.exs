@@ -291,7 +291,11 @@ defmodule AshReplicant.StatusTest do
       # The atom table is the hazard: a hostile or corrupted terminal_cause
       # string must be absorbed by the closed set, not converted into new
       # atoms (memory exhaustion through the decode path). async: false
-      # keeps the atom count observation free of concurrent minting.
+      # keeps the atom count observation free of concurrent minting, and
+      # the warm-up call forces any lazy first-call module loading OUTSIDE
+      # the measured window (cross-vendor F5: a cold decode path loaded
+      # modules and minted ~123 atoms inside it, reding the gate spuriously).
+      _ = Status.decode_cause("warmup_probe")
       before = :erlang.system_info(:atom_count)
 
       assert {:halt, :tombstone_unknown} =
@@ -316,6 +320,26 @@ defmodule AshReplicant.StatusTest do
       for reason <- [:census_unverifiable, :publication_contract_incompatible, :operator_stopped] do
         assert Status.classify(reason) in [:halt, :misconfigured, :stopped]
       end
+    end
+  end
+
+  describe "the callback boundary writer (cross-vendor F3)" do
+    test "an error leaving the boundary is terminal: recorded and passed through" do
+      error =
+        AshReplicant.Error.exception(reason: :source_timeline_changed, resource: nil, op: :bind)
+
+      assert {:error, ^error} = Status.record_callback_error(@slot, {:error, error})
+
+      assert %Status.Tombstone{cause: :source_timeline_changed, class: :halt} =
+               :persistent_term.get(@tombstone_key)
+    end
+
+    test "a non-error result crosses the boundary untouched" do
+      :persistent_term.erase(@tombstone_key)
+
+      assert :ok = Status.record_callback_error(@slot, :ok)
+      assert {:ok, nil} = Status.record_callback_error(@slot, {:ok, nil})
+      assert :none == :persistent_term.get(@tombstone_key, :none)
     end
   end
 end
