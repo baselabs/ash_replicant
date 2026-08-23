@@ -363,9 +363,7 @@ defmodule AshReplicant.Status do
     record_durable(slot_name, sink, identity, tombstone)
   end
 
-  @doc """
-  The always-writable leg. Returns the tombstone it wrote.
-  """
+  @doc false
   @spec record_node_local(String.t(), reason()) :: Tombstone.t()
   def record_node_local(slot_name, reason) when is_binary(slot_name) do
     tombstone = %Tombstone{cause: reason, class: classify(reason), at: DateTime.utc_now()}
@@ -407,12 +405,7 @@ defmodule AshReplicant.Status do
 
   def record_callback_error(_slot_name, result), do: result
 
-  @doc """
-  The durable leg on the checkpoint row — only when that row already
-  exists (locked read; a tombstone never creates a watermark-less row).
-  A sink or identity the caller cannot resolve (nothing live to ask) is a
-  quiet skip, not a write failure.
-  """
+  @doc false
   @spec record_durable(String.t(), module() | nil, map() | nil, Tombstone.t()) :: :ok
   def record_durable(slot_name, sink, identity, %Tombstone{} = tombstone)
       when is_binary(slot_name) do
