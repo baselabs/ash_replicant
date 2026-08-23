@@ -12,11 +12,13 @@ covered guards is.
 
 Contract (SEC01 / the reconciled T2 design):
 
-- The matrix is per independent guard and per sibling path across nine
+- The matrix is per independent guard and per sibling path across ten
   families: tenant absence, tenant reassignment, replica identity, sensitive
   type shape, sink-action multitenancy bypass, dynamic destination
-  participants, notifier load drift, snapshot fingerprint collisions, and
-  append identity.
+  participants, notifier load drift, snapshot fingerprint collisions,
+  append identity, and value-free telemetry typing (O03: one mutant family
+  per typed metadata key, per measurement key, and per shared type clause,
+  so no telemetry gate can survive unobserved).
 - Mutants run SERIALLY in one `mktemp` project copy built from `git
   ls-files` working-tree bytes plus copied (never symlinked) `deps/` and the
   test build; the copied dependency tree loses write permission. The live
@@ -130,6 +132,7 @@ IMPL = "lib/ash_replicant/sink/impl.ex"
 ROWS = "lib/ash_replicant/snapshot/rows.ex"
 RETIREMENT = "lib/ash_replicant/snapshot/retirement.ex"
 PROVENANCE = "lib/ash_replicant/snapshot/provenance.ex"
+TELEMETRY = "lib/ash_replicant/telemetry.ex"
 
 T_RESOLVER = "test/ash_replicant/resolver_test.exs"
 T_COVERAGE = "test/ash_replicant/coverage_test.exs"
@@ -141,6 +144,7 @@ T_DESTINATION = "test/ash_replicant/destination_test.exs"
 T_NOTIFIER = "test/ash_replicant/notifier_load_binding_test.exs"
 T_PROVENANCE = "test/ash_replicant/snapshot_provenance_test.exs"
 T_APPEND_V = "test/ash_replicant/validate_append_log_test.exs"
+T_TELEMETRY = "test/ash_replicant/telemetry_test.exs"
 
 B_RESOLVER = "Elixir.AshReplicant.Resolver.beam"
 B_COVERAGE = "Elixir.AshReplicant.Coverage.beam"
@@ -150,6 +154,7 @@ B_APPEND_V = "Elixir.AshReplicant.Resource.Verifiers.ValidateAppendLog.beam"
 B_DESTINATION = "Elixir.AshReplicant.Destination.beam"
 B_NOTIFIER_LOADS = "Elixir.AshReplicant.Destination.NotifierLoads.beam"
 B_PROVENANCE = "Elixir.AshReplicant.Snapshot.Provenance.beam"
+B_TELEMETRY = "Elixir.AshReplicant.Telemetry.beam"
 
 NO_RAISE = "but nothing was raised"
 
@@ -1471,6 +1476,528 @@ MATRIX = [
                     "an append action change that can rewrite the immutable identity is"
                     " rejected"
                 ],
+            }
+        ],
+    },
+    # --------------------------------------------- telemetry value-free typing
+    # O03: mutation tests cover every key. Three mutant families over
+    # lib/ash_replicant/telemetry.ex, all observed in T_TELEMETRY:
+    #   telemetry_types.<key>        — the key's @meta_types entry is replaced
+    #                                   with an unmatchable type string, so the
+    #                                   key's LEGIT shape is rejected; red target
+    #                                   is that key's per-key legit-acceptance
+    #                                   test (the accept direction).
+    #   telemetry_offtype.<key>      — the key's type is laxed to accept the
+    #                                   off-type value its rejection test feeds
+    #                                   (the value-free reject direction).
+    #   telemetry_types.<clause>     — the shared non-negativity guard of a
+    #                                   numeric type clause is dropped.
+    #   telemetry_measurements.<key> — the measurement key leaves the closed
+    #                                   set; its legit shape is now off-set.
+    {
+        "id": "telemetry_types.commit_lsn",
+        "file": TELEMETRY,
+        "beams": [B_TELEMETRY],
+        "replacements": [
+            [
+                '    commit_lsn: "nil | non_neg_integer",\n',
+                '    commit_lsn: "mutation_lax",\n',
+            ]
+        ],
+        "runs": [
+            {
+                "file": T_TELEMETRY,
+                "red": ["legit shape accepted: :commit_lsn"],
+                "absent": ["legit shape accepted: :resource"],
+            }
+        ],
+    },
+    {
+        "id": "telemetry_types.resource",
+        "file": TELEMETRY,
+        "beams": [B_TELEMETRY],
+        "replacements": [
+            [
+                '    resource: "nil | atom",\n',
+                '    resource: "mutation_lax",\n',
+            ]
+        ],
+        "runs": [
+            {
+                "file": T_TELEMETRY,
+                "red": ["legit shape accepted: :resource"],
+                "absent": ["legit shape accepted: :commit_lsn"],
+            }
+        ],
+    },
+    {
+        "id": "telemetry_types.table",
+        "file": TELEMETRY,
+        "beams": [B_TELEMETRY],
+        "replacements": [
+            [
+                '    table: "nil | binary",\n',
+                '    table: "mutation_lax",\n',
+            ]
+        ],
+        "runs": [
+            {
+                "file": T_TELEMETRY,
+                "red": ["legit shape accepted: :table"],
+                "absent": ["legit shape accepted: :slot_name"],
+            }
+        ],
+    },
+    {
+        "id": "telemetry_types.change_count",
+        "file": TELEMETRY,
+        "beams": [B_TELEMETRY],
+        "replacements": [
+            [
+                '    change_count: "nil | non_neg_integer",\n',
+                '    change_count: "mutation_lax",\n',
+            ]
+        ],
+        "runs": [
+            {
+                "file": T_TELEMETRY,
+                "red": ["legit shape accepted: :change_count"],
+                "absent": ["legit shape accepted: :txn_count"],
+            }
+        ],
+    },
+    {
+        "id": "telemetry_types.txn_count",
+        "file": TELEMETRY,
+        "beams": [B_TELEMETRY],
+        "replacements": [
+            [
+                '    txn_count: "nil | non_neg_integer",\n',
+                '    txn_count: "mutation_lax",\n',
+            ]
+        ],
+        "runs": [
+            {
+                "file": T_TELEMETRY,
+                "red": ["legit shape accepted: :txn_count"],
+                "absent": ["legit shape accepted: :change_count"],
+            }
+        ],
+    },
+    {
+        "id": "telemetry_types.tenant?",
+        "file": TELEMETRY,
+        "beams": [B_TELEMETRY],
+        "replacements": [
+            [
+                '    tenant?: "boolean",\n',
+                '    tenant?: "mutation_lax",\n',
+            ]
+        ],
+        "runs": [
+            {
+                "file": T_TELEMETRY,
+                "red": ["legit shape accepted: :tenant?"],
+                "absent": ["legit shape accepted: :transactional"],
+            }
+        ],
+    },
+    {
+        "id": "telemetry_types.duration",
+        "file": TELEMETRY,
+        "beams": [B_TELEMETRY],
+        "replacements": [
+            [
+                '    duration: "non_neg_integer",\n',
+                '    duration: "mutation_lax",\n',
+            ]
+        ],
+        "runs": [
+            {
+                "file": T_TELEMETRY,
+                "red": ["legit shape accepted: :duration"],
+                "absent": ["legit shape accepted: :change_count"],
+            }
+        ],
+    },
+    {
+        "id": "telemetry_types.reason",
+        "file": TELEMETRY,
+        "beams": [B_TELEMETRY],
+        "replacements": [
+            [
+                '    reason: "nil | atom | {:invalid_destination_config, atom}",\n',
+                '    reason: "mutation_lax",\n',
+            ]
+        ],
+        "runs": [
+            {
+                "file": T_TELEMETRY,
+                "red": ["legit shape accepted: :reason"],
+                "absent": ["legit shape accepted: :error_class"],
+            }
+        ],
+    },
+    {
+        "id": "telemetry_types.error_class",
+        "file": TELEMETRY,
+        "beams": [B_TELEMETRY],
+        "replacements": [
+            [
+                '    error_class: "nil | atom",\n',
+                '    error_class: "mutation_lax",\n',
+            ]
+        ],
+        "runs": [
+            {
+                "file": T_TELEMETRY,
+                "red": ["legit shape accepted: :error_class"],
+                "absent": ["legit shape accepted: :kind"],
+            }
+        ],
+    },
+    {
+        "id": "telemetry_types.kind",
+        "file": TELEMETRY,
+        "beams": [B_TELEMETRY],
+        "replacements": [
+            [
+                '    kind: "nil | atom",\n',
+                '    kind: "mutation_lax",\n',
+            ]
+        ],
+        "runs": [
+            {
+                "file": T_TELEMETRY,
+                "red": ["legit shape accepted: :kind"],
+                "absent": ["legit shape accepted: :error_class"],
+            }
+        ],
+    },
+    {
+        "id": "telemetry_types.slot_name",
+        "file": TELEMETRY,
+        "beams": [B_TELEMETRY],
+        "replacements": [
+            [
+                '    slot_name: "nil | binary",\n',
+                '    slot_name: "mutation_lax",\n',
+            ]
+        ],
+        "runs": [
+            {
+                "file": T_TELEMETRY,
+                "red": ["legit shape accepted: :slot_name"],
+                "absent": ["legit shape accepted: :table"],
+            }
+        ],
+    },
+    {
+        "id": "telemetry_types.transactional",
+        "file": TELEMETRY,
+        "beams": [B_TELEMETRY],
+        "replacements": [
+            [
+                '    transactional: "boolean"\n',
+                '    transactional: "mutation_lax"\n',
+            ]
+        ],
+        "runs": [
+            {
+                "file": T_TELEMETRY,
+                "red": ["legit shape accepted: :transactional"],
+                "absent": ["legit shape accepted: :tenant?"],
+            }
+        ],
+    },
+    {
+        "id": "telemetry_offtype.commit_lsn",
+        "file": TELEMETRY,
+        "beams": [B_TELEMETRY],
+        "replacements": [
+            [
+                '    commit_lsn: "nil | non_neg_integer",\n',
+                '    commit_lsn: "nil | binary",\n',
+            ]
+        ],
+        "runs": [
+            {
+                "file": T_TELEMETRY,
+                "red": ['off-type :commit_lsn = "5" raises'],
+                "absent": ["off-type :commit_lsn = -1 raises"],
+            }
+        ],
+    },
+    {
+        "id": "telemetry_offtype.resource",
+        "file": TELEMETRY,
+        "beams": [B_TELEMETRY],
+        "replacements": [
+            [
+                '    resource: "nil | atom",\n',
+                '    resource: "nil | binary",\n',
+            ]
+        ],
+        "runs": [
+            {
+                "file": T_TELEMETRY,
+                "red": ['off-type :resource = "Foo" raises'],
+                "absent": ["legit shape accepted: :commit_lsn"],
+            }
+        ],
+    },
+    {
+        "id": "telemetry_offtype.table",
+        "file": TELEMETRY,
+        "beams": [B_TELEMETRY],
+        "replacements": [
+            [
+                '    table: "nil | binary",\n',
+                '    table: "nil | atom",\n',
+            ]
+        ],
+        "runs": [
+            {
+                "file": T_TELEMETRY,
+                "red": ["off-type :table = :orders raises"],
+                "absent": ["legit shape accepted: :slot_name"],
+            }
+        ],
+    },
+    {
+        "id": "telemetry_offtype.change_count",
+        "file": TELEMETRY,
+        "beams": [B_TELEMETRY],
+        "replacements": [
+            [
+                '    change_count: "nil | non_neg_integer",\n',
+                '    change_count: "nil | binary",\n',
+            ]
+        ],
+        "runs": [
+            {
+                "file": T_TELEMETRY,
+                "red": ['off-type :change_count = "3" raises'],
+                "absent": ["off-type :change_count = -1 raises"],
+            }
+        ],
+    },
+    {
+        "id": "telemetry_offtype.tenant?",
+        "file": TELEMETRY,
+        "beams": [B_TELEMETRY],
+        "replacements": [
+            [
+                '    tenant?: "boolean",\n',
+                '    tenant?: "nil | binary",\n',
+            ]
+        ],
+        "runs": [
+            {
+                "file": T_TELEMETRY,
+                "red": ['off-type :tenant? = "yes" raises', "off-type :tenant? = nil raises"],
+                "absent": ["legit shape accepted: :slot_name"],
+            }
+        ],
+    },
+    {
+        "id": "telemetry_offtype.duration",
+        "file": TELEMETRY,
+        "beams": [B_TELEMETRY],
+        "replacements": [
+            [
+                '    duration: "non_neg_integer",\n',
+                '    duration: "nil | binary",\n',
+            ]
+        ],
+        "runs": [
+            {
+                "file": T_TELEMETRY,
+                "red": ['off-type :duration = "1" raises'],
+                "absent": ["off-type :duration = -1 raises"],
+            }
+        ],
+    },
+    {
+        "id": "telemetry_offtype.reason",
+        "file": TELEMETRY,
+        "beams": [B_TELEMETRY],
+        "replacements": [
+            [
+                '    reason: "nil | atom | {:invalid_destination_config, atom}",\n',
+                '    reason: "nil | binary",\n',
+            ]
+        ],
+        "runs": [
+            {
+                "file": T_TELEMETRY,
+                "red": ["a binary under the atom-typed reason key raises"],
+                "absent": ["off-type :slot_name = 5 raises"],
+            }
+        ],
+    },
+    {
+        "id": "telemetry_offtype.error_class",
+        "file": TELEMETRY,
+        "beams": [B_TELEMETRY],
+        "replacements": [
+            [
+                '    error_class: "nil | atom",\n',
+                '    error_class: "nil | binary",\n',
+            ]
+        ],
+        "runs": [
+            {
+                "file": T_TELEMETRY,
+                "red": ['off-type :error_class = "invalid" raises'],
+                "absent": ["legit shape accepted: :slot_name"],
+            }
+        ],
+    },
+    {
+        "id": "telemetry_offtype.kind",
+        "file": TELEMETRY,
+        "beams": [B_TELEMETRY],
+        "replacements": [
+            [
+                '    kind: "nil | atom",\n',
+                '    kind: "nil | binary",\n',
+            ]
+        ],
+        "runs": [
+            {
+                "file": T_TELEMETRY,
+                "red": ['off-type :kind = "identity" raises'],
+                "absent": ["legit shape accepted: :table"],
+            }
+        ],
+    },
+    {
+        "id": "telemetry_offtype.slot_name",
+        "file": TELEMETRY,
+        "beams": [B_TELEMETRY],
+        "replacements": [
+            [
+                '    slot_name: "nil | binary",\n',
+                '    slot_name: "nil | non_neg_integer",\n',
+            ]
+        ],
+        "runs": [
+            {
+                "file": T_TELEMETRY,
+                "red": ["off-type :slot_name = 5 raises"],
+                "absent": ["legit shape accepted: :table"],
+            }
+        ],
+    },
+    {
+        "id": "telemetry_types.nonneg_clause",
+        "file": TELEMETRY,
+        "beams": [B_TELEMETRY],
+        "replacements": [
+            [
+                '  defp meta_value_ok?("nil | non_neg_integer", v), do: is_integer(v) and v >= 0\n',
+                '  defp meta_value_ok?("nil | non_neg_integer", v), do: is_integer(v)\n',
+            ]
+        ],
+        "runs": [
+            {
+                "file": T_TELEMETRY,
+                "red": [
+                    "off-type :commit_lsn = -1 raises",
+                    "off-type :change_count = -1 raises",
+                ],
+                "absent": ['off-type :commit_lsn = "5" raises'],
+            }
+        ],
+    },
+    {
+        "id": "telemetry_types.duration_nonneg_clause",
+        "file": TELEMETRY,
+        "beams": [B_TELEMETRY],
+        "replacements": [
+            [
+                '  defp meta_value_ok?("non_neg_integer", v), do: is_integer(v) and v >= 0\n',
+                '  defp meta_value_ok?("non_neg_integer", v), do: is_integer(v)\n',
+            ]
+        ],
+        "runs": [
+            {
+                "file": T_TELEMETRY,
+                "red": ["off-type :duration = -1 raises"],
+                "absent": ["off-type :commit_lsn = -1 raises"],
+            }
+        ],
+    },
+    {
+        "id": "telemetry_measurements.count",
+        "file": TELEMETRY,
+        "beams": [B_TELEMETRY],
+        "replacements": [
+            [
+                "  @allowed_measurement_keys ~w(count change_count duration byte_size)a\n",
+                "  @allowed_measurement_keys ~w(change_count duration byte_size)a\n",
+            ]
+        ],
+        "runs": [
+            {
+                "file": T_TELEMETRY,
+                "red": ["measurement accepted: :count"],
+                "absent": ["measurement accepted: :change_count"],
+            }
+        ],
+    },
+    {
+        "id": "telemetry_measurements.change_count",
+        "file": TELEMETRY,
+        "beams": [B_TELEMETRY],
+        "replacements": [
+            [
+                "  @allowed_measurement_keys ~w(count change_count duration byte_size)a\n",
+                "  @allowed_measurement_keys ~w(count duration byte_size)a\n",
+            ]
+        ],
+        "runs": [
+            {
+                "file": T_TELEMETRY,
+                "red": ["measurement accepted: :change_count"],
+                "absent": ["measurement accepted: :count"],
+            }
+        ],
+    },
+    {
+        "id": "telemetry_measurements.duration",
+        "file": TELEMETRY,
+        "beams": [B_TELEMETRY],
+        "replacements": [
+            [
+                "  @allowed_measurement_keys ~w(count change_count duration byte_size)a\n",
+                "  @allowed_measurement_keys ~w(count change_count byte_size)a\n",
+            ]
+        ],
+        "runs": [
+            {
+                "file": T_TELEMETRY,
+                "red": ["measurement accepted: :duration"],
+                "absent": ["measurement accepted: :count"],
+            }
+        ],
+    },
+    {
+        "id": "telemetry_measurements.byte_size",
+        "file": TELEMETRY,
+        "beams": [B_TELEMETRY],
+        "replacements": [
+            [
+                "  @allowed_measurement_keys ~w(count change_count duration byte_size)a\n",
+                "  @allowed_measurement_keys ~w(count change_count duration)a\n",
+            ]
+        ],
+        "runs": [
+            {
+                "file": T_TELEMETRY,
+                "red": ["measurement accepted: :byte_size"],
+                "absent": ["measurement accepted: :count"],
             }
         ],
     },

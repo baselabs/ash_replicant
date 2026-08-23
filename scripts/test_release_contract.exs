@@ -220,9 +220,9 @@ defmodule AshReplicant.ReleaseContractSelfTest do
      "schedule_next_census(%{state | consecutive_faults: 0, last_census: :healthy})"},
     {"lib/ash_replicant/pipeline_owner.ex",
      "halt_for_census(state, check, :census_unverifiable)"},
-    {"lib/ash_replicant/telemetry.ex", "[:ash_replicant, :census, :passed]"},
-    {"lib/ash_replicant/telemetry.ex", "[:ash_replicant, :census, :faulted]"},
-    {"lib/ash_replicant/telemetry.ex", "[:ash_replicant, :census, :halted]"}
+    {"lib/ash_replicant/telemetry.ex", "[:ash_replicant, :census, :passed],\n"},
+    {"lib/ash_replicant/telemetry.ex", "[:ash_replicant, :census, :faulted],\n"},
+    {"lib/ash_replicant/telemetry.ex", "[:ash_replicant, :census, :halted],\n"}
   ]
 
   @upgrade_doc_contracts [

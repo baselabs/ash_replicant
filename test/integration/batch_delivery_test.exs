@@ -12,7 +12,8 @@ defmodule AshReplicant.BatchMarqueeSink do
       {"outbox", AshReplicant.Test.Messages.Outbox, :record},
       {"peer", AshReplicant.Test.Messages.PeerOutbox, :record}
     ],
-    ignored_message_prefixes: ["noise"]
+    ignored_message_prefixes: ["noise"],
+    recovery_horizon: {1, :day}
 end
 
 defmodule AshReplicant.BatchTenantOrder do

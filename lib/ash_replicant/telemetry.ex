@@ -11,6 +11,87 @@ defmodule AshReplicant.Telemetry do
   measurement — now fails at the enforcement point instead of shipping
   downstream. Violations name the KEY and expected type ONLY; a row value in
   KEY position renders as a count, never the key itself.
+
+  ## Metrics example (executable, no extra dependencies)
+
+  Every event the library emits is listed by `emitted_event_names/0`. A
+  minimal metrics reporter attaches one handler to that whole inventory:
+
+  ```elixir
+  defmodule MyApp.ReplicantMetrics do
+    @moduledoc "Counts every AshReplicant telemetry event with :counters."
+
+    def attach do
+      :persistent_term.put({__MODULE__, :counter}, :counters.new(1, [:write_concurrency]))
+
+      :telemetry.attach_many(
+        __MODULE__,
+        AshReplicant.Telemetry.emitted_event_names(),
+        &__MODULE__.handle_event/4,
+        nil
+      )
+    end
+
+    def detach, do: :telemetry.detach(__MODULE__)
+
+    def deliveries,
+      do: :counters.get(:persistent_term.get({__MODULE__, :counter}), 1)
+
+    def handle_event(_event, _measurements, _meta, _config) do
+      :counters.add(:persistent_term.get({__MODULE__, :counter}), 1, 1)
+    end
+  end
+
+  MyApp.ReplicantMetrics.attach()
+  ```
+
+  ## OpenTelemetry bridge example (executable handler; spans need your OTel dep)
+
+  The mapping below is executable and complete: it covers exactly
+  `emitted_event_names/0`. The span emission site is marked — it requires YOUR
+  `:opentelemetry` dependency (this library keeps OTel an optional bridge,
+  never a core runtime dependency), so the handler runs with or without it:
+
+  ```elixir
+  defmodule MyApp.ReplicantOTel do
+    @moduledoc "Bridges AshReplicant telemetry onto OpenTelemetry span events."
+
+    @span_for %{
+      [:ash_replicant, :sink, :session_identity_accepted] => :"ash_replicant.session_identity",
+      [:ash_replicant, :sink, :applied] => :"ash_replicant.sink.applied",
+      [:ash_replicant, :sink, :batch_applied] => :"ash_replicant.sink.batch_applied",
+      [:ash_replicant, :sink, :skipped] => :"ash_replicant.sink.skipped",
+      [:ash_replicant, :sink, :halted] => :"ash_replicant.sink.halted",
+      [:ash_replicant, :checkpoint, :conflict] => :"ash_replicant.checkpoint.conflict",
+      [:ash_replicant, :message, :applied] => :"ash_replicant.message.applied",
+      [:ash_replicant, :snapshot, :batch] => :"ash_replicant.snapshot.batch",
+      [:ash_replicant, :snapshot, :complete] => :"ash_replicant.snapshot.complete",
+      [:ash_replicant, :preflight, :failed] => :"ash_replicant.preflight.failed",
+      [:ash_replicant, :census, :passed] => :"ash_replicant.census.passed",
+      [:ash_replicant, :census, :faulted] => :"ash_replicant.census.faulted",
+      [:ash_replicant, :census, :halted] => :"ash_replicant.census.halted",
+      [:ash_replicant, :status, :tombstone_write_failed] => :"ash_replicant.status.tombstone_write_failed"
+    }
+
+    def attach do
+      :telemetry.attach_many(__MODULE__, Map.keys(@span_for), &__MODULE__.handle_event/4, nil)
+    end
+
+    def detach, do: :telemetry.detach(__MODULE__)
+
+    def span_name(event), do: Map.fetch!(@span_for, event)
+
+    def handle_event(event, _measurements, _meta, _config) do
+      _name = span_name(event)
+      # With {:opentelemetry, "~> 1.3"} in YOUR deps, emit here, e.g.
+      # :otel_span.add_event(_name, ...). Without it, the mapping above still
+      # runs and stays complete against AshReplicant.Telemetry.emitted_event_names/0.
+      :ok
+    end
+  end
+
+  MyApp.ReplicantOTel.attach()
+  ```
   """
 
   @typed_meta_keys ~w(commit_lsn resource table change_count txn_count tenant? duration reason error_class kind slot_name transactional)a

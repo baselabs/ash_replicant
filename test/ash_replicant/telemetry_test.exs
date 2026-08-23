@@ -173,6 +173,61 @@ defmodule AshReplicant.TelemetryTest do
     end
   end
 
+  describe "per-key legit acceptance (O03 mutation anchors)" do
+    # One test per typed metadata key: each names its key so the mutation
+    # matrix cell that laxes exactly that key's @meta_types entry has a
+    # property-specific red target (a vacuous gate for one key cannot hide
+    # behind the others).
+    @legit_meta %{
+      commit_lsn: 5,
+      resource: Foo,
+      table: "orders",
+      change_count: 1,
+      txn_count: 1,
+      tenant?: true,
+      duration: 9,
+      reason: :halted,
+      error_class: :error,
+      kind: :coverage,
+      slot_name: "slot",
+      transactional: true
+    }
+
+    for {key, value} <- @legit_meta do
+      test "legit shape accepted: #{inspect(key)}" do
+        meta = %{unquote(key) => unquote(value)}
+        assert Telemetry.validate!(meta) == meta
+      end
+    end
+
+    @legit_measurements %{
+      count: 1,
+      change_count: 2,
+      duration: 1.5,
+      byte_size: 10
+    }
+
+    for {key, value} <- @legit_measurements do
+      test "measurement accepted: #{inspect(key)}" do
+        assert Telemetry.validate_measurements!(%{unquote(key) => unquote(value)}) == :ok
+      end
+    end
+
+    test "the mutation matrix covers every typed telemetry key (completeness tripwire)" do
+      matrix = File.read!("scripts/run-mutation-gates.py")
+
+      for key <- Telemetry.allowed_meta_keys() do
+        assert matrix =~ "telemetry_types.#{key}",
+               "no mutation-matrix cell for the typed metadata key #{inspect(key)}"
+      end
+
+      for key <- Telemetry.allowed_measurement_keys() do
+        assert matrix =~ "telemetry_measurements.#{key}",
+               "no mutation-matrix cell for the measurement key #{inspect(key)}"
+      end
+    end
+  end
+
   test "the library's own tuple-shaped reason mints valid telemetry (cross-vendor blocker regression)" do
     # {:invalid_destination_config, :onetime_store} is a RUNTIME reason minted
     # by preflight_onetime_transaction, raised on the apply path, and forwarded

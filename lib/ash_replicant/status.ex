@@ -84,7 +84,10 @@ defmodule AshReplicant.Status do
     :source_column_missing,
     :source_column_unmapped,
     :source_type_invalid,
-    :source_replica_identity
+    :source_replica_identity,
+    # O03 (ADR-0020): the retention-below-recovery-horizon refusal is a
+    # declared-configuration failure, not a runtime halt.
+    :retention_below_recovery_horizon
   ]
 
   # The closed halt atoms a persisted cause may decode back into

@@ -321,9 +321,9 @@ defmodule AshReplicant.ReleaseContract do
      "schedule_next_census(%{state | consecutive_faults: 0, last_census: :healthy})"},
     {"lib/ash_replicant/pipeline_owner.ex",
      "halt_for_census(state, check, :census_unverifiable)"},
-    {"lib/ash_replicant/telemetry.ex", "[:ash_replicant, :census, :passed]"},
-    {"lib/ash_replicant/telemetry.ex", "[:ash_replicant, :census, :faulted]"},
-    {"lib/ash_replicant/telemetry.ex", "[:ash_replicant, :census, :halted]"}
+    {"lib/ash_replicant/telemetry.ex", "[:ash_replicant, :census, :passed],\n"},
+    {"lib/ash_replicant/telemetry.ex", "[:ash_replicant, :census, :faulted],\n"},
+    {"lib/ash_replicant/telemetry.ex", "[:ash_replicant, :census, :halted],\n"}
   ]
 
   @upgrade_doc_contracts [
@@ -427,7 +427,7 @@ defmodule AshReplicant.ReleaseContract do
         {sink_path,
          "# removed `apply_ledger`) must surface as a compile-time failure on the host,"},
         {sink_path, ":apply_ledger"},
-        {sink_path, "\":initial_state, and the compile-only legacy :apply_ledger marker\""},
+        {sink_path, "\"legacy :apply_ledger marker\""},
         {sink_path, "legacy_apply_ledger?: unquote(legacy_apply_ledger?)"},
         {root_path, "%{legacy_apply_ledger?: true} ->"},
         {task_path, "compile-only `apply_ledger` marker from each explicitly bound legacy sink."},

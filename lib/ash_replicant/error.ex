@@ -48,6 +48,7 @@ defmodule AshReplicant.Error do
           | :census_checker_fault
           | :census_source_unreachable
           | :census_unverifiable
+          | :retention_below_recovery_horizon
           # Destination admission re-uses this tuple shape with its own
           # structural sub-reasons; their closed set is enumerated in
           # `AshReplicant.Destination`'s own @type.
@@ -161,7 +162,12 @@ defmodule AshReplicant.Error do
     :census_timeout,
     :census_checker_fault,
     :census_source_unreachable,
-    :census_unverifiable
+    :census_unverifiable,
+    # O03 (ADR-0020): the static recovery-horizon refusal — a claim-backed
+    # message route's declared retention does not cover the operator's
+    # declared supported outage/replay window, so an in-window outage would
+    # expire the standalone message's only dedup. Misconfiguration class.
+    :retention_below_recovery_horizon
   ]
 
   for reason <- @closed_reasons do

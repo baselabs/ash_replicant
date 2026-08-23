@@ -466,7 +466,8 @@ defmodule AshReplicant.Test.Messages do
         {"peer", AshReplicant.Test.Messages.PeerOutbox, :record},
         {"transient", AshReplicant.Test.Messages.TransientOutbox, :record}
       ],
-      ignored_message_prefixes: ["noise"]
+      ignored_message_prefixes: ["noise"],
+      recovery_horizon: {1, :second}
   end
 
   defmodule MarqueeSink do
@@ -481,6 +482,7 @@ defmodule AshReplicant.Test.Messages do
         {"peer", AshReplicant.Test.Messages.PeerOutbox, :record},
         {"transient", AshReplicant.Test.Messages.TransientOutbox, :record}
       ],
-      ignored_message_prefixes: ["noise"]
+      ignored_message_prefixes: ["noise"],
+      recovery_horizon: {1, :second}
   end
 end

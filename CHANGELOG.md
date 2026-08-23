@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Typed operations telemetry, part 1 — executable examples and per-key
+  mutation matrix** (roadmap D3 / issue #13 / O03). `AshReplicant.Telemetry`'s
+  moduledoc now ships two operator-copyable example blocks — a dependency-free
+  metrics reporter (`:telemetry` + `:counters` attaching over
+  `emitted_event_names/0`) and an OpenTelemetry bridge whose handler runs
+  without the optional OTel dep while its mapping table stays pinned complete
+  against the emitted inventory — both extracted verbatim and executed by
+  `test/ash_replicant/telemetry_examples_test.exs`. The data-boundary mutation
+  matrix gains the value-free telemetry family: 28 cells (one garbage-type
+  mutant per typed metadata key, one lax mutant per off-type-tested key, the
+  shared non-negativity clause mutants, and one removal mutant per measurement
+  key), with a completeness tripwire test forcing every future telemetry key
+  to ship with its mutant.
+- **Recovery horizon, part 1 — declaration and activation enforcement**
+  (issue #13 / O03). Sinks with claim-backed `message_routes` must declare
+  `recovery_horizon: {count, unit}` (the operator's supported outage/replay
+  window; normalized to seconds at compile). Activation refuses with the new
+  closed reason `:retention_below_recovery_horizon` (misconfigured class)
+  when any routed create's declared AshOnetime retention does not cover the
+  horizon — an in-window outage would otherwise expire a standalone message's
+  only dedup while its WAL is still recoverable. Route-less and `:append_log`
+  sinks are exempt (append routes dedup structurally through the append
+  identity); a stray horizon in either posture is a compile error.
+  Classification lives in the new `AshReplicant.Horizon` — one body the
+  doctor and census will delegate to.
+
 - **Coherent runtime status and lifecycle tombstones** (roadmap D3-status /
   issue #12 / ADR-0019). `AshReplicant.status/1` answers with the closed
   five-value contract `:healthy | :catching_up | {:halted, reason} |

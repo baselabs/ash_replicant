@@ -100,6 +100,51 @@ defmodule AshReplicant.Sink do
   defp message_prefix_shape?(prefix) when is_binary(prefix) and prefix != "", do: true
   defp message_prefix_shape?(_), do: false
 
+  # {count, unit} → seconds, bounded by the same ceiling ash_onetime admits
+  # for a claim's retention_seconds so a declared horizon is always
+  # representable by the retention it must be compared against.
+  @horizon_units %{
+    second: 1,
+    seconds: 1,
+    minute: 60,
+    minutes: 60,
+    hour: 3_600,
+    hours: 3_600,
+    day: 86_400,
+    days: 86_400,
+    week: 604_800,
+    weeks: 604_800
+  }
+
+  @max_horizon_seconds 2_147_483_647
+
+  defp normalize_recovery_horizon!({count, unit})
+       when is_integer(count) and count >= 1 and is_atom(unit) do
+    case Map.fetch(@horizon_units, unit) do
+      {:ok, seconds} ->
+        total = count * seconds
+
+        if total <= @max_horizon_seconds do
+          total
+        else
+          raise ArgumentError,
+                ":recovery_horizon must be a positive bounded {count, unit} duration " <>
+                  "(the declared window exceeds the representable retention ceiling)"
+        end
+
+      :error ->
+        raise ArgumentError,
+              ":recovery_horizon must be a positive bounded {count, unit} duration " <>
+                "(unknown unit — use second(s), minute(s), hour(s), day(s), or week(s))"
+    end
+  end
+
+  defp normalize_recovery_horizon!(_other) do
+    raise ArgumentError,
+          ":recovery_horizon must be a positive bounded {count, unit} duration " <>
+            "(e.g. {24, :hour})"
+  end
+
   @doc false
   defmacro __using__(opts) do
     repo = Keyword.fetch!(opts, :repo)
@@ -119,6 +164,7 @@ defmodule AshReplicant.Sink do
            :ignored_sources,
            :message_routes,
            :ignored_message_prefixes,
+           :recovery_horizon,
            :sink_kind,
            :initial_state,
            :apply_ledger
@@ -130,8 +176,9 @@ defmodule AshReplicant.Sink do
         raise ArgumentError,
               "unknown AshReplicant.Sink option(s) #{inspect(Keyword.keys(extra))} — " <>
                 "the sink admits only :repo, :domains, :checkpoint_resource, :slot_name, " <>
-                ":ignored_sources, :message_routes, :ignored_message_prefixes, :sink_kind, " <>
-                ":initial_state, and the compile-only legacy :apply_ledger marker"
+                ":ignored_sources, :message_routes, :ignored_message_prefixes, " <>
+                ":recovery_horizon, :sink_kind, :initial_state, and the compile-only " <>
+                "legacy :apply_ledger marker"
     end
 
     # ADR-0018 §1: a generated sink is EXCLUSIVELY one kind. Replicant reads
@@ -253,6 +300,35 @@ defmodule AshReplicant.Sink do
               "#{inspect(route_prefixes -- (route_prefixes -- ignored_message_prefixes))}"
     end
 
+    # O03 (ADR-0020): the recovery horizon — the operator's supported
+    # outage/replay window, the floor every claim-backed route retention must
+    # cover (activation enforces it against the manifest; AshReplicant.Horizon
+    # owns the one comparison body). Declared exactly when claim-backed
+    # message routes exist: route-less sinks have nothing to protect, and an
+    # :append_log sink's routes dedup structurally through the append
+    # identity — a stray horizon in either posture is config drift.
+    recovery_horizon =
+      case Keyword.get(opts, :recovery_horizon) do
+        nil ->
+          nil
+
+        value ->
+          cond do
+            message_routes == [] ->
+              raise ArgumentError,
+                    ":recovery_horizon is declared with no message routes to protect — " <>
+                      "remove it or declare message_routes"
+
+            sink_kind == :append_log ->
+              raise ArgumentError,
+                    ":recovery_horizon does not apply to an :append_log sink — its " <>
+                      "message routes dedup through the append identity, not claims"
+
+            true ->
+              normalize_recovery_horizon!(value)
+          end
+      end
+
     # Deterministic order for the baked config (the config digest is
     # term_to_binary over it — declaration order must not change identity).
     message_routes = Enum.sort(message_routes)
@@ -278,6 +354,21 @@ defmodule AshReplicant.Sink do
           description: "AshReplicant sink callback #{name}/#{arity} is final"
       end
 
+      # O03 (ADR-0020): claim-backed routes without a declared horizon never
+      # compile — the spec's retention-vs-horizon validation cannot be
+      # silently absent. Spliced AFTER the finality guard so a host breaking
+      # BOTH rules still learns about the callback first.
+      unquote(
+        if message_routes != [] and sink_kind == :state_mirror and is_nil(recovery_horizon) do
+          quote do
+            raise ArgumentError,
+                  ":recovery_horizon is required when message_routes are declared — " <>
+                    "declare a recovery horizon (the supported outage/replay window) " <>
+                    "so every route's claim retention can be validated against it"
+          end
+        end
+      )
+
       # Registered before the macro's own injected definitions: @on_definition
       # fires only for definitions made AFTER the attribute is set, so any LATER
       # host def hits the guard. The expanding flag exempts the injected defs.
@@ -297,6 +388,7 @@ defmodule AshReplicant.Sink do
           ignored_sources: unquote(Macro.escape(ignored_sources)),
           message_routes: unquote(Macro.escape(message_routes)),
           ignored_message_prefixes: unquote(Macro.escape(ignored_message_prefixes)),
+          recovery_horizon: unquote(recovery_horizon),
           sink_kind: unquote(sink_kind),
           initial_state: unquote(initial_state),
           legacy_apply_ledger?: unquote(legacy_apply_ledger?)

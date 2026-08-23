@@ -142,7 +142,9 @@ defmodule AshReplicant.ErrorTest do
           # S02 (ADR-0017), additive growth per ADR-0011.
           :snapshot_state_invalid,
           :snapshot_provenance_unavailable,
-          :snapshot_scope_incomplete
+          :snapshot_scope_incomplete,
+          # O03 (ADR-0020): the recovery-horizon refusal.
+          :retention_below_recovery_horizon
         ],
         &[Atom.to_string(&1)]
       )

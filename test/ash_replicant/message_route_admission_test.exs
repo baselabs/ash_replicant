@@ -252,4 +252,83 @@ defmodule AshReplicant.MessageRouteAdmissionTest do
       assert Map.has_key?(manifest.onetime_prefixes_by_action, {Fixtures.Outbox, :record})
     end
   end
+
+  describe "recovery horizon (O03)" do
+    test "message_routes without :recovery_horizon fail compilation naming the option" do
+      assert_raise ArgumentError, ~r/:recovery_horizon.*declare a recovery horizon/s, fn ->
+        Code.compile_string("""
+        defmodule AshReplicant.Test.NoHorizonSink do
+          use AshReplicant.Sink,
+            repo: AshReplicant.TestRepo,
+            domains: [AshReplicant.Test.Messages.Domain],
+            checkpoint_resource: AshReplicant.Test.Checkpoint,
+            slot_name: "no_horizon_slot",
+            message_routes: [{"outbox", AshReplicant.Test.Messages.Outbox, :record}]
+        end
+        """)
+      end
+    end
+
+    test ":recovery_horizon without message_routes is rejected — nothing to protect" do
+      assert_raise ArgumentError, ~r/no message routes to protect/, fn ->
+        Code.compile_string("""
+        defmodule AshReplicant.Test.UnprotectedHorizonSink do
+          use AshReplicant.Sink,
+            repo: AshReplicant.TestRepo,
+            domains: [AshReplicant.Test.Domain],
+            checkpoint_resource: AshReplicant.Test.Checkpoint,
+            slot_name: "unprotected_horizon_slot",
+            recovery_horizon: {24, :hour}
+        end
+        """)
+      end
+    end
+
+    test ":recovery_horizon must be a positive bounded {count, unit} duration" do
+      base = """
+      repo: AshReplicant.TestRepo,
+      domains: [AshReplicant.Test.Messages.Domain],
+      checkpoint_resource: AshReplicant.Test.Checkpoint,
+      """
+
+      for bad <- [{0, :hour}, {-1, :hour}, {1, :decade}, {1.5, :hour}, "24h", 24] do
+        assert_raise ArgumentError, ~r/positive bounded \{count, unit\} duration/, fn ->
+          Code.compile_string("""
+          defmodule AshReplicant.Test.BadHorizonSink do
+            use AshReplicant.Sink,
+              #{base}
+              slot_name: "bad_horizon_slot",
+              message_routes: [{"outbox", AshReplicant.Test.Messages.Outbox, :record}],
+              recovery_horizon: #{inspect(bad)}
+          end
+          """)
+        end
+      end
+    end
+
+    test "the baked config carries recovery_horizon normalized to seconds" do
+      config = Fixtures.Sink.__ash_replicant_config__()
+
+      assert is_integer(config.recovery_horizon) and config.recovery_horizon > 0
+    end
+
+    test "min_route_retention walks the manifest's message protections" do
+      {:ok, manifest} =
+        manifest_for([
+          {"outbox", Fixtures.Outbox, :record},
+          {"transient", Fixtures.TransientOutbox, :record}
+        ])
+
+      # The transient probe declares one second — the binding floor.
+      assert {:ok, 1} = AshReplicant.Horizon.min_route_retention(manifest)
+    end
+
+    test "classify_retention compares the floor against the declared horizon" do
+      assert :ok = AshReplicant.Horizon.classify_retention(86_400, 3_600)
+      assert :ok = AshReplicant.Horizon.classify_retention(3_600, 3_600)
+
+      assert {:error, :retention_below_recovery_horizon} =
+               AshReplicant.Horizon.classify_retention(3_599, 3_600)
+    end
+  end
 end

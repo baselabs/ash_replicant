@@ -703,6 +703,7 @@ defmodule AshReplicant do
            AshReplicant.Destination.effective_dynamic_repo(sink_config.repo),
          :ok <- AshReplicant.Destination.preflight_onetime(manifest, dynamic_repo),
          :ok <- AshReplicant.Messages.preflight_digest(sink_config),
+         :ok <- AshReplicant.Horizon.preflight_static(manifest, sink_config),
          :ok <- Provenance.preflight(sink_config),
          {:ok, code_modules} <- AshReplicant.Destination.code_modules(sink, manifest),
          {:ok, code_fingerprint} <- AshReplicant.Destination.code_fingerprint(code_modules) do

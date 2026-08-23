@@ -105,6 +105,10 @@ defmodule AshReplicant.StatusTest do
                AshReplicant.status(StatusSink)
     end
 
+    test "the O03 recovery-horizon refusal classifies misconfigured" do
+      assert :misconfigured = AshReplicant.Status.classify(:retention_below_recovery_horizon)
+    end
+
     test "an unknown persisted cause decodes to the closed fallback" do
       put_tombstone(:tombstone_unknown, :halt)
 
