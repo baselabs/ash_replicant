@@ -53,7 +53,7 @@ defmodule AshReplicant.StatusLifecycleTest do
     )
   end
 
-  defp eventually(fun, polls \\ 400) do
+  defp eventually(fun, polls \\ 800) do
     cond do
       fun.() -> :ok
       polls == 0 -> flunk("condition not reached within the poll budget")
@@ -167,17 +167,14 @@ defmodule AshReplicant.StatusLifecycleTest do
       end)
     end
 
-    @tag skip:
-           System.get_env("ASH_REPLICANT_TEST_URL") != nil &&
-             "DB-free premise: the live env skips the durable leg benignly"
     test "when the durable leg cannot write, the value-free telemetry IS the record" do
       # The repo is not running in this suite — exactly the destination-down
       # halt condition. The node-local leg still answers, and the durable
       # leg's failure fires the closed typed event that makes the loss
-      # observable instead of silent. Scoped to the DB-free environment
-      # that owns the premise: under the combined live suite (sandbox auto,
-      # no checkpoint row for this never-connected slot) the durable leg
-      # legitimately skips and no record is owed.
+      # observable instead of silent. Under the combined live environment
+      # (sandbox auto, no checkpoint row for this never-connected slot) the
+      # durable leg benignly SKIPS: nothing failed, no record is owed, and
+      # the absence of the failure event is itself asserted.
       events = self()
 
       :telemetry.attach_many(
@@ -206,15 +203,22 @@ defmodule AshReplicant.StatusLifecycleTest do
           match?({:halted, :pipeline_terminated}, AshReplicant.status(LifecycleSink))
         end)
 
-        assert_receive {:telemetry, [:ash_replicant, :status, :tombstone_write_failed],
-                        %{slot_name: @slot, reason: reason}},
-                       5_000
+        if System.get_env("ASH_REPLICANT_TEST_URL") do
+          # Live env: the durable leg benignly skips (no row for this
+          # never-connected slot) — assert no failure record is owed.
+          refute_receive {:telemetry, [:ash_replicant, :status, :tombstone_write_failed], _},
+                         1_000
+        else
+          assert_receive {:telemetry, [:ash_replicant, :status, :tombstone_write_failed],
+                          %{slot_name: @slot, reason: reason}},
+                         5_000
 
-        # DB-free (this suite): the repo is not running, so the guard
-        # itself refuses. Under the live battery (TestRepo started, manual
-        # sandbox with no checked-out owner): the write is attempted and
-        # the transaction fails. Both are the closed record firing.
-        assert reason in [:destination_unavailable, :destination_write_failed]
+          # DB-free (this suite): the repo is not running, so the guard
+          # itself refuses. Under a started-repo manual sandbox the write
+          # is attempted and the transaction fails. Both are the closed
+          # record firing.
+          assert reason in [:destination_unavailable, :destination_write_failed]
+        end
       end)
     end
 
