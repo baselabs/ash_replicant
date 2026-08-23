@@ -217,7 +217,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     {"lib/ash_replicant/pipeline_owner.ex",
      "send(parent, {:census_result, token, Census.run(slot_name, sink)})"},
     {"lib/ash_replicant/pipeline_owner.ex",
-     "schedule_next_census(%{state | consecutive_faults: 0})"},
+     "schedule_next_census(%{state | consecutive_faults: 0, last_census: :healthy})"},
     {"lib/ash_replicant/pipeline_owner.ex",
      "halt_for_census(state, check, :census_unverifiable)"},
     {"lib/ash_replicant/telemetry.ex", "[:ash_replicant, :census, :passed]"},
