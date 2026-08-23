@@ -300,7 +300,7 @@ defmodule AshReplicant.Sink do
               "#{inspect(route_prefixes -- (route_prefixes -- ignored_message_prefixes))}"
     end
 
-    # O03 (ADR-0020): the recovery horizon — the operator's supported
+    # O03 (ADR-0022): the recovery horizon — the operator's supported
     # outage/replay window, the floor every claim-backed route retention must
     # cover (activation enforces it against the manifest; AshReplicant.Horizon
     # owns the one comparison body). Declared exactly when claim-backed
@@ -354,7 +354,7 @@ defmodule AshReplicant.Sink do
           description: "AshReplicant sink callback #{name}/#{arity} is final"
       end
 
-      # O03 (ADR-0020): claim-backed routes without a declared horizon never
+      # O03 (ADR-0022): claim-backed routes without a declared horizon never
       # compile — the spec's retention-vs-horizon validation cannot be
       # silently absent. Spliced AFTER the finality guard so a host breaking
       # BOTH rules still learns about the callback first.

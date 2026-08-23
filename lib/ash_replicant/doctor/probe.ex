@@ -138,7 +138,7 @@ defmodule AshReplicant.Doctor.Probe do
   The slot's type, plugin, liveness, and retention horizon. `wal_status` and
   `safe_wal_size` exist from PostgreSQL 13, so this is portable across the whole
   PostgreSQL 15 through 18 support matrix — unlike `invalidation_reason` (PG18), `conflicting`
-  (PG16), and `inactive_since` (PG17). O03 (ADR-0020) added `safe_wal_size`
+  (PG16), and `inactive_since` (PG17). O03 (ADR-0022) added `safe_wal_size`
   itself (not just its exhaustion) so `AshReplicant.Horizon` reads byte
   headroom from the SAME statement — one SQL home (rule 11). The slot name
   binds `$1`.
@@ -209,7 +209,7 @@ defmodule AshReplicant.Doctor.Probe do
   end
 
   @doc """
-  O03 (ADR-0020): the one slot-fact probe the runtime (census + the
+  O03 (ADR-0022): the one slot-fact probe the runtime (census + the
   activation resume gate) shares with the doctor — a short-lived read-only
   connection, `admit!/1`, and the SAME `sql_replication_slot/0` statement
   (rule 11: one SQL home, never a copy). Returns the slot fact map, `nil`

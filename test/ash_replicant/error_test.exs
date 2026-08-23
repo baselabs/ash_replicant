@@ -143,7 +143,7 @@ defmodule AshReplicant.ErrorTest do
           :snapshot_state_invalid,
           :snapshot_provenance_unavailable,
           :snapshot_scope_incomplete,
-          # O03 (ADR-0020): the recovery-horizon refusal.
+          # O03 (ADR-0022): the recovery-horizon refusal.
           :retention_below_recovery_horizon
         ],
         &[Atom.to_string(&1)]

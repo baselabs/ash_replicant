@@ -418,7 +418,7 @@ defmodule AshReplicant.Sink.Impl do
   end
 
   defp write_bound_contract!(config, identity, contract, extra) do
-    # O03 (ADR-0020): the bind records the CURRENT digest-key observation —
+    # O03 (ADR-0022): the bind records the CURRENT digest-key observation —
     # the witness that bounds later key-version removals. Computed under the
     # bind (the activation lock is held); an encode failure fails the bind.
     witness =

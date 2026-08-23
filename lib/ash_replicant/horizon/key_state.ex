@@ -1,6 +1,6 @@
 defmodule AshReplicant.Horizon.KeyState do
   @moduledoc """
-  The authenticated digest-key-set witness (O03, ADR-0020): the last-observed
+  The authenticated digest-key-set witness (O03, ADR-0022): the last-observed
   set of message-digest key VERSIONS, the active version, and the observation
   time — MAC'd under its own key version of
   `:ash_replicant, :horizon_provenance_keys`, an orthogonal family (never the
