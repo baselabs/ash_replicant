@@ -203,22 +203,17 @@ defmodule AshReplicant.StatusLifecycleTest do
           match?({:halted, :pipeline_terminated}, AshReplicant.status(LifecycleSink))
         end)
 
-        if System.get_env("ASH_REPLICANT_TEST_URL") do
-          # Live env: the durable leg benignly skips (no row for this
-          # never-connected slot) — assert no failure record is owed.
-          refute_receive {:telemetry, [:ash_replicant, :status, :tombstone_write_failed], _},
-                         1_000
-        else
-          assert_receive {:telemetry, [:ash_replicant, :status, :tombstone_write_failed],
-                          %{slot_name: @slot, reason: reason}},
-                         5_000
+        assert_receive {:telemetry, [:ash_replicant, :status, :tombstone_write_failed],
+                        %{slot_name: @slot, reason: reason}},
+                       5_000
 
-          # DB-free (this suite): the repo is not running, so the guard
-          # itself refuses. Under a started-repo manual sandbox the write
-          # is attempted and the transaction fails. Both are the closed
-          # record firing.
-          assert reason in [:destination_unavailable, :destination_write_failed]
-        end
+        # DB-free (this suite): the repo is not running, so the guard
+        # itself refuses (:destination_unavailable). Under the live
+        # environment (repo started, manual sandbox, the owner process not
+        # checked out): the write is attempted and the transaction fails
+        # (:destination_write_failed) — verified deterministically in all
+        # three live cells. Both are the closed record firing.
+        assert reason in [:destination_unavailable, :destination_write_failed]
       end)
     end
 
