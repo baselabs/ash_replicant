@@ -167,11 +167,17 @@ defmodule AshReplicant.StatusLifecycleTest do
       end)
     end
 
+    @tag skip:
+           System.get_env("ASH_REPLICANT_TEST_URL") != nil &&
+             "DB-free premise: the live env skips the durable leg benignly"
     test "when the durable leg cannot write, the value-free telemetry IS the record" do
       # The repo is not running in this suite — exactly the destination-down
       # halt condition. The node-local leg still answers, and the durable
       # leg's failure fires the closed typed event that makes the loss
-      # observable instead of silent.
+      # observable instead of silent. Scoped to the DB-free environment
+      # that owns the premise: under the combined live suite (sandbox auto,
+      # no checkpoint row for this never-connected slot) the durable leg
+      # legitimately skips and no record is owed.
       events = self()
 
       :telemetry.attach_many(
