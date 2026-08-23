@@ -431,11 +431,30 @@ defmodule AshReplicant.Status do
 
   @doc """
   A successful activation clears the node-local leg — the live generation
-  is the newer fact.
+  is the newer fact. The clear runs BEFORE the generation entry exists so
+  that a node-local tombstone under a live entry can only be that entry's
+  own halt decision; a start that then FAILS restores the captured prior
+  tombstone (`snapshot_node_local/1` + `restore_node_local/2`), so a
+  prior generation's node-local-only record cannot be destroyed by a
+  restart attempt that never produced a generation.
   """
   @spec clear_node_local(String.t()) :: :ok
   def clear_node_local(slot_name) when is_binary(slot_name) do
     :persistent_term.erase({__MODULE__, slot_name})
+    :ok
+  end
+
+  @doc false
+  @spec snapshot_node_local(String.t()) :: Tombstone.t() | nil
+  def snapshot_node_local(slot_name) when is_binary(slot_name),
+    do: node_local(slot_name)
+
+  @doc false
+  @spec restore_node_local(String.t(), Tombstone.t() | nil) :: :ok
+  def restore_node_local(_slot_name, nil), do: :ok
+
+  def restore_node_local(slot_name, %Tombstone{} = tombstone) when is_binary(slot_name) do
+    :persistent_term.put({__MODULE__, slot_name}, tombstone)
     :ok
   end
 

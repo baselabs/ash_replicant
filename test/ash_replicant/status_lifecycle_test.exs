@@ -201,8 +201,14 @@ defmodule AshReplicant.StatusLifecycleTest do
         end)
 
         assert_receive {:telemetry, [:ash_replicant, :status, :tombstone_write_failed],
-                        %{slot_name: @slot, reason: :destination_unavailable}},
+                        %{slot_name: @slot, reason: reason}},
                        5_000
+
+        # DB-free (this suite): the repo is not running, so the guard
+        # itself refuses. Under the live battery (TestRepo started, manual
+        # sandbox with no checked-out owner): the write is attempted and
+        # the transaction fails. Both are the closed record firing.
+        assert reason in [:destination_unavailable, :destination_write_failed]
       end)
     end
 
@@ -286,6 +292,29 @@ defmodule AshReplicant.StatusLifecycleTest do
                  AshReplicant.start_link(start_opts(census: [enabled?: false]))
 
         assert AshReplicant.status(LifecycleSink) in [:catching_up, :healthy]
+
+        assert :ok = AshReplicant.stop_supervised(@slot)
+      end)
+    end
+
+    test "a FAILED activation preserves the prior node-local terminal cause" do
+      capture_log(fn ->
+        # The prior halt whose durable leg never wrote (destination down):
+        # its node-local record is all that remains. A restart attempt that
+        # fails after admission must not destroy it — the clear that opens
+        # the halt-window invariant is only owed to a generation that
+        # actually starts (cross-vendor de-risk finding).
+        :persistent_term.put(@tombstone_key, %AshReplicant.Status.Tombstone{
+          cause: :census_unverifiable,
+          class: :halt,
+          at: DateTime.utc_now()
+        })
+
+        # `messages: true` on this route-less sink passes the adapter's own
+        # admission but is refused by Replicant at pipeline start.
+        assert {:error, _reason} = AshReplicant.start_link(start_opts(messages: true))
+
+        assert {:halted, :census_unverifiable} = AshReplicant.status(LifecycleSink)
 
         assert :ok = AshReplicant.stop_supervised(@slot)
       end)

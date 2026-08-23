@@ -711,7 +711,11 @@ defmodule AshReplicant do
       # The node-local tombstone clears BEFORE the entry exists: from that
       # ordering, a node-local tombstone coexisting with a live entry can
       # only be THIS generation's halt decision, which is what lets the
-      # derivation close the healthy-while-halting window.
+      # derivation close the healthy-while-halting window. The prior
+      # tombstone is captured first and restored if this start fails, so a
+      # restart attempt that never produced a generation cannot destroy a
+      # prior halt's node-local-only record.
+      previous_tombstone = Status.snapshot_node_local(sink_config.slot_name)
       :ok = Status.clear_node_local(sink_config.slot_name)
 
       runtime = %Generation{
@@ -754,6 +758,7 @@ defmodule AshReplicant do
            }}
 
         _start_failed ->
+          :ok = Status.restore_node_local(sink_config.slot_name, previous_tombstone)
           erase_generation_key(key, reference)
           result
       end
