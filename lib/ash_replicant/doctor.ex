@@ -339,7 +339,7 @@ defmodule AshReplicant.Doctor do
     ]
   end
 
-  # O03 (ADR-0020): the recovery-horizon diagnosis — an ADAPTER over the one
+  # O03 (ADR-0022): the recovery-horizon diagnosis — an ADAPTER over the one
   # classification body in AshReplicant.Horizon (rule 11: never a copy). The
   # static leg compares the manifest's retention floor against the declared
   # horizon; the halted leg compares the durable tombstone's duration and the

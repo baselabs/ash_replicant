@@ -40,7 +40,7 @@ config :ash_replicant, message_digest_keys: [{1, "test-message-digest-key-v1"}]
 # and restore it (`AshReplicant.Test.Provenance`).
 config :ash_replicant, snapshot_provenance_keys: [{1, "test-snapshot-provenance-key-v1"}]
 
-# O03 digest-key horizon witness baseline (ADR-0020): the ORTHOGONAL family
+# O03 digest-key horizon witness baseline (ADR-0022): the ORTHOGONAL family
 # authenticating the checkpoint's digest_key_state envelope — never the
 # rotating message digest keys themselves.
 config :ash_replicant, horizon_provenance_keys: [{1, "test-horizon-provenance-key-v1"}]

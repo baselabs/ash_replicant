@@ -208,7 +208,7 @@ defmodule AshReplicant.Checkpoint do
           allow_nil? true
         end
 
-        # O03 (issue #13 / ADR-0020): the authenticated digest-key-set
+        # O03 (issue #13 / ADR-0022): the authenticated digest-key-set
         # witness (`AshReplicant.Horizon.KeyState`) — the last-observed
         # message-digest key versions, active version, and observation time,
         # MAC'd under the orthogonal :horizon_provenance_keys family. NULL
