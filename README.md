@@ -643,6 +643,12 @@ AshReplicant.status(MyApp.Replicant.Sink)
 #=> :healthy | :catching_up | {:halted, reason} | {:misconfigured, reason} | :not_started
 ```
 
+For every control-plane fault — source disconnect, owner death, checkpoint
+read/write faults, timeline changes, contract drift, census timeouts — the
+[recovery-states matrix](https://github.com/baselabs/ash_replicant/blob/main/docs/RECOVERY.md)
+(`docs/RECOVERY.md`) documents the surfaced state, what the pipeline does on
+its own, and the operator action each one owes.
+
 The answer is **derived, never stored**: it asks the live `PipelineOwner` for
 its own facts (census health, pipeline liveness), falls back to the
 node-local generation entry (a dead owner is the fault

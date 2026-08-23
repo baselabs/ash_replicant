@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Fault-recovery matrix — live proofs and documented recovery states**
+  (roadmap F01 / issue #14). `test/integration/fault_recovery_test.exs`
+  exercises the control-plane crash/reconnect matrix against a live
+  PostgreSQL: source disconnect mid-stream (forced in-process walsender kill
+  — continuation is exactly-once, the owner and generation untouched), owner
+  death (the next delivery fails closed, the pipeline halts itself, the
+  surfaced state is the tombstone cause, and an explicit re-activation reaps
+  the dead generation and resumes with no duplication or loss), and a
+  persistent checkpoint read fault injected mid-run (the connect-position
+  read is fail-open by transport design, so safety rests on the delivery
+  admission's locked re-read failing closed — no effect proceeds, the
+  watermark is byte-identical, repair plus explicit restart recovers
+  exactly-once). Each leg is red-capable: a paired mutation of its guard
+  turns the test red (receipts in the F01 design note; the watermark skip's
+  own proof remains the direct-LSN suite). `docs/RECOVERY.md` documents the
+  full fault → surfaced state → pipeline behavior → operator action matrix
+  (both owner-death windows, the absent-slot fail-closed carve-out, and the
+  two telemetry/tombstone names one halt can carry), linked from the README
+  status section.
 - **Typed operations telemetry, part 1 — executable examples and per-key
   mutation matrix** (roadmap D3 / issue #13 / O03). `AshReplicant.Telemetry`'s
   moduledoc now ships two operator-copyable example blocks — a dependency-free
