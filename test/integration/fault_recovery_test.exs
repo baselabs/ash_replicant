@@ -51,14 +51,20 @@ defmodule AshReplicant.FaultRecoveryTest do
   @moduledoc """
   Issue #14 / ADR-0014 + ADR-0019: the control-plane crash and reconnect
   matrix, live. Three legs, each with a paired red-capability mutation
-  recorded in `.kimosabe/designs/f01-fault-recovery-matrix.md`:
+  (receipts in the F01 design note, a local lifecycle artifact):
 
     * source disconnect mid-stream — the walsender dies while the pipeline
-      PROCESS stays up; postgrex reconnects in-process and the un-acked WAL
-      re-streams. Exactly-once continuation is proven by the per-statement
-      observer (no duplicate apply) AND by a `:skipped` event for the
-      re-delivered transaction (the watermark skip actually fired — the test
-      is green for the right reason, not because nothing re-delivered);
+      PROCESS stays up; postgrex reconnects in-process (the reconnect's own
+      `:slot_active` is asserted, and the killer flunks if it matched no
+      backend) and the WAL committed during the outage streams through.
+      Exactly-once is proven by per-statement observer counts on BOTH
+      operations — a re-apply of an existing row is an upsert conflict
+      (UPDATE), invisible to an INSERT-only count. There is no
+      re-deliver-then-skip window to assert here: the reconnect resume
+      origin is `max(durable checkpoint, confirmed_flush)` and the
+      checkpoint commits WITH the rows, so it never lags a completed
+      delivery — the watermark skip's own red-capable proof is the
+      direct-LSN suite in `checkpoint_binding_test.exs`;
     * owner death + generation replacement — killing the live owner fails
       the next delivery's admission closed, the pipeline halts itself, the
       surfaced state is the tombstone cause, and an explicit re-activation
@@ -165,16 +171,22 @@ defmodule AshReplicant.FaultRecoveryTest do
     Marquee.q!("INSERT INTO #{@src} (id, note) VALUES ('2', 'b'), ('3', 'c')")
 
     # The pipeline process never died (no supervisor restart, no
-    # re-activation): postgrex reconnects in-process and the WAL committed
-    # during the outage streams through. Rows 2 and 3 are ONE source
-    # transaction (one INSERT statement) — one applied event, change_count 2.
+    # re-activation): postgrex reconnects IN-PROCESS — the reconnect emits
+    # its own :slot_active — and the WAL committed during the outage
+    # streams through. Rows 2 and 3 are ONE source transaction (one INSERT
+    # statement) — one applied event, change_count 2.
+    assert_receive {:delivery, ^ref, :slot_active}, 15_000
     assert_receive {:delivery, ^ref, {:applied, _second_lsn}}, 15_000
 
     PG.wait_until(fn -> length(mirror_rows()) == 3 end, 600)
     assert mirror_rows() == [["1", "a"], ["2", "b"], ["3", "c"]]
 
-    # Exactly-once, observed per statement: one mirror INSERT per row.
+    # Exactly-once, observed per statement and BOTH operations: one mirror
+    # INSERT per row and ZERO UPDATEs — a re-apply of an existing row is an
+    # upsert conflict, which fires the observer's UPDATE trigger and would
+    # stay invisible to an INSERT-only count.
     assert DestinationObserver.effect_count(run_id, "mapped", "INSERT") == 3
+    assert DestinationObserver.effect_count(run_id, "mapped", "UPDATE") == 0
 
     # The disconnect never touched the lifecycle: same live owner, the
     # watermark advanced monotonically, and the slot never halted.
@@ -224,8 +236,10 @@ defmodule AshReplicant.FaultRecoveryTest do
     assert mirror_rows() == [["m", "marker"], ["p", "post-kill"], ["q", "resumed"]]
 
     # No duplication across the death/replacement arc: exactly one mirror
-    # INSERT per source row, and the watermark advanced past every LSN.
+    # INSERT per source row (a re-apply would be an upsert UPDATE), and the
+    # watermark advanced past every LSN.
     assert DestinationObserver.effect_count(run_id, "mapped", "INSERT") == 3
+    assert DestinationObserver.effect_count(run_id, "mapped", "UPDATE") == 0
     assert is_integer(watermark()) and watermark() > 0
 
     # The replacement generation reaches HEALTHY under its own census.
@@ -273,6 +287,7 @@ defmodule AshReplicant.FaultRecoveryTest do
     PG.wait_until(fn -> mirror_rows() == [["1", "a"], ["2", "b"]] end, 600)
 
     assert DestinationObserver.effect_count(run_id, "mapped", "INSERT") == 2
+    assert DestinationObserver.effect_count(run_id, "mapped", "UPDATE") == 0
     assert watermark() > watermark_before
 
     assert :ok = AshReplicant.stop_supervised(@slot)
@@ -362,13 +377,19 @@ defmodule AshReplicant.FaultRecoveryTest do
 
   # The forced-reconnect shape (test/integration/checkpoint_binding_test.exs):
   # terminate the slot's walsender backend — the pipeline's Connection
-  # process survives and postgrex reconnects in-process.
+  # process survives and postgrex reconnects in-process. Flunks when the
+  # join matches no backend: a silent no-op kill would leave the leg's
+  # reconnect assertions vacuously green.
   defp kill_walsender do
     rows =
       Marquee.q!(
         "SELECT r.pid FROM pg_stat_replication r JOIN pg_replication_slots s ON s.active_pid = r.pid WHERE s.slot_name = $1",
         [@slot]
       ).rows
+
+    unless rows != [] do
+      ExUnit.Assertions.flunk("kill_walsender matched no backend for #{@slot}")
+    end
 
     for [pid] <- rows do
       Marquee.q!("SELECT pg_terminate_backend($1)", [pid])
