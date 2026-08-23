@@ -258,9 +258,9 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     {"lib/mix/tasks/ash_replicant.upgrade.ex", "Checkpoint.check(plan.repo"}
   ]
 
-  @checkout "actions/checkout@11d5960a326750d5838078e36cf38b85af677262"
+  @checkout "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
   @setup_beam "erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236"
-  @cache "actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830"
+  @cache "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
   @named_separator_entities ~w(
     af ApplyFunction emsp13 emsp14 emsp ensp hairsp ic InvisibleComma
     InvisibleTimes it lrm MediumSpace nbsp NegativeMediumSpace NegativeThickSpace
@@ -433,8 +433,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
       mutate_job!(
         job,
-        "      - uses: #{@checkout} # v4\n",
-        "      - uses: #{@checkout} # v4\n        with:\n          ref: stale-gate-revision\n"
+        "      - uses: #{@checkout} # v7.0.1\n",
+        "      - uses: #{@checkout} # v7.0.1\n        with:\n          ref: stale-gate-revision\n"
       )
 
       assert_invalid!()
@@ -1371,8 +1371,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   defp insert_after_first_checkout!(addition) do
     replace_once!(
       @workflow,
-      "      - uses: #{@checkout} # v4\n",
-      "      - uses: #{@checkout} # v4\n#{addition}"
+      "      - uses: #{@checkout} # v7.0.1\n",
+      "      - uses: #{@checkout} # v7.0.1\n#{addition}"
     )
   end
 
