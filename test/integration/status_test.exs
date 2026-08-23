@@ -153,8 +153,11 @@ defmodule AshReplicant.StatusIntegrationTest do
 
     # The ADVANCE clear: a seeded terminal cause (no live generation — a
     # live one outranks every tombstone) is answered as the halt it
-    # records, and must not outlive the next committed delivery.
+    # records, and must not outlive the next committed delivery. The stop
+    # wrote the operator_stopped NODE-LOCAL leg, which outranks the durable
+    # row — clear it so the seeded durable cause is the evidence in force.
     assert :ok = AshReplicant.stop_supervised(@slot)
+    :persistent_term.erase({AshReplicant.Status, @slot})
 
     Marquee.q!(
       "UPDATE ash_replicant_checkpoints SET terminal_cause = $1, terminal_class = $2 WHERE slot_name = $3",

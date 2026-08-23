@@ -99,9 +99,18 @@ defmodule AshReplicant.Test.DestinationObserver do
           "CASE WHEN TG_OP = 'DELETE' THEN OLD.#{quoted} ELSE NEW.#{quoted} END"
       end
 
+    # O02: the checkpoint table now also carries the terminal tombstone
+    # columns, and a stop/halt/clear writes them WITHOUT any data effect.
+    # The observer proves effect-once on DATA writes, so a checkpoint
+    # UPDATE that leaves every data column unchanged (a terminal-only
+    # control-plane write) is not an effect and must not be counted —
+    # otherwise the fault-containment budgets see phantom advances.
+    terminal_guard = terminal_only_guard(trigger)
+
     Marquee.q!("""
     CREATE FUNCTION #{quote_ident(function_name(trigger))}() RETURNS trigger LANGUAGE plpgsql AS $$
     BEGIN
+    #{terminal_guard}
       INSERT INTO #{quote_ident(@table)}
         (run_id, participant, operation, transaction_id, commit_lsn)
       VALUES
@@ -118,6 +127,26 @@ defmodule AshReplicant.Test.DestinationObserver do
     FOR EACH ROW EXECUTE FUNCTION #{quote_ident(function_name(trigger))}()
     """)
   end
+
+  # Emitted only for the checkpoint table (the one table with terminal
+  # columns): skip the observer row when an UPDATE changed nothing on the
+  # data surface — the write was a tombstone set/clear.
+  defp terminal_only_guard(%{table: "ash_replicant_checkpoints"}) do
+    """
+      IF TG_OP = 'UPDATE'
+         AND NEW.commit_lsn IS NOT DISTINCT FROM OLD.commit_lsn
+         AND NEW.snapshot_state IS NOT DISTINCT FROM OLD.snapshot_state
+         AND NEW.snapshot_progress IS NOT DISTINCT FROM OLD.snapshot_progress
+         AND NEW.publication_contract IS NOT DISTINCT FROM OLD.publication_contract
+         AND NEW.publication_fingerprint IS NOT DISTINCT FROM OLD.publication_fingerprint
+         AND NEW.source_timeline IS NOT DISTINCT FROM OLD.source_timeline
+         AND NEW.origin_floor IS NOT DISTINCT FROM OLD.origin_floor THEN
+        RETURN NEW;
+      END IF;
+    """
+  end
+
+  defp terminal_only_guard(_other_trigger), do: ""
 
   defp normalize_operation!(operation) do
     operation = operation |> to_string() |> String.upcase()

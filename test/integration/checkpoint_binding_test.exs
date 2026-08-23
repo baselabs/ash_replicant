@@ -365,6 +365,15 @@ defmodule AshReplicant.CheckpointBindingTest do
       @slot
     ])
 
+    # O02: the stop above records the operator_stopped tombstone; this test
+    # pins the BIND's write-nothing contract, so start it from the
+    # tombstone-free row a pre-O02 run had (the tombstone-bearing clear is
+    # the status integration suite's contract).
+    Marquee.q!(
+      "UPDATE ash_replicant_checkpoints SET terminal_cause = NULL, terminal_class = NULL, terminal_at = NULL WHERE slot_name = $1",
+      [@slot]
+    )
+
     before = bound_row(@slot)
 
     assert {:ok, _pid} = start(SinkA, @slot)
