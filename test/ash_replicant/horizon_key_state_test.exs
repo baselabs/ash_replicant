@@ -19,30 +19,31 @@ defmodule AshReplicant.HorizonKeyStateTest do
   @now ~U[2026-08-23 12:00:00Z]
 
   describe "the horizon provenance key set" do
-    test "reads the validated :horizon_provenance_keys family" do
-      env_keys = [{2, :binary.copy("k", 16)}, {1, :binary.copy("j", 16)}]
-
-      try do
-        Application.put_env(:ash_replicant, :horizon_provenance_keys, env_keys)
-        assert {:ok, [{1, _}, {2, _}]} = Horizon.provenance_keys()
-      after
-        Application.delete_env(:ash_replicant, :horizon_provenance_keys)
-      end
+    # ENV-MUTATION BAN (CI root cause): an async test swapping the shared
+    # Application env poisons concurrently-starting pipelines — activations
+    # fail closed on require_provenance_keys, and a bind under swapped keys
+    # mints a witness the baseline census cannot decode (census drift).
+    # Invalid shapes go through the PURE validator; the happy path asserts
+    # the config baseline read-only.
+    test "reads the validated config baseline without mutating env" do
+      assert {:ok, [{1, _baseline}]} = Horizon.provenance_keys()
     end
 
-    test "rejects the malformed shapes (empty, short keys, dup versions)" do
+    test "the pure validator sorts a valid set and rejects malformed shapes" do
+      assert {:ok, [{1, _}, {2, _}]} =
+               Horizon.provenance_key_set([
+                 {2, :binary.copy("k", 16)},
+                 {1, :binary.copy("j", 16)}
+               ])
+
       for bad <- [
             [],
             [{1, "short"}],
             [{1, :binary.copy("a", 16)}, {1, :binary.copy("b", 16)}],
+            [{0, :binary.copy("a", 16)}],
             "no"
           ] do
-        try do
-          Application.put_env(:ash_replicant, :horizon_provenance_keys, bad)
-          assert :error = Horizon.provenance_keys()
-        after
-          Application.delete_env(:ash_replicant, :horizon_provenance_keys)
-        end
+        assert :error = Horizon.provenance_key_set(bad)
       end
     end
   end

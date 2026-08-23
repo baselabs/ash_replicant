@@ -39,19 +39,29 @@ defmodule AshReplicant.Horizon do
   @spec provenance_keys() :: {:ok, [{pos_integer(), binary()}]} | :error
   def provenance_keys do
     case Application.get_env(:ash_replicant, :horizon_provenance_keys) do
-      keys when is_list(keys) and keys != [] ->
-        with true <- Enum.all?(keys, &valid_provenance_key?/1),
-             versions = Enum.map(keys, &elem(&1, 0)),
-             true <- length(Enum.uniq(versions)) == length(versions) do
-          {:ok, Enum.sort(keys)}
-        else
-          _other -> :error
-        end
-
-      _other ->
-        :error
+      keys when is_list(keys) -> provenance_key_set(keys)
+      _other -> :error
     end
   end
+
+  @doc false
+  # The pure validator so tests exercise malformed shapes WITHOUT mutating
+  # the shared Application env — an async test swapping the env poisons any
+  # concurrently-starting pipeline's activation (require_provenance_keys is
+  # fail-closed) and can even mint a witness under a key the baseline census
+  # cannot decode. Env-mutating tests of this family are banned by contract.
+  @spec provenance_key_set(term()) :: {:ok, [{pos_integer(), binary()}]} | :error
+  def provenance_key_set(keys) when is_list(keys) and keys != [] do
+    with true <- Enum.all?(keys, &valid_provenance_key?/1),
+         versions = Enum.map(keys, &elem(&1, 0)),
+         true <- length(Enum.uniq(versions)) == length(versions) do
+      {:ok, Enum.sort(keys)}
+    else
+      _other -> :error
+    end
+  end
+
+  def provenance_key_set(_other), do: :error
 
   defp valid_provenance_key?({version, key})
        when is_integer(version) and version >= 1 and is_binary(key) and
