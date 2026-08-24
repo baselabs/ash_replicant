@@ -54,6 +54,12 @@ Modes:
     run-mutation-gates.py --self-test     sentinel/fixture self-test only
     run-mutation-gates.py --matrix        full matrix only
     run-mutation-gates.py --cells A,B     matrix subset (development aid)
+    run-mutation-gates.py --diff-base REF run only the cells REF..HEAD makes
+                                         relevant (guard file or named test
+                                         changed; harness/build surfaces and
+                                         an unusable REF fall back to the
+                                         FULL matrix — the push evidence
+                                         scope, never a local gate)
 
 `--fixture-config PATH` drives the engine from a JSON config; it exists for
 the self-test's fixture scenarios and is not a supported entry point.
@@ -157,6 +163,67 @@ B_PROVENANCE = "Elixir.AshReplicant.Snapshot.Provenance.beam"
 B_TELEMETRY = "Elixir.AshReplicant.Telemetry.beam"
 
 NO_RAISE = "but nothing was raised"
+
+# --------------------------------------------------------------------------
+# Path scoping (--diff-base): per-push evidence without the full-matrix cost.
+#
+# A cell is RELEVANT to a diff exactly when the diff touches the production
+# file the cell mutates OR one of the named focused test files that observe
+# it. Anything else — docs, README, CHANGELOG, notebooks — selects nothing.
+# The surfaces that could change HOW guards are observed (this runner, the
+# structural harness, fixtures, build identity, CI wiring) force the FULL
+# matrix: scoping may never silently weaken the evidence machinery itself.
+# --------------------------------------------------------------------------
+
+FULL_MATRIX_PREFIXES = (
+    "scripts/",
+    "config/",
+    "test/support/",
+    ".github/",
+    "priv/",
+)
+FULL_MATRIX_FILES = {"mix.exs", "mix.lock", ".tool-versions"}
+FULL_MATRIX_TEST_FILES = {"test/test_helper.exs"}
+SCOPED_PREFIXES = ("lib/", "test/")
+
+
+def select_matrix_cells(changed_files):
+    """Select the cells a diff makes relevant.
+
+    Returns a list of MATRIX cells (possibly empty), or None when the diff
+    must run the FULL matrix. Pure: no git, no filesystem.
+    """
+    selected = {}
+    for raw in changed_files:
+        path = raw.strip()
+        if not path:
+            continue
+        if path in FULL_MATRIX_FILES or path.startswith(FULL_MATRIX_PREFIXES):
+            return None
+        if path in FULL_MATRIX_TEST_FILES:
+            return None
+        if not path.startswith(SCOPED_PREFIXES):
+            continue
+        for cell in MATRIX:
+            if cell["file"] == path or any(
+                run.get("file") == path for run in cell["runs"]
+            ):
+                selected[cell["id"]] = cell
+    return list(selected.values())
+
+
+def changed_files_for_base(ref):
+    """Changed paths between `ref` and HEAD, or None when ref is unusable
+    (unreachable, absent, a bad sha) — the caller then runs the FULL matrix
+    (evidence availability outranks scoping)."""
+    result = subprocess.run(
+        ["git", "diff", "--name-only", ref, "HEAD"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return None
+    return [line for line in result.stdout.splitlines() if line.strip()]
 
 MATRIX = [
     # ---------------------------------------------------------- tenant absence
@@ -3205,6 +3272,52 @@ def self_test():
     checks.append(("real-matrix-inventory", inventory_ok))
     print(f"{label}: {'PASS' if inventory_ok else 'FAIL'} real-matrix-inventory")
 
+    # --diff-base path scoping. The selection is a pure function over the
+    # changed-file list; None means the FULL matrix. Each scenario pins one
+    # direction of the partition: relevant files select ALL their cells
+    # (completeness), irrelevant files select none, and the evidence
+    # machinery forces FULL.
+    resolver_expected = sorted(
+        cell["id"] for cell in MATRIX if cell["file"] == RESOLVER
+    )
+    telemetry_expected = sorted(
+        cell["id"]
+        for cell in MATRIX
+        if any(run.get("file") == T_TELEMETRY for run in cell["runs"])
+    )
+
+    def selection_ids(changed):
+        cells = select_matrix_cells(changed)
+        return None if cells is None else sorted(cell["id"] for cell in cells)
+
+    def scope_ok(name, changed, expected):
+        ids = selection_ids(changed)
+        ok = ids == expected
+        checks.append((name, ok))
+        print(f"{label}: {'PASS' if ok else 'FAIL'} {name}")
+
+    scope_ok("scope-docs-only-zero",
+             ["README.md", "docs/RECOVERY.md", "CHANGELOG.md"], [])
+    scope_ok("scope-guard-file-complete", [RESOLVER], resolver_expected)
+    scope_ok("scope-named-test-complete", [T_TELEMETRY], telemetry_expected)
+    scope_ok("scope-uncovered-lib-file-zero", ["lib/ash_replicant/status.ex"], [])
+    scope_ok("scope-gate-script-full", ["scripts/run-mutation-gates.py"], None)
+    scope_ok("scope-fixture-support-full", ["test/support/marquee.ex"], None)
+    scope_ok("scope-test-helper-full", ["test/test_helper.exs"], None)
+    scope_ok("scope-build-identity-full", ["mix.lock"], None)
+    scope_ok("scope-docs-plus-guard",
+             ["README.md", RESOLVER], resolver_expected)
+
+    unreachable_ok = changed_files_for_base("no-such-ref-0deadbeef") is None
+    checks.append(("scope-unreachable-base-full", unreachable_ok))
+    print(f"{label}: {'PASS' if unreachable_ok else 'FAIL'} scope-unreachable-base-full")
+
+    # The expected sets are derived from MATRIX; an emptied or re-anchored
+    # MATRIX must not let the completeness scenarios pass vacuously.
+    anchors_ok = resolver_expected != [] and telemetry_expected != []
+    checks.append(("scope-matrix-anchors-nonempty", anchors_ok))
+    print(f"{label}: {'PASS' if anchors_ok else 'FAIL'} scope-matrix-anchors-nonempty")
+
     failed = [name for name, ok in checks if not ok]
     if failed:
         print(f"{label}: FAIL ({len(failed)} scenario(s))")
@@ -3226,6 +3339,7 @@ def run_main():
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--matrix", action="store_true")
     parser.add_argument("--cells", default=None)
+    parser.add_argument("--diff-base", default=None, metavar="REF")
     parser.add_argument("--fixture-config", default=None)
     args = parser.parse_args()
 
@@ -3238,6 +3352,39 @@ def run_main():
 
     if args.self_test:
         return self_test()
+
+    if args.diff_base:
+        changed = changed_files_for_base(args.diff_base)
+        if changed is None:
+            print(
+                "mutation-gates: diff-base unusable — running FULL matrix "
+                f"({args.diff_base})"
+            )
+            return run_gates(real_config(), MATRIX)
+
+        cells = select_matrix_cells(changed)
+        if cells is None:
+            print(
+                "mutation-gates: diff touches guard-evidence machinery — "
+                "running FULL matrix "
+                f"({len(changed)} file(s))"
+            )
+            return run_gates(real_config(), MATRIX)
+
+        if not cells:
+            print(
+                "mutation-gates: PASS (0 cells selected — no guard file or "
+                f"named test changed; {len(changed)} file(s) diffed)"
+            )
+            return 0
+
+        print(
+            f"mutation-gates: scoped {len(cells)}/{len(MATRIX)} cells "
+            f"({len(changed)} file(s) diffed)"
+        )
+        config = real_config()
+        config["require_full_inventory"] = False
+        return run_gates(config, cells)
 
     if args.cells:
         wanted = [prefix for prefix in args.cells.split(",") if prefix]

@@ -55,9 +55,16 @@ removes one production guard or reorders one notifier guard after its first
 effect at a time in an isolated temporary copy of the project, and requires
 the named no-database focused test to go red for the property-specific reason.
 It compiles the project once per mutant, so expect
-a long serial run; CI executes it once in the no-database job. Its
-`--self-test` mode runs only the runner's own fixture/sentinel battery, and
-`--cells <prefix>` runs a subset while iterating on one guard family.
+a long serial run; the LOCAL developer battery always runs the full matrix.
+CI's no-database job runs it PATH-SCOPED per push (`--diff-base` = the push
+event's prior head): only the cells whose guard file or named test changed
+run, so docs/test-only pushes pay minutes instead of hours. The scoping
+fails safe to the FULL matrix — a diff touching the evidence machinery
+(`scripts/`, `config/`, `test/support/`, `mix.lock`, the workflow, the test
+helper) or an unusable base (first push, force push) runs everything. Its
+`--self-test` mode runs only the runner's own fixture/sentinel battery
+(including the path-scoping scenarios), and `--cells <prefix>` runs a subset
+while iterating on one guard family.
 The runner deletes inherited Mix build/dependency path overrides and handles
 SIGINT/SIGTERM by stopping the active child process group before scratch cleanup.
 

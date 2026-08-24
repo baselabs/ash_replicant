@@ -30,6 +30,18 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   mix ecto.migrate
   """
 
+  # Mirrors assert_release_contract.exs's @mutation_gates_run byte-for-byte
+  # (the three-file pin set: ci.yml + both contract scripts move TOGETHER).
+  @mutation_gates_run """
+  BASE="${GITHUB_EVENT_BEFORE:-}"
+  if [ -n "$BASE" ] && [ "$BASE" != "0000000000000000000000000000000000000000" ] \\
+     && git fetch --no-tags --quiet origin "$BASE"; then
+    scripts/run-mutation-gates.py --diff-base "$BASE"
+  else
+    scripts/run-mutation-gates.py
+  fi
+  """
+
   @public_dependency_check """
   env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION mix run --no-start -e '
   deps = Mix.Project.config() |> Keyword.fetch!(:deps)
@@ -89,7 +101,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       "mix credo --strict",
       "mix deps.audit",
       "env -u ASH_REPLICANT_TEST_URL scripts/run-structural-tests.sh --allow-excluded --exclude integration",
-      "scripts/run-mutation-gates.py"
+      String.trim(@mutation_gates_run)
     ],
     "compatibility" => [
       String.trim(@postgres_run),
