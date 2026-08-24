@@ -13,6 +13,11 @@ preserve_failure() {
   preserved="${TMPDIR:-/tmp}/ash-replicant-structural-failure.$$.log"
   grep '^FAILED: ' "$raw_output" >&2 || true
   grep '^CONSUMER-COMMAND: ' "$raw_output" >&2 || true
+  # The failure CLASS only (the exception banner's parenthesized token) —
+  # value-free by construction: the class names the shape (MatchError,
+  # ExUnit.TimeoutError, Postgrex.Error); the banner's message text, which
+  # can carry values, is never emitted.
+  grep -oE '\*\* \([A-Za-z0-9_.]+\)' "$raw_output" | sort | uniq -c >&2 || true
   mv "$raw_output" "$preserved"
   echo "raw output preserved at: $preserved" >&2
 }
