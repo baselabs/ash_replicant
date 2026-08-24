@@ -35,6 +35,7 @@ the narrative "why"; an ADR is the tracked, per-decision record with code eviden
 | [0020](0020-support-package-and-release-identity.md) | Proposed: support, package, provenance, and consumer claims bind to one fetched release artifact | D1 / D6 / D8-D9 / E1-E2 |
 | [0021](0021-measured-performance-bounds.md) | Proposed: measured resource and performance budgets are release correctness gates | D5 |
 | [0022](0022-recovery-horizon-and-typed-telemetry.md) | Recovery horizons alert before recovery becomes impossible: a declared `recovery_horizon` floors claim retention, an authenticated digest-key witness bounds key retirement, and three alert legs (census push, activation resume gate, doctor pull) cover running and halted phases; telemetry's typed gates are mutation-proven per key | D3 / O03 |
+| [0023](0023-public-api-and-compatibility.md) | The public API is a frozen module inventory (test-pinned); everything else is internal-by-convention; SemVer with no silent removals — a deprecation keeps working for at least one minor cycle | D8 / PKG01 |
 
 ## On-touch gap list
 
