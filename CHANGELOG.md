@@ -16,10 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unwrapped (horizon), so a host running an owned dynamic repo instance
   could read/write control state in the wrong database, miss a halt's
   durable record, or waive the `:retention_horizon_crossed` resume gate.
-  The binding now has ONE home — `AshReplicant.Destination.action_context/1`
-  (the callable MODULE in the Ash context) and
-  `with_repo_binding/2` (the admitted instance through the process
-  dictionary, wrapping every destination transaction entry and control-plane
+  The binding now has ONE home — `Destination.action_context` (the callable MODULE in the Ash
+  context) and `Destination.with_repo_binding` (the admitted instance
+  through the process dictionary, wrapping every destination transaction entry and control-plane
   read: delivery's eleven transaction sites, the census checkpoint read, the
   tombstone write/read legs, the digest-key witness, and the resume gate —
   which now also receives the admitted instance at activation). Red-first
