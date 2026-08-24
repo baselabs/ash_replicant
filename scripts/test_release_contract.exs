@@ -30,6 +30,21 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   mix ecto.migrate
   """
 
+  # Mirrors assert_release_contract.exs's @performance_postgres_run (the
+  # non-matrix performance job's literal pinned-digest PG16 step).
+  @performance_postgres_run """
+  docker run -d --name pg \\
+    -e POSTGRES_HOST_AUTH_METHOD=trust \\
+    -p 5432:5432 \\
+    postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b \\
+    -c wal_level=logical -c max_replication_slots=20 -c max_wal_senders=20
+  for _ in $(seq 1 30); do
+    docker exec pg pg_isready -U postgres && break
+    sleep 1
+  done
+  docker exec pg pg_isready -U postgres || { docker logs pg; exit 1; }
+  """
+
   # Mirrors assert_release_contract.exs's @mutation_gates_run byte-for-byte
   # (the three-file pin set: ci.yml + both contract scripts move TOGETHER).
   @mutation_gates_run """
@@ -117,6 +132,13 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       "scripts/run-structural-tests.sh --include integration",
       "scripts/run-structural-tests.sh test/integration --include integration",
       "mix dialyzer"
+    ],
+    "performance" => [
+      String.trim(@performance_postgres_run),
+      "mix deps.compile",
+      "mix compile --warnings-as-errors",
+      String.trim(@create_database),
+      "scripts/run-structural-tests.sh test/integration/performance_bounds_test.exs --include integration"
     ],
     "release-artifact" => [
       "env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION mix deps.get",

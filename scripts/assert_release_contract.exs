@@ -121,8 +121,29 @@ defmodule AshReplicant.ReleaseContract do
       "ASH_REPLICANT_REPLICANT_VERSION" => "${{ matrix.replicant_selector }}",
       "ASH_REPLICANT_TEST_URL" => "postgres://postgres@localhost:5432/postgres"
     },
-    "release-artifact" => %{"MIX_ENV" => "dev"}
+    "release-artifact" => %{"MIX_ENV" => "dev"},
+    "performance" => %{
+      "MIX_ENV" => "test",
+      "ASH_REPLICANT_TEST_URL" => "postgres://postgres@localhost:5432/postgres",
+      "ASH_REPLICANT_PERFORMANCE" => "1"
+    }
   }
+
+  # The dedicated performance job is not a matrix job — its PG16 step
+  # carries the literal pinned digest (the parameterized @postgres_run
+  # belongs to the compatibility cells).
+  @performance_postgres_run """
+  docker run -d --name pg \\
+    -e POSTGRES_HOST_AUTH_METHOD=trust \\
+    -p 5432:5432 \\
+    #{@pg16_image} \\
+    -c wal_level=logical -c max_replication_slots=20 -c max_wal_senders=20
+  for _ in $(seq 1 30); do
+    docker exec pg pg_isready -U postgres && break
+    sleep 1
+  done
+  docker exec pg pg_isready -U postgres || { docker logs pg; exit 1; }
+  """
 
   @pg17_image "postgres:17@sha256:e38411452a464af89e5adadb8d223bf53b898d47d6ef918b2d58c08707350449"
   @pg18_image "postgres:18@sha256:06cad38a5d9f5d24b4d83d86def30795d5e4b757fedbf5281172b576dedcd941"
@@ -188,7 +209,8 @@ defmodule AshReplicant.ReleaseContract do
   @job_keys %{
     "no-database" => ~w(env name runs-on steps),
     "compatibility" => ~w(env name runs-on steps strategy),
-    "release-artifact" => ~w(env name runs-on steps)
+    "release-artifact" => ~w(env name runs-on steps),
+    "performance" => ~w(env name runs-on steps)
   }
 
   @job_steps %{
@@ -238,6 +260,23 @@ defmodule AshReplicant.ReleaseContract do
       {:run, "scripts/run-structural-tests.sh --include integration"},
       {:run, "scripts/run-structural-tests.sh test/integration --include integration"},
       {:run, "mix dialyzer"}
+    ],
+    "performance" => [
+      {:uses, @checkout, :absent},
+      {:run, String.trim(@performance_postgres_run)},
+      {:uses, @setup_beam, @setup_beam_inputs},
+      {:uses, @cache,
+       %{
+         "path" => "deps\n_build\n",
+         "key" =>
+           "${{ runner.os }}-perf-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}"
+       }},
+      {:run, "mix deps.get"},
+      {:run, "mix deps.compile"},
+      {:run, "mix compile --warnings-as-errors"},
+      {:run, String.trim(@create_database)},
+      {:run,
+       "scripts/run-structural-tests.sh test/integration/performance_bounds_test.exs --include integration"}
     ],
     "release-artifact" => [
       {:uses, @checkout, :absent},

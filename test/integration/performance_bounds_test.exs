@@ -75,7 +75,13 @@ defmodule AshReplicant.PerformanceBoundsTest do
 
   use ExUnit.Case, async: false
 
-  @moduletag :integration
+  # :performance ONLY (deliberately not :integration): an --include on the
+  # command line lifts configure-excludes for dual-tagged tests, so these
+  # heavy legs could never be excluded from the integration batteries if
+  # they also carried :integration. They run when --include performance is
+  # passed (the dedicated CI job; local full batteries opt in via the
+  # runner) and are excluded everywhere else — including db-free runs.
+  @moduletag :performance
   @moduletag capture_log: true
 
   alias AshReplicant.Test.{AppendMarquee, Marquee, PG}

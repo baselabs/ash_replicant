@@ -197,6 +197,56 @@ jobs:
 
       - run: mix dialyzer
 
+  performance:
+    name: Measured performance bounds
+    runs-on: ubuntu-latest
+    env:
+      MIX_ENV: test
+      ASH_REPLICANT_TEST_URL: postgres://postgres@localhost:5432/postgres
+      ASH_REPLICANT_PERFORMANCE: "1"
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Start PostgreSQL 16 with logical replication
+        run: |
+          docker run -d --name pg \
+            -e POSTGRES_HOST_AUTH_METHOD=trust \
+            -p 5432:5432 \
+            postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b \
+            -c wal_level=logical -c max_replication_slots=20 -c max_wal_senders=20
+          for _ in $(seq 1 30); do
+            docker exec pg pg_isready -U postgres && break
+            sleep 1
+          done
+          docker exec pg pg_isready -U postgres || { docker logs pg; exit 1; }
+
+      - uses: erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236 # v1
+        with:
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+          otp-version: ${{ env.OTP_VERSION }}
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-perf-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}
+
+      - run: mix deps.get
+      - run: mix deps.compile
+      - run: mix compile --warnings-as-errors
+      - name: Create and migrate the integration database
+        run: |
+          mix ecto.create
+          mix ecto.migrate
+      # ADR-0021's sentinel bounds, isolated in their own job: the legs are
+      # heavy (thousands of rows through the guarded delivery path) and
+      # their load destabilized the timing-sensitive lifecycle suites when
+      # they ran inside every compatibility cell.
+      - name: Performance bound sentinels
+        run: scripts/run-structural-tests.sh test/integration/performance_bounds_test.exs --include integration
+
   release-artifact:
     name: Selector-free docs and package
     runs-on: ubuntu-latest

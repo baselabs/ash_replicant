@@ -9,11 +9,12 @@ if AshReplicant.Test.PG.enabled?() do
   Ecto.Migrator.run(AshReplicant.TestRepo, :up, all: true)
   Ecto.Adapters.SQL.Sandbox.mode(AshReplicant.TestRepo, :manual)
 
+  ExUnit.configure(exclude: [:performance])
   ExUnit.start()
 else
   Application.put_env(:ash_replicant, :forbid_test_repo_start?, true)
   :persistent_term.erase(AshReplicant.TestRepo.start_attempt_key())
-  ExUnit.configure(exclude: [:integration])
+  ExUnit.configure(exclude: [:integration, :performance])
   ExUnit.start()
 
   ExUnit.after_suite(fn _result ->

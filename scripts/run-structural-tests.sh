@@ -20,6 +20,21 @@ preserve_failure() {
 allow_excluded=""
 mix_args=()
 
+# The performance-bound legs are excluded by default (heavy load that
+# destabilizes timing-sensitive suites when run inside the full battery);
+# local full batteries opt in automatically, CI opts in per-job via
+# ASH_REPLICANT_PERFORMANCE=1 (the dedicated performance job). The CLI
+# --exclude is required even though test_helper excludes the tag: an
+# --include on the command line lifts configure-excludes for tests
+# carrying BOTH tags (the module is :integration AND :performance).
+performance_default="$([ -z "${GITHUB_ACTIONS:-}" ] && [ -n "${ASH_REPLICANT_TEST_URL:-}" ] && echo 1 || echo 0)"
+
+if [[ "${ASH_REPLICANT_PERFORMANCE:-$performance_default}" == "1" ]]; then
+  mix_args+=("--include" "performance")
+else
+  mix_args+=("--exclude" "performance")
+fi
+
 for argument in "$@"; do
   if [[ "$argument" == "--allow-excluded" ]]; then
     if [[ -n "$allow_excluded" ]]; then
