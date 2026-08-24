@@ -20,6 +20,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Data-plane fault recovery states documented (F02 / issue #15).** The
+  batch, message, snapshot, and append fault legs already carried
+  live-tested zero-net-effect proofs from their landing slices; this adds
+  their recovery-state rows to `docs/RECOVERY.md` (whole-batch rollback
+  and re-delivery skip; message claim replay, external-peer AshOnetime
+  three-state ambiguity recovery — which requires an explicit restart —
+  and the retention-window re-execution with the `:retention_horizon_crossed`
+  resume refusal; v1 and incremental snapshot fault semantics; append
+  origin-floor halts and crash-resume exactly-once) plus a fresh
+  red-capability receipt for the one previously-unpinned guard (the
+  batch whole-skip arm).
 - **Path-scoped guard-mutation evidence in CI.** The no-database job's
   guard-mutation gate (ADR-0003) now runs per-push only the cells the push
   makes relevant — a diff touching a cell's guard file or its named focused
