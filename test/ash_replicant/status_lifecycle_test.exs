@@ -16,6 +16,7 @@ defmodule AshReplicant.StatusLifecycleTest do
 
   alias AshReplicant.Destination.Generation
   alias AshReplicant.PipelineOwner
+  alias Ecto.Adapters.SQL.Sandbox
 
   defmodule LifecycleSink do
     @moduledoc false
@@ -239,7 +240,7 @@ defmodule AshReplicant.StatusLifecycleTest do
             repo = AshReplicant.TestRepo
 
             if is_pid(Process.whereis(repo)) do
-              {:ok, _} = Ecto.Adapters.SQL.Sandbox.checkout(repo)
+              {:ok, _} = Sandbox.checkout(repo)
 
               [[count]] =
                 repo.query!(

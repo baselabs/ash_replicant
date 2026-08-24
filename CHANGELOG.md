@@ -20,6 +20,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Measured performance bounds (B01 / issue #16 / ADR-0021).**
+  `test/integration/performance_bounds_test.exs` measures every delivery
+  mode — per-transaction streaming, sink-owned batch, SCD2 versioning,
+  append-log — through the real pipeline on the live substrate, and
+  carries wide CI sentinel floors (~1/4 of measured steady state: they
+  catch class regressions — a lost single-pass stream, an O(n²) apply,
+  an unbounded materialization, lost batch amortization — never percent
+  drift) plus a total-BEAM anti-blowup ceiling. With
+  `ASH_REPLICANT_BENCH_RECEIPT=<path>` the same legs append the
+  reproducible baseline receipt; `bench/BASELINES.md` records the
+  2026-08-24 receipt (59–84 rows/s across modes, Apple-silicon laptop,
+  pinned PG16 image) and the dominant-cost finding: per-change
+  generation-guard re-validation, with batch amortization visible
+  (throughput +~40%, statements −~25% at equal rows). Changing a
+  protected bound is an ADR amendment, not a test tweak.
 - **Data-plane fault recovery states documented (F02 / issue #15).** The
   batch, message, snapshot, and append fault legs already carried
   live-tested zero-net-effect proofs from their landing slices; this adds
