@@ -212,14 +212,21 @@ def select_matrix_cells(changed_files):
     return list(selected.values())
 
 
-def changed_files_for_base(ref):
+def changed_files_for_base(ref, cwd=None):
     """Changed paths between `ref` and HEAD, or None when ref is unusable
     (unreachable, absent, a bad sha) — the caller then runs the FULL matrix
-    (evidence availability outranks scoping)."""
+    (evidence availability outranks scoping).
+
+    `--no-renames` is load-bearing: git's default rename detection lists
+    ONLY the new path for a pure rename, so a renamed guard file would
+    select zero cells and pass silently — while the full run would fail
+    loudly on the stale anchor. With both paths listed, the OLD path
+    selects its cell and the run fails loudly at anchor-missing."""
     result = subprocess.run(
-        ["git", "diff", "--name-only", ref, "HEAD"],
+        ["git", "diff", "--no-renames", "--name-only", ref, "HEAD"],
         capture_output=True,
         text=True,
+        cwd=cwd or repo_root(),
     )
     if result.returncode != 0:
         return None
@@ -3312,6 +3319,41 @@ def self_test():
     checks.append(("scope-unreachable-base-full", unreachable_ok))
     print(f"{label}: {'PASS' if unreachable_ok else 'FAIL'} scope-unreachable-base-full")
 
+    # A pure rename must list BOTH paths (git's default rename detection
+    # collapses to the new path only, which would let a renamed guard file
+    # select zero cells and pass silently). Real scratch repo, real git.
+    rename_ok = False
+    try:
+        with tempfile.TemporaryDirectory(prefix="mutation-gates-rename.") as repo:
+            def git(*argv):
+                return subprocess.run(
+                    ["git", "-C", repo] + list(argv),
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+
+            git("init", "--quiet")
+            git("config", "user.email", "selftest@example.invalid")
+            git("config", "user.name", "mutation-gates self-test")
+            with open(os.path.join(repo, "lib_guard.ex"), "w", encoding="utf-8") as f:
+                f.write("guard\n")
+            git("add", "-A")
+            git("commit", "--quiet", "-m", "base")
+            os.rename(os.path.join(repo, "lib_guard.ex"), os.path.join(repo, "lib_renamed.ex"))
+            git("add", "-A")
+            git("commit", "--quiet", "-m", "rename")
+
+            changed = changed_files_for_base("HEAD~1", cwd=repo)
+            rename_ok = changed is not None and set(changed) == {
+                "lib_guard.ex",
+                "lib_renamed.ex",
+            }
+    except (subprocess.CalledProcessError, OSError):
+        rename_ok = False
+    checks.append(("scope-rename-lists-both-paths", rename_ok))
+    print(f"{label}: {'PASS' if rename_ok else 'FAIL'} scope-rename-lists-both-paths")
+
     # The expected sets are derived from MATRIX; an emptied or re-anchored
     # MATRIX must not let the completeness scenarios pass vacuously.
     anchors_ok = resolver_expected != [] and telemetry_expected != []
@@ -3354,6 +3396,14 @@ def run_main():
         return self_test()
 
     if args.diff_base:
+        # Every --diff-base path keeps the runner's OWN vacuity battery in
+        # the per-push evidence — the no-args path always runs it, and a
+        # push editing this runner is exactly the push where a vacuous
+        # runner would otherwise slip through scoped.
+        code = self_test()
+        if code != 0:
+            return code
+
         changed = changed_files_for_base(args.diff_base)
         if changed is None:
             print(

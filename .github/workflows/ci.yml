@@ -55,12 +55,12 @@ jobs:
       - name: Guard-mutation gates
         # Path-scoped per-push evidence (ADR-0003 discipline kept, cost
         # scoped): run only the cells the push makes relevant. The push
-        # event's BEFORE sha names the prior head; when it is absent or
-        # unfetchable (first push, force push, reordered history) — or the
-        # diff touches the evidence machinery itself — the runner falls
-        # back to the FULL matrix.
+        # payload's BEFORE sha (empty on non-push events) names the prior
+        # head; when it is absent or unfetchable (first push, force push,
+        # reordered history) — or the diff touches the evidence machinery
+        # itself — the runner falls back to the FULL matrix.
         run: |
-          BASE="${GITHUB_EVENT_BEFORE:-}"
+          BASE="${{ github.event.before }}"
           if [ -n "$BASE" ] && [ "$BASE" != "0000000000000000000000000000000000000000" ] \
              && git fetch --no-tags --quiet origin "$BASE"; then
             scripts/run-mutation-gates.py --diff-base "$BASE"

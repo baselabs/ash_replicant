@@ -57,14 +57,16 @@ the named no-database focused test to go red for the property-specific reason.
 It compiles the project once per mutant, so expect
 a long serial run; the LOCAL developer battery always runs the full matrix.
 CI's no-database job runs it PATH-SCOPED per push (`--diff-base` = the push
-event's prior head): only the cells whose guard file or named test changed
+payload's prior head): only the cells whose guard file or named test changed
 run, so docs/test-only pushes pay minutes instead of hours. The scoping
 fails safe to the FULL matrix — a diff touching the evidence machinery
-(`scripts/`, `config/`, `test/support/`, `mix.lock`, the workflow, the test
-helper) or an unusable base (first push, force push) runs everything. Its
-`--self-test` mode runs only the runner's own fixture/sentinel battery
-(including the path-scoping scenarios), and `--cells <prefix>` runs a subset
-while iterating on one guard family.
+(the runner's `FULL_MATRIX_PREFIXES`/`FULL_MATRIX_FILES` set: `scripts/`,
+`config/`, `test/support/`, `priv/`, `.github/`, `mix.exs`, `mix.lock`,
+`.tool-versions`, the test helper) or an unusable base (first push, force
+push) runs everything, and every `--diff-base` path still runs the runner's
+own self-test battery first. Its `--self-test` mode runs only the runner's
+fixture/sentinel battery (including the path-scoping scenarios), and
+`--cells <prefix>` runs a subset while iterating on one guard family.
 The runner deletes inherited Mix build/dependency path overrides and handles
 SIGINT/SIGTERM by stopping the active child process group before scratch cleanup.
 

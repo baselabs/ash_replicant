@@ -51,11 +51,12 @@ defmodule AshReplicant.ReleaseContract do
   """
 
   # Path-scoped per-push guard-mutation evidence (ADR-0003 discipline kept,
-  # cost scoped): BEFORE names the prior head; absent/unfetchable (first
-  # push, force push) or an evidence-machinery diff falls back to the FULL
-  # matrix inside the runner itself.
+  # cost scoped): BEFORE names the prior head from the push payload (the
+  # runner template-expands the expression; non-push events yield the empty
+  # string); absent/unfetchable (first push, force push) or an
+  # evidence-machinery diff falls back to the FULL matrix inside the runner.
   @mutation_gates_run """
-  BASE="${GITHUB_EVENT_BEFORE:-}"
+  BASE="${{ github.event.before }}"
   if [ -n "$BASE" ] && [ "$BASE" != "0000000000000000000000000000000000000000" ] \\
      && git fetch --no-tags --quiet origin "$BASE"; then
     scripts/run-mutation-gates.py --diff-base "$BASE"

@@ -33,7 +33,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   # Mirrors assert_release_contract.exs's @mutation_gates_run byte-for-byte
   # (the three-file pin set: ci.yml + both contract scripts move TOGETHER).
   @mutation_gates_run """
-  BASE="${GITHUB_EVENT_BEFORE:-}"
+  BASE="${{ github.event.before }}"
   if [ -n "$BASE" ] && [ "$BASE" != "0000000000000000000000000000000000000000" ] \\
      && git fetch --no-tags --quiet origin "$BASE"; then
     scripts/run-mutation-gates.py --diff-base "$BASE"

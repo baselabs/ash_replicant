@@ -12,14 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Path-scoped guard-mutation evidence in CI.** The no-database job's
   guard-mutation gate (ADR-0003) now runs per-push only the cells the push
   makes relevant — a diff touching a cell's guard file or its named focused
-  test selects exactly those cells; docs/README/CHANGELOG-only pushes select
-  none. The scoping fails safe: a diff touching the evidence machinery
-  (`scripts/`, `config/`, `test/support/`, `mix.lock`, the workflow, the
-  test helper) or an unusable diff base (first push, force push) runs the
-  FULL matrix, and the local developer battery is unchanged (always full).
-  Eleven runner self-test scenarios pin the partition in both directions
-  (completeness: a changed guard file selects every cell anchored to it;
-  the gate script itself forces FULL), each proven red-capable by tamper.
+  test selects exactly those cells (a pure rename lists both paths, so a
+  renamed guard file fails loudly at the stale anchor rather than silently
+  selecting nothing); docs/README/CHANGELOG-only pushes select none. The
+  scoping fails safe: a diff touching the evidence machinery (the runner's
+  `FULL_MATRIX_PREFIXES`/`FULL_MATRIX_FILES` set) or an unusable diff base
+  (first push, force push, non-push events) runs the FULL matrix, every
+  `--diff-base` path still runs the runner's self-test battery first, and
+  the local developer battery is unchanged (always full). Twelve runner
+  self-test scenarios pin the partition in both directions (completeness:
+  a changed guard file selects every cell anchored to it; the gate script
+  itself forces FULL; a rename lists both paths), each proven red-capable
+  by tamper.
 - **Fault-recovery matrix — live proofs and documented recovery states**
   (roadmap F01 / issue #14). `test/integration/fault_recovery_test.exs`
   exercises the control-plane crash/reconnect matrix against a live
