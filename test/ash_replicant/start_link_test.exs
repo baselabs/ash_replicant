@@ -209,6 +209,11 @@ defmodule AshReplicant.StartLinkTest do
     end
   end
 
+  # Activation deliberately targets an unreachable port and waits through the
+  # transport retry path. The structural battery observed this test exceed
+  # ExUnit's 60s default under compatibility-runner load; its assertions are
+  # event-driven, so the ceiling bounds the harness rather than the behavior.
+  @tag timeout: 120_000
   test "source identity is required and compared without returning values" do
     assert {:error, :source_identity_required} =
              AshReplicant.start_link(Keyword.delete(start_opts(), :source_identity))

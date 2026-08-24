@@ -26,11 +26,7 @@ defmodule AshReplicant.ReleaseContract do
     -p 5432:5432 \\
     ${{ matrix.pg_image }} \\
     -c wal_level=logical -c max_replication_slots=20 -c max_wal_senders=20
-  for _ in $(seq 1 30); do
-    docker exec pg pg_isready -U postgres && break
-    sleep 1
-  done
-  docker exec pg pg_isready -U postgres || { docker logs pg; exit 1; }
+  scripts/wait-for-postgres.sh pg
   """
 
   @resolve_dependencies """
@@ -138,11 +134,7 @@ defmodule AshReplicant.ReleaseContract do
     -p 5432:5432 \\
     #{@pg16_image} \\
     -c wal_level=logical -c max_replication_slots=20 -c max_wal_senders=20
-  for _ in $(seq 1 30); do
-    docker exec pg pg_isready -U postgres && break
-    sleep 1
-  done
-  docker exec pg pg_isready -U postgres || { docker logs pg; exit 1; }
+  scripts/wait-for-postgres.sh pg
   """
 
   @pg17_image "postgres:17@sha256:e38411452a464af89e5adadb8d223bf53b898d47d6ef918b2d58c08707350449"
@@ -574,8 +566,15 @@ defmodule AshReplicant.ReleaseContract do
       |> Enum.count(&(String.trim(&1) == "scripts/test-release-package-inspection.sh >/dev/null"))
 
     assert(inspection_count == 1, "package inspection checker wiring is incomplete")
+
+    readiness_count =
+      source
+      |> String.split("\n")
+      |> Enum.count(&(String.trim(&1) == "scripts/test-postgres-readiness.sh >/dev/null"))
+
+    assert(readiness_count == 1, "PostgreSQL readiness checker wiring is incomplete")
   rescue
-    _error in [File.Error] -> fail("AshOnetime migration checker wiring input is invalid")
+    _error in [File.Error] -> fail("release checker wiring input is invalid")
   end
 
   def run_cli(root) do

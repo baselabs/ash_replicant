@@ -136,11 +136,7 @@ jobs:
             -p 5432:5432 \
             ${{ matrix.pg_image }} \
             -c wal_level=logical -c max_replication_slots=20 -c max_wal_senders=20
-          for _ in $(seq 1 30); do
-            docker exec pg pg_isready -U postgres && break
-            sleep 1
-          done
-          docker exec pg pg_isready -U postgres || { docker logs pg; exit 1; }
+          scripts/wait-for-postgres.sh pg
 
       - uses: erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236 # v1
         with:
@@ -215,11 +211,7 @@ jobs:
             -p 5432:5432 \
             postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b \
             -c wal_level=logical -c max_replication_slots=20 -c max_wal_senders=20
-          for _ in $(seq 1 30); do
-            docker exec pg pg_isready -U postgres && break
-            sleep 1
-          done
-          docker exec pg pg_isready -U postgres || { docker logs pg; exit 1; }
+          scripts/wait-for-postgres.sh pg
 
       - uses: erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236 # v1
         with:

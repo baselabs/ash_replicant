@@ -18,11 +18,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     -p 5432:5432 \\
     ${{ matrix.pg_image }} \\
     -c wal_level=logical -c max_replication_slots=20 -c max_wal_senders=20
-  for _ in $(seq 1 30); do
-    docker exec pg pg_isready -U postgres && break
-    sleep 1
-  done
-  docker exec pg pg_isready -U postgres || { docker logs pg; exit 1; }
+  scripts/wait-for-postgres.sh pg
   """
 
   @create_database """
@@ -38,11 +34,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     -p 5432:5432 \\
     postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b \\
     -c wal_level=logical -c max_replication_slots=20 -c max_wal_senders=20
-  for _ in $(seq 1 30); do
-    docker exec pg pg_isready -U postgres && break
-    sleep 1
-  done
-  docker exec pg pg_isready -U postgres || { docker logs pg; exit 1; }
+  scripts/wait-for-postgres.sh pg
   """
 
   # Mirrors assert_release_contract.exs's @mutation_gates_run byte-for-byte
@@ -345,6 +337,16 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     replace_once!(
       "scripts/test-release-checkers.sh",
       "scripts/test-release-package-inspection.sh >/dev/null",
+      "true"
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
+    replace_once!(
+      "scripts/test-release-checkers.sh",
+      "scripts/test-postgres-readiness.sh >/dev/null",
       "true"
     )
 

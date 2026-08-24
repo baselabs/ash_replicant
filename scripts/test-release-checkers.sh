@@ -208,6 +208,7 @@ fi
 
 scripts/test-ash-onetime-migration-checker.sh >/dev/null
 scripts/test-release-package-inspection.sh >/dev/null
+scripts/test-postgres-readiness.sh >/dev/null
 
 printf '%s\n' \
   'defmodule AshReplicant.ReleaseCheckerFixtureTest do' \
@@ -226,7 +227,10 @@ set -e
 
 rm -f "$fixture_test"
 
-if [[ "$structural_exit" -eq 0 ]] || [[ "$structural_output" == *"ASH_REPLICANT_BACKGROUND_SENTINEL"* ]]; then
+if [[ "$structural_exit" -eq 0 ]] ||
+  [[ "$structural_output" == *"ASH_REPLICANT_BACKGROUND_SENTINEL"* ]] ||
+  [[ "$structural_output" != *"uncontrolled structural errors: logger="* ]] ||
+  [[ "$structural_output" != *" exception="* ]]; then
   echo "uncontrolled process crash was not rejected structurally" >&2
   exit 1
 fi
