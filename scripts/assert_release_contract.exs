@@ -4,7 +4,7 @@ end
 
 defmodule AshReplicant.ReleaseContract do
   @immutable_action ~r/\A[^@\s]+@[0-9a-f]{40}\z/
-  @postgres_image "postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b"
+  @pg16_image "postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b"
   @ash_requirement ">= 3.31.3 and < 4.0.0-0"
   @replicant_requirement ">= 1.2.3 and < 2.0.0-0"
   @checkout "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
@@ -18,11 +18,13 @@ defmodule AshReplicant.ReleaseContract do
     "otp-version" => "${{ env.OTP_VERSION }}"
   }
 
+  # The image ref rides the matrix (pg_image: the pinned digest ref per
+  # cell); the digest pinning is enforced through the exact @matrix match.
   @postgres_run """
   docker run -d --name pg \\
     -e POSTGRES_HOST_AUTH_METHOD=trust \\
     -p 5432:5432 \\
-    #{@postgres_image} \\
+    ${{ matrix.pg_image }} \\
     -c wal_level=logical -c max_replication_slots=20 -c max_wal_senders=20
   for _ in $(seq 1 30); do
     docker exec pg pg_isready -U postgres && break
@@ -122,6 +124,9 @@ defmodule AshReplicant.ReleaseContract do
     "release-artifact" => %{"MIX_ENV" => "dev"}
   }
 
+  @pg17_image "postgres:17@sha256:e38411452a464af89e5adadb8d223bf53b898d47d6ef918b2d58c08707350449"
+  @pg18_image "postgres:18@sha256:06cad38a5d9f5d24b4d83d86def30795d5e4b757fedbf5281172b576dedcd941"
+
   @matrix [
     %{
       "label" => "exact-floors",
@@ -130,7 +135,9 @@ defmodule AshReplicant.ReleaseContract do
       "ash_requirement" => "== 3.31.3",
       "replicant_selector" => "1.2.3",
       "replicant_unlock" => true,
-      "replicant_requirement" => "== 1.2.3"
+      "replicant_requirement" => "== 1.2.3",
+      "pg_major" => "16",
+      "pg_image" => @pg16_image
     },
     %{
       "label" => "current-lock",
@@ -139,7 +146,9 @@ defmodule AshReplicant.ReleaseContract do
       "ash_requirement" => @ash_requirement,
       "replicant_selector" => "",
       "replicant_unlock" => false,
-      "replicant_requirement" => @replicant_requirement
+      "replicant_requirement" => @replicant_requirement,
+      "pg_major" => "16",
+      "pg_image" => @pg16_image
     },
     %{
       "label" => "latest-compatible",
@@ -148,7 +157,31 @@ defmodule AshReplicant.ReleaseContract do
       "ash_requirement" => @ash_requirement,
       "replicant_selector" => "latest",
       "replicant_unlock" => true,
-      "replicant_requirement" => @replicant_requirement
+      "replicant_requirement" => @replicant_requirement,
+      "pg_major" => "16",
+      "pg_image" => @pg16_image
+    },
+    %{
+      "label" => "current-lock-pg17",
+      "ash_selector" => "",
+      "ash_unlock" => false,
+      "ash_requirement" => @ash_requirement,
+      "replicant_selector" => "",
+      "replicant_unlock" => false,
+      "replicant_requirement" => @replicant_requirement,
+      "pg_major" => "17",
+      "pg_image" => @pg17_image
+    },
+    %{
+      "label" => "current-lock-pg18",
+      "ash_selector" => "",
+      "ash_unlock" => false,
+      "ash_requirement" => @ash_requirement,
+      "replicant_selector" => "",
+      "replicant_unlock" => false,
+      "replicant_requirement" => @replicant_requirement,
+      "pg_major" => "18",
+      "pg_image" => @pg18_image
     }
   ]
 

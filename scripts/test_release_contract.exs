@@ -16,7 +16,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   docker run -d --name pg \\
     -e POSTGRES_HOST_AUTH_METHOD=trust \\
     -p 5432:5432 \\
-    postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b \\
+    ${{ matrix.pg_image }} \\
     -c wal_level=logical -c max_replication_slots=20 -c max_wal_senders=20
   for _ in $(seq 1 30); do
     docker exec pg pg_isready -U postgres && break
@@ -835,12 +835,15 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     replace_once!(@workflow, "    runs-on: ubuntu-latest\n", "    runs-on: self-hosted\n")
     assert_invalid!()
 
+    # The image digests now ride the matrix (pg_image); mutating one digest
+    # breaks the exact @matrix match — the pin's red direction. Anchored on
+    # the PG17 cell (unique in the workflow; the PG16 ref appears 3x).
     prepare_fixture()
 
     replace_once!(
       @workflow,
-      "postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b \\",
-      "postgres:16 \\\n          # postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b"
+      "pg_image: \"postgres:17@sha256:e38411452a464af89e5adadb8d223bf53b898d47d6ef918b2d58c08707350449\"",
+      "pg_image: \"postgres:17\""
     )
 
     assert_invalid!()

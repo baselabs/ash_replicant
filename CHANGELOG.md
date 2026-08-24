@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Support matrix narrowed to PostgreSQL 16–18 (PG15 dropped)** and the
+  live CI matrix extended to match: the compatibility job gains pinned
+  `postgres:17` and `postgres:18` cells (current-lock dependency range
+  alongside the existing three PG16 cells — dependency ranges stay
+  fully covered on 16, and the version axis runs current-lock per
+  major). Roadmap D6, README, CONTRIBUTING, and the Charter note are
+  amended; image digests stay pinned through the release contract's
+  exact matrix match.
+
 ### Added
 
 - **Path-scoped guard-mutation evidence in CI.** The no-database job's

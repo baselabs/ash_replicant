@@ -14,7 +14,7 @@ Thank you for your interest in contributing to AshReplicant!
   and publication. CI pins PostgreSQL 16; the local gate runs whatever instance
   `ASH_REPLICANT_TEST_URL` points at (derive the live version with
   `SELECT version();` — never assume it from this doc), and the support
-  matrix is PG15–18
+  matrix is PG16–18
 
 ## Getting Started
 

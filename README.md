@@ -63,7 +63,7 @@ The current 1.0.0 hardening baseline is built and tested with:
 - PostgreSQL with `wal_level=logical` for the live integration gate: CI pins
   PostgreSQL 16, the local gate runs whatever instance `ASH_REPLICANT_TEST_URL`
   points at (derive the live version with `SELECT version();` — never assume it
-  from this doc), and the support matrix is PG15–18.
+  from this doc), and the support matrix is PG16–18.
 
 The Ash lower bound excludes known-vulnerable patches, and the upper bound
 excludes Ash 4 prereleases. AshOnetime protects admitted local auxiliary actions

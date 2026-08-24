@@ -69,7 +69,7 @@ jobs:
           fi
 
   compatibility:
-    name: Dependencies ${{ matrix.label }} / PostgreSQL 16
+    name: Dependencies ${{ matrix.label }} / PostgreSQL ${{ matrix.pg_major }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -82,6 +82,8 @@ jobs:
             replicant_selector: "1.2.3"
             replicant_unlock: true
             replicant_requirement: "== 1.2.3"
+            pg_major: "16"
+            pg_image: "postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b"
           - label: current-lock
             ash_selector: ""
             ash_unlock: false
@@ -89,6 +91,8 @@ jobs:
             replicant_selector: ""
             replicant_unlock: false
             replicant_requirement: ">= 1.2.3 and < 2.0.0-0"
+            pg_major: "16"
+            pg_image: "postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b"
           - label: latest-compatible
             ash_selector: latest
             ash_unlock: true
@@ -96,6 +100,26 @@ jobs:
             replicant_selector: latest
             replicant_unlock: true
             replicant_requirement: ">= 1.2.3 and < 2.0.0-0"
+            pg_major: "16"
+            pg_image: "postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b"
+          - label: current-lock-pg17
+            ash_selector: ""
+            ash_unlock: false
+            ash_requirement: ">= 3.31.3 and < 4.0.0-0"
+            replicant_selector: ""
+            replicant_unlock: false
+            replicant_requirement: ">= 1.2.3 and < 2.0.0-0"
+            pg_major: "17"
+            pg_image: "postgres:17@sha256:e38411452a464af89e5adadb8d223bf53b898d47d6ef918b2d58c08707350449"
+          - label: current-lock-pg18
+            ash_selector: ""
+            ash_unlock: false
+            ash_requirement: ">= 3.31.3 and < 4.0.0-0"
+            replicant_selector: ""
+            replicant_unlock: false
+            replicant_requirement: ">= 1.2.3 and < 2.0.0-0"
+            pg_major: "18"
+            pg_image: "postgres:18@sha256:06cad38a5d9f5d24b4d83d86def30795d5e4b757fedbf5281172b576dedcd941"
     env:
       MIX_ENV: test
       ASH_REPLICANT_ASH_VERSION: ${{ matrix.ash_selector }}
@@ -105,12 +129,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Start PostgreSQL 16 with logical replication
+      - name: Start PostgreSQL ${{ matrix.pg_major }} with logical replication
         run: |
           docker run -d --name pg \
             -e POSTGRES_HOST_AUTH_METHOD=trust \
             -p 5432:5432 \
-            postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b \
+            ${{ matrix.pg_image }} \
             -c wal_level=logical -c max_replication_slots=20 -c max_wal_senders=20
           for _ in $(seq 1 30); do
             docker exec pg pg_isready -U postgres && break
