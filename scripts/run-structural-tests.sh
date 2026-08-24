@@ -29,10 +29,13 @@ mix_args=()
 # carrying BOTH tags (the module is :integration AND :performance).
 performance_default="$([ -z "${GITHUB_ACTIONS:-}" ] && [ -n "${ASH_REPLICANT_TEST_URL:-}" ] && echo 1 || echo 0)"
 
+performance_excluded=0
+
 if [[ "${ASH_REPLICANT_PERFORMANCE:-$performance_default}" == "1" ]]; then
   mix_args+=("--include" "performance")
 else
   mix_args+=("--exclude" "performance")
+  performance_excluded=1
 fi
 
 for argument in "$@"; do
@@ -47,6 +50,13 @@ for argument in "$@"; do
     mix_args+=("$argument")
   fi
 done
+
+# The default performance exclusion puts ', N excluded' on the Result line;
+# the evidence gate accepts that ONLY with --allow-excluded, so the runner
+# owns the flag whenever it owns the exclusion (an explicit pass wins first).
+if [[ "$performance_excluded" -eq 1 && -z "$allow_excluded" ]]; then
+  allow_excluded="--allow-excluded"
+fi
 
 test_exit=0
 mix test "${mix_args[@]}" --formatter AshReplicant.StructuralFormatter >"$raw_output" 2>&1 || test_exit=$?
