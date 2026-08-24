@@ -223,12 +223,11 @@ defmodule AshReplicant.StartLinkTest do
     end
   end
 
-  # Activation deliberately targets an unreachable port and waits through the
-  # transport retry path. The structural battery observed this test exceed
-  # ExUnit's 60s default under compatibility-runner load; its assertions are
-  # event-driven, so the ceiling bounds the harness rather than the behavior.
-  @tag timeout: 120_000
-  test "source identity is required and compared without returning values" do
+  # The validation half of the identity contract: pure option validation,
+  # no connection. Split from the accepted-path half (below) so a runner
+  # failure names its half — this test has lottery-ed across three runs on
+  # three different cells and the receipt was the only surviving evidence.
+  test "source identity is required (option validation, value-free)" do
     assert {:error, :source_identity_required} =
              AshReplicant.start_link(Keyword.delete(start_opts(), :source_identity))
 
@@ -241,7 +240,16 @@ defmodule AshReplicant.StartLinkTest do
       assert {:error, :source_identity_required} =
                AshReplicant.start_link(start_opts(source_identity: identity))
     end
+  end
 
+  # The accepted-path half: activation against the unreachable port
+  # (deferred coverage) plus the generated guard's comparison, all
+  # value-free. Activation deliberately targets an unreachable port; the
+  # queue bounds on the fixture make the refusal deterministic (~150ms
+  # measured; the CoDel defaults made one activation stall ~6s and blew
+  # ExUnit's ceiling on compatibility runners).
+  @tag timeout: 120_000
+  test "the accepted path starts, the guard compares without returning values, and it stops" do
     log =
       capture_log(fn ->
         assert {:ok, _pid} = AshReplicant.start_link(start_opts())
@@ -306,7 +314,13 @@ defmodule AshReplicant.StartLinkTest do
                    ValidSink.handle_session_identity(identity, mismatched_context)
         end
 
-        assert :ok = AshReplicant.stop_supervised("valid_slot")
+        # A stop that never completes is a WEDGED transport — name it
+        # structurally instead of letting it eat the test's ceiling.
+        stopper = Task.async(fn -> AshReplicant.stop_supervised("valid_slot") end)
+
+        assert Task.await(stopper, 60_000) == :ok,
+               "stop_supervised never returned against the unreachable transport"
+
         assert :none == :persistent_term.get({AshReplicant, "valid_slot"}, :none)
       end)
 
