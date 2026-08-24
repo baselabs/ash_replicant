@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-08-24
+
+First stable release. The public API, DSL, error reasons, telemetry
+events, and package contents are frozen by ADR-0023
+(`test/ash_replicant/public_api_freeze_test.exs`); everything inside the
+frozen inventory is internal-by-convention. Supported foundation:
+Elixir 1.20.3 / OTP 29, Ash `>= 3.31.3 and < 4.0.0-0`, Replicant
+`>= 1.2.3 and < 2.0.0-0`, PostgreSQL 16–18.
+
 ### Changed
 
 - **Support matrix narrowed to PostgreSQL 16–18 (PG15 dropped)** and the
@@ -518,6 +527,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documented
 
+- The guided tour notebook gains sections for the 1.0 operations surface:
+  the continuous census (§12), runtime status & tombstones with a runnable
+  `AshReplicant.Status.classify/1` demo (§13), typed telemetry & recovery
+  horizons with the complete `emitted_event_names/0` inventory (§14), and
+  the fault → state → operator matrix with the `docs/RECOVERY.md` link
+  (§15). Version references (README banner, install snippet, notebook)
+  move to 1.0.0.
 - Record the approved 1.0 release design as ADRs 0017-0021 and pending hardening
   amendments to ADR-0010/0015. ADR-0017's snapshot restart protocol is now live;
   the later append-log, continuous assurance, install/doctor, expanded support,
@@ -1148,7 +1164,8 @@ sensitive-column verification.
   `usage-rules.md`, `CONTRIBUTING.md`, `LICENSE`, `NOTICE`; tracked charter at
   `docs/CHARTER.md` (only `/docs/superpowers/` lifecycle artifacts are local-only).
 
-[Unreleased]: https://github.com/baselabs/ash_replicant/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/baselabs/ash_replicant/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/baselabs/ash_replicant/tree/v1.0.0
 [0.4.0]: https://github.com/baselabs/ash_replicant/tree/v0.4.0
 [0.3.3]: https://github.com/baselabs/ash_replicant/commit/3b61d3a9ae553fb96ff26e9fcf581416af723843
 [0.3.2]: https://github.com/baselabs/ash_replicant/tree/v0.3.2

@@ -3,7 +3,7 @@
 ```elixir
 Mix.install([
   # This notebook lives in `notebooks/`, so `..` is the repo root. Swap for
-  # `{:ash_replicant, "~> 0.4.0"}` to run it against the published Hex package.
+  # `{:ash_replicant, "~> 1.0.0"}` to run it against the published Hex package.
   {:ash_replicant, path: Path.join(__DIR__, "..")},
   {:kino, "~> 0.14"}
 ])
@@ -69,7 +69,7 @@ one tangible:
 
 ```elixir
 AshReplicant.version()
-# => "0.4.0"
+# => "1.0.0"
 ```
 
 ## 3 · The value-free boundary (rule 4)
@@ -717,7 +717,167 @@ flowchart TD
   style Skip fill:#eef,stroke:#33a
 ```
 
-## 12 · Where to go next
+## 12 · The continuous census (the pipeline that re-proves itself)
+
+📋 **Reference.** Mirroring a database is a long-lived bet that the world
+stays as it was admitted: the destination still is the database the
+checkpoint was bound to, the publication still carries the contract the
+watermark covers, every mapped source table is still covered. The
+**census** (C01 / ADR-0019) is the standing re-check of that bet — one
+jittered, bounded, monitored worker per slot, run *through* the pipeline
+owner (never a second Replicant callback or lifecycle process):
+
+* **What it rechecks** — destination identity, the live publication
+  contract against the durable one, the checkpoint's contract/fingerprint,
+  and full source coverage (the four `:destination | :contract |
+  :checkpoint | :coverage` checks).
+* **Drift halts immediately** — a contract that no longer matches the
+  watermark's coverage is a data-integrity fault, not a warning. A
+  *timeout*, an *unreachable source*, or a *checker fault* is a typed
+  non-pass result that halts only at the configured consecutive budget
+  (transient blips self-heal; three-in-a-row does not).
+* **One run at a time** — the next census is scheduled only after the
+  current one settles, and owner teardown kills an in-flight worker.
+
+```elixir
+AshReplicant.start_link(
+  ...,
+  census: [
+    enabled?: true,              # default ON — :healthy requires a passing census
+    interval_ms: 60_000,         # default cadence
+    jitter_ratio: 0.1,           # ±10% jitter so fleets don't stampede the source
+    timeout_ms: 10_000,          # a census run that overruns is a fault, not a hang
+    max_consecutive_faults: 3    # consecutive non-pass results before the halt
+  ]
+)
+```
+
+Census health feeds the status contract below — `:healthy` is *not* "the
+process is up"; it is "the owner is live, the pipeline is live, and the
+census last passed."
+
+## 13 · Runtime status & tombstones
+
+`AshReplicant.status/1` answers *what state is this sink's pipeline in?*
+with a closed five-value contract — derived on every call, never stored:
+
+```elixir
+AshReplicant.status(MyApp.Replicant.Sink)
+#=> :healthy | :catching_up | {:halted, reason} | {:misconfigured, reason} | :not_started
+```
+
+▶︎ **Runnable.** Underneath sits a pure, closed-set classifier: the class
+of a *terminal cause*. `:operator_stopped` is a stop; the
+identity/contract/mapping drift an operator fixes **in configuration** is
+`:misconfigured`; everything else — including a reason the library has
+never met — fails closed to `:halt`:
+
+```elixir
+for r <- [
+  :operator_stopped,
+  :source_identity_mismatch,
+  {:invalid_destination_config, :notifier_load_drift},
+  :sink_failed,
+  :a_reason_this_version_never_met
+] do
+  {inspect(r), AshReplicant.Status.classify(r)}
+end
+# => [
+#   {":operator_stopped", :stopped},
+#   {":source_identity_mismatch", :misconfigured},
+#   {"{:invalid_destination_config, :notifier_load_drift}", :misconfigured},
+#   {":sink_failed", :halt},
+#   {":a_reason_this_version_never_met", :halt}
+# ]
+```
+
+When a generation ends, the party that knows the cause records a
+**tombstone** — bounded (latest per slot) and value-free (a closed reason
+atom, a class, a timestamp; never a row value, prefix, or progress token).
+It has two legs: a node-local one (always writable) and a durable one on
+the checkpoint row (`terminal_cause`/`terminal_class`/`terminal_at`),
+written only when the row already exists and **cleared by every admitted
+checkpoint write** — a stale cause can never outlive the generation that
+superseded it. The derivation precedence (live owner facts → generation
+entry → tombstones → `:not_started`) and the two documented edges
+(destination-unreachable halt persists node-local only; a host-tree
+shutdown writes nothing) are specified in the README's
+*Runtime status and lifecycle tombstones* section (ADR-0019).
+
+## 14 · Typed telemetry & recovery horizons
+
+§3a showed the metadata allowlist. The **event inventory** is equally
+closed — this is every event the library emits, so a handler can be pinned
+complete against it:
+
+▶︎ **Runnable.**
+
+```elixir
+AshReplicant.Telemetry.emitted_event_names()
+# => [
+#   [:ash_replicant, :sink, :session_identity_accepted],
+#   [:ash_replicant, :sink, :applied],
+#   [:ash_replicant, :sink, :batch_applied],
+#   [:ash_replicant, :sink, :skipped],
+#   [:ash_replicant, :sink, :halted],
+#   [:ash_replicant, :checkpoint, :conflict],
+#   [:ash_replicant, :message, :applied],
+#   [:ash_replicant, :snapshot, :batch],
+#   [:ash_replicant, :snapshot, :complete],
+#   [:ash_replicant, :preflight, :failed],
+#   [:ash_replicant, :census, :passed],
+#   [:ash_replicant, :census, :faulted],
+#   [:ash_replicant, :census, :halted],
+#   [:ash_replicant, :retention, :at_risk],
+#   [:ash_replicant, :status, :tombstone_write_failed]
+# ]
+```
+
+Measurements are typed per key (`count`, `change_count`, `duration`,
+`byte_size`) — the OpenTelemetry/metrics mapping in
+`AshReplicant.Telemetry`'s moduledoc is test-pinned complete against this
+inventory.
+
+📋 **Recovery horizons (ADR-0022).** A message-routed sink declares the
+outage window its routes' claim retention must cover — activation refuses
+`retention_below_recovery_horizon` when it doesn't, because a claim that
+dies at `retain_until` is a standalone message's *only* dedup:
+
+```elixir
+use AshReplicant.Sink,
+  ...,
+  message_routes: [{"mail", MyApp.MailOutbox, :record}],
+  recovery_horizon: {24, :hour}
+```
+
+The WAL side alerts **before recovery becomes impossible**: the census
+emits `[:ash_replicant, :retention, :at_risk]` (meta only — no
+measurement) while the slot's retention window shrinks, `:source_wal_lost`
+/ `:retention_horizon_crossed` halt once crossed, and a digest key removed
+inside the rotation window halts `:digest_key_horizon_violated`. While
+**halted** nothing in the library watches the clock — run
+`mix ash_replicant.doctor` on the operator's scheduler as the pull
+channel. The README's *alert table* maps every signal to its operator
+action.
+
+## 15 · When it breaks: the fault → state → operator matrix
+
+📋 **Reference.** Every control-plane and data-plane fault this adapter
+can hit — source disconnect, owner death, checkpoint read/write faults,
+batch/message/snapshot/append delivery faults, external-effect ambiguity,
+timeline changes, contract drift, census faults, retention horizons — has
+a documented row in
+**[`docs/RECOVERY.md`](../docs/RECOVERY.md)**: the state it surfaces, what
+the pipeline does on its own, and what an operator owes. The whole matrix
+is value-free; restart is always an explicit operator decision, and the
+un-acked WAL re-streams and dedups to zero net effect on every resume.
+
+Each row's mechanism is exercised live by the fault suites —
+`test/integration/fault_recovery_test.exs` and the suites
+`docs/RECOVERY.md` cites (transaction/batch/message/snapshot/append fault
+injection with append-only observers proving zero net duplicate/loss).
+
+## 16 · Where to go next
 
 * **[`AGENTS.md`](../AGENTS.md)** — the working guide; the six critical rules are
   binding (start here to contribute).
