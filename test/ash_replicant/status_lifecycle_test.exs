@@ -143,7 +143,11 @@ defmodule AshReplicant.StatusLifecycleTest do
         assert %AshReplicant.Status.Tombstone{cause: :census_unverifiable, class: :halt} =
                  tombstone()
 
-        assert :none == :persistent_term.get(@entry, :none)
+        # The halt answer comes from the node-local tombstone, which the
+        # owner writes BEFORE its own cleanup (safe_stop, durable record,
+        # then the erase) — poll the erase, never assert it immediately
+        # (the O02-era flake class this file fights).
+        eventually(fn -> :none == :persistent_term.get(@entry, :none) end)
       end)
     end
   end
@@ -207,18 +211,48 @@ defmodule AshReplicant.StatusLifecycleTest do
         # from the node-local leg, which precedes the durable attempt's
         # telemetry — under a loaded full battery that transaction can out-
         # run a 5s window without any behavior change (the flake O02 fought;
-        # the event itself is deterministic in both environments).
-        assert_receive {:telemetry, [:ash_replicant, :status, :tombstone_write_failed],
-                        %{slot_name: @slot, reason: reason}},
-                       20_000
+        # the event itself is deterministic in both environments). A lawful
+        # SKIP is the one outcome that emits nothing: the durable leg only
+        # writes when a checkpoint row under the entry's identity already
+        # exists — so a missing event must be PROVEN to be the skip (row
+        # absent with the repo up), never assumed.
+        received =
+          receive do
+            {:telemetry, [:ash_replicant, :status, :tombstone_write_failed],
+             %{slot_name: @slot, reason: reason}} ->
+              {:event, reason}
+          after
+            20_000 ->
+              :no_event
+          end
 
-        # DB-free (this suite): the repo is not running, so the guard
-        # itself refuses (:destination_unavailable). Under the live
-        # environment (repo started, manual sandbox, the owner process not
-        # checked out): the write is attempted and the transaction fails
-        # (:destination_write_failed) — verified deterministically in all
-        # three live cells. Both are the closed record firing.
-        assert reason in [:destination_unavailable, :destination_write_failed]
+        case received do
+          {:event, reason} ->
+            # DB-free (this suite): the repo is not running, so the guard
+            # itself refuses (:destination_unavailable). Under the live
+            # environment with the sandbox checked out to this test only,
+            # the write is attempted and the transaction fails
+            # (:destination_write_failed). Both are the closed record firing.
+            assert reason in [:destination_unavailable, :destination_write_failed]
+
+          :no_event ->
+            repo = AshReplicant.TestRepo
+
+            if is_pid(Process.whereis(repo)) do
+              {:ok, _} = Ecto.Adapters.SQL.Sandbox.checkout(repo)
+
+              [[count]] =
+                repo.query!(
+                  "SELECT count(*) FROM ash_replicant_checkpoints WHERE slot_name = $1 AND source_system_id = $2 AND source_database = $3",
+                  [@slot, "741852963", "postgres"]
+                ).rows
+
+              # The durable leg lawfully skipped: no row, no record owed.
+              assert count == 0
+            else
+              flunk("durable tombstone record neither fired nor lawfully skipped")
+            end
+        end
       end)
     end
 
