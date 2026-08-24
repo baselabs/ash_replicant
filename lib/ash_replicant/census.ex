@@ -224,6 +224,10 @@ defmodule AshReplicant.Census do
     # routing — Destination.with_repo_binding/2); the owner's process is not
     # otherwise bound and the static module would read the wrong database on
     # a dynamic-repo host.
+    # The census read binds the ADMITTED dynamic repo (the process-dictionary
+    # routing — Destination.with_repo_binding/2); the owner's process is not
+    # otherwise bound and the static module would read the wrong database on
+    # a dynamic-repo host.
     case AshReplicant.Destination.with_repo_binding(config, fn ->
            Ash.read(query,
              authorize?: false,

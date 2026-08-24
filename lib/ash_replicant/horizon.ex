@@ -413,34 +413,7 @@ defmodule AshReplicant.Horizon do
     result =
       with_repo_binding(config, fn ->
         config.repo.transaction(fn ->
-          rows =
-            config.checkpoint_resource
-            |> Ash.Query.filter(
-              slot_name == ^slot and source_system_id == ^system_id and
-                source_database == ^database
-            )
-            |> Ash.read!(lock: :for_update, authorize?: false, context: context)
-            |> List.wrap()
-
-          case rows do
-            [_row] ->
-              Ash.create!(
-                config.checkpoint_resource,
-                Map.merge(checkpoint_filter(config), %{digest_key_state: encoded}),
-                action: :upsert,
-                upsert?: true,
-                upsert_identity: :source_slot,
-                upsert_fields: [:digest_key_state],
-                authorize?: false,
-                context: context,
-                return_notifications?: true
-              )
-
-              :ok
-
-            _absent_or_ambiguous ->
-              :skip
-          end
+          witness_write(config, context, system_id, database, slot, encoded)
         end)
       end)
 
@@ -453,6 +426,37 @@ defmodule AshReplicant.Horizon do
     _error -> {:error, Error.exception(reason: :config_invalid, op: :census)}
   catch
     _kind, _reason -> {:error, Error.exception(reason: :config_invalid, op: :census)}
+  end
+
+  defp witness_write(config, context, system_id, database, slot, encoded) do
+    rows =
+      config.checkpoint_resource
+      |> Ash.Query.filter(
+        slot_name == ^slot and source_system_id == ^system_id and
+          source_database == ^database
+      )
+      |> Ash.read!(lock: :for_update, authorize?: false, context: context)
+      |> List.wrap()
+
+    case rows do
+      [_row] ->
+        Ash.create!(
+          config.checkpoint_resource,
+          Map.merge(checkpoint_filter(config), %{digest_key_state: encoded}),
+          action: :upsert,
+          upsert?: true,
+          upsert_identity: :source_slot,
+          upsert_fields: [:digest_key_state],
+          authorize?: false,
+          context: context,
+          return_notifications?: true
+        )
+
+        :ok
+
+      _absent_or_ambiguous ->
+        :skip
+    end
   end
 
   defp checkpoint_filter(config) do

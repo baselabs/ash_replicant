@@ -93,12 +93,15 @@ defmodule AshReplicant do
   @spec stop_supervised(String.t()) :: :ok | {:error, :pipeline_stop_failed}
   def stop_supervised(slot_name) do
     activation_lock(slot_name, fn ->
-      # Capture the stop fact BEFORE safe_stop (the dying owner erases the
-      # generation — the identity would be unreadable after), but write the
-      # tombstone AFTER: an admitted delivery that commits while the stop
-      # waits on the lease would otherwise CLEAR the durable leg with its
-      # checkpoint advance — the same D3 ordering the census halt path uses.
+      # Record the stop fact BEFORE safe_stop — the owner's own death path
+      # records :pipeline_terminated only when NO tombstone is present, so a
+      # stop with no prior record races it into a mislabeled cause — and
+      # RE-ASSERT it AFTER: an admitted delivery that commits while the stop
+      # waits on the lease clears the durable terminal columns with its
+      # checkpoint advance (the census halt path's D3 hazard); the re-assert
+      # (idempotent, once the pipeline is down) supersedes that late clear.
       stop_fact = capture_stop_fact(slot_name)
+      write_stop_fact(slot_name, stop_fact)
       result = safe_stop(slot_name)
       write_stop_fact(slot_name, stop_fact)
       :persistent_term.erase({AshReplicant, slot_name})

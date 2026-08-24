@@ -9,6 +9,8 @@ defmodule AshReplicant.StartLinkTest do
 
   import ExUnit.CaptureLog
 
+  alias Ecto.Adapters.SQL
+
   alias AshReplicant.Destination.Generation
   alias AshReplicant.Test.DestinationFixtures
 
@@ -531,18 +533,19 @@ defmodule AshReplicant.StartLinkTest do
   # node-local leg stays right; the durable evidence died with the restart).
   @tag :integration
   test "an advance committing during a stop cannot erase the durable stop tombstone" do
-    Ecto.Adapters.SQL.Sandbox.mode(AshReplicant.TestRepo, :auto)
+    SQL.Sandbox.mode(AshReplicant.TestRepo, :auto)
+    checkpoint = AshReplicant.Test.Checkpoint
     observer = self()
 
     cleanup = fn ->
-      Ecto.Adapters.SQL.query!(
+      SQL.query!(
         AshReplicant.TestRepo,
         "DELETE FROM ash_replicant_checkpoints WHERE slot_name = $1",
         ["lease_slot"]
       )
 
       :persistent_term.erase({AshReplicant.Status, "lease_slot"})
-      Ecto.Adapters.SQL.Sandbox.mode(AshReplicant.TestRepo, :manual)
+      SQL.Sandbox.mode(AshReplicant.TestRepo, :manual)
     end
 
     on_exit(cleanup)
@@ -583,7 +586,7 @@ defmodule AshReplicant.StartLinkTest do
                 # The advance-shaped checkpoint write: exactly what
                 # clear_terminal_tombstone!/1 emits on a committed delivery
                 # over a row carrying a terminal record.
-                AshReplicant.Test.Checkpoint
+                checkpoint
                 |> Ash.create!(
                   %{
                     source_system_id: "741852963",
@@ -624,7 +627,7 @@ defmodule AshReplicant.StartLinkTest do
       # The durable leg records the STOP — the late advance's terminal-clear
       # landed BEFORE the stop's record, not after it.
       {:ok, [[cause]]} =
-        Ecto.Adapters.SQL.query!(
+        SQL.query!(
           AshReplicant.TestRepo,
           "SELECT terminal_cause FROM ash_replicant_checkpoints WHERE slot_name = $1",
           ["lease_slot"]

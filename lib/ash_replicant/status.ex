@@ -498,41 +498,7 @@ defmodule AshReplicant.Status do
     result =
       Destination.with_repo_binding(config, fn ->
         config.repo.transaction(fn ->
-          rows =
-            config.checkpoint_resource
-            |> Ash.Query.filter(
-              slot_name == ^config.slot_name and source_system_id == ^system_id and
-                source_database == ^database
-            )
-            |> Ash.read!(lock: :for_update, authorize?: false, context: context)
-            |> List.wrap()
-
-          case rows do
-            [_row] ->
-              Ash.create!(
-                config.checkpoint_resource,
-                %{
-                  source_system_id: system_id,
-                  source_database: database,
-                  slot_name: config.slot_name,
-                  terminal_cause: encode_cause(tombstone.cause),
-                  terminal_class: Atom.to_string(tombstone.class),
-                  terminal_at: tombstone.at
-                },
-                action: :upsert,
-                upsert?: true,
-                upsert_identity: :source_slot,
-                upsert_fields: [:terminal_cause, :terminal_class, :terminal_at],
-                authorize?: false,
-                context: context,
-                return_notifications?: true
-              )
-
-              :ok
-
-            _absent_or_ambiguous ->
-              :skip
-          end
+          tombstone_write(config, context, system_id, database, tombstone)
         end)
       end)
 
@@ -544,6 +510,44 @@ defmodule AshReplicant.Status do
     _error -> telemetry_write_failed(config.slot_name, :destination_write_failed)
   catch
     _kind, _reason -> telemetry_write_failed(config.slot_name, :destination_write_failed)
+  end
+
+  defp tombstone_write(config, context, system_id, database, %Tombstone{} = tombstone) do
+    rows =
+      config.checkpoint_resource
+      |> Ash.Query.filter(
+        slot_name == ^config.slot_name and source_system_id == ^system_id and
+          source_database == ^database
+      )
+      |> Ash.read!(lock: :for_update, authorize?: false, context: context)
+      |> List.wrap()
+
+    case rows do
+      [_row] ->
+        Ash.create!(
+          config.checkpoint_resource,
+          %{
+            source_system_id: system_id,
+            source_database: database,
+            slot_name: config.slot_name,
+            terminal_cause: encode_cause(tombstone.cause),
+            terminal_class: Atom.to_string(tombstone.class),
+            terminal_at: tombstone.at
+          },
+          action: :upsert,
+          upsert?: true,
+          upsert_identity: :source_slot,
+          upsert_fields: [:terminal_cause, :terminal_class, :terminal_at],
+          authorize?: false,
+          context: context,
+          return_notifications?: true
+        )
+
+        :ok
+
+      _absent_or_ambiguous ->
+        :skip
+    end
   end
 
   defp telemetry_write_failed(slot_name, reason) do

@@ -329,25 +329,39 @@ defmodule AshReplicant.Destination do
   @doc false
   @spec with_repo_binding(map(), (-> term())) :: term()
   def with_repo_binding(config, fun) do
-    bound = admitted_repo(config)
-    previous = config.repo.put_dynamic_repo(bound)
+    case admitted_repo(config) do
+      nil ->
+        # No explicit owned instance: run UNWRAPPED, honoring the caller's
+        # own process binding (a console bound to the instance keeps reading
+        # the right database; and a stored nil would poison Ecto 3.14's
+        # get_dynamic_repo — nil is returned, not defaulted).
+        fun.()
 
-    try do
-      fun.()
-    after
-      config.repo.put_dynamic_repo(previous)
+      instance ->
+        previous = config.repo.put_dynamic_repo(instance)
+
+        try do
+          fun.()
+        after
+          config.repo.put_dynamic_repo(previous)
+        end
     end
   end
 
-  # The admitted dynamic instance when the config carries one; the module
-  # repo otherwise (identity for every non-dynamic host — put_dynamic_repo
-  # with the module is the default binding).
+  # The instance eligible for CROSS-PROCESS binding: an explicit
+  # `:dynamic_repo` that is an OWNED dynamic instance of the repo AND is not
+  # the module default (the default needs no binding; the admitting
+  # process's sandbox checkout is process-local and must not leak into the
+  # owner, the census, or the delivery processes).
   @doc false
-  @spec admitted_repo(map()) :: atom() | pid()
+  @spec admitted_repo(map()) :: atom() | pid() | nil
   def admitted_repo(config) do
     case Map.get(config, :dynamic_repo) do
-      instance when is_atom(instance) or is_pid(instance) -> instance
-      _nil -> Map.get(action_context(config), :data_layer) |> Map.get(:repo)
+      instance when instance != nil and instance != config.repo ->
+        if dynamic_repo_owned_by?(config.repo, instance), do: instance
+
+      _absent_or_default ->
+        nil
     end
   end
 

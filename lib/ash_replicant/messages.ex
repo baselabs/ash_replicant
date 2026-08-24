@@ -19,7 +19,7 @@ defmodule AshReplicant.Messages do
   """
 
   alias AshReplicant.Apply.Context, as: DeliveryContext
-  alias AshReplicant.{DestinationParticipant, Error, Telemetry}
+  alias AshReplicant.{DestinationParticipant, Error, Horizon.KeyState, Telemetry}
 
   @digest_min_key_bytes 16
 
@@ -103,24 +103,25 @@ defmodule AshReplicant.Messages do
 
   def preflight_digest(config) do
     if routes_configured?(config) do
-      case digest_keys() do
-        {:ok, keys} ->
-          # The witness envelope caps the version count (KeyState); a set
-          # beyond the cap would fail at bind with an opaque encode error —
-          # the fail-closed admission belongs HERE, before any effect.
-          if length(keys) <= AshReplicant.Horizon.KeyState.max_versions() do
-            :ok
-          else
-            {:error, Error.exception(reason: :config_invalid, resource: nil, op: :activation)}
-          end
-
-        :error ->
-          {:error, Error.exception(reason: :config_invalid, resource: nil, op: :activation)}
-      end
+      digest_admission(digest_keys())
     else
       :ok
     end
   end
+
+  # The witness envelope caps the version count (KeyState); a set beyond the
+  # cap would fail at bind with an opaque encode error — the fail-closed
+  # admission belongs HERE, before any effect.
+  defp digest_admission({:ok, keys}) do
+    if length(keys) <= KeyState.max_versions() do
+      :ok
+    else
+      {:error, Error.exception(reason: :config_invalid, resource: nil, op: :activation)}
+    end
+  end
+
+  defp digest_admission(:error),
+    do: {:error, Error.exception(reason: :config_invalid, resource: nil, op: :activation)}
 
   # --- routing ---
 

@@ -45,10 +45,14 @@ defmodule AshReplicant.DynamicDestinationBindingTest do
       @slot
     ])
 
+    # config/test.exs sets BOTH key families globally — capture and RESTORE
+    # (a delete would starve every later census's classify_witness).
+    digest_baseline = Application.get_env(:ash_replicant, :message_digest_keys)
+    provenance_baseline = Application.get_env(:ash_replicant, :horizon_provenance_keys)
+
     on_exit(fn ->
-      # env restore DELETES (never leaves a set key behind)
-      Application.delete_env(:ash_replicant, :message_digest_keys)
-      Application.delete_env(:ash_replicant, :horizon_provenance_keys)
+      restore_env(:message_digest_keys, digest_baseline)
+      restore_env(:horizon_provenance_keys, provenance_baseline)
       AshReplicant.stop_supervised(@slot)
       :persistent_term.erase({AshReplicant, @slot})
 
@@ -65,6 +69,9 @@ defmodule AshReplicant.DynamicDestinationBindingTest do
 
     :ok
   end
+
+  defp restore_env(key, nil), do: Application.delete_env(:ash_replicant, key)
+  defp restore_env(key, value), do: Application.put_env(:ash_replicant, key, value)
 
   defp dyn_row!(columns) do
     %{rows: rows} =
@@ -248,9 +255,12 @@ defmodule AshReplicant.DynamicDestinationBindingTest do
 
   test "a digest-key set larger than the witness envelope cap is refused at preflight" do
     keys = for v <- 1..17, do: {v, :crypto.strong_rand_bytes(16)}
+    baseline = Application.get_env(:ash_replicant, :message_digest_keys)
     Application.put_env(:ash_replicant, :message_digest_keys, keys)
 
-    on_exit(fn -> Application.delete_env(:ash_replicant, :message_digest_keys) end)
+    on_exit(fn ->
+      restore_env(:message_digest_keys, baseline)
+    end)
 
     config = RoutedSink.__ash_replicant_config__()
 
