@@ -46,7 +46,19 @@ defmodule AshReplicant.StartLinkTest do
           hostname: "127.0.0.1",
           port: 1,
           username: "postgres",
-          database: "postgres"
+          database: "postgres",
+          # The unreachable-port fixture rides DBConnection's CoDel queue to
+          # its refusal: with the defaults one activation stalls ~6s on the
+          # queue-drop delay (queue_target 50 / queue_interval 2000), and the
+          # stacked waits blew ExUnit's ceiling on compatibility runners
+          # (run 32698769957, twice — cells rotate). Tight queue bounds make
+          # the refusal deterministic: measured 6000ms → 152ms per activation.
+          # Nothing under test depends on how long the refusal takes, only
+          # that the port is unreachable.
+          queue_target: 5,
+          queue_interval: 50,
+          pool_timeout: 250,
+          timeout: 250
         ],
         publication: "valid_pub",
         source_identity: @source_identity,
