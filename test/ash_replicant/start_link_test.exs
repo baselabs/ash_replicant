@@ -523,6 +523,118 @@ defmodule AshReplicant.StartLinkTest do
     end)
   end
 
+  # Cross-vendor REL02 (claude peer): the durable :operator_stopped tombstone
+  # is written AFTER safe_stop — the census halt path's D3 ordering. An
+  # admitted checkpoint write that commits while the stopper waits on the
+  # lease CLEARS the durable terminal columns; recording the stop before the
+  # pipeline is down lets that late clear erase the stop's own record (the
+  # node-local leg stays right; the durable evidence died with the restart).
+  @tag :integration
+  test "an advance committing during a stop cannot erase the durable stop tombstone" do
+    Ecto.Adapters.SQL.Sandbox.mode(AshReplicant.TestRepo, :auto)
+    observer = self()
+
+    cleanup = fn ->
+      Ecto.Adapters.SQL.query!(
+        AshReplicant.TestRepo,
+        "DELETE FROM ash_replicant_checkpoints WHERE slot_name = $1",
+        ["lease_slot"]
+      )
+
+      :persistent_term.erase({AshReplicant.Status, "lease_slot"})
+      Ecto.Adapters.SQL.Sandbox.mode(AshReplicant.TestRepo, :manual)
+    end
+
+    on_exit(cleanup)
+
+    # lease_slot's checkpoint row: pre-seeded with a terminal record (a prior
+    # generation's halt), so the callback's advance-shaped clear has
+    # something a real delivery would clear.
+    seed_row = fn ->
+      AshReplicant.Test.Checkpoint
+      |> Ash.create!(
+        %{
+          source_system_id: "741852963",
+          source_database: "postgres",
+          slot_name: "lease_slot",
+          commit_lsn: 100,
+          terminal_cause: "sink_failed",
+          terminal_class: "halt"
+        },
+        action: :upsert,
+        upsert?: true,
+        upsert_identity: :source_slot,
+        authorize?: false
+      )
+    end
+
+    seed_row.()
+
+    capture_log(fn ->
+      assert {:ok, _owner} = AshReplicant.start_link(start_opts(sink: LeaseSink))
+
+      callback =
+        Task.async(fn ->
+          AshReplicant.run_callback("lease_slot", LeaseSink, :mutate, fn _config ->
+            send(observer, {:inside_stop_window, self()})
+
+            receive do
+              :do_advance ->
+                # The advance-shaped checkpoint write: exactly what
+                # clear_terminal_tombstone!/1 emits on a committed delivery
+                # over a row carrying a terminal record.
+                AshReplicant.Test.Checkpoint
+                |> Ash.create!(
+                  %{
+                    source_system_id: "741852963",
+                    source_database: "postgres",
+                    slot_name: "lease_slot",
+                    terminal_cause: nil,
+                    terminal_class: nil,
+                    terminal_at: nil
+                  },
+                  action: :upsert,
+                  upsert?: true,
+                  upsert_identity: :source_slot,
+                  upsert_fields: [:terminal_cause, :terminal_class, :terminal_at],
+                  authorize?: false
+                )
+
+                send(observer, :advanced)
+
+                receive do
+                  :release_callback -> {:ok, 777}
+                end
+            end
+          end)
+        end)
+
+      assert_receive {:inside_stop_window, callback_pid}, 15_000
+
+      stopper = Task.async(fn -> AshReplicant.stop_supervised("lease_slot") end)
+      assert Task.yield(stopper, 50) == nil
+
+      # The advance commits INSIDE the stop window (the lease is held).
+      send(callback_pid, :do_advance)
+      assert_receive :advanced, 15_000
+      send(callback_pid, :release_callback)
+      assert {:ok, 777} = Task.await(callback, 15_000)
+      assert :ok = Task.await(stopper, 15_000)
+
+      # The durable leg records the STOP — the late advance's terminal-clear
+      # landed BEFORE the stop's record, not after it.
+      {:ok, [[cause]]} =
+        Ecto.Adapters.SQL.query!(
+          AshReplicant.TestRepo,
+          "SELECT terminal_cause FROM ash_replicant_checkpoints WHERE slot_name = $1",
+          ["lease_slot"]
+        )
+        |> then(&{:ok, &1.rows})
+
+      assert cause == "operator_stopped"
+    end)
+  end
+
   test "a hot-loaded sink config is never merged into the admitted generation" do
     module = AshReplicant.Test.RuntimeDriftSink
     previous_ignore = Code.get_compiler_option(:ignore_module_conflict)

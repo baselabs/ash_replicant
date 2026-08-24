@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The tombstone, horizon, and census control-plane paths bind the admitted
+  dynamic repo** (cross-vendor full-range review, codex peer — CONFIRMED).
+  Runtime delivery pins its data-layer context, but the O02/O03 writers
+  reconstructed the static sink config (status) or passed the layer map
+  unwrapped (horizon), so a host running an owned dynamic repo instance
+  could read/write control state in the wrong database, miss a halt's
+  durable record, or waive the `:retention_horizon_crossed` resume gate.
+  The binding now has ONE home — `AshReplicant.Destination.action_context/1`
+  (the callable MODULE in the Ash context) and
+  `with_repo_binding/2` (the admitted instance through the process
+  dictionary, wrapping every destination transaction entry and control-plane
+  read: delivery's eleven transaction sites, the census checkpoint read, the
+  tombstone write/read legs, the digest-key witness, and the resume gate —
+  which now also receives the admitted instance at activation). Red-first
+  proven on a dedicated second-database dynamic instance
+  (`dynamic_destination_binding_test.exs`, 4 legs).
+- **A digest-key set larger than the witness envelope cap (16 versions) is
+  refused at preflight** with `:config_invalid` instead of failing at bind
+  as an opaque encode error (claude peer; `rebind_key_state/1` also no
+  longer raises `WithClauseError` on an observation error).
+- **The durable `:operator_stopped` tombstone is written after the pipeline
+  is down** (claude peer): `stop_supervised/1` captures the stop fact,
+  waits out the destination lease via `safe_stop`, then records — the census
+  halt path's D3 ordering — so an admitted checkpoint write committing during
+  the stop window can no longer erase the stop's own durable record.
+
 ## [1.0.0] - 2026-08-24
 
 First stable release. The public API, DSL, error reasons, telemetry

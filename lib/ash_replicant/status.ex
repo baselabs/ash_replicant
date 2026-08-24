@@ -39,6 +39,7 @@ defmodule AshReplicant.Status do
   but only when no tombstone is already present.
   """
 
+  alias AshReplicant.Destination
   alias AshReplicant.Destination.Generation
   alias AshReplicant.Error
   alias AshReplicant.Snapshot.{Provenance, State}
@@ -184,7 +185,11 @@ defmodule AshReplicant.Status do
 
   defp derive_slot(config, timeout) do
     key = {AshReplicant, config.slot_name}
-    checkpoint = durable_facts(config)
+    # The durable read binds the ADMITTED dynamic repo (the live
+    # generation's) — the same binding record_durable writes with; a static
+    # read would miss the row on a dynamic-repo host and report
+    # :not_started over a present durable tombstone.
+    checkpoint = durable_facts(durable_binding(config.slot_name, config))
 
     case :persistent_term.get(key, :none) do
       %Generation{owner: owner} when is_pid(owner) ->
@@ -429,12 +434,27 @@ defmodule AshReplicant.Status do
          {:ok, system_id} <- closed_binary(identity.system_identifier),
          {:ok, database} <- closed_binary(identity.database),
          true <- is_pid(Process.whereis(config.repo)) do
-      persist_tombstone(config, system_id, database, tombstone)
+      persist_tombstone(durable_binding(slot_name, config), system_id, database, tombstone)
     else
       _structurally_unavailable -> telemetry_write_failed(slot_name, :destination_unavailable)
     end
 
     :ok
+  end
+
+  # The durable leg must land on the ADMITTED dynamic repo, not the static
+  # module: the live generation carries the binding the activation admitted
+  # (runtime delivery pins the same one through its config). A bare sink
+  # module (no live generation — e.g. the owner already reaped) keeps the
+  # static binding, which is identity-equal for every non-dynamic host.
+  defp durable_binding(slot_name, config) do
+    case :persistent_term.get({AshReplicant, slot_name}, :none) do
+      %Generation{dynamic_repo: dynamic_repo} when dynamic_repo != nil ->
+        Map.put(config, :dynamic_repo, dynamic_repo)
+
+      _no_live_generation ->
+        config
+    end
   end
 
   @doc """
@@ -470,42 +490,50 @@ defmodule AshReplicant.Status do
   defp closed_binary(_other), do: :error
 
   defp persist_tombstone(config, system_id, database, %Tombstone{} = tombstone) do
+    # The ONE data-layer binding pair (Destination): the admitted dynamic
+    # repo resolves per operation from context.data_layer.repo, and the
+    # transaction entry binds through the process dictionary.
+    context = Destination.action_context(config)
+
     result =
-      config.repo.transaction(fn ->
-        rows =
-          config.checkpoint_resource
-          |> Ash.Query.filter(
-            slot_name == ^config.slot_name and source_system_id == ^system_id and
-              source_database == ^database
-          )
-          |> Ash.read!(lock: :for_update, authorize?: false)
-          |> List.wrap()
-
-        case rows do
-          [_row] ->
-            Ash.create!(
-              config.checkpoint_resource,
-              %{
-                source_system_id: system_id,
-                source_database: database,
-                slot_name: config.slot_name,
-                terminal_cause: encode_cause(tombstone.cause),
-                terminal_class: Atom.to_string(tombstone.class),
-                terminal_at: tombstone.at
-              },
-              action: :upsert,
-              upsert?: true,
-              upsert_identity: :source_slot,
-              upsert_fields: [:terminal_cause, :terminal_class, :terminal_at],
-              authorize?: false,
-              return_notifications?: true
+      Destination.with_repo_binding(config, fn ->
+        config.repo.transaction(fn ->
+          rows =
+            config.checkpoint_resource
+            |> Ash.Query.filter(
+              slot_name == ^config.slot_name and source_system_id == ^system_id and
+                source_database == ^database
             )
+            |> Ash.read!(lock: :for_update, authorize?: false, context: context)
+            |> List.wrap()
 
-            :ok
+          case rows do
+            [_row] ->
+              Ash.create!(
+                config.checkpoint_resource,
+                %{
+                  source_system_id: system_id,
+                  source_database: database,
+                  slot_name: config.slot_name,
+                  terminal_cause: encode_cause(tombstone.cause),
+                  terminal_class: Atom.to_string(tombstone.class),
+                  terminal_at: tombstone.at
+                },
+                action: :upsert,
+                upsert?: true,
+                upsert_identity: :source_slot,
+                upsert_fields: [:terminal_cause, :terminal_class, :terminal_at],
+                authorize?: false,
+                context: context,
+                return_notifications?: true
+              )
 
-          _absent_or_ambiguous ->
-            :skip
-        end
+              :ok
+
+            _absent_or_ambiguous ->
+              :skip
+          end
+        end)
       end)
 
     case result do
@@ -554,10 +582,14 @@ defmodule AshReplicant.Status do
   end
 
   defp read_durable_facts(config) do
+    context = Destination.action_context(config)
+
     rows =
-      config.checkpoint_resource
-      |> Ash.Query.filter(slot_name == ^config.slot_name)
-      |> Ash.read!(authorize?: false)
+      Destination.with_repo_binding(config, fn ->
+        config.checkpoint_resource
+        |> Ash.Query.filter(slot_name == ^config.slot_name)
+        |> Ash.read!(authorize?: false, context: context)
+      end)
       |> List.wrap()
 
     case rows do

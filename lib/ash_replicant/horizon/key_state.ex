@@ -38,6 +38,14 @@ defmodule AshReplicant.Horizon.KeyState do
   @mac_bytes 32
 
   @doc """
+  The maximum digest-key version count the witness envelope can carry.
+  Admission (Messages.preflight_digest/1) refuses a larger set so the cap
+  surfaces as a configuration fault, never an encode failure at bind.
+  """
+  @spec max_versions() :: pos_integer()
+  def max_versions, do: @max_versions
+
+  @doc """
   Encode `state` into the durable column bytes, authenticated under its own
   `key_version` of the horizon provenance `keys`.
   """

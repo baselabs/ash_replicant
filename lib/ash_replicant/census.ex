@@ -220,12 +220,16 @@ defmodule AshReplicant.Census do
       config.checkpoint_resource
       |> Ash.Query.filter(slot_name == ^slot_name)
 
-    case Ash.read(query,
-           authorize?: false,
-           context: %{
-             data_layer: Map.get(config, :data_layer_context, %{repo: config.repo})
-           }
-         ) do
+    # The census read binds the ADMITTED dynamic repo (the process-dictionary
+    # routing — Destination.with_repo_binding/2); the owner's process is not
+    # otherwise bound and the static module would read the wrong database on
+    # a dynamic-repo host.
+    case AshReplicant.Destination.with_repo_binding(config, fn ->
+           Ash.read(query,
+             authorize?: false,
+             context: AshReplicant.Destination.action_context(config)
+           )
+         end) do
       {:ok, rows} ->
         case classify_checkpoint(rows, checkpoint_filter(config), config.source_contract.manifest) do
           :pass -> classify_witness(config, rows)

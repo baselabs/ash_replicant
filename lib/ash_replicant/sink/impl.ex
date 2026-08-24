@@ -98,7 +98,8 @@ defmodule AshReplicant.Sink.Impl do
   def handle_slot_origin(config, origin, %{reused?: reused?} = _context)
       when is_integer(origin) and origin >= 0 and is_boolean(reused?) do
     result =
-      config.repo.transaction(
+      txn(
+        config,
         fn ->
           guard_generation!(config)
           admit_slot_origin!(config, origin, reused?)
@@ -252,7 +253,8 @@ defmodule AshReplicant.Sink.Impl do
     # generation (outside the destination transaction — a catalog read).
     with :ok <- reconnect_coverage_check(config) do
       result =
-        config.repo.transaction(
+        txn(
+          config,
           fn -> bind_slot_rows!(config, identity, contract) end,
           timeout: @snapshot_transaction_timeout
         )
@@ -527,7 +529,8 @@ defmodule AshReplicant.Sink.Impl do
     if empty_index?(config) do
       {:error, Error.exception(reason: :config_invalid, resource: nil, op: :snapshot_progress)}
     else
-      config.repo.transaction(
+      txn(
+        config,
         fn -> prepare_incremental_progress!(config) end,
         timeout: @snapshot_transaction_timeout
       )
@@ -719,7 +722,8 @@ defmodule AshReplicant.Sink.Impl do
     # the locked admission read hold inside this transaction, and a batch
     # multiplies the work under one lock hold.
     result =
-      config.repo.transaction(
+      txn(
+        config,
         fn ->
           guard_generation!(config)
 
@@ -1002,7 +1006,8 @@ defmodule AshReplicant.Sink.Impl do
          progress
        ) do
     result =
-      config.repo.transaction(
+      txn(
+        config,
         fn ->
           apply_incremental_snapshot_transaction!(
             config,
@@ -1071,7 +1076,8 @@ defmodule AshReplicant.Sink.Impl do
          op: :snapshot_complete
        )}
     else
-      config.repo.transaction(
+      txn(
+        config,
         fn -> complete_incremental_transaction!(config, progress, snapshot_lsn) end,
         timeout: @snapshot_transaction_timeout
       )
@@ -1131,7 +1137,8 @@ defmodule AshReplicant.Sink.Impl do
 
   defp run_snapshot_transaction(config, resource, changes, snapshot_lsn, ordinal_base) do
     result =
-      config.repo.transaction(
+      txn(
+        config,
         fn ->
           apply_snapshot_transaction!(
             config,
@@ -1577,7 +1584,8 @@ defmodule AshReplicant.Sink.Impl do
       # mirrored nothing because the index was empty — that locks in invisible loss.
       {:error, Error.exception(reason: :config_invalid, resource: nil, op: :snapshot_complete)}
     else
-      config.repo.transaction(
+      txn(
+        config,
         fn -> complete_snapshot_transaction!(config, snapshot_lsn) end,
         # Same ceiling as every other locked path: the first statement holds
         # FOR UPDATE on the checkpoint row, so a lock wait must not run into
@@ -1826,7 +1834,8 @@ defmodule AshReplicant.Sink.Impl do
     # forever and source WAL retention grows unbounded). Same ceiling as the
     # snapshot transaction.
     result =
-      config.repo.transaction(
+      txn(
+        config,
         fn ->
           guard_generation!(config)
 
@@ -1992,7 +2001,8 @@ defmodule AshReplicant.Sink.Impl do
       :ok
     else
       result =
-        config.repo.transaction(
+        txn(
+          config,
           fn ->
             guard_generation!(config)
             apply_routed_message(config, message, route, nil)
@@ -2041,7 +2051,8 @@ defmodule AshReplicant.Sink.Impl do
 
   defp advance_message_watermark(config, lsn) when is_integer(lsn) do
     result =
-      config.repo.transaction(
+      txn(
+        config,
         fn ->
           guard_generation!(config)
           advance_watermark!(config, lsn)
@@ -2182,8 +2193,19 @@ defmodule AshReplicant.Sink.Impl do
     }
   end
 
-  defp action_context(config),
-    do: %{data_layer: Map.get(config, :data_layer_context, %{repo: config.repo})}
+  defp action_context(config), do: AshReplicant.Destination.action_context(config)
+
+  # Every destination transaction binds the ADMITTED dynamic repo through
+  # the process dictionary (Destination.with_repo_binding/2) — the
+  # transaction ENTRY opens on the bound instance. A bare
+  # `config.repo.transaction` would open on the static module's default
+  # instance while the admitted effects belong to the instance
+  # (cross-vendor REL02 sibling sweep).
+  defp txn(config, fun, opts) do
+    Destination.with_repo_binding(config, fn ->
+      config.repo.transaction(fun, opts)
+    end)
+  end
 
   defp snapshot_action_context(config, snapshot_lsn, ordinal_base) do
     config

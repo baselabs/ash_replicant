@@ -333,17 +333,18 @@ defmodule AshReplicant.Horizon do
   # and the resume gate was vacuous) — the activation passes its own
   # verified identity explicitly.
   defp durable_terminal_at(config, source_identity) do
-    context = Map.get(config, :data_layer_context, %{repo: config.repo})
     system_id = source_identity.system_identifier
     database = source_identity.database
 
-    config.checkpoint_resource
-    |> Ash.Query.filter(
-      slot_name == ^config.slot_name and
-        source_system_id == ^system_id and
-        source_database == ^database
-    )
-    |> Ash.read(authorize?: false, context: context)
+    with_repo_binding(config, fn ->
+      config.checkpoint_resource
+      |> Ash.Query.filter(
+        slot_name == ^config.slot_name and
+          source_system_id == ^system_id and
+          source_database == ^database
+      )
+      |> Ash.read(authorize?: false, context: action_context(config))
+    end)
     |> case do
       {:ok, [%{terminal_at: %DateTime{} = at}]} -> at
       _absent_or_no_tombstone -> nil
@@ -392,45 +393,55 @@ defmodule AshReplicant.Horizon do
       write_witness(config, binary)
     else
       nil -> :ok
+      {:error, %Error{}} = error -> error
     end
   end
 
+  # The data-layer binding pair lives in ONE home (Destination) — horizon
+  # routes every checkpoint read/write through it: a runtime config's
+  # data_layer_context names the ADMITTED dynamic repo, and the transaction
+  # ENTRY binds through the process dictionary (Ecto's dynamic-repo model).
+  defp action_context(config), do: Destination.action_context(config)
+  defp with_repo_binding(config, fun), do: Destination.with_repo_binding(config, fun)
+
   defp write_witness(config, encoded) do
-    context = Map.get(config, :data_layer_context, %{repo: config.repo})
+    context = action_context(config)
     system_id = config.source_identity.system_identifier
     database = config.source_identity.database
     slot = config.slot_name
 
     result =
-      config.repo.transaction(fn ->
-        rows =
-          config.checkpoint_resource
-          |> Ash.Query.filter(
-            slot_name == ^slot and source_system_id == ^system_id and
-              source_database == ^database
-          )
-          |> Ash.read!(lock: :for_update, authorize?: false, context: context)
-          |> List.wrap()
-
-        case rows do
-          [_row] ->
-            Ash.create!(
-              config.checkpoint_resource,
-              Map.merge(checkpoint_filter(config), %{digest_key_state: encoded}),
-              action: :upsert,
-              upsert?: true,
-              upsert_identity: :source_slot,
-              upsert_fields: [:digest_key_state],
-              authorize?: false,
-              context: context,
-              return_notifications?: true
+      with_repo_binding(config, fn ->
+        config.repo.transaction(fn ->
+          rows =
+            config.checkpoint_resource
+            |> Ash.Query.filter(
+              slot_name == ^slot and source_system_id == ^system_id and
+                source_database == ^database
             )
+            |> Ash.read!(lock: :for_update, authorize?: false, context: context)
+            |> List.wrap()
 
-            :ok
+          case rows do
+            [_row] ->
+              Ash.create!(
+                config.checkpoint_resource,
+                Map.merge(checkpoint_filter(config), %{digest_key_state: encoded}),
+                action: :upsert,
+                upsert?: true,
+                upsert_identity: :source_slot,
+                upsert_fields: [:digest_key_state],
+                authorize?: false,
+                context: context,
+                return_notifications?: true
+              )
 
-          _absent_or_ambiguous ->
-            :skip
-        end
+              :ok
+
+            _absent_or_ambiguous ->
+              :skip
+          end
+        end)
       end)
 
     case result do

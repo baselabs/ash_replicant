@@ -93,25 +93,34 @@ defmodule AshReplicant do
   @spec stop_supervised(String.t()) :: :ok | {:error, :pipeline_stop_failed}
   def stop_supervised(slot_name) do
     activation_lock(slot_name, fn ->
-      record_stop_tombstone(slot_name)
+      # Capture the stop fact BEFORE safe_stop (the dying owner erases the
+      # generation — the identity would be unreadable after), but write the
+      # tombstone AFTER: an admitted delivery that commits while the stop
+      # waits on the lease would otherwise CLEAR the durable leg with its
+      # checkpoint advance — the same D3 ordering the census halt path uses.
+      stop_fact = capture_stop_fact(slot_name)
       result = safe_stop(slot_name)
+      write_stop_fact(slot_name, stop_fact)
       :persistent_term.erase({AshReplicant, slot_name})
       Impl.clear_snapshot_ordinals(slot_name)
       result
     end)
   end
 
-  defp record_stop_tombstone(slot_name) do
+  defp capture_stop_fact(slot_name) do
     case :persistent_term.get({AshReplicant, slot_name}, :none) do
       %Generation{sink: sink, source_identity: identity, owner: owner} ->
-        if owner_alive?(owner),
-          do: Status.record_terminal(slot_name, sink, identity, :operator_stopped),
-          else: :ok
+        if owner_alive?(owner), do: {sink, identity}, else: :none
 
       _absent ->
-        :ok
+        :none
     end
   end
+
+  defp write_stop_fact(_slot_name, :none), do: :ok
+
+  defp write_stop_fact(slot_name, {sink, identity}),
+    do: Status.record_terminal(slot_name, sink, identity, :operator_stopped)
 
   @doc false
   def erase_generation(slot_name, generation),
@@ -708,7 +717,10 @@ defmodule AshReplicant do
            AshReplicant.Horizon.preflight_resume(
              Keyword.get(opts, :connection),
              sink_config.slot_name,
-             sink_config,
+             # The resume gate reads the durable terminal record through the
+             # ADMITTED dynamic binding — a static read would miss it on a
+             # dynamic-repo host and waive :retention_horizon_crossed.
+             Map.put(sink_config, :dynamic_repo, dynamic_repo),
              source_identity,
              manifest
            ),
@@ -952,7 +964,7 @@ defmodule AshReplicant do
          true <- config.source_contract == generation.source_contract,
          true <- config.coverage == generation.coverage,
          true <- config.dynamic_repo == generation.dynamic_repo,
-         true <- config.data_layer_context == %{repo: generation.dynamic_repo},
+         true <- config.data_layer_context == %{repo: generation.sink_config.repo},
          # S02: the three identities the snapshot attempt binds itself to. A
          # config whose delivery run, code fingerprint, or config digest has
          # drifted from the live generation would mint or resume an attempt
@@ -986,7 +998,12 @@ defmodule AshReplicant do
       publication: generation.publication,
       generation: generation.reference,
       dynamic_repo: generation.dynamic_repo,
-      data_layer_context: %{repo: generation.dynamic_repo},
+      # The MODULE repo in the Ash data-layer context (callable); the
+      # admitted INSTANCE routes through :dynamic_repo + the process
+      # dictionary (Destination.with_repo_binding/2) — an instance name in
+      # context.data_layer.repo is not a module and would crash as
+      # `:instance.all/2`.
+      data_layer_context: %{repo: generation.sink_config.repo},
       # S02 (ADR-0017): the snapshot attempt binds itself to the admitted
       # contract, so the delivery run and the two remaining identity digests
       # ride the runtime config beside the manifest and source contract that

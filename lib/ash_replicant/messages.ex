@@ -104,8 +104,15 @@ defmodule AshReplicant.Messages do
   def preflight_digest(config) do
     if routes_configured?(config) do
       case digest_keys() do
-        {:ok, _keys} ->
-          :ok
+        {:ok, keys} ->
+          # The witness envelope caps the version count (KeyState); a set
+          # beyond the cap would fail at bind with an opaque encode error —
+          # the fail-closed admission belongs HERE, before any effect.
+          if length(keys) <= AshReplicant.Horizon.KeyState.max_versions() do
+            :ok
+          else
+            {:error, Error.exception(reason: :config_invalid, resource: nil, op: :activation)}
+          end
 
         :error ->
           {:error, Error.exception(reason: :config_invalid, resource: nil, op: :activation)}

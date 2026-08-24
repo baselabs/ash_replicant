@@ -312,6 +312,45 @@ defmodule AshReplicant.Destination do
     _kind, _reason -> {:error, {:invalid_destination_config, :effective_repo}}
   end
 
+  # The ONE canonical data-layer binding pair for the admitted dynamic repo
+  # (cross-vendor REL02 fix). The ADMITTED dynamic instance routes through
+  # the PROCESS DICTIONARY (Ecto's dynamic-repo model — an instance name is
+  # not a module and cannot be called; putting it in
+  # `context.data_layer.repo` crashes delivery as `:instance.all/2`): the
+  # config's `:dynamic_repo` key carries the admitted instance, and
+  # `with_repo_binding/2` binds it around a transaction or read.
+  # `action_context/1` carries the MODULE repo (or a host's declared
+  # cross-module context) — always callable.
+  @doc false
+  @spec action_context(map()) :: %{data_layer: %{repo: module()}}
+  def action_context(config),
+    do: %{data_layer: Map.get(config, :data_layer_context, %{repo: config.repo})}
+
+  @doc false
+  @spec with_repo_binding(map(), (-> term())) :: term()
+  def with_repo_binding(config, fun) do
+    bound = admitted_repo(config)
+    previous = config.repo.put_dynamic_repo(bound)
+
+    try do
+      fun.()
+    after
+      config.repo.put_dynamic_repo(previous)
+    end
+  end
+
+  # The admitted dynamic instance when the config carries one; the module
+  # repo otherwise (identity for every non-dynamic host — put_dynamic_repo
+  # with the module is the default binding).
+  @doc false
+  @spec admitted_repo(map()) :: atom() | pid()
+  def admitted_repo(config) do
+    case Map.get(config, :dynamic_repo) do
+      instance when is_atom(instance) or is_pid(instance) -> instance
+      _nil -> Map.get(action_context(config), :data_layer) |> Map.get(:repo)
+    end
+  end
+
   @doc false
   @spec preflight_onetime(Manifest.t(), atom() | pid()) ::
           :ok | {:error, {:invalid_destination_config, :onetime_store}}
