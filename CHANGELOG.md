@@ -5,7 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.1.0] - 2026-08-25
+
+### Changed
+
+- **The AshOnetime requirement moves from `~> 0.6.0` to
+  `>= 1.1.0 and < 2.0.0-0` and the lock moves to 1.2.1** (with in-range
+  transitive re-locks ash_sql 0.6.9 and ecto 3.14.2; Ash stays at the 3.31.3
+  lock). The prior constraint excluded AshOnetime 1.x entirely, forcing
+  consumers that pin AshOnetime 1.x directly into an unsatisfiable resolution
+  against AshReplicant. The floor is 1.1.0, not 0.6.0, because 1.1.0's
+  logical-partition store schema is the shape this package's test fixtures and
+  migration content contract (`scripts/test-ash-onetime-migration-checker.sh`)
+  pin — the exact-floors CI cell proves that floor. Nothing AshReplicant
+  admits or inspects changed shape across the range: the
+  `AshOnetime.Resource.Protection` entity is field-identical from 0.6.0
+  through 1.2.1, so contract manifest digests are unchanged by the upgrade
+  (0.7.0's only break — the Ash floor at 3.31.3 — is already this package's
+  floor). CI pins the 1.1.0 floor in the exact-floors cell and floats latest
+  1.x in the latest-compatible cell, mirroring the Ash/Replicant legs. One
+  schema consequence for hosts: AshOnetime 1.1.0 added the
+  `logical_partition` column to its admission store, so a host that serves
+  message routes from its own AshOnetime store installed before 1.1.0 must
+  run AshOnetime's `mix ash_onetime.gen.logical_partitions` upgrade before
+  serving traffic on 1.1+ (AshOnetime 1.2.0's `mix ash_onetime.doctor --live`
+  catches the upgrade-without-migrating case). This repo's vendored
+  test-store install migration is regenerated from the 1.2.1 renderer, and
+  the full live battery runs green against the upgraded store shape.
 
 ### Fixed
 

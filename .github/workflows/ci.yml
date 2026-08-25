@@ -82,6 +82,9 @@ jobs:
             replicant_selector: "1.2.3"
             replicant_unlock: true
             replicant_requirement: "== 1.2.3"
+            onetime_selector: "1.1.0"
+            onetime_unlock: true
+            onetime_requirement: "== 1.1.0"
             pg_major: "16"
             pg_image: "postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b"
           - label: current-lock
@@ -91,6 +94,9 @@ jobs:
             replicant_selector: ""
             replicant_unlock: false
             replicant_requirement: ">= 1.2.3 and < 2.0.0-0"
+            onetime_selector: ""
+            onetime_unlock: false
+            onetime_requirement: ">= 1.1.0 and < 2.0.0-0"
             pg_major: "16"
             pg_image: "postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b"
           - label: latest-compatible
@@ -100,6 +106,9 @@ jobs:
             replicant_selector: latest
             replicant_unlock: true
             replicant_requirement: ">= 1.2.3 and < 2.0.0-0"
+            onetime_selector: latest
+            onetime_unlock: true
+            onetime_requirement: ">= 1.1.0 and < 2.0.0-0"
             pg_major: "16"
             pg_image: "postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b"
           - label: current-lock-pg17
@@ -109,6 +118,9 @@ jobs:
             replicant_selector: ""
             replicant_unlock: false
             replicant_requirement: ">= 1.2.3 and < 2.0.0-0"
+            onetime_selector: ""
+            onetime_unlock: false
+            onetime_requirement: ">= 1.1.0 and < 2.0.0-0"
             pg_major: "17"
             pg_image: "postgres:17@sha256:e38411452a464af89e5adadb8d223bf53b898d47d6ef918b2d58c08707350449"
           - label: current-lock-pg18
@@ -118,12 +130,16 @@ jobs:
             replicant_selector: ""
             replicant_unlock: false
             replicant_requirement: ">= 1.2.3 and < 2.0.0-0"
+            onetime_selector: ""
+            onetime_unlock: false
+            onetime_requirement: ">= 1.1.0 and < 2.0.0-0"
             pg_major: "18"
             pg_image: "postgres:18@sha256:06cad38a5d9f5d24b4d83d86def30795d5e4b757fedbf5281172b576dedcd941"
     env:
       MIX_ENV: test
       ASH_REPLICANT_ASH_VERSION: ${{ matrix.ash_selector }}
       ASH_REPLICANT_REPLICANT_VERSION: ${{ matrix.replicant_selector }}
+      ASH_REPLICANT_ONETIME_VERSION: ${{ matrix.onetime_selector }}
       ASH_REPLICANT_TEST_URL: postgres://postgres@localhost:5432/postgres
 
     steps:
@@ -160,11 +176,16 @@ jobs:
           if [[ '${{ matrix.replicant_unlock }}' == 'true' ]]; then
             mix deps.unlock replicant
           fi
+          if [[ '${{ matrix.onetime_unlock }}' == 'true' ]]; then
+            mix deps.unlock ash_onetime
+          fi
           mix deps.get
           mix deps ash
           mix deps replicant
+          mix deps ash_onetime
           scripts/assert-dependency-version.sh ash '${{ matrix.ash_requirement }}'
           scripts/assert-dependency-version.sh replicant '${{ matrix.replicant_requirement }}'
+          scripts/assert-dependency-version.sh ash_onetime '${{ matrix.onetime_requirement }}'
 
       - run: mix deps.compile
       - run: mix compile --warnings-as-errors

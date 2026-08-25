@@ -1,10 +1,11 @@
 defmodule AshReplicant.MixProject do
   use Mix.Project
 
-  @version "1.0.0"
+  @version "1.1.0"
   @source_url "https://github.com/baselabs/ash_replicant"
   @ash_requirement ">= 3.31.3 and < 4.0.0-0"
   @replicant_requirement ">= 1.2.3 and < 2.0.0-0"
+  @onetime_requirement ">= 1.1.0 and < 2.0.0-0"
 
   def project do
     [
@@ -43,7 +44,7 @@ defmodule AshReplicant.MixProject do
     [
       {:ash, ash_requirement()},
       {:ash_postgres, "~> 2.11.0"},
-      {:ash_onetime, "~> 0.6.0"},
+      {:ash_onetime, onetime_requirement()},
       {:ash_cloak, "~> 0.1"},
       {:replicant, replicant_requirement()},
       # The install codemod surface (I01). OPTIONAL for consumers and at
@@ -93,6 +94,22 @@ defmodule AshReplicant.MixProject do
         else
           _ ->
             raise "ASH_REPLICANT_REPLICANT_VERSION must be a semantic version matching #{@replicant_requirement}"
+        end
+    end
+  end
+
+  defp onetime_requirement do
+    case System.get_env("ASH_REPLICANT_ONETIME_VERSION") do
+      value when value in [nil, "", "latest"] ->
+        @onetime_requirement
+
+      value ->
+        with {:ok, _version} <- Version.parse(value),
+             true <- Version.match?(value, @onetime_requirement) do
+          "== #{value}"
+        else
+          _ ->
+            raise "ASH_REPLICANT_ONETIME_VERSION must be a semantic version matching #{@onetime_requirement}"
         end
     end
   end

@@ -14,7 +14,7 @@ not re-gated. It executes through the
 [`replicant`](https://github.com/baselabs/replicant) client (the transport — the
 "`postgrex` of CDC").
 
-> **Status: v1.0.0 — stable public API (ADR-0023).** Effect-once mirroring with fail-closed
+> **Status: v1.1.0 — stable public API (ADR-0023).** Effect-once mirroring with fail-closed
 > multitenancy (compile-time verified), SCD2 history mirroring, and AshCloak integration.
 > Working rules are in
 > [`AGENTS.md`](https://github.com/baselabs/ash_replicant/blob/main/AGENTS.md) — read it
@@ -46,7 +46,7 @@ Add `ash_replicant` to your dependencies in `mix.exs`:
 
 ```elixir
 # mix.exs
-{:ash_replicant, "~> 1.0.0"}
+{:ash_replicant, "~> 1.1.0"}
 ```
 
 It pulls in [`replicant`](https://github.com/baselabs/replicant) (the CDC transport)
@@ -54,19 +54,23 @@ as a transitive dependency.
 
 ### Supported foundation
 
-The current 1.0.0 hardening baseline is built and tested with:
+The current 1.1.0 release baseline is built and tested with:
 
 - Elixir 1.20.3 on Erlang/OTP 29;
 - Ash `>= 3.31.3 and < 4.0.0-0` and AshPostgres 2.11.x;
 - Replicant `>= 1.2.3 and < 2.0.0-0` (current release-candidate lock 1.2.3) and
-  AshOnetime 0.6.x;
+  AshOnetime `>= 1.1.0 and < 2.0.0-0` (current lock 1.2.1);
 - PostgreSQL with `wal_level=logical` for the live integration gate: CI pins
   PostgreSQL 16, the local gate runs whatever instance `ASH_REPLICANT_TEST_URL`
   points at (derive the live version with `SELECT version();` — never assume it
   from this doc), and the support matrix is PG16–18.
 
 The Ash lower bound excludes known-vulnerable patches, and the upper bound
-excludes Ash 4 prereleases. AshOnetime protects admitted local auxiliary actions
+excludes Ash 4 prereleases. The AshOnetime ceiling tracks its 1.0 surface
+freeze — 2.0 is its next reserved break. A host whose own AshOnetime store
+was installed before 1.1.0 must run AshOnetime's
+`mix ash_onetime.gen.logical_partitions` upgrade before serving message
+routes on 1.1+. AshOnetime protects admitted local auxiliary actions
 that need a WAL replay guard and is also the dedup mechanism for logical
 messages (C1 / [ADR-0015](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0015-logical-message-effects.md)):
 a standalone `pg_logical_emit_message` routes by prefix to a protected create
