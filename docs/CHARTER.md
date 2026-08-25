@@ -1,6 +1,6 @@
 # AshReplicant — Project Charter
 
-**Status: realized, latest published package 1.1.0.**
+**Status: realized, latest published package 1.2.0.**
 The original state-mirror and SCD2 capabilities are shipped. The canonical
 production-readiness scope and dependency order live in `docs/ROADMAP.md`.
 Product-shaping decisions are tracked in `docs/adr/`; historical lifecycle
