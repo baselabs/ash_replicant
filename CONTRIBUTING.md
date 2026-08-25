@@ -33,9 +33,14 @@ env -u ASH_REPLICANT_TEST_URL \
 
 1. Create a feature branch from `main`.
 2. Make your changes with clear, descriptive commit messages.
-3. Run the database-free and static checks before opening a PR:
+3. Run the database-free and static checks before opening a PR —
+   `scripts/prepush.sh` runs this whole list fail-fast in one command,
+   and adds the live-database lane when `ASH_REPLICANT_TEST_URL` is set:
 
 ```bash
+scripts/prepush.sh
+
+# — or, gate by gate —
 scripts/with-release-runtime.sh mix format --check-formatted
 scripts/with-release-runtime.sh mix compile --warnings-as-errors
 scripts/with-release-runtime.sh mix credo --strict
@@ -54,8 +59,14 @@ The last command is the data-boundary guard-mutation gate (ADR-0003): it
 removes one production guard or reorders one notifier guard after its first
 effect at a time in an isolated temporary copy of the project, and requires
 the named no-database focused test to go red for the property-specific reason.
-It compiles the project once per mutant, so expect
-a long serial run; the LOCAL developer battery always runs the full matrix.
+It compiles the project once per mutant, so a full run is long; cells run
+in parallel shard workspaces by default (`--jobs`, 1 = the legacy serial
+path) and the LOCAL developer battery always runs the full matrix.
+Run it in a QUIESCENT tree — the shards snapshot the live tree and copy
+the live `_build` as their warm cache, so a concurrent `mix compile`,
+`mix format`, or open editor save in the same checkout fails the run with
+`live_tree_mutated` or `baseline` classes that say more about the
+concurrency than about the guards.
 CI's no-database job runs it PATH-SCOPED per push (`--diff-base` = the push
 payload's prior head): only the cells whose guard file or named test changed
 run, so docs/test-only pushes pay minutes instead of hours. The scoping

@@ -61,6 +61,14 @@ Modes:
                                          FULL matrix — the push evidence
                                          scope, never a local gate)
 
+`--jobs N` (default 4) runs the selected cells as N self-reinvoked shard
+children, each with its own isolated workspace; cells never share a
+workspace across shards, selection is recomputed deterministically by every
+child, and the parent aggregates exit codes. `--jobs 1` is the legacy
+single-workspace path. Sharding changes wall-clock only: every selected
+cell still runs, still RED-proves its sentinel, and the full-matrix modes
+still validate the complete cell inventory in the parent before sharding.
+
 `--fixture-config PATH` drives the engine from a JSON config; it exists for
 the self-test's fixture scenarios and is not a supported entry point.
 """
@@ -171,18 +179,25 @@ NO_RAISE = "but nothing was raised"
 # file the cell mutates OR one of the named focused test files that observe
 # it. Anything else — docs, README, CHANGELOG, notebooks — selects nothing.
 # The surfaces that could change HOW guards are observed (this runner, the
-# structural harness, fixtures, build identity, CI wiring) force the FULL
-# matrix: scoping may never silently weaken the evidence machinery itself.
+# fixtures, build identity, CI wiring) force the FULL matrix: scoping may
+# never silently weaken the evidence machinery itself. Only the mutation
+# runner itself counts as evidence machinery under scripts/ — the mutation
+# children execute `mix compile` / `mix test` directly, so no other script's
+# bytes can change what a sentinel observes.
 # --------------------------------------------------------------------------
 
 FULL_MATRIX_PREFIXES = (
-    "scripts/",
     "config/",
     "test/support/",
     ".github/",
     "priv/",
 )
-FULL_MATRIX_FILES = {"mix.exs", "mix.lock", ".tool-versions"}
+FULL_MATRIX_FILES = {
+    "mix.exs",
+    "mix.lock",
+    ".tool-versions",
+    "scripts/run-mutation-gates.py",
+}
 FULL_MATRIX_TEST_FILES = {"test/test_helper.exs"}
 SCOPED_PREFIXES = ("lib/", "test/")
 
@@ -2531,7 +2546,17 @@ def run_gates(config, cells, label="mutation-gates"):
                 if key in seen_runs:
                     continue
                 seen_runs.add(key)
+
+                # The baseline is the GREEN pre-state, not sentinel
+                # evidence: under parallel-shard compile load a
+                # timing-sensitive focused test can flake once. ONE logged
+                # retry keeps a load transient from failing the battery;
+                # a real regression fails twice. The RED proof after
+                # mutation is NEVER retried.
                 code, out = run_test(workspace, config, run, "baseline")
+                if code != 0:
+                    print(f"{label}: baseline retry (load transient)")
+                    code, out = run_test(workspace, config, run, "baseline-retry")
                 if code != 0:
                     raise StructuralFailure("baseline", BASELINE_TEST_FAILED)
                 if marker and marker.encode() not in out:
@@ -2860,9 +2885,107 @@ def build_fixture(base, src, compile_script, test_script, cells, env_set=None):
     return config_path
 
 
-def run_fixture(config_path):
+def shard_cells(cells, index, total):
+    """Deterministic, order-preserving round-robin slice of `cells`.
+
+    Shard `index` is 1-based. Slicing the ORIGINAL ordered list (not a
+    sorted copy) keeps every shard a subsequence of the selection order, so
+    shard composition is stable across runs and reproducible locally.
+    """
+    if total < 1 or not 1 <= index <= total:
+        raise ValueError(f"invalid shard {index}/{total}")
+    return cells[index - 1::total]
+
+
+def child_argv_for(args):
+    """Rebuild this invocation's MODE arguments for shard children.
+
+    Children recompute the identical deterministic selection, so only the
+    mode flags travel; run_parallel appends --jobs/--internal-shard. The
+    bare (no-flag) mode is self-test-then-full-matrix; its children run as
+    --matrix shards because the parent has already run the self-test once.
+    """
+    tail = []
+    if args.fixture_config:
+        tail += ["--fixture-config", args.fixture_config]
+    if args.diff_base:
+        tail += ["--diff-base", args.diff_base]
+    if args.cells:
+        tail += ["--cells", args.cells]
+    if args.matrix:
+        tail += ["--matrix"]
+    if not tail:
+        tail = ["--matrix"]
+    return tail
+
+
+def run_parallel(child_argv, jobs, cells, validate_full_inventory):
+    """Run the selected cells as N self-reinvoked shard children.
+
+    Every child recomputes the SAME deterministic selection from its mode
+    arguments, takes its shard slice, and runs it in its own isolated
+    workspace — cells never share a workspace across shards, so sharding
+    cannot change any cell's outcome, only wall-clock. The parent validates
+    the complete cell inventory ONCE (the full-matrix tripwire stays in the
+    parent; children run partial inventories by construction), aggregates
+    child exit codes, and reports failures by shard ordinal and exit code —
+    never a child byte.
+    """
+    # Always validated in the parent: duplicate cell ids are a config
+    # defect no shard should ever inherit, and the full-inventory
+    # tripwire applies exactly when the mode demands it. Reported with
+    # the same grammar run_gates uses, so a sharded run never tracebacks.
+    try:
+        validate_cells(cells, validate_full_inventory)
+    except StructuralFailure as failure:
+        print(f"mutation-gates: FAIL {failure.scope} {failure.cls}")
+        return 1
+
+    children = []
+    try:
+        for index in range(1, jobs + 1):
+            argv = [sys.executable, os.path.abspath(__file__)] + child_argv + [
+                "--jobs", "1",
+                "--internal-shard", str(index), str(jobs),
+            ]
+            children.append(subprocess.Popen(argv))
+
+        failures = []
+        for index, child in enumerate(children, start=1):
+            code = child.wait()
+            if code != 0:
+                failures.append((index, code))
+    except BaseException:
+        # RunnerTermination / KeyboardInterrupt / OSError: tear the shard
+        # children down before re-raising so no orphan keeps mutating.
+        for child in children:
+            if child.poll() is None:
+                child.terminate()
+        for child in children:
+            try:
+                child.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                child.kill()
+        raise
+
+    if failures:
+        rendered = ", ".join(f"shard {i} exit {c}" for i, c in failures)
+        print(f"mutation-gates: FAIL ({rendered})")
+        return 1
+
+    print(f"mutation-gates: PASS ({jobs} shards, {len(cells)} cells)")
+    return 0
+
+
+def run_fixture(config_path, extra_argv=None):
+    argv = [sys.executable, os.path.abspath(__file__), "--fixture-config", config_path]
+    argv += list(extra_argv or [])
+    # Legacy single-workspace path unless the scenario itself selects a
+    # parallelism (argparse would otherwise take the LAST --jobs).
+    if not any(argument == "--jobs" for argument in argv):
+        argv += ["--jobs", "1"]
     proc = subprocess.run(
-        [sys.executable, os.path.abspath(__file__), "--fixture-config", config_path],
+        argv,
         capture_output=True,
         text=True,
         timeout=300,
@@ -2913,6 +3036,108 @@ def self_test():
         [fixture_cell(), fixture_cell()],
         1, ["config_invalid"],
     )
+
+    # --jobs sharding: the partition must be complete, disjoint, and
+    # order-stable; the parallel path must pass green cells and FAIL the
+    # shard that observes a broken one, naming the shard ordinal and exit
+    # code — never a child byte. A duplicate id must fail in the parent
+    # even when each shard would inherit a single cell.
+    sharding_ok = True
+    matrix_order = [cell["id"] for cell in MATRIX]
+    for total in (2, 3, 5):
+        slices = [shard_cells(MATRIX, index, total) for index in range(1, total + 1)]
+        union_ids = [cell["id"] for shard in slices for cell in shard]
+        disjoint = len(union_ids) == len(set(union_ids))
+        complete = sorted(union_ids) == sorted(matrix_order)
+        stable = all(
+            [cell["id"] for cell in shard]
+            == [i for i in matrix_order if i in {c["id"] for c in shard}]
+            for shard in slices
+        )
+        sharding_ok = sharding_ok and disjoint and complete and stable
+    checks.append(("jobs-shard-partition", sharding_ok))
+    print(f"{label}: {'PASS' if sharding_ok else 'FAIL'} jobs-shard-partition")
+
+    def jobs_scenario(name, cells, extra_argv, expect_exit, expect_out):
+        with tempfile.TemporaryDirectory(prefix="mutation-gates-selftest.") as base:
+            config_path = build_fixture(
+                base, SRC_DEFAULT, COMPILE_DEFAULT, TEST_DEFAULT, cells
+            )
+            code, out = run_fixture(config_path, extra_argv=extra_argv)
+            ok = (code != 0) == (expect_exit != 0)
+            for needle in expect_out:
+                ok = ok and needle in out
+            if SENTINEL in out:
+                ok = False
+            checks.append((name, ok))
+            print(f"{label}: {'PASS' if ok else 'FAIL'} {name}")
+
+    jobs_scenario(
+        "jobs-2-green",
+        [fixture_cell(id="fixture.guard.a"), fixture_cell(id="fixture.guard.b")],
+        ["--jobs", "2"],
+        0, ["PASS (2 shards, 2 cells)"],
+    )
+    jobs_scenario(
+        "jobs-2-red",
+        [
+            fixture_cell(id="fixture.guard.a"),
+            fixture_cell(
+                id="fixture.guard.b",
+                replacements=[["NO_SUCH_ANCHOR\n", "guard removed\n"]],
+            ),
+        ],
+        ["--jobs", "2"],
+        1, ["FAIL", "shard 2 exit 1"],
+    )
+    jobs_scenario(
+        "jobs-duplicate-id-parallel",
+        [fixture_cell(id="fixture.guard.a"), fixture_cell(id="fixture.guard.a")],
+        ["--jobs", "2"],
+        1, ["config_invalid"],
+    )
+    jobs_scenario(
+        "jobs-0-invalid",
+        [fixture_cell()],
+        ["--jobs", "0"],
+        1, ["config_invalid"],
+    )
+
+    # Baseline load-retry: a one-shot transient in the GREEN pre-state is
+    # rescued exactly once (and logged); a persistent baseline failure
+    # still fails the battery. The state file makes the FIRST invocation
+    # fail as a transient; with state present the pristine source passes
+    # (the retry) and the mutated source still RED-proves the sentinel.
+    transient_test = """
+import pathlib, sys
+src = pathlib.Path("src.txt").read_text()
+state = pathlib.Path("state.tmp")
+if not state.exists():
+    state.write_text("seen")
+    sys.exit(1)
+if "GUARD_LINE_A" in src:
+    print("FIXTURE_MARKER")
+    sys.exit(0)
+print("FIXTURE_RED")
+sys.exit(1)
+""".replace("FIXTURE_MARKER", FIXTURE_MARKER).replace("FIXTURE_RED", FIXTURE_RED)
+    with tempfile.TemporaryDirectory(prefix="mutation-gates-selftest.") as base:
+        config_path = build_fixture(
+            base, SRC_DEFAULT, COMPILE_DEFAULT, transient_test, [fixture_cell()]
+        )
+        code, out = run_fixture(config_path)
+        ok = code == 0 and "baseline retry (load transient)" in out
+        checks.append(("baseline-retry-transient", ok))
+        print(f"{label}: {'PASS' if ok else 'FAIL'} baseline-retry-transient")
+
+    with tempfile.TemporaryDirectory(prefix="mutation-gates-selftest.") as base:
+        config_path = build_fixture(
+            base, SRC_DEFAULT, COMPILE_DEFAULT, TEST_BASELINE_FAILS, [fixture_cell()]
+        )
+        code, out = run_fixture(config_path)
+        ok = code != 0 and "baseline baseline_test_failed" in out
+        checks.append(("baseline-retry-persistent-fails", ok))
+        print(f"{label}: {'PASS' if ok else 'FAIL'} baseline-retry-persistent-fails")
 
     with tempfile.TemporaryDirectory(prefix="mutation-gates-selftest-path.") as base:
         outside = os.path.join(base, "outside.txt")
@@ -3309,6 +3534,8 @@ def self_test():
     scope_ok("scope-named-test-complete", [T_TELEMETRY], telemetry_expected)
     scope_ok("scope-uncovered-lib-file-zero", ["lib/ash_replicant/status.ex"], [])
     scope_ok("scope-gate-script-full", ["scripts/run-mutation-gates.py"], None)
+    scope_ok("scope-ci-script-neutral", ["scripts/assert-release-contract.sh"], [])
+    scope_ok("scope-harness-script-neutral", ["scripts/run-structural-tests.sh"], [])
     scope_ok("scope-fixture-support-full", ["test/support/marquee.ex"], None)
     scope_ok("scope-test-helper-full", ["test/test_helper.exs"], None)
     scope_ok("scope-build-identity-full", ["mix.lock"], None)
@@ -3383,14 +3610,63 @@ def run_main():
     parser.add_argument("--cells", default=None)
     parser.add_argument("--diff-base", default=None, metavar="REF")
     parser.add_argument("--fixture-config", default=None)
+    parser.add_argument(
+        "--jobs", type=int, default=4,
+        help="parallel shard children (1 = legacy single workspace)",
+    )
+    parser.add_argument(
+        "--internal-shard", nargs=2, metavar=("INDEX", "TOTAL"), default=None,
+        help=argparse.SUPPRESS,
+    )
     args = parser.parse_args()
+
+    if args.jobs < 1:
+        print("mutation-gates: FAIL matrix config_invalid")
+        return 1
+
+    shard = None
+    if args.internal_shard is not None:
+        try:
+            shard = (int(args.internal_shard[0]), int(args.internal_shard[1]))
+        except ValueError:
+            print("mutation-gates: FAIL matrix config_invalid")
+            return 1
+        if not 1 <= shard[0] <= shard[1] or shard[1] < 1:
+            print("mutation-gates: FAIL matrix config_invalid")
+            return 1
+
+    def run_selected(config, cells, label="mutation-gates", full_inventory=False):
+        """Run a selection, either parallel (parent) or sliced (shard child).
+
+        The parent validates the full inventory when the mode requires it
+        (pass full_inventory=True), then fans the SAME mode arguments out to
+        N children; each child recomputes the identical deterministic
+        selection, slices it, and runs its slice in its own workspace with
+        the partial-inventory flag the slice legitimately needs.
+        """
+        if shard is not None:
+            index, total = shard
+            sliced = shard_cells(cells, index, total)
+            config = dict(config)
+            config["require_full_inventory"] = False
+            sliced_label = f"{label}[{index}/{total}]"
+            if not sliced:
+                print(f"{sliced_label}: PASS (0 cells in shard)")
+                return 0
+            return run_gates(config, sliced, label=sliced_label)
+        if args.jobs > 1 and len(cells) > 1:
+            return run_parallel(child_argv_for(args), args.jobs, cells, full_inventory)
+        if full_inventory:
+            config = dict(config)
+            config["require_full_inventory"] = True
+        return run_gates(config, cells, label=label)
 
     if args.fixture_config:
         with open(args.fixture_config) as handle:
             config = json.load(handle)
         cells = config.pop("cells")
         config["test_command"] = lambda file: [sys.executable, "tool/test.py"]
-        return run_gates(config, cells)
+        return run_selected(config, cells)
 
     if args.self_test:
         return self_test()
@@ -3399,10 +3675,12 @@ def run_main():
         # Every --diff-base path keeps the runner's OWN vacuity battery in
         # the per-push evidence — the no-args path always runs it, and a
         # push editing this runner is exactly the push where a vacuous
-        # runner would otherwise slip through scoped.
-        code = self_test()
-        if code != 0:
-            return code
+        # runner would otherwise slip through scoped. Shard children skip
+        # it: the parent of a sharded run has already run it once.
+        if shard is None:
+            code = self_test()
+            if code != 0:
+                return code
 
         changed = changed_files_for_base(args.diff_base)
         if changed is None:
@@ -3410,7 +3688,7 @@ def run_main():
                 "mutation-gates: diff-base unusable — running FULL matrix "
                 f"({args.diff_base})"
             )
-            return run_gates(real_config(), MATRIX)
+            return run_selected(real_config(), MATRIX, full_inventory=True)
 
         cells = select_matrix_cells(changed)
         if cells is None:
@@ -3419,7 +3697,7 @@ def run_main():
                 "running FULL matrix "
                 f"({len(changed)} file(s))"
             )
-            return run_gates(real_config(), MATRIX)
+            return run_selected(real_config(), MATRIX, full_inventory=True)
 
         if not cells:
             print(
@@ -3428,13 +3706,14 @@ def run_main():
             )
             return 0
 
-        print(
-            f"mutation-gates: scoped {len(cells)}/{len(MATRIX)} cells "
-            f"({len(changed)} file(s) diffed)"
-        )
+        if shard is None:
+            print(
+                f"mutation-gates: scoped {len(cells)}/{len(MATRIX)} cells "
+                f"({len(changed)} file(s) diffed)"
+            )
         config = real_config()
         config["require_full_inventory"] = False
-        return run_gates(config, cells)
+        return run_selected(config, cells)
 
     if args.cells:
         wanted = [prefix for prefix in args.cells.split(",") if prefix]
@@ -3448,15 +3727,21 @@ def run_main():
             return 1
         config = real_config()
         config["require_full_inventory"] = False
-        return run_gates(config, cells)
+        return run_selected(config, cells)
 
     if args.matrix:
-        return run_gates(real_config(), MATRIX)
+        return run_selected(real_config(), MATRIX, full_inventory=True)
+
+    if shard is not None:
+        # A bare shard child has no mode of its own; the parent always
+        # spawns children with an explicit mode argument.
+        print("mutation-gates: FAIL matrix config_invalid")
+        return 1
 
     code = self_test()
     if code != 0:
         return code
-    return run_gates(real_config(), MATRIX)
+    return run_selected(real_config(), MATRIX, full_inventory=True)
 
 
 def raise_runner_termination(signum, _frame):

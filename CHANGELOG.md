@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **The guard-mutation battery runs its cells in parallel** (`--jobs N`,
+  default 4): the runner fans the deterministic selection out to N
+  self-reinvoked shard children, each in its own isolated workspace, so
+  sharding changes wall-clock only — every selected cell still runs and
+  still RED-proves its sentinel, the parent still validates duplicate ids
+  and (for the full-matrix modes) the complete cell inventory, and a
+  failing shard is reported by ordinal and exit code, value-free. A
+  release-slice push that previously serialized ~130 sentinels in one
+  runner now divides by the shard count (the 4-vCPU CI runner and a local
+  workstation alike). `--jobs 1` is the legacy path; the self-test pins
+  the partition (complete, disjoint, order-stable) and both parallel
+  outcomes green and red.
+- **Path scoping no longer forces the FULL mutation matrix for every
+  `scripts/` edit** — only the mutation runner itself is evidence
+  machinery (mutation children execute `mix compile` / `mix test`
+  directly; no other script's bytes can change what a sentinel observes).
+  Contract/checker/wrapper script edits now select zero mutation cells;
+  `config/`, `test/support/`, `.github/`, `priv/`, and the build-identity
+  files keep forcing the full matrix.
+
+### Added
+
+- **`scripts/prepush.sh`** — one fail-fast command mirroring every
+  CI-runnable gate in cheapest-first order (format, warnings-as-errors
+  compile, release checkers, release contract, Credo, deps.audit, the
+  no-database structural suite, Dialyzer, docs, hex.build), plus the full
+  live lane (ecto create/migrate, migration drift gate, live suite) when
+  `ASH_REPLICANT_TEST_URL` is set. A red push costs seconds locally
+  instead of a CI round-trip.
+
 ## [1.1.0] - 2026-08-25
 
 ### Changed

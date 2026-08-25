@@ -269,7 +269,10 @@ defmodule AshReplicant.ReleaseContractSelfTest do
      ["**10. The 0.4.0 to 1.0.0 upgrade never infers checkpoint ownership.**"]},
     {"docs/adr/0007-source-bound-checkpoint-effect-once.md", "## Decision",
      ["mix ash_replicant.upgrade 0.4.0 1.0.0", "checksummed rollback ledger"]},
-    {"CHANGELOG.md", "### Added", ["**Guarded 0.4.0 to 1.0.0 package upgrade and rollback.**"]}
+    # CHANGELOG is matched whole-file (heading nil): an [Unreleased] block
+    # legitimately carries its own `### Added` ahead of the released
+    # section that owns this entry.
+    {"CHANGELOG.md", nil, ["**Guarded 0.4.0 to 1.0.0 package upgrade and rollback.**"]}
   ]
 
   @upgrade_source_contracts [
@@ -1053,9 +1056,11 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
   defp upgrade_contract_probes do
     Enum.each(@upgrade_doc_contracts, fn {path, heading, required_texts} ->
-      prepare_fixture()
-      replace_once!(path, heading, "#{heading} changed")
-      assert_invalid!()
+      unless is_nil(heading) do
+        prepare_fixture()
+        replace_once!(path, heading, "#{heading} changed")
+        assert_invalid!()
+      end
 
       Enum.each(required_texts, fn required ->
         prepare_fixture()

@@ -445,7 +445,10 @@ defmodule AshReplicant.ReleaseContract do
      ["**10. The 0.4.0 to 1.0.0 upgrade never infers checkpoint ownership.**"]},
     {"docs/adr/0007-source-bound-checkpoint-effect-once.md", "## Decision",
      ["mix ash_replicant.upgrade 0.4.0 1.0.0", "checksummed rollback ledger"]},
-    {"CHANGELOG.md", "### Added", ["**Guarded 0.4.0 to 1.0.0 package upgrade and rollback.**"]}
+    # CHANGELOG is matched whole-file, not by first-section extraction: an
+    # [Unreleased] block legitimately carries its own `### Added` heading
+    # ahead of the released section that owns this entry.
+    {"CHANGELOG.md", nil, ["**Guarded 0.4.0 to 1.0.0 package upgrade and rollback.**"]}
   ]
 
   @upgrade_source_contracts [
@@ -1074,15 +1077,31 @@ defmodule AshReplicant.ReleaseContract do
   defp assert_upgrade_contract(root) do
     Enum.each(@upgrade_doc_contracts, fn {path, heading, required_texts} ->
       visible = root |> Path.join(path) |> File.read!() |> visible_markdown()
-      section = section(visible, heading)
 
-      assert(section != nil, "published upgrade contract section is missing")
-      normalized_section = normalize_markdown(section)
+      if is_nil(heading) do
+        # Whole-file pins: the entry must exist, wherever the changelog
+        # structure places it.
+        assert(
+          Enum.all?(
+            required_texts,
+            &String.contains?(normalize_markdown(visible), normalize_markdown(&1))
+          ),
+          "published upgrade contract is incomplete"
+        )
+      else
+        section = section(visible, heading)
 
-      assert(
-        Enum.all?(required_texts, &String.contains?(normalized_section, normalize_markdown(&1))),
-        "published upgrade contract is incomplete"
-      )
+        assert(section != nil, "published upgrade contract section is missing")
+        normalized_section = normalize_markdown(section)
+
+        assert(
+          Enum.all?(
+            required_texts,
+            &String.contains?(normalized_section, normalize_markdown(&1))
+          ),
+          "published upgrade contract is incomplete"
+        )
+      end
     end)
 
     Enum.each(@upgrade_source_contracts, fn {path, required} ->
