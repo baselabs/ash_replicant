@@ -22,8 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `AshOnetime.Resource.Protection` entity is field-identical from 0.6.0
   through 1.2.1, so contract manifest digests are unchanged by the upgrade
   (0.7.0's only break — the Ash floor at 3.31.3 — is already this package's
-  floor). CI pins the 1.1.0 floor in the exact-floors cell and floats latest
-  1.x in the latest-compatible cell, mirroring the Ash/Replicant legs. One
+  floor). CI now pins the 1.1.0 floor in the exact-floors cell and floats latest
+  1.x in the latest-compatible cell, mirroring the Ash/Replicant legs; the
+  release contract and its self-test teach the new matrix, job-env, and
+  resolve-step pins plus the AshOnetime foundation lines. One
   schema consequence for hosts: AshOnetime 1.1.0 added the
   `logical_partition` column to its admission store, so a host that serves
   message routes from its own AshOnetime store installed before 1.1.0 must

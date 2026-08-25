@@ -58,8 +58,8 @@ The current 1.1.0 release baseline is built and tested with:
 
 - Elixir 1.20.3 on Erlang/OTP 29;
 - Ash `>= 3.31.3 and < 4.0.0-0` and AshPostgres 2.11.x;
-- Replicant `>= 1.2.3 and < 2.0.0-0` (current release-candidate lock 1.2.3) and
-  AshOnetime `>= 1.1.0 and < 2.0.0-0` (current lock 1.2.1);
+- Replicant `>= 1.2.3 and < 2.0.0-0` (current release-candidate lock 1.2.3); and
+- AshOnetime `>= 1.1.0 and < 2.0.0-0` (current lock 1.2.1);
 - PostgreSQL with `wal_level=logical` for the live integration gate: CI pins
   PostgreSQL 16, the local gate runs whatever instance `ASH_REPLICANT_TEST_URL`
   points at (derive the live version with `SELECT version();` — never assume it

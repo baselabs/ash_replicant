@@ -7,6 +7,7 @@ defmodule AshReplicant.ReleaseContract do
   @pg16_image "postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b"
   @ash_requirement ">= 3.31.3 and < 4.0.0-0"
   @replicant_requirement ">= 1.2.3 and < 2.0.0-0"
+  @onetime_requirement ">= 1.1.0 and < 2.0.0-0"
   @checkout "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
   @setup_beam "erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236"
   @cache "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
@@ -36,11 +37,16 @@ defmodule AshReplicant.ReleaseContract do
   if [[ '${{ matrix.replicant_unlock }}' == 'true' ]]; then
     mix deps.unlock replicant
   fi
+  if [[ '${{ matrix.onetime_unlock }}' == 'true' ]]; then
+    mix deps.unlock ash_onetime
+  fi
   mix deps.get
   mix deps ash
   mix deps replicant
+  mix deps ash_onetime
   scripts/assert-dependency-version.sh ash '${{ matrix.ash_requirement }}'
   scripts/assert-dependency-version.sh replicant '${{ matrix.replicant_requirement }}'
+  scripts/assert-dependency-version.sh ash_onetime '${{ matrix.onetime_requirement }}'
   """
 
   @create_database """
@@ -115,6 +121,7 @@ defmodule AshReplicant.ReleaseContract do
       "MIX_ENV" => "test",
       "ASH_REPLICANT_ASH_VERSION" => "${{ matrix.ash_selector }}",
       "ASH_REPLICANT_REPLICANT_VERSION" => "${{ matrix.replicant_selector }}",
+      "ASH_REPLICANT_ONETIME_VERSION" => "${{ matrix.onetime_selector }}",
       "ASH_REPLICANT_TEST_URL" => "postgres://postgres@localhost:5432/postgres"
     },
     "release-artifact" => %{"MIX_ENV" => "dev"},
@@ -149,6 +156,9 @@ defmodule AshReplicant.ReleaseContract do
       "replicant_selector" => "1.2.3",
       "replicant_unlock" => true,
       "replicant_requirement" => "== 1.2.3",
+      "onetime_selector" => "1.1.0",
+      "onetime_unlock" => true,
+      "onetime_requirement" => "== 1.1.0",
       "pg_major" => "16",
       "pg_image" => @pg16_image
     },
@@ -160,6 +170,9 @@ defmodule AshReplicant.ReleaseContract do
       "replicant_selector" => "",
       "replicant_unlock" => false,
       "replicant_requirement" => @replicant_requirement,
+      "onetime_selector" => "",
+      "onetime_unlock" => false,
+      "onetime_requirement" => @onetime_requirement,
       "pg_major" => "16",
       "pg_image" => @pg16_image
     },
@@ -171,6 +184,9 @@ defmodule AshReplicant.ReleaseContract do
       "replicant_selector" => "latest",
       "replicant_unlock" => true,
       "replicant_requirement" => @replicant_requirement,
+      "onetime_selector" => "latest",
+      "onetime_unlock" => true,
+      "onetime_requirement" => @onetime_requirement,
       "pg_major" => "16",
       "pg_image" => @pg16_image
     },
@@ -182,6 +198,9 @@ defmodule AshReplicant.ReleaseContract do
       "replicant_selector" => "",
       "replicant_unlock" => false,
       "replicant_requirement" => @replicant_requirement,
+      "onetime_selector" => "",
+      "onetime_unlock" => false,
+      "onetime_requirement" => @onetime_requirement,
       "pg_major" => "17",
       "pg_image" => @pg17_image
     },
@@ -193,6 +212,9 @@ defmodule AshReplicant.ReleaseContract do
       "replicant_selector" => "",
       "replicant_unlock" => false,
       "replicant_requirement" => @replicant_requirement,
+      "onetime_selector" => "",
+      "onetime_unlock" => false,
+      "onetime_requirement" => @onetime_requirement,
       "pg_major" => "18",
       "pg_image" => @pg18_image
     }
@@ -303,7 +325,8 @@ defmodule AshReplicant.ReleaseContract do
      [
        "- Elixir 1.20.3 on Erlang/OTP 29;",
        "- Ash `#{@ash_requirement}` and AshPostgres 2.11.x;",
-       "- Replicant `#{@replicant_requirement}` (current release-candidate lock 1.2.3)"
+       "- Replicant `#{@replicant_requirement}` (current release-candidate lock 1.2.3)",
+       "- AshOnetime `#{@onetime_requirement}` (current lock 1.2.1)"
      ]},
     {"CONTRIBUTING.md", "## Prerequisites",
      [
@@ -315,7 +338,8 @@ defmodule AshReplicant.ReleaseContract do
      [
        "The supported release foundation is Elixir 1.20.3 on Erlang/OTP 29 with Ash\n" <>
          "`#{@ash_requirement}` and Replicant\n" <>
-         "`#{@replicant_requirement}` (current release-candidate lock 1.2.3)."
+         "`#{@replicant_requirement}` (current release-candidate lock 1.2.3), plus\n" <>
+         "AshOnetime `#{@onetime_requirement}` (current lock 1.2.1)."
      ]}
   ]
 
