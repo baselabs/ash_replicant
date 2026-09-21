@@ -30,8 +30,8 @@ the narrative "why"; an ADR is the tracked, per-decision record with code eviden
 | [0015](0015-logical-message-effects.md) | Logical messages route by prefix to protected create actions; transactional ones ride the transaction, standalone ones dedup through an AshOnetime claim keyed on source+slot+LSN with a versioned host-keyed content digest, and the watermark advances only with (or after) the claim | C1 |
 | [0016](0016-atomic-batch-delivery.md) | Sink-owned batch delivery: the generated sink implements `handle_batch/1` unconditionally (one destination transaction, single trailing watermark write, single-pass spilled streams, message interleave carried); `batch_delivery` is a forwarded pipeline option | C2 |
 | [0017](0017-snapshot-provenance-and-restart.md) | Atomic snapshot progress and host provenance prevent repeated business effects across v1 and incremental restart | C3 |
-| [0018](0018-append-log-delivery.md) | Proposed: append-log is an exclusive host-owned sink with explicit origin-floor and event identity | C4 |
-| [0019](0019-continuous-assurance-and-readiness.md) | Proposed: PipelineOwner runs the continuous invariant census and readiness derives from coherent live and durable facts | C5 / D2-D4 |
+| [0018](0018-append-log-delivery.md) | Accepted: append-log is an exclusive host-owned sink with explicit origin-floor and event identity | C4 |
+| [0019](0019-continuous-assurance-and-readiness.md) | Accepted: PipelineOwner owns continuous assurance and coherent readiness; remaining destination/migration census extensions retain their own acceptance | C5 / D2-D4 |
 | [0020](0020-support-package-and-release-identity.md) | Proposed: support, package, provenance, and consumer claims bind to one fetched release artifact | D1 / D6 / D8-D9 / E1-E2 |
 | [0021](0021-measured-performance-bounds.md) | Proposed: measured resource and performance budgets are release correctness gates | D5 |
 | [0022](0022-recovery-horizon-and-typed-telemetry.md) | Recovery horizons alert before recovery becomes impossible: a declared `recovery_horizon` floors claim retention, an authenticated digest-key witness bounds key retirement, and three alert legs (census push, activation resume gate, doctor pull) cover running and halted phases; telemetry's typed gates are mutation-proven per key | D3 / O03 |
@@ -50,7 +50,7 @@ operational precondition row is governed by
 tenant-blind layering / pipeline ownership row is governed by
 [ADR-0014](0014-internal-trust-and-lifecycle-ownership.md):
 
-The remaining SCD2 continuous-validation decision is now included in proposed
-[ADR-0019](0019-continuous-assurance-and-readiness.md). Proposed records become
-accepted only when their required red/green evidence lands; the index does not
-claim those capabilities are implemented.
+[ADR-0019](0019-continuous-assurance-and-readiness.md) is accepted and records the
+implemented continuous census and status/tombstone child; its remaining destination/migration
+census extensions stay with their later roadmap children. This index follows each record's
+status and does not promote its remaining acceptance. ADR-0020 and ADR-0021 remain proposed.
