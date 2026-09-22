@@ -5,10 +5,13 @@ Thank you for your interest in contributing to AshReplicant!
 ## Prerequisites
 
 - **Elixir 1.20.3** and **Erlang/OTP 29** (run `asdf install` from the repository root)
-- Ash `>= 3.31.3 and < 4.0.0-0`; selector-free development uses this public range
-- Replicant `>= 1.2.3 and < 2.0.0-0` from Hex; the release-candidate lock is 1.2.3.
+- Ash `>= 3.33.4 and < 4.0.0-0`; selector-free development uses this public range
+- Replicant `>= 1.2.3 and < 2.0.0-0` from Hex; the release-candidate lock is 1.2.4.
   No sibling checkout is required to build or test. A local checkout at
   `../replicant` is only needed for cross-repo design work and is never release evidence.
+- AshCloak `>= 0.4.0 and < 1.0.0-0` from Hex; the current lock is 0.4.0 (the
+  CVE-2026-81319 / CVE-2026-81322 security floor — every earlier release is
+  vulnerable and the requirement refuses to resolve to one).
 - **PostgreSQL** with `wal_level=logical` for the live integration gate; the
   integration suite runs against a live Postgres with a logical replication slot
   and publication. CI pins PostgreSQL 16; the local gate runs whatever instance

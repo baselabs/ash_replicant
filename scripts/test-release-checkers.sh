@@ -40,8 +40,9 @@ if scripts/assert-exunit-output.sh "$fixture_dir/intentional-exclusion.txt" >/de
   exit 1
 fi
 
-scripts/assert-dependency-version.sh ash '>= 3.31.3 and < 4.0.0-0' >/dev/null
+scripts/assert-dependency-version.sh ash '>= 3.33.4 and < 4.0.0-0' >/dev/null
 scripts/assert-dependency-version.sh replicant '>= 1.2.3 and < 2.0.0-0' >/dev/null
+scripts/assert-dependency-version.sh ash_onetime '>= 1.3.2 and < 2.0.0-0' >/dev/null
 
 if scripts/assert-dependency-version.sh ash '== 0.0.0' >/dev/null 2>&1; then
   echo "dependency checker accepted a nonmatching requirement" >&2
@@ -112,7 +113,7 @@ if [[ "$ash4_exit" -eq 0 ]] || [[ "$ash4_output" != *"must be a semantic version
   exit 1
 fi
 
-public_requirement=">= 3.31.3 and < 4.0.0-0"
+public_requirement=">= 3.33.4 and < 4.0.0-0"
 
 for selector in unset empty latest; do
   case "$selector" in
@@ -136,10 +137,10 @@ for selector in unset empty latest; do
   fi
 done
 
-floor_requirement="$(ASH_REPLICANT_ASH_VERSION=3.31.3 mix run --no-start --no-compile --no-deps-check -e '
+floor_requirement="$(ASH_REPLICANT_ASH_VERSION=3.33.4 mix run --no-start --no-compile --no-deps-check -e '
   Mix.Project.config() |> Keyword.fetch!(:deps) |> List.keyfind!(:ash, 0) |> elem(1) |> IO.write()')"
 
-if [[ "$floor_requirement" != "== 3.31.3" ]]; then
+if [[ "$floor_requirement" != "== 3.33.4" ]]; then
   echo "exact Ash floor selector did not produce an exact requirement" >&2
   exit 1
 fi
@@ -203,6 +204,38 @@ replicant_floor_requirement="$(ASH_REPLICANT_REPLICANT_VERSION=1.2.3 mix run --n
 
 if [[ "$replicant_floor_requirement" != "== 1.2.3" ]]; then
   echo "exact Replicant floor selector did not produce an exact requirement" >&2
+  exit 1
+fi
+
+onetime_public_requirement=">= 1.3.2 and < 2.0.0-0"
+
+for selector in unset empty latest; do
+  case "$selector" in
+    unset)
+      selected_requirement="$(env -u ASH_REPLICANT_ONETIME_VERSION mix run --no-start --no-compile --no-deps-check -e '
+        Mix.Project.config() |> Keyword.fetch!(:deps) |> List.keyfind!(:ash_onetime, 0) |> elem(1) |> IO.write()')"
+      ;;
+    empty)
+      selected_requirement="$(ASH_REPLICANT_ONETIME_VERSION='' mix run --no-start --no-compile --no-deps-check -e '
+        Mix.Project.config() |> Keyword.fetch!(:deps) |> List.keyfind!(:ash_onetime, 0) |> elem(1) |> IO.write()')"
+      ;;
+    latest)
+      selected_requirement="$(ASH_REPLICANT_ONETIME_VERSION=latest mix run --no-start --no-compile --no-deps-check -e '
+        Mix.Project.config() |> Keyword.fetch!(:deps) |> List.keyfind!(:ash_onetime, 0) |> elem(1) |> IO.write()')"
+      ;;
+  esac
+
+  if [[ "$selected_requirement" != "$onetime_public_requirement" ]]; then
+    echo "public AshOnetime selector mode changed its requirement" >&2
+    exit 1
+  fi
+done
+
+onetime_floor_requirement="$(ASH_REPLICANT_ONETIME_VERSION=1.3.2 mix run --no-start --no-compile --no-deps-check -e '
+  Mix.Project.config() |> Keyword.fetch!(:deps) |> List.keyfind!(:ash_onetime, 0) |> elem(1) |> IO.write()')"
+
+if [[ "$onetime_floor_requirement" != "== 1.3.2" ]]; then
+  echo "exact AshOnetime floor selector did not produce an exact requirement" >&2
   exit 1
 fi
 

@@ -403,9 +403,11 @@ documented pull channel.
 ## Development workflow
 
 The supported release foundation is Elixir 1.20.3 on Erlang/OTP 29 with Ash
-`>= 3.31.3 and < 4.0.0-0` and Replicant
-`>= 1.2.3 and < 2.0.0-0` (current release-candidate lock 1.2.3), plus
-AshOnetime `>= 1.1.0 and < 2.0.0-0` (current lock 1.2.1).
+`>= 3.33.4 and < 4.0.0-0` and Replicant
+`>= 1.2.3 and < 2.0.0-0` (current release-candidate lock 1.2.4), plus
+AshOnetime `>= 1.3.2 and < 2.0.0-0` (current lock 1.3.2) and AshCloak
+`>= 0.4.0 and < 1.0.0-0` (current lock 0.4.0; releases below 0.4.0 carry
+CVE-2026-81319 and CVE-2026-81322 and are not admitted).
 
 ```bash
 asdf install

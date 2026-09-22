@@ -5,6 +5,61 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-09-22
+
+### Changed
+
+- **The AshOnetime requirement moves from `>= 1.1.0 and < 2.0.0-0` to
+  `>= 1.3.2 and < 2.0.0-0` and the lock moves to 1.3.2** (published
+  September 21, 2026), with the coherent companion floors: Ash
+  `>= 3.33.4 and < 4.0.0-0`, AshPostgres `~> 2.13`, and optional Igniter
+  `>= 0.8.4 and < 1.0.0-0`. AshSQL `>= 0.7.1` and Mint `>= 1.10.1` are
+  transitive requirements of that floor, not new direct dependencies. The
+  exact-floors CI cell pins Ash 3.33.4 and AshOnetime 1.3.2 together, and
+  the selector-free metadata assertion now checks the published
+  `ash_onetime` requirement alongside Ash and Replicant.
+- **Consumers pin Ash's string-length counting basis in their own host
+  config** — `config :ash, default_string_length_count: :codepoints`
+  (README "Manual installation"): it is the basis this package's
+  contracts and generated migrations are authored against. The library
+  never mutates global Ash config at runtime; this repository's
+  unpublished `config/` sets the same basis and additionally asserts the
+  Elixir 1.20.3/OTP 29 checkout toolchain at config load (config files
+  are not shipped with the package, which keeps its declared
+  Elixir `~> 1.20` support window).
+- **The selector-free packaging commands clear all three dependency
+  selectors.** Release-artifact `mix deps.get`, the metadata assertion,
+  the package-inspection `mix hex.build`, and the fresh-consumer tarball
+  build previously cleared `ASH_REPLICANT_ASH_VERSION` and
+  `ASH_REPLICANT_REPLICANT_VERSION` but omitted
+  `ASH_REPLICANT_ONETIME_VERSION`, so an exported selector could pin the
+  built package's metadata to a single version instead of publishing the
+  requirement range. All four commands now clear all three; the
+  release-contract self-test carries mutation probes for each clearing
+  and for the asserted onetime requirement, and the package-inspection
+  self-test fails when its shell extraction no longer observes the
+  shipped predicate's real text.
+- **The AshCloak requirement moves from `~> 0.1` to
+  `>= 0.4.0 and < 1.0.0-0` and the lock moves to 0.4.0** — the security
+  floor for EEF-CVE-2026-81319 (MEDIUM: unsafe deserialization of
+  decrypted terms enables node DoS; aka CVE-2026-81319 /
+  GHSA-rc26-mrm2-6pf9) and EEF-CVE-2026-81322 (LOW: cloaked plaintext
+  leaks through a non-sensitive action argument; aka CVE-2026-81322 /
+  GHSA-qp4v-vvrg-8ggx), both fixed only in ash_cloak 0.4.0 (published
+  August 30, 2026). Every release below 0.4.0 is affected; the previous
+  `~> 0.1` range let a consumer resolve to a vulnerable one. The library
+  itself owns no decrypt path (it routes writes through the host actions,
+  where AshCloak's before_action hook fires), so no code change rides
+  along. The release contract now pins the ash_cloak requirement in the
+  local mix contract and in the selector-free metadata assertion, each
+  with a mutation probe weakening the floor back to `~> 0.1`.
+- **The Replicant lock moves from 1.2.3 to 1.2.4** (published August 24,
+  2026) within the unchanged `>= 1.2.3 and < 2.0.0-0` requirement; the
+  release contract's selector-free lock expectation and its lock-mutation
+  probes move with it, and the exact 1.2.3 floor cell keeps proving the
+  declared floor. Development-only dependencies dialyxir (1.4.8) and
+  ex_doc (0.40.4) also refresh; neither ships in the package.
+
 ## [1.2.0] - 2026-08-25
 
 ### Changed

@@ -1,11 +1,11 @@
 defmodule AshReplicant.MixProject do
   use Mix.Project
 
-  @version "1.2.0"
+  @version "1.3.0"
   @source_url "https://github.com/baselabs/ash_replicant"
-  @ash_requirement ">= 3.31.3 and < 4.0.0-0"
+  @ash_requirement ">= 3.33.4 and < 4.0.0-0"
   @replicant_requirement ">= 1.2.3 and < 2.0.0-0"
-  @onetime_requirement ">= 1.1.0 and < 2.0.0-0"
+  @onetime_requirement ">= 1.3.2 and < 2.0.0-0"
 
   def project do
     [
@@ -43,14 +43,17 @@ defmodule AshReplicant.MixProject do
   defp deps do
     [
       {:ash, ash_requirement()},
-      {:ash_postgres, "~> 2.11.0"},
+      {:ash_postgres, "~> 2.13"},
       {:ash_onetime, onetime_requirement()},
-      {:ash_cloak, "~> 0.1"},
+      # Security floor: EEF-CVE-2026-81319 and EEF-CVE-2026-81322 affect
+      # every ash_cloak release below 0.4.0; a consumer must not be able
+      # to resolve to a vulnerable one.
+      {:ash_cloak, ">= 0.4.0 and < 1.0.0-0"},
       {:replicant, replicant_requirement()},
       # The install codemod surface (I01). OPTIONAL for consumers and at
       # runtime: `mix ash_replicant.install` compiles to an actionable stub when
       # Igniter is absent, so no shipped library code depends on it.
-      {:igniter, ">= 0.8.3 and < 1.0.0-0", optional: true},
+      {:igniter, ">= 0.8.4 and < 1.0.0-0", optional: true},
       {:spark, "~> 2.7.0"},
       {:splode, "~> 0.3"},
       {:jason, "~> 1.4"},

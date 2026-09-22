@@ -5,9 +5,10 @@ end
 defmodule AshReplicant.ReleaseContract do
   @immutable_action ~r/\A[^@\s]+@[0-9a-f]{40}\z/
   @pg16_image "postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b"
-  @ash_requirement ">= 3.31.3 and < 4.0.0-0"
+  @ash_requirement ">= 3.33.4 and < 4.0.0-0"
   @replicant_requirement ">= 1.2.3 and < 2.0.0-0"
-  @onetime_requirement ">= 1.1.0 and < 2.0.0-0"
+  @onetime_requirement ">= 1.3.2 and < 2.0.0-0"
+  @cloak_requirement ">= 0.4.0 and < 1.0.0-0"
   @checkout "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
   @setup_beam "erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236"
   @cache "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
@@ -70,12 +71,14 @@ defmodule AshReplicant.ReleaseContract do
   """
 
   @public_dependency_check """
-  env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION mix run --no-start -e '
+  env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix run --no-start -e '
   deps = Mix.Project.config() |> Keyword.fetch!(:deps)
 
   expected = %{
-    ash: ">= 3.31.3 and < 4.0.0-0",
-    replicant: ">= 1.2.3 and < 2.0.0-0"
+    ash: ">= 3.33.4 and < 4.0.0-0",
+    replicant: ">= 1.2.3 and < 2.0.0-0",
+    ash_onetime: ">= 1.3.2 and < 2.0.0-0",
+    ash_cloak: ">= 0.4.0 and < 1.0.0-0"
   }
 
   Enum.each(expected, fn {dependency, requirement} ->
@@ -88,7 +91,7 @@ defmodule AshReplicant.ReleaseContract do
   @package_inspection """
   package_dir=$(mktemp -d)
   trap 'rm -rf "$package_dir"' EXIT
-  env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION mix hex.build --unpack --output "$package_dir"
+  env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix hex.build --unpack --output "$package_dir"
 
   for required in lib .formatter.exs mix.exs README.md LICENSE NOTICE CHANGELOG.md usage-rules.md \\
     lib/ash_replicant/upgrade.ex lib/ash_replicant/upgrade/checkpoint.ex \\
@@ -150,15 +153,15 @@ defmodule AshReplicant.ReleaseContract do
   @matrix [
     %{
       "label" => "exact-floors",
-      "ash_selector" => "3.31.3",
+      "ash_selector" => "3.33.4",
       "ash_unlock" => true,
-      "ash_requirement" => "== 3.31.3",
+      "ash_requirement" => "== 3.33.4",
       "replicant_selector" => "1.2.3",
       "replicant_unlock" => true,
       "replicant_requirement" => "== 1.2.3",
-      "onetime_selector" => "1.1.0",
+      "onetime_selector" => "1.3.2",
       "onetime_unlock" => true,
-      "onetime_requirement" => "== 1.1.0",
+      "onetime_requirement" => "== 1.3.2",
       "pg_major" => "16",
       "pg_image" => @pg16_image
     },
@@ -301,7 +304,8 @@ defmodule AshReplicant.ReleaseContract do
          "key" =>
            "${{ runner.os }}-release-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}"
        }},
-      {:run, "env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION mix deps.get"},
+      {:run,
+       "env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix deps.get"},
       {:run, "mix deps.compile"},
       {:run, "mix compile --warnings-as-errors"},
       {:run, "elixir --version"},
@@ -324,22 +328,26 @@ defmodule AshReplicant.ReleaseContract do
     {"README.md", "### Supported foundation",
      [
        "- Elixir 1.20.3 on Erlang/OTP 29;",
-       "- Ash `#{@ash_requirement}` and AshPostgres 2.11.x;",
-       "- Replicant `#{@replicant_requirement}` (current release-candidate lock 1.2.3)",
-       "- AshOnetime `#{@onetime_requirement}` (current lock 1.2.1)"
+       "- Ash `#{@ash_requirement}` and AshPostgres 2.13.x;",
+       "- Replicant `#{@replicant_requirement}` (current release-candidate lock 1.2.4)",
+       "- AshOnetime `#{@onetime_requirement}` (current lock 1.3.2)",
+       "- AshCloak `#{@cloak_requirement}` (current lock 0.4.0"
      ]},
     {"CONTRIBUTING.md", "## Prerequisites",
      [
        "- **Elixir 1.20.3** and **Erlang/OTP 29**",
        "- Ash `#{@ash_requirement}`; selector-free development uses this public range",
-       "- Replicant `#{@replicant_requirement}` from Hex; the release-candidate lock is 1.2.3."
+       "- Replicant `#{@replicant_requirement}` from Hex; the release-candidate lock is 1.2.4.",
+       "- AshCloak `#{@cloak_requirement}` from Hex; the current lock is 0.4.0 (the"
      ]},
     {"AGENTS.md", "## Development workflow",
      [
        "The supported release foundation is Elixir 1.20.3 on Erlang/OTP 29 with Ash\n" <>
          "`#{@ash_requirement}` and Replicant\n" <>
-         "`#{@replicant_requirement}` (current release-candidate lock 1.2.3), plus\n" <>
-         "AshOnetime `#{@onetime_requirement}` (current lock 1.2.1)."
+         "`#{@replicant_requirement}` (current release-candidate lock 1.2.4), plus\n" <>
+         "AshOnetime `#{@onetime_requirement}` (current lock 1.3.2) and AshCloak\n" <>
+         "`#{@cloak_requirement}` (current lock 0.4.0; releases below 0.4.0 carry\n" <>
+         "CVE-2026-81319 and CVE-2026-81322 and are not admitted)."
      ]}
   ]
 
@@ -714,11 +722,13 @@ defmodule AshReplicant.ReleaseContract do
     dependency_lists = find_definitions(body, :defp, :deps)
     ash_requirements = find_module_attributes(body, :ash_requirement)
     replicant_requirements = find_module_attributes(body, :replicant_requirement)
+    onetime_requirements = find_module_attributes(body, :onetime_requirement)
 
     assert(
       exact_project_contract?(projects) and exact_dependency_contract?(dependency_lists) and
         ash_requirements == [@ash_requirement] and
-        replicant_requirements == [@replicant_requirement],
+        replicant_requirements == [@replicant_requirement] and
+        onetime_requirements == [@onetime_requirement],
       "Mix release contract is incomplete"
     )
   rescue
@@ -743,10 +753,14 @@ defmodule AshReplicant.ReleaseContract do
     case Enum.filter(dependencies, fn
            {:ash, _requirement} -> true
            {:replicant, _requirement} -> true
+           {:ash_onetime, _requirement} -> true
+           {:ash_cloak, _requirement} -> true
            _dependency -> false
          end) do
       [
         {:ash, {:ash_requirement, _, []}},
+        {:ash_onetime, {:onetime_requirement, _, []}},
+        {:ash_cloak, @cloak_requirement},
         {:replicant, {:replicant_requirement, _, []}}
       ] ->
         true
@@ -850,7 +864,7 @@ defmodule AshReplicant.ReleaseContract do
   defp expected_replicant_lock_version(lock) do
     case System.get_env("ASH_REPLICANT_REPLICANT_VERSION") do
       value when value in [nil, ""] ->
-        "1.2.3"
+        "1.2.4"
 
       "latest" ->
         lock
@@ -964,7 +978,7 @@ defmodule AshReplicant.ReleaseContract do
 
       assert(
         not Regex.match?(
-          ~r/(?:unsupported release foundation|does(?:[\s\p{Cf}]+not|n't)[\s\p{Cf}]+support[\s\p{Cf}]*(?:Elixir 1\.20\.3|Erlang\/OTP 29|Ash 3\.31\.3|Replicant 1(?:\.x|\.\d+(?:\.\d+)?))|(?:Elixir 1\.20\.3|Erlang\/OTP 29|Ash 3\.31\.3|Replicant 1(?:\.x|\.\d+(?:\.\d+)?))[\s\p{Cf}]*(?:is[\s\p{Cf}]+)?not[\s\p{Cf}]+supported)/iu,
+          ~r/(?:unsupported release foundation|does(?:[\s\p{Cf}]+not|n't)[\s\p{Cf}]+support[\s\p{Cf}]*(?:Elixir 1\.20\.3|Erlang\/OTP 29|Ash 3\.33\.4|Replicant 1(?:\.x|\.\d+(?:\.\d+)?))|(?:Elixir 1\.20\.3|Erlang\/OTP 29|Ash 3\.33\.4|Replicant 1(?:\.x|\.\d+(?:\.\d+)?))[\s\p{Cf}]*(?:is[\s\p{Cf}]+)?not[\s\p{Cf}]+supported)/iu,
           visible
         ),
         "published runtime or dependency contract is contradictory"

@@ -488,7 +488,7 @@ defmodule AshReplicant.DoctorTest do
 
   describe "version mismatches are distinguished on both axes" do
     test "a dependency outside this package's requirement fails" do
-      check = Doctor.check_dependency_requirements(%{replicant: "1.0.0", ash: "3.31.3"})
+      check = Doctor.check_dependency_requirements(%{replicant: "1.0.0", ash: "3.33.4"})
 
       assert check.status == :fail
       assert check.reason == :dependency_version_mismatch
@@ -496,14 +496,14 @@ defmodule AshReplicant.DoctorTest do
     end
 
     test "an unloaded dependency fails with its own reason" do
-      check = Doctor.check_dependency_requirements(%{replicant: nil, ash: "3.31.3"})
+      check = Doctor.check_dependency_requirements(%{replicant: nil, ash: "3.33.4"})
 
       assert check.status == :fail
       assert check.reason == :dependency_missing
     end
 
     test "loaded versions inside the requirements pass" do
-      check = Doctor.check_dependency_requirements(%{replicant: "1.2.3", ash: "3.31.3"})
+      check = Doctor.check_dependency_requirements(%{replicant: "1.2.3", ash: "3.33.4"})
 
       assert check.status == :pass
     end
@@ -534,7 +534,7 @@ defmodule AshReplicant.DoctorTest do
     end
 
     test "the two version axes never share a reason" do
-      dependency = Doctor.check_dependency_requirements(%{replicant: "1.0.0", ash: "3.31.3"})
+      dependency = Doctor.check_dependency_requirements(%{replicant: "1.0.0", ash: "3.33.4"})
       source = Doctor.check_source_release(140_000)
 
       assert dependency.reason != source.reason

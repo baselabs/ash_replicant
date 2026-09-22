@@ -25,7 +25,13 @@ vendor="$consumer/vendor/ash_replicant"
 
 echo "== building the release package =="
 tarball="$work/ash_replicant-release.tar"
-(cd "$root" && MIX_ENV=test mix hex.build --output "$tarball" >/dev/null)
+# Selector-free build: an exported dependency selector would pin the
+# tarball's package metadata to one version instead of the published
+# requirement ranges, so all three selectors are cleared here exactly as
+# the release-artifact job's hex.build clears them.
+(cd "$root" &&
+  env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION \
+    MIX_ENV=test mix hex.build --output "$tarball" >/dev/null)
 [ -s "$tarball" ] || { echo "fresh-consumer: FAIL — no package built"; exit 1; }
 
 echo "== unpacking the tarball as the consumer's only dependency source =="
@@ -80,6 +86,9 @@ url =
 config :fresh_consumer, ecto_repos: [FreshConsumer.Repo]
 config :fresh_consumer, FreshConsumer.Repo, url: url, pool_size: 5
 config :fresh_consumer, ash_domains: [FreshConsumer.Domain]
+# Consumer host config (README "Manual installation"): the counting basis
+# ash_replicant's contracts and generated migrations are authored against.
+config :ash, default_string_length_count: :codepoints
 config :ash, :validate_domain_resource_inclusion?, false
 config :ash, :validate_domain_config_inclusion?, false
 CONF

@@ -73,6 +73,37 @@ The Replicant portion of this decision was amended by
 `>= 1.2.3 and < 2.0.0-0`, the release lock is 1.2.3, and CI exercises both the
 exact 1.2.3 floor and the selector-free current lock.
 
+The Ash, AshPostgres, and AshOnetime portions were amended September 22, 2026
+to carry the AshOnetime 1.3 floor (1.3.2 published September 21, 2026): Ash is
+declared `>= 3.33.4 and < 4.0.0-0`, AshPostgres `~> 2.13`, optional Igniter
+`>= 0.8.4 and < 1.0.0-0`, and AshOnetime `>= 1.3.2 and < 2.0.0-0` (current
+lock 1.3.2). AshSQL `>= 0.7.1` and Mint `>= 1.10.1` enter only as transitive
+requirements of that floor, not as direct dependencies. The Elixir `~> 1.20.3`
+requirement, the OTP 29 release evidence, and the selector/CI shape above are
+unchanged; the exact-floors CI cell now proves Ash 3.33.4 and AshOnetime 1.3.2
+together, and the selector-free metadata assertion checks the published
+`ash_onetime` requirement alongside Ash and Replicant. Consumers additionally
+pin Ash's string-length counting basis
+(`config :ash, default_string_length_count: :codepoints`) in their own host
+config — the library never mutates global Ash config.
+
+The AshCloak portion was amended September 22, 2026 for security: AshCloak is
+declared `>= 0.4.0 and < 1.0.0-0` (previous range `~> 0.1`, previous lock
+0.3.1). Two advisories — EEF-CVE-2026-81319 (unsafe deserialization of
+decrypted terms, node DoS) and EEF-CVE-2026-81322 (cloaked plaintext leak
+through a non-sensitive action argument) — affect every AshCloak release
+below 0.4.0 and are fixed only in 0.4.0, so a floor below 0.4.0 admits a
+known-vulnerable dependency and the range now refuses to resolve to one.
+ash_replicant itself owns no decrypt path (rule 1: writes route through the
+host actions where AshCloak's before_action hook fires), so the fix rides the
+host dependency, and the release contract pins the requirement in both the
+local mix contract and the selector-free metadata assertion, each guarded by
+a mutation probe that weakens the floor back to `~> 0.1`. The same amendment
+moves the Replicant release lock to 1.2.4 within the unchanged
+`>= 1.2.3 and < 2.0.0-0` requirement (the exact 1.2.3 floor cell keeps
+proving the declared floor), and refreshes the development-only dialyxir and
+ex_doc locks, which are not shipped in the package.
+
 ## Evidence
 
 - Package contract: `mix.exs`, `.tool-versions`, and `mix.lock`.

@@ -15,10 +15,31 @@ inspection="$(MIX_ENV=test mix run --no-start --no-compile --no-deps-check -e '
   IO.write(AshReplicant.ReleaseContract.package_inspection())
 ')"
 
+# The staging rebind below must observe the checker's REAL generated
+# text. A sed pattern that no longer matches silently leaves the LIVE
+# `mix hex.build` in place and stages nothing — the run would execute a
+# real package build instead of inspecting the fixture. Both guards fail
+# the self-test on exactly that drift, so the extraction pattern moves
+# with the shipped predicate or the check goes red.
+selector_free_build='env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix hex.build --unpack --output "$package_dir"'
+
+printf '%s\n' "$inspection" | grep -qF "$selector_free_build" || {
+  echo "package inspection self-test: the shipped hex.build selector clearing changed shape" >&2
+  exit 1
+}
+
 rebind_staging() {
-  printf '%s\n' "$inspection" \
+  local staged
+  staged="$(printf '%s\n' "$inspection" \
     | sed -e 's|^package_dir=\$(mktemp -d)$|package_dir="$ASH_REPLICANT_PACKAGE_FIXTURE"|' \
-          -e 's|^env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION mix hex.build --unpack --output "\$package_dir"$|: # self-test staged fixture|'
+          -e "s|^${selector_free_build}\$|: # self-test staged fixture|")"
+
+  if printf '%s\n' "$staged" | grep -q 'mix hex.build'; then
+    echo "package inspection self-test: the staging rebind did not replace the hex.build line" >&2
+    exit 1
+  fi
+
+  printf '%s\n' "$staged"
 }
 
 run_inspection() {

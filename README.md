@@ -14,7 +14,7 @@ not re-gated. It executes through the
 [`replicant`](https://github.com/baselabs/replicant) client (the transport — the
 "`postgrex` of CDC").
 
-> **Status: v1.2.0 — stable public API (ADR-0023).** Effect-once mirroring with fail-closed
+> **Status: v1.3.0 — stable public API (ADR-0023).** Effect-once mirroring with fail-closed
 > multitenancy (compile-time verified), SCD2 history mirroring, and AshCloak integration.
 > Working rules are in
 > [`AGENTS.md`](https://github.com/baselabs/ash_replicant/blob/main/AGENTS.md) — read it
@@ -46,7 +46,7 @@ Add `ash_replicant` to your dependencies in `mix.exs`:
 
 ```elixir
 # mix.exs
-{:ash_replicant, "~> 1.2.0"}
+{:ash_replicant, "~> 1.3.0"}
 ```
 
 It pulls in [`replicant`](https://github.com/baselabs/replicant) (the CDC transport)
@@ -54,19 +54,25 @@ as a transitive dependency.
 
 ### Supported foundation
 
-The current 1.2.0 release baseline is built and tested with:
+The current 1.3.0 release baseline is built and tested with:
 
 - Elixir 1.20.3 on Erlang/OTP 29;
-- Ash `>= 3.31.3 and < 4.0.0-0` and AshPostgres 2.11.x;
-- Replicant `>= 1.2.3 and < 2.0.0-0` (current release-candidate lock 1.2.3); and
-- AshOnetime `>= 1.1.0 and < 2.0.0-0` (current lock 1.2.1);
+- Ash `>= 3.33.4 and < 4.0.0-0` and AshPostgres 2.13.x;
+- Replicant `>= 1.2.3 and < 2.0.0-0` (current release-candidate lock 1.2.4); and
+- AshOnetime `>= 1.3.2 and < 2.0.0-0` (current lock 1.3.2); and
+- AshCloak `>= 0.4.0 and < 1.0.0-0` (current lock 0.4.0; every release below
+  0.4.0 carries CVE-2026-81319 and CVE-2026-81322 and is not admitted); and
 - PostgreSQL with `wal_level=logical` for the live integration gate: CI pins
   PostgreSQL 16, the local gate runs whatever instance `ASH_REPLICANT_TEST_URL`
   points at (derive the live version with `SELECT version();` — never assume it
   from this doc), and the support matrix is PG16–18.
 
 The Ash lower bound excludes known-vulnerable patches, and the upper bound
-excludes Ash 4 prereleases. The AshOnetime ceiling tracks its 1.0 surface
+excludes Ash 4 prereleases. The AshCloak lower bound is a security floor:
+every release below 0.4.0 carries CVE-2026-81319 (unsafe deserialization of
+decrypted terms) and CVE-2026-81322 (plaintext leak through a non-sensitive
+action argument), and the requirement refuses to resolve to a vulnerable
+one. The AshOnetime ceiling tracks its 1.0 surface
 freeze — 2.0 is its next reserved break. A host whose own AshOnetime store
 was installed before 1.1.0 must run AshOnetime's
 `mix ash_onetime.gen.logical_partitions` upgrade before serving message
@@ -178,9 +184,18 @@ and generate the checkpoint migration:
 ```
 
 ```elixir
-# config/config.exs — register the domain
+# config/config.exs — register the domain and pin Ash's string-length
+# counting basis to codepoints (the basis ash_replicant's contracts and
+# generated migrations are authored against; Ash >= 3.33 warns until the
+# basis is explicit)
+config :ash, default_string_length_count: :codepoints
 config :my_app, ash_domains: [MyApp.Replicant]
 ```
+
+The `config :ash, default_string_length_count: :codepoints` line is
+host-owned on both install paths: the installer does not write global Ash
+config, and AshReplicant never mutates global Ash config at runtime — each
+host app sets it in its own `config/config.exs`.
 
 ```elixir
 # lib/my_app/application.ex — supervise the pipeline

@@ -76,63 +76,63 @@ jobs:
       matrix:
         include:
           - label: exact-floors
-            ash_selector: "3.31.3"
+            ash_selector: "3.33.4"
             ash_unlock: true
-            ash_requirement: "== 3.31.3"
+            ash_requirement: "== 3.33.4"
             replicant_selector: "1.2.3"
             replicant_unlock: true
             replicant_requirement: "== 1.2.3"
-            onetime_selector: "1.1.0"
+            onetime_selector: "1.3.2"
             onetime_unlock: true
-            onetime_requirement: "== 1.1.0"
+            onetime_requirement: "== 1.3.2"
             pg_major: "16"
             pg_image: "postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b"
           - label: current-lock
             ash_selector: ""
             ash_unlock: false
-            ash_requirement: ">= 3.31.3 and < 4.0.0-0"
+            ash_requirement: ">= 3.33.4 and < 4.0.0-0"
             replicant_selector: ""
             replicant_unlock: false
             replicant_requirement: ">= 1.2.3 and < 2.0.0-0"
             onetime_selector: ""
             onetime_unlock: false
-            onetime_requirement: ">= 1.1.0 and < 2.0.0-0"
+            onetime_requirement: ">= 1.3.2 and < 2.0.0-0"
             pg_major: "16"
             pg_image: "postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b"
           - label: latest-compatible
             ash_selector: latest
             ash_unlock: true
-            ash_requirement: ">= 3.31.3 and < 4.0.0-0"
+            ash_requirement: ">= 3.33.4 and < 4.0.0-0"
             replicant_selector: latest
             replicant_unlock: true
             replicant_requirement: ">= 1.2.3 and < 2.0.0-0"
             onetime_selector: latest
             onetime_unlock: true
-            onetime_requirement: ">= 1.1.0 and < 2.0.0-0"
+            onetime_requirement: ">= 1.3.2 and < 2.0.0-0"
             pg_major: "16"
             pg_image: "postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b"
           - label: current-lock-pg17
             ash_selector: ""
             ash_unlock: false
-            ash_requirement: ">= 3.31.3 and < 4.0.0-0"
+            ash_requirement: ">= 3.33.4 and < 4.0.0-0"
             replicant_selector: ""
             replicant_unlock: false
             replicant_requirement: ">= 1.2.3 and < 2.0.0-0"
             onetime_selector: ""
             onetime_unlock: false
-            onetime_requirement: ">= 1.1.0 and < 2.0.0-0"
+            onetime_requirement: ">= 1.3.2 and < 2.0.0-0"
             pg_major: "17"
             pg_image: "postgres:17@sha256:e38411452a464af89e5adadb8d223bf53b898d47d6ef918b2d58c08707350449"
           - label: current-lock-pg18
             ash_selector: ""
             ash_unlock: false
-            ash_requirement: ">= 3.31.3 and < 4.0.0-0"
+            ash_requirement: ">= 3.33.4 and < 4.0.0-0"
             replicant_selector: ""
             replicant_unlock: false
             replicant_requirement: ">= 1.2.3 and < 2.0.0-0"
             onetime_selector: ""
             onetime_unlock: false
-            onetime_requirement: ">= 1.1.0 and < 2.0.0-0"
+            onetime_requirement: ">= 1.3.2 and < 2.0.0-0"
             pg_major: "18"
             pg_image: "postgres:18@sha256:06cad38a5d9f5d24b4d83d86def30795d5e4b757fedbf5281172b576dedcd941"
     env:
@@ -281,7 +281,7 @@ jobs:
             _build
           key: ${{ runner.os }}-release-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}
 
-      - run: env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION mix deps.get
+      - run: env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix deps.get
       - run: mix deps.compile
       - run: mix compile --warnings-as-errors
       - run: elixir --version
@@ -289,12 +289,14 @@ jobs:
       - run: scripts/assert-release-contract.sh
       - name: Assert selector-free public dependency requirements
         run: |
-          env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION mix run --no-start -e '
+          env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix run --no-start -e '
           deps = Mix.Project.config() |> Keyword.fetch!(:deps)
 
           expected = %{
-            ash: ">= 3.31.3 and < 4.0.0-0",
-            replicant: ">= 1.2.3 and < 2.0.0-0"
+            ash: ">= 3.33.4 and < 4.0.0-0",
+            replicant: ">= 1.2.3 and < 2.0.0-0",
+            ash_onetime: ">= 1.3.2 and < 2.0.0-0",
+            ash_cloak: ">= 0.4.0 and < 1.0.0-0"
           }
 
           Enum.each(expected, fn {dependency, requirement} ->
@@ -309,7 +311,7 @@ jobs:
         run: |
           package_dir=$(mktemp -d)
           trap 'rm -rf "$package_dir"' EXIT
-          env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION mix hex.build --unpack --output "$package_dir"
+          env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix hex.build --unpack --output "$package_dir"
 
           for required in lib .formatter.exs mix.exs README.md LICENSE NOTICE CHANGELOG.md usage-rules.md \
             lib/ash_replicant/upgrade.ex lib/ash_replicant/upgrade/checkpoint.ex \

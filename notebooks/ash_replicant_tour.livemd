@@ -3,7 +3,7 @@
 ```elixir
 Mix.install([
   # This notebook lives in `notebooks/`, so `..` is the repo root. Swap for
-  # `{:ash_replicant, "~> 1.2.0"}` to run it against the published Hex package.
+  # `{:ash_replicant, "~> 1.3.0"}` to run it against the published Hex package.
   {:ash_replicant, path: Path.join(__DIR__, "..")},
   {:kino, "~> 0.14"}
 ])
@@ -50,9 +50,11 @@ flowchart TD
 ```
 
 Multitenancy and classification live **here**, not in `replicant` — exactly as
-`ash_postgres` (not `postgrex`) owns schema-based tenancy. Six critical rules
-([`AGENTS.md`](../AGENTS.md)) define the adapter, and the rest of this tour makes each
-one tangible:
+`ash_postgres` (not `postgrex`) owns schema-based tenancy. The critical rules in
+[`AGENTS.md`](../AGENTS.md) define the adapter (thirteen today — the
+snapshot-provenance, append-log, install/upgrade, doctor, status, and
+recovery-horizon rules joined the original six); this tour makes the core six
+tangible and §11–§14 cover the later ones:
 
 | # | Rule | You'll see it in |
 |---|------|------------------|
@@ -69,7 +71,7 @@ one tangible:
 
 ```elixir
 AshReplicant.version()
-# => "1.2.0"
+# => "1.3.0"
 ```
 
 ## 3 · The value-free boundary (rule 4)
@@ -85,7 +87,7 @@ it **raises** rather than shipping a value downstream — so a stray `pan:` or
 
 ```elixir
 AshReplicant.Telemetry.allowed_meta_keys()
-# => [:commit_lsn, :resource, :table, :change_count, :tenant?, :duration, :reason, :error_class, :kind, :slot_name]
+# => [:commit_lsn, :resource, :table, :change_count, :txn_count, :tenant?, :duration, :reason, :error_class, :kind, :slot_name, :transactional]
 ```
 
 An allowlisted event passes through untouched:
@@ -352,10 +354,12 @@ end
 
 > **Operational note.** A `:delete`, PK-changing `:update`, or tenant reassignment
 > needs the old tenant from `old_record`, which under the Postgres-default replica
-> identity carries **only the primary-key columns**. Set `ALTER TABLE <src> REPLICA
-> IDENTITY FULL` on every source table backing a tenant-scoped mirror. A
-> `tenant_mfa` must resolve deterministically from both record shapes; an
-> indeterminate old-side result remains a roadmap B4 fail-closed hardening item.
+> identity carries **only the primary-key columns**. Activation preflight therefore
+> requires `ALTER TABLE <src> REPLICA IDENTITY FULL` on every source table backing a
+> tenant-scoped mirror, so `old_record` carries the tenant column on every update
+> and delete. A `tenant_mfa` must resolve deterministically from both record shapes;
+> an absent, blank, or raising old-side resolution is a structural halt
+> (`:tenant_required` / `:tenant_resolution_failed`) before any write.
 
 ## 6 · The resolver index (rule 1 · routing)
 
@@ -879,7 +883,7 @@ injection with append-only observers proving zero net duplicate/loss).
 
 ## 16 · Where to go next
 
-* **[`AGENTS.md`](../AGENTS.md)** — the working guide; the six critical rules are
+* **[`AGENTS.md`](../AGENTS.md)** — the working guide; the critical rules are
   binding (start here to contribute).
 * **[`docs/CHARTER.md`](../docs/CHARTER.md)** — mission, layering, scope, and the
   resolved key decisions (D1–D5).

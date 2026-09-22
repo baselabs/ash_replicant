@@ -9,3 +9,8 @@ config :upgrade_fixture, UpgradeFixture.Repo,
 
 config :upgrade_fixture,
   ash_domains: [UpgradeFixture.Domain]
+
+# The string-length counting basis the fixture's generated resources are
+# snapshotted against — the same host config consumers set (README
+# "Manual installation"). The library never mutates global Ash config.
+config :ash, default_string_length_count: :codepoints

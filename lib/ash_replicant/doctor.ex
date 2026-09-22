@@ -55,7 +55,7 @@ defmodule AshReplicant.Doctor do
   # `AshReplicant.DoctorTest` asserts the literals are equal, so changing one
   # without the other goes red.
   @replicant_requirement ">= 1.2.3 and < 2.0.0-0"
-  @ash_requirement ">= 3.31.3 and < 4.0.0-0"
+  @ash_requirement ">= 3.33.4 and < 4.0.0-0"
 
   # The PostgreSQL 15 through 18 support matrix as `server_version_num`.
   @source_release_floor 150_000
