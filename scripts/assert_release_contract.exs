@@ -668,7 +668,7 @@ defmodule AshReplicant.ReleaseContract do
         "CI release job control is invalid"
       )
 
-      assert(job["runs-on"] == "ubuntu-latest", "CI release runner is invalid")
+      assert(job["runs-on"] == "ubuntu-24.04", "CI release runner is invalid")
       assert(job["env"] == @job_env[name], "CI release job environment is invalid")
 
       assert(

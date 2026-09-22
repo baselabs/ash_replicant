@@ -422,7 +422,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       """
       jobs:
         harmless-environment-key:
-          runs-on: ubuntu-latest
+          runs-on: ubuntu-24.04
           env:
             uses: harmless-environment-value
           steps:
@@ -918,9 +918,9 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
       mutate_job!(
         job,
-        "    runs-on: ubuntu-latest\n",
+        "    runs-on: ubuntu-24.04\n",
         """
-            runs-on: ubuntu-latest
+            runs-on: ubuntu-24.04
             container:
               image: ubuntu:24.04
               env:
@@ -973,7 +973,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     end
 
     prepare_fixture()
-    replace_once!(@workflow, "    runs-on: ubuntu-latest\n", "    runs-on: self-hosted\n")
+    replace_once!(@workflow, "    runs-on: ubuntu-24.04\n", "    runs-on: self-hosted\n")
     assert_invalid!()
 
     # The image digests now ride the matrix (pg_image); mutating one digest

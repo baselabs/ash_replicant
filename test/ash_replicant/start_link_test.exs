@@ -124,6 +124,15 @@ defmodule AshReplicant.StartLinkTest do
     assert :persistent_term.get({AshReplicant, "valid_slot"}, :none) == :none
   end
 
+  # Load-budget class (see the accepted-path note below): every port-1
+  # activation walks the ~56-module code fingerprint through the SERIALIZED
+  # Erlang code server, so full-core scheduler starvation stretches an
+  # activation from ~150ms to seconds (measured: the transport-options
+  # loop of eight walks blew the 60s default under local 10-core
+  # saturation; CI's 4-core runners starve harder). The ceilings bound
+  # WAITING ONLY — the start-gate outcome under test is scheduler-
+  # independent. 180s across every activation-bearing test.
+  @tag timeout: 180_000
   test "a concurrent duplicate start cannot replace or erase the winner generation" do
     capture_log(fn ->
       [first, second] =
@@ -203,6 +212,7 @@ defmodule AshReplicant.StartLinkTest do
       end
     end
 
+    @tag timeout: 180_000
     test "operator functions refuse a live slot (offline-only)" do
       identity = [system_identifier: "741852963", database: "postgres"]
 
@@ -242,13 +252,15 @@ defmodule AshReplicant.StartLinkTest do
     end
   end
 
-  # The accepted-path half: activation against the unreachable port
-  # (deferred coverage) plus the generated guard's comparison, all
-  # value-free. Activation deliberately targets an unreachable port; the
+  # Activation deliberately targets an unreachable port; the
   # queue bounds on the fixture make the refusal deterministic (~150ms
   # measured; the CoDel defaults made one activation stall ~6s and blew
-  # ExUnit's ceiling on compatibility runners).
-  @tag timeout: 120_000
+  # ExUnit's ceiling on compatibility runners). The fingerprint walk
+  # rides the serialized code server, so a saturated runner (4-core CI
+  # under the full battery) can consume the 120s this test once carried
+  # (run 35689545248, latest-compatible cell, starved stop path); the
+  # ceiling bounds waiting only, never the outcome. 180s.
+  @tag timeout: 180_000
   test "the accepted path starts, the guard compares without returning values, and it stops" do
     log =
       capture_log(fn ->
@@ -328,6 +340,7 @@ defmodule AshReplicant.StartLinkTest do
     refute log =~ "sentinel-database-value"
   end
 
+  @tag timeout: 180_000
   test "the generated identity guard cannot be overridden by a host sink" do
     log =
       capture_log(fn ->
@@ -382,6 +395,7 @@ defmodule AshReplicant.StartLinkTest do
     refute log =~ sentinel
   end
 
+  @tag timeout: 180_000
   test "generation cleanup only erases the generation that lost activation" do
     key = {AshReplicant, "valid_slot"}
     loser = make_ref()
@@ -402,26 +416,40 @@ defmodule AshReplicant.StartLinkTest do
     end)
   end
 
-  test "transport-only Replicant options are forwarded instead of silently discarded" do
-    for {key, bad_value} <- [
-          streaming: :invalid,
-          max_inflight_lag: -1,
-          max_command_retries: -1,
-          failover: :invalid,
-          # C1: :messages is now an ADAPTER-recognized forwarded option (a
-          # message-capable sink gets `messages: true` by default) — a bad
-          # value must reach Replicant's config gate and fail closed.
-          messages: :invalid,
-          # C2: :batch_delivery is forwarded to Replicant (the generated
-          # sink implements handle_batch/1 unconditionally) — a bad shape
-          # must reach Replicant's normalize_batch gate and fail closed,
-          # never start silently unbatched.
-          batch_delivery: :invalid
-        ] do
-      assert {:error, :config_invalid} = AshReplicant.start_link(start_opts([{key, bad_value}]))
+  # One activation per test: each start_link walks the full code
+  # fingerprint through the serialized Erlang code server, and a starved
+  # runner stretched the old six-case loop past every ceiling (measured
+  # past 180s under full-core saturation). Splitting bounds the blast to
+  # one option and names the starved case — the same split the identity
+  # contract took for the same reason.
+  @transport_option_cases [
+    streaming: :invalid,
+    max_inflight_lag: -1,
+    max_command_retries: -1,
+    failover: :invalid,
+    # C1: :messages is now an ADAPTER-recognized forwarded option (a
+    # message-capable sink gets `messages: true` by default) — a bad
+    # value must reach Replicant's config gate and fail closed.
+    messages: :invalid,
+    # C2: :batch_delivery is forwarded to Replicant (the generated
+    # sink implements handle_batch/1 unconditionally) — a bad shape
+    # must reach Replicant's normalize_batch gate and fail closed,
+    # never start silently unbatched.
+    batch_delivery: :invalid
+  ]
+
+  for {key, bad_value} <- @transport_option_cases do
+    @tag timeout: 180_000
+    test "transport-only option #{inspect(key)} is forwarded instead of silently discarded" do
+      assert {:error, :config_invalid} =
+               AshReplicant.start_link(start_opts([{unquote(key), unquote(bad_value)}]))
+
       assert :persistent_term.get({AshReplicant, "valid_slot"}, :none) == :none
     end
+  end
 
+  @tag timeout: 180_000
+  test "valid transport-only options start and stop cleanly" do
     capture_log(fn ->
       assert {:ok, _pid} =
                AshReplicant.start_link(
@@ -470,6 +498,7 @@ defmodule AshReplicant.StartLinkTest do
     end
   end
 
+  @tag timeout: 180_000
   test "a foreign effective dynamic Repo is rejected at callback entry" do
     # One window covers the live pipeline (the retrying port-1 connection)
     # through the stop — with the generation ALIVE, so the callback error
@@ -496,6 +525,7 @@ defmodule AshReplicant.StartLinkTest do
     end)
   end
 
+  @tag timeout: 180_000
   test "stop waits for a mutating callback to leave the destination lease" do
     observer = self()
 
@@ -652,6 +682,7 @@ defmodule AshReplicant.StartLinkTest do
     end)
   end
 
+  @tag timeout: 180_000
   test "a hot-loaded sink config is never merged into the admitted generation" do
     module = AshReplicant.Test.RuntimeDriftSink
     previous_ignore = Code.get_compiler_option(:ignore_module_conflict)
@@ -704,6 +735,7 @@ defmodule AshReplicant.StartLinkTest do
     end
   end
 
+  @tag timeout: 180_000
   test "hot-loaded code with unchanged sink config is rejected by the fingerprint" do
     module = AshReplicant.Test.RuntimeDriftSink
     previous_ignore = Code.get_compiler_option(:ignore_module_conflict)

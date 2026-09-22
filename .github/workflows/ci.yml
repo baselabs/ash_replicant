@@ -19,7 +19,7 @@ env:
 jobs:
   no-database:
     name: No-database tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       MIX_ENV: test
 
@@ -70,7 +70,7 @@ jobs:
 
   compatibility:
     name: Dependencies ${{ matrix.label }} / PostgreSQL ${{ matrix.pg_major }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -216,7 +216,7 @@ jobs:
 
   performance:
     name: Measured performance bounds
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       MIX_ENV: test
       ASH_REPLICANT_TEST_URL: postgres://postgres@localhost:5432/postgres
@@ -262,7 +262,7 @@ jobs:
 
   release-artifact:
     name: Selector-free docs and package
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       MIX_ENV: dev
 

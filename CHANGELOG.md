@@ -59,6 +59,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   probes move with it, and the exact 1.2.3 floor cell keeps proving the
   declared floor. Development-only dependencies dialyxir (1.4.8) and
   ex_doc (0.40.4) also refresh; neither ships in the package.
+- **Every port-1 lifecycle test in the start-link suite carries an
+  explicit 180-second ceiling, and the transport-options loop is split
+  into one test per option.** Each activation walks the code fingerprint
+  through the serialized Erlang code server, and a saturated runner
+  stretches a walk from ~150ms toward minutes: the six-case loop blew
+  the 60-second default (reproduced under local full-core saturation
+  with the timeout stuck in a serialized code-server call), and the
+  latest-compatible CI cell starved the accepted-path stop past its
+  120-second budget (run 35689545248). The split bounds a starved
+  runner to one named option — the same treatment the identity contract
+  took — and the ceilings bound waiting only: the start-gate outcomes
+  under test are scheduler-independent. The timeout kill was also the
+  source of the leaked logger error that tripped the structural
+  no-error gate.
+- **CI pins `ubuntu-24.04` instead of the floating `ubuntu-latest`
+  label** (release contract, checker expectation, and self-test pins
+  move together): GitHub migrates the label to Ubuntu 26 on October 19,
+  2026, and a contract that pins action SHAs and the postgres digest
+  should not ride a silently-migrating runner image. Today's
+  `ubuntu-latest` resolves to 24.04, so the pin changes nothing until
+  the migration would have.
 
 ## [1.2.0] - 2026-08-25
 
