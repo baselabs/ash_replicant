@@ -109,17 +109,10 @@ defmodule AshReplicant.DynamicDestinationBindingTest do
   end
 
   defp source_connection do
-    uri =
-      "ASH_REPLICANT_TEST_URL"
-      |> System.get_env("postgres://postgres@localhost:5599")
-      |> URI.parse()
-
-    [
-      hostname: uri.host,
-      port: uri.port || 5432,
-      username: uri.userinfo || "postgres",
-      database: "postgres"
-    ]
+    "ASH_REPLICANT_TEST_URL"
+    |> System.get_env("postgres://postgres@localhost:5599")
+    |> URI.parse()
+    |> DynamicDestination.connect_opts("postgres")
   end
 
   defp drop_source_slot! do

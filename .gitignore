@@ -3,6 +3,8 @@ _build/
 erl_crash.dump
 *.beam
 *.ez
+# The package tarball scripts/prepush.sh builds (mix hex.build)
+/ash_replicant-*.tar
 
 # Dependencies
 deps/

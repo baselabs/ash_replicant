@@ -57,13 +57,7 @@ defmodule AshReplicant.Test.DynamicDestination do
   def query!(sql, params \\ []) do
     uri = server_uri()
 
-    {:ok, conn} =
-      Postgrex.start_link(
-        hostname: uri.host,
-        port: uri.port || 5432,
-        username: uri.userinfo || "postgres",
-        database: @database
-      )
+    {:ok, conn} = Postgrex.start_link(connect_opts(uri, @database))
 
     try do
       Postgrex.query!(conn, sql, params)
@@ -75,13 +69,7 @@ defmodule AshReplicant.Test.DynamicDestination do
   defp bootstrap_database! do
     uri = server_uri()
 
-    {:ok, conn} =
-      Postgrex.start_link(
-        hostname: uri.host,
-        port: uri.port || 5432,
-        username: uri.userinfo || "postgres",
-        database: "postgres"
-      )
+    {:ok, conn} = Postgrex.start_link(connect_opts(uri, "postgres"))
 
     try do
       Postgrex.query!(conn, "CREATE DATABASE #{@database}", [])
@@ -92,6 +80,21 @@ defmodule AshReplicant.Test.DynamicDestination do
     after
       GenServer.stop(conn)
     end
+  end
+
+  @doc """
+  Postgrex options for `database` on the server `uri` names. The URL's userinfo is "user" or
+  "user:password" (percent-encoded); a password-authenticated server needs both halves, not the
+  whole userinfo as the username.
+  """
+  def connect_opts(uri, database) do
+    credentials =
+      case String.split(uri.userinfo || "postgres", ":", parts: 2) do
+        [user, password] -> [username: URI.decode(user), password: URI.decode(password)]
+        [user] -> [username: URI.decode(user)]
+      end
+
+    [hostname: uri.host, port: uri.port || 5432, database: database] ++ credentials
   end
 
   defp dyn_url do

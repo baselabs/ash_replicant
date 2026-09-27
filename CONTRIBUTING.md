@@ -132,7 +132,10 @@ affected tests in the same change, and record the Ash version contract delta in 
   Postgres. Integration tests run whenever `ASH_REPLICANT_TEST_URL` is set (it gates the
   suite); unit tests run without it. The URL supplies host/port/user, but the **database is
   always forced to a dedicated `ash_replicant_test`** (isolated from any sibling suite sharing
-  the instance — see `config/test.exs`). One-time provision, then run:
+  the instance — see `config/test.exs`). A shared server works too: the URL's role needs only
+  `LOGIN REPLICATION CREATEDB` (no superuser) and ownership of `ash_replicant_test`, and a
+  password in the URL is honored everywhere, including the dynamic-destination fixtures.
+  One-time provision, then run:
 
   ```bash
   export ASH_REPLICANT_TEST_URL="postgres://postgres@localhost:5599/postgres" # example — point at YOUR logical-replication Postgres (host/port are machine-local; the database name is forced anyway)
