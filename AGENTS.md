@@ -433,7 +433,9 @@ guard moved after its first effect, at a time in an isolated project copy must
 turn its named no-database focused test red) listed
 in `CONTRIBUTING.md`. `mix quality` covers only
 format, Credo, and Dialyzer. Changes are recorded under `[Unreleased]` in
-`CHANGELOG.md`.
+`CHANGELOG.md`. When a shared logical-replication server already runs, its
+`ASH_REPLICANT_TEST_URL` sits in the gitignored `.env`; load it with
+`set -a; . ./.env; set +a` before `scripts/prepush.sh` to add the live lane.
 
 ## Testing
 
