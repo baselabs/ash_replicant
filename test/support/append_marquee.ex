@@ -112,8 +112,12 @@ defmodule AshReplicant.Test.AppendMarquee do
            "SELECT confirmed_flush_lsn::text FROM pg_replication_slots WHERE slot_name = $1",
            [slot]
          ).rows do
-      [[lsn]] when is_binary(lsn) -> Replicant.lsn_from_string(lsn)
-      _other -> 0
+      [[lsn]] when is_binary(lsn) ->
+        {:ok, value} = Replicant.lsn_from_string(lsn)
+        value
+
+      _other ->
+        0
     end
   end
 

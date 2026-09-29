@@ -104,6 +104,32 @@ moves the Replicant release lock to 1.2.4 within the unchanged
 proving the declared floor), and refreshes the development-only dialyxir and
 ex_doc locks, which are not shipped in the package.
 
+## Amendment (2026-09-29): the Ash and Replicant floors move; the AshOnetime and Mint locks move
+
+Four facts, all observed on 2026-09-28/29, move the floors:
+
+- **Ash floor rises to `>= 3.33.11 and < 4.0.0-0`.** Every release in the
+  advisory's affected range (`>= 2.17.15` and `< 3.33.11`) carries
+  EEF-CVE-2026-93477; the exact-floors CI cell runs
+  `mix deps.audit` against the resolved floor set, and that cell is red
+  against the old 3.33.4 floor — the floor itself admitted a
+  vulnerable patch, so the floor must rise with the advisory database.
+- **Replicant floor and lock move to 1.3.0** (`>= 1.3.0 and < 2.0.0-0`).
+  Replicant 1.3.0 changes the public `lsn_from_string/1` return shape
+  (a deliberate minor-shipped contract change, its ADR-0008) and fixes
+  silent casting corruption in 1.2.x (`interval[]` truncation,
+  locale-dishonest `money`, truncated `timetz`); a mirror sink's value is
+  its fidelity, so the floor guarantees the corrected casting contract.
+  The sink does not call the changed function; the two
+  test fixtures unwrap the new tuple (under the tuple shape one prior
+  assertion passed vacuously — Elixir orders tuples above integers), and the
+  only `lib/` change is the doctor's runtime requirement literals.
+- **AshOnetime lock moves to 1.4.0** (requirement unchanged): the pre-peer
+  claim lock closes the in-flight-retry double-spend window on
+  external-effect message routes; no ash_replicant code depends on new API.
+- **Mint lock moves to 1.11.0** (optional requirement unchanged):
+  EEF-CVE-2026-91043 (HIGH), EEF-CVE-2026-92103, EEF-CVE-2026-94194.
+
 ## Evidence
 
 - Package contract: `mix.exs`, `.tool-versions`, and `mix.lock`.

@@ -451,7 +451,8 @@ defmodule AshReplicant.AppendLogTest do
       )
 
       assert %{rows: [[advanced]]} = AppendMarquee.advance_slot_to_current_wal!(@stream_slot)
-      assert Replicant.lsn_from_string(advanced) > checkpoint
+      assert {:ok, advanced_lsn} = Replicant.lsn_from_string(advanced)
+      assert advanced_lsn > checkpoint
 
       ref = make_ref()
       test_pid = self()

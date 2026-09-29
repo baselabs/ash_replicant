@@ -57,9 +57,9 @@ as a transitive dependency.
 The current 1.3.0 release baseline is built and tested with:
 
 - Elixir 1.20.3 on Erlang/OTP 29;
-- Ash `>= 3.33.4 and < 4.0.0-0` and AshPostgres 2.13.x;
-- Replicant `>= 1.2.3 and < 2.0.0-0` (current release-candidate lock 1.2.4); and
-- AshOnetime `>= 1.3.2 and < 2.0.0-0` (current lock 1.3.2); and
+- Ash `>= 3.33.11 and < 4.0.0-0` and AshPostgres 2.13.x;
+- Replicant `>= 1.3.0 and < 2.0.0-0` (current lock 1.3.0); and
+- AshOnetime `>= 1.3.2 and < 2.0.0-0` (current lock 1.4.0); and
 - AshCloak `>= 0.4.0 and < 1.0.0-0` (current lock 0.4.0; every release below
   0.4.0 carries CVE-2026-81319 and CVE-2026-81322 and is not admitted); and
 - PostgreSQL with `wal_level=logical` for the live integration gate: CI runs

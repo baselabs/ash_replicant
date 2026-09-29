@@ -54,8 +54,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   deps = Mix.Project.config() |> Keyword.fetch!(:deps)
 
   expected = %{
-    ash: ">= 3.33.4 and < 4.0.0-0",
-    replicant: ">= 1.2.3 and < 2.0.0-0",
+    ash: ">= 3.33.11 and < 4.0.0-0",
+    replicant: ">= 1.3.0 and < 2.0.0-0",
     ash_onetime: ">= 1.3.2 and < 2.0.0-0",
     ash_cloak: ">= 0.4.0 and < 1.0.0-0"
   }
@@ -151,24 +151,24 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     {"README.md", "### Supported foundation",
      [
        "- Elixir 1.20.3 on Erlang/OTP 29;",
-       "- Ash `>= 3.33.4 and < 4.0.0-0` and AshPostgres 2.13.x;",
-       "- Replicant `>= 1.2.3 and < 2.0.0-0` (current release-candidate lock 1.2.4)",
-       "- AshOnetime `>= 1.3.2 and < 2.0.0-0` (current lock 1.3.2)",
+       "- Ash `>= 3.33.11 and < 4.0.0-0` and AshPostgres 2.13.x;",
+       "- Replicant `>= 1.3.0 and < 2.0.0-0` (current lock 1.3.0)",
+       "- AshOnetime `>= 1.3.2 and < 2.0.0-0` (current lock 1.4.0)",
        "- AshCloak `>= 0.4.0 and < 1.0.0-0` (current lock 0.4.0"
      ]},
     {"CONTRIBUTING.md", "## Prerequisites",
      [
        "- **Elixir 1.20.3** and **Erlang/OTP 29**",
-       "- Ash `>= 3.33.4 and < 4.0.0-0`; selector-free development uses this public range",
-       "- Replicant `>= 1.2.3 and < 2.0.0-0` from Hex; the release-candidate lock is 1.2.4.",
+       "- Ash `>= 3.33.11 and < 4.0.0-0`; selector-free development uses this public range",
+       "- Replicant `>= 1.3.0 and < 2.0.0-0` from Hex; the lock is 1.3.0.",
        "- AshCloak `>= 0.4.0 and < 1.0.0-0` from Hex; the current lock is 0.4.0 (the"
      ]},
     {"AGENTS.md", "## Development workflow",
      [
        "The supported release foundation is Elixir 1.20.3 on Erlang/OTP 29 with Ash\n" <>
-         "`>= 3.33.4 and < 4.0.0-0` and Replicant\n" <>
-         "`>= 1.2.3 and < 2.0.0-0` (current release-candidate lock 1.2.4), plus\n" <>
-         "AshOnetime `>= 1.3.2 and < 2.0.0-0` (current lock 1.3.2) and AshCloak\n" <>
+         "`>= 3.33.11 and < 4.0.0-0` and Replicant\n" <>
+         "`>= 1.3.0 and < 2.0.0-0` (current lock 1.3.0), plus\n" <>
+         "AshOnetime `>= 1.3.2 and < 2.0.0-0` (current lock 1.4.0) and AshCloak\n" <>
          "`>= 0.4.0 and < 1.0.0-0` (current lock 0.4.0; releases below 0.4.0 carry\n" <>
          "CVE-2026-81319 and CVE-2026-81322 and are not admitted)."
      ]}
@@ -305,8 +305,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     puncsp rlm shy Tab ThickSpace thinsp ThinSpace VeryThinSpace ZeroWidthSpace zwj zwnj
   )
   @mix_contracts [
-    ~s(@ash_requirement ">= 3.33.4 and < 4.0.0-0"),
-    ~s(@replicant_requirement ">= 1.2.3 and < 2.0.0-0"),
+    ~s(@ash_requirement ">= 3.33.11 and < 4.0.0-0"),
+    ~s(@replicant_requirement ">= 1.3.0 and < 2.0.0-0"),
     ~s(@onetime_requirement ">= 1.3.2 and < 2.0.0-0"),
     ~s(elixir: "~> 1.20.3")
   ]
@@ -368,31 +368,32 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
   defp replicant_selector_probes do
     # The exact-floor CI cell re-resolves the lock to the selector's version
-    # before the contract runs, so a floor-selector run is modeled by a fixture
-    # lock pinned to the floor; the stale current lock under that selector, and
-    # a below-floor lock, are both rejected.
+    # before the contract runs, so a floor-selector run is modeled with the
+    # fixture lock already at the floor (the lock IS 1.3.0); a stale in-window
+    # lock under that selector, and a below-floor lock, are both rejected.
     prepare_fixture()
 
-    replace_once!(
-      "mix.lock",
-      ~s("replicant": {:hex, :replicant, "1.2.4"),
-      ~s("replicant": {:hex, :replicant, "1.2.3")
-    )
-
-    with_env("ASH_REPLICANT_REPLICANT_VERSION", "1.2.3", &assert_valid!/0)
-
-    prepare_fixture()
-    with_env("ASH_REPLICANT_REPLICANT_VERSION", "1.2.3", &assert_invalid!/0)
+    with_env("ASH_REPLICANT_REPLICANT_VERSION", "1.3.0", &assert_valid!/0)
 
     prepare_fixture()
 
     replace_once!(
       "mix.lock",
-      ~s("replicant": {:hex, :replicant, "1.2.4"),
-      ~s("replicant": {:hex, :replicant, "1.2.2")
+      ~s("replicant": {:hex, :replicant, "1.3.0"),
+      ~s("replicant": {:hex, :replicant, "1.3.1")
     )
 
-    with_env("ASH_REPLICANT_REPLICANT_VERSION", "1.2.3", &assert_invalid!/0)
+    with_env("ASH_REPLICANT_REPLICANT_VERSION", "1.3.0", &assert_invalid!/0)
+
+    prepare_fixture()
+
+    replace_once!(
+      "mix.lock",
+      ~s("replicant": {:hex, :replicant, "1.3.0"),
+      ~s("replicant": {:hex, :replicant, "1.2.4")
+    )
+
+    with_env("ASH_REPLICANT_REPLICANT_VERSION", "1.3.0", &assert_invalid!/0)
 
     prepare_fixture()
     with_env("ASH_REPLICANT_REPLICANT_VERSION", "latest", &assert_valid!/0)
@@ -769,8 +770,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     mutate_job!(
       "compatibility",
-      "            ash_requirement: \"== 3.33.4\"\n",
-      "            ash_requirement: \">= 3.33.4\"\n"
+      "            ash_requirement: \"== 3.33.11\"\n",
+      "            ash_requirement: \">= 3.33.11\"\n"
     )
 
     assert_invalid!()
@@ -779,8 +780,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     mutate_job!(
       "compatibility",
-      "            replicant_requirement: \"== 1.2.3\"\n",
-      "            replicant_requirement: \">= 1.2.3\"\n"
+      "            replicant_requirement: \"== 1.3.0\"\n",
+      "            replicant_requirement: \">= 1.3.0\"\n"
     )
 
     assert_invalid!()
@@ -1209,8 +1210,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       "mix.exs",
-      ~s(@ash_requirement ">= 3.33.4 and < 4.0.0-0"),
-      ~s(@ash_requirement ">= 3.33.4 and < 4.0.0-0"\n  @ash_requirement ">= 3.0.0 and < 4.0.0-0")
+      ~s(@ash_requirement ">= 3.33.11 and < 4.0.0-0"),
+      ~s(@ash_requirement ">= 3.33.11 and < 4.0.0-0"\n  @ash_requirement ">= 3.0.0 and < 4.0.0-0")
     )
 
     assert_invalid!()
@@ -1241,7 +1242,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     replace_once!(
       "mix.exs",
       "{:ash, ash_requirement()}",
-      "{:ash, String.replace(ash_requirement(), \">= 3.33.4\", \">= 3.0.0\")}"
+      "{:ash, String.replace(ash_requirement(), \">= 3.33.11\", \">= 3.0.0\")}"
     )
 
     assert_invalid!()
@@ -1250,7 +1251,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       "mix.exs",
-      ~s(@replicant_requirement ">= 1.2.3 and < 2.0.0-0"),
+      ~s(@replicant_requirement ">= 1.3.0 and < 2.0.0-0"),
       ~s(@replicant_requirement ">= 0.3.0 and < 2.0.0-0")
     )
 
@@ -1300,7 +1301,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       "mix.lock",
-      ~s("replicant": {:hex, :replicant, "1.2.4"),
+      ~s("replicant": {:hex, :replicant, "1.3.0"),
       ~s("replicant": {:hex, :replicant, "0.3.1")
     )
 
@@ -1310,7 +1311,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       "mix.lock",
-      ~s("replicant": {:hex, :replicant, "1.2.4"),
+      ~s("replicant": {:hex, :replicant, "1.3.0"),
       ~s("replicant": {:hex, :replicant, "1.1.0")
     )
 

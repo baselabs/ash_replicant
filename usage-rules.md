@@ -875,7 +875,7 @@ AshReplicant.start_link(
    attempt is armed or active runs the normal host action, then stamps its new
    fingerprint and the same membership marker before the stream watermark
    advances. Deletes remove or close normally. The Replicant collision
-   window makes the later stream image win (the fetched 1.2.3-or-later
+   window makes the later stream image win (the fetched 1.3.0-or-later
    contract bounds the window; see below).
 4. **Complete.** Replicant sends one empty `handle_snapshot/2` callback with
    `backfill_complete?: true`. Completion retires unseen open rows, stores the
@@ -883,7 +883,7 @@ AshReplicant.start_link(
    the stream watermark. Redelivery of that token returns before any scan,
    including after a later stream write or admitted-contract deployment.
 
-The fetched Replicant contract (1.2.3 or later) bounds keyed and keyless contention at
+The fetched Replicant contract (1.3.0 or later) bounds keyed and keyless contention at
 three discarded table attempts, distinguishes reconnect from contention, and
 applies pending-chunk backpressure. AshReplicant pins those behaviors with
 black-box tests rather than checking only for module/function presence.

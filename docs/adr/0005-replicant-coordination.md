@@ -34,7 +34,9 @@ idempotency, and provenance contracts landed.
 
 - The public dependency is `>= 1.2.3 and < 2.0.0-0`. CI resolves exact 1.2.3 as
   the compatibility floor and the selector-free current lock, presently 1.2.3,
-  as separate mandatory cells.
+  as separate mandatory cells. *(Amended 2026-09-29: the floor and lock moved to
+  1.3.0 — Replicant 1.3.0's `lsn_from_string/1` contract change and casting
+  fixes; see ADR-0002's 2026-09-29 amendment.)*
 - Production activation requires an operator-pinned PostgreSQL system identifier
   and database. The generated sink compares those values plus the configured slot
   and normalized publication against `Replicant.SessionIdentity` from the actual

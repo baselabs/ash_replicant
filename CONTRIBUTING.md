@@ -5,8 +5,8 @@ Thank you for your interest in contributing to AshReplicant!
 ## Prerequisites
 
 - **Elixir 1.20.3** and **Erlang/OTP 29** (run `asdf install` from the repository root)
-- Ash `>= 3.33.4 and < 4.0.0-0`; selector-free development uses this public range
-- Replicant `>= 1.2.3 and < 2.0.0-0` from Hex; the release-candidate lock is 1.2.4.
+- Ash `>= 3.33.11 and < 4.0.0-0`; selector-free development uses this public range
+- Replicant `>= 1.3.0 and < 2.0.0-0` from Hex; the lock is 1.3.0.
   No sibling checkout is required to build or test. A local checkout at
   `../replicant` is only needed for cross-repo design work and is never release evidence.
 - AshCloak `>= 0.4.0 and < 1.0.0-0` from Hex; the current lock is 0.4.0 (the
@@ -93,7 +93,7 @@ SIGINT/SIGTERM by stopping the active child process group before scratch cleanup
 
 The frozen host action contract is pinned by `test/ash_replicant/action_contract_freeze_test.exs`
 (the D8 table, asserted against live reflection) and the suppression/admission suites. Ash is a
-floor-pinned dependency (`>= 3.33.4 and < 4.0.0-0`); when bumping the lock, run the old-contract
+floor-pinned dependency (`>= 3.33.11 and < 4.0.0-0`); when bumping the lock, run the old-contract
 grep BEFORE trusting green
 tests — a behavior change inside Ash can silently invalidate a pinned fact while the pin still
 passes against the NEW behavior:
@@ -160,17 +160,17 @@ affected tests in the same change, and record the Ash version contract delta in 
   These live-suite and migration-drift commands are mandatory parts of the
   pre-PR release battery, in addition to the checks in step 3.
 
-  CI also resolves the exact Replicant 1.2.3 floor independently of the current
-  lock (1.2.4). To reproduce that selector in an isolated instrument worktree:
+  CI also resolves the exact Replicant 1.3.0 floor independently of the current
+  lock (1.3.0). To reproduce that selector in an isolated instrument worktree:
 
   ```bash
-  ASH_REPLICANT_REPLICANT_VERSION=1.2.3 \
+  ASH_REPLICANT_REPLICANT_VERSION=1.3.0 \
     scripts/with-release-runtime.sh mix deps.unlock replicant
-  ASH_REPLICANT_REPLICANT_VERSION=1.2.3 \
+  ASH_REPLICANT_REPLICANT_VERSION=1.3.0 \
     scripts/with-release-runtime.sh mix deps.get
-  ASH_REPLICANT_REPLICANT_VERSION=1.2.3 \
+  ASH_REPLICANT_REPLICANT_VERSION=1.3.0 \
     scripts/with-release-runtime.sh \
-      scripts/assert-dependency-version.sh replicant '== 1.2.3'
+      scripts/assert-dependency-version.sh replicant '== 1.3.0'
   ```
 
   The full release battery is intentionally not represented by `mix quality`;

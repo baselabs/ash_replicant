@@ -54,8 +54,8 @@ defmodule AshReplicant.Doctor do
   # Duplicated from `mix.exs` because `mix.exs` is not loadable from a release.
   # `AshReplicant.DoctorTest` asserts the literals are equal, so changing one
   # without the other goes red.
-  @replicant_requirement ">= 1.2.3 and < 2.0.0-0"
-  @ash_requirement ">= 3.33.4 and < 4.0.0-0"
+  @replicant_requirement ">= 1.3.0 and < 2.0.0-0"
+  @ash_requirement ">= 3.33.11 and < 4.0.0-0"
 
   # The PostgreSQL 15 through 18 support matrix as `server_version_num`.
   @source_release_floor 150_000

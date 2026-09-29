@@ -40,8 +40,8 @@ if scripts/assert-exunit-output.sh "$fixture_dir/intentional-exclusion.txt" >/de
   exit 1
 fi
 
-scripts/assert-dependency-version.sh ash '>= 3.33.4 and < 4.0.0-0' >/dev/null
-scripts/assert-dependency-version.sh replicant '>= 1.2.3 and < 2.0.0-0' >/dev/null
+scripts/assert-dependency-version.sh ash '>= 3.33.11 and < 4.0.0-0' >/dev/null
+scripts/assert-dependency-version.sh replicant '>= 1.3.0 and < 2.0.0-0' >/dev/null
 scripts/assert-dependency-version.sh ash_onetime '>= 1.3.2 and < 2.0.0-0' >/dev/null
 
 if scripts/assert-dependency-version.sh ash '== 0.0.0' >/dev/null 2>&1; then
@@ -113,7 +113,7 @@ if [[ "$ash4_exit" -eq 0 ]] || [[ "$ash4_output" != *"must be a semantic version
   exit 1
 fi
 
-public_requirement=">= 3.33.4 and < 4.0.0-0"
+public_requirement=">= 3.33.11 and < 4.0.0-0"
 
 for selector in unset empty latest; do
   case "$selector" in
@@ -137,10 +137,10 @@ for selector in unset empty latest; do
   fi
 done
 
-floor_requirement="$(ASH_REPLICANT_ASH_VERSION=3.33.4 mix run --no-start --no-compile --no-deps-check -e '
+floor_requirement="$(ASH_REPLICANT_ASH_VERSION=3.33.11 mix run --no-start --no-compile --no-deps-check -e '
   Mix.Project.config() |> Keyword.fetch!(:deps) |> List.keyfind!(:ash, 0) |> elem(1) |> IO.write()')"
 
-if [[ "$floor_requirement" != "== 3.33.4" ]]; then
+if [[ "$floor_requirement" != "== 3.33.11" ]]; then
   echo "exact Ash floor selector did not produce an exact requirement" >&2
   exit 1
 fi
@@ -175,7 +175,7 @@ if [[ "$replicant_old_exit" -eq 0 ]] || [[ "$replicant_old_output" != *"must be 
   exit 1
 fi
 
-replicant_public_requirement=">= 1.2.3 and < 2.0.0-0"
+replicant_public_requirement=">= 1.3.0 and < 2.0.0-0"
 
 for selector in unset empty latest; do
   case "$selector" in
@@ -199,10 +199,10 @@ for selector in unset empty latest; do
   fi
 done
 
-replicant_floor_requirement="$(ASH_REPLICANT_REPLICANT_VERSION=1.2.3 mix run --no-start --no-compile --no-deps-check -e '
+replicant_floor_requirement="$(ASH_REPLICANT_REPLICANT_VERSION=1.3.0 mix run --no-start --no-compile --no-deps-check -e '
   Mix.Project.config() |> Keyword.fetch!(:deps) |> List.keyfind!(:replicant, 0) |> elem(1) |> IO.write()')"
 
-if [[ "$replicant_floor_requirement" != "== 1.2.3" ]]; then
+if [[ "$replicant_floor_requirement" != "== 1.3.0" ]]; then
   echo "exact Replicant floor selector did not produce an exact requirement" >&2
   exit 1
 fi

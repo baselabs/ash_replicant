@@ -9,11 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **The Ash lock moves to 3.33.11** (from 3.33.9): 3.33.11 lands the
-  fix for EEF-CVE-2026-93477, so the lock no longer resolves to a vulnerable
-  patch. The public requirement is unchanged (`>= 3.33.4 and < 4.0.0-0`);
-  the requirement alone does not exclude the vulnerable patches, so consumers
-  holding an in-range lock below 3.33.11 should move their lock too.
+- **The Ash requirement floor rises to `>= 3.33.11 and < 4.0.0-0`** (lock
+  3.33.11): every release in the advisory's affected range (`>= 2.17.15` and
+  `< 3.33.11`) carries EEF-CVE-2026-93477, and the exact-floors CI cell's
+  dependency audit is red against the old 3.33.4 floor — a consumer must not
+  be able to resolve a vulnerable patch.
+- **The Replicant requirement floor and lock move to 1.3.0**
+  (`>= 1.3.0 and < 2.0.0-0`). Two reasons the floor moves with the lock:
+  Replicant 1.3.0 changes the public `Replicant.lsn_from_string/1` to return
+  `{:ok, lsn} | {:error, :invalid_lsn}` (a deliberate minor-shipped contract
+  change recorded in its ADR-0008), and it fixes silent data corruption in
+  the 1.2.x casting contract — `interval[]` columns were truncated to their
+  leading integer, `money` mis-decoded under a non-C `lc_monetary` locale,
+  and `timetz` lost its fractional seconds and offset — while
+  multidimensional arrays of most types halted `:decode_failure` on ordinary
+  data. The floor guarantees every consumer the corrected casting contract.
+  No sink-implementation changes: the sink does not call the changed
+  functions, and the halt-taxonomy refinements flow through the value-free
+  boundary unchanged (a backfill connection fault is now `:snapshot_failed`
+  instead of consuming contention attempts; the assembler's formerly
+  crashing no-window reply is a distinct internal `:snapshot_window_missing`
+  that the reader's boundary delivers as `:snapshot_failed`). The only
+  `lib/` change is the doctor's runtime requirement literals, which mirror
+  the new floors. The two test fixtures that call `lsn_from_string/1` now
+  unwrap the tuple — under the tuple shape one assertion passed vacuously
+  (Elixir orders tuples above integers, so `{:ok, lsn} > checkpoint` is
+  always true) and now asserts the decoded LSN.
+- **The AshOnetime lock moves to 1.4.0** (requirement unchanged at
+  `>= 1.3.2 and < 2.0.0-0`): 1.4.0 adds the pre-peer claim lock for
+  external-effect actions (its ADR-0010) — two executes under one key can no
+  longer overlap at the peer, closing the in-flight-retry double-spend
+  window on `message_routes` external-effect routes; a same-key retry may
+  surface `:request_in_progress` within the configured wait. The sink's
+  watermark still advances only after finalized/replayed success; no
+  ash_replicant code changes.
 - **The optional Mint lock moves to 1.11.0** (from 1.10.1): 1.10.1 carries
   EEF-CVE-2026-91043 (HIGH — HPACK-indexed cookie fields bypass
   `max_header_list_size`), EEF-CVE-2026-92103, and EEF-CVE-2026-94194
