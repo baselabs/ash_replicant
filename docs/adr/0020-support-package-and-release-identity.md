@@ -6,6 +6,18 @@ Date: 2026-08-19
 
 Status: Proposed for the 1.0.0 release line (roadmap D1, D6, D8-D9, and E1-E2).
 
+## Amendment (2026-09-28)
+
+Decision 1's lane statement is amended by the shipped posture: **the release
+lanes are PostgreSQL 16–18.** PG15 was dropped before any 1.x release (commit
+`bac56f5`; the CI matrix runs pinned PG16/17/18 cells — CHANGELOG `[1.3.0]`
+records the matrix note), so "PostgreSQL 15-18 are required release lanes" and
+the PG15 EOL-policy clause no longer describe the product. The PG19
+non-blocking-canary language is unchanged. Status remains **Proposed**:
+Decision 5's canonical per-release SBOM/license-report/attestation artifact is
+still produced per-release by hand (receipts for 1.0.0–1.2.0; the 1.3.0
+receipt is missing) rather than wired into the release pipeline.
+
 ## Context
 
 The current package is 0.4.0, its Elixir requirement is patch-minor narrow, CI

@@ -1,9 +1,11 @@
 # ADR-0022: Recovery horizons and typed telemetry proof
 
 Date: 2026-08-23
-Status: Accepted (O03, issue #13)
-Supersedes: none (extends ADR-0015 message claims, ADR-0019 status vocabulary,
-and the D5/U3 typed telemetry surface)
+
+## Status
+
+Status: Accepted (O03, issue #13). Supersedes: none (extends ADR-0015 message
+claims, ADR-0019 status vocabulary, and the D5/U3 typed telemetry surface).
 
 ## Context
 

@@ -7,8 +7,8 @@
    tenant-blind layering, effect-once watermark), the target sink-adapter surface, and
    the dev/test workflow. **Binding.**
 2. **`docs/CHARTER.md`** — the project charter: mission, layering, scope, the decisions,
-   and the resolved effect-once model. **Tracked** (only `/docs/superpowers/` lifecycle
-   artifacts are gitignored / local-only).
+   and the resolved effect-once model. **Tracked** in full; repo-local tool state lives
+   under `.kimosabe/` and `graphify-out/` (gitignored).
 
 ## One-line orientation
 

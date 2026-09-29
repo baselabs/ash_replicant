@@ -9,9 +9,10 @@
 # Live lane: when ASH_REPLICANT_TEST_URL points at a logical-replication
 # Postgres (see README "Supported foundation"), also runs ecto
 # create/migrate, the migration drift gate, and the FULL live suite —
-# exactly the compatibility job's steps. Set
-# ASH_REPLICANT_TEST_URL=postgres://postgres@localhost:5599/postgres for
-# the conventional local instance.
+# exactly the compatibility job's steps. Point it at your own
+# machine-local instance, e.g.
+# ASH_REPLICANT_TEST_URL=postgres://postgres@localhost:5599/postgres
+# (host/port are machine-local; the test database name is forced anyway).
 #
 # The dependency selectors (ASH_REPLICANT_ASH_VERSION,
 # ASH_REPLICANT_REPLICANT_VERSION, ASH_REPLICANT_ONETIME_VERSION) pass

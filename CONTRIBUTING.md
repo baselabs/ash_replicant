@@ -14,7 +14,8 @@ Thank you for your interest in contributing to AshReplicant!
   vulnerable and the requirement refuses to resolve to one).
 - **PostgreSQL** with `wal_level=logical` for the live integration gate; the
   integration suite runs against a live Postgres with a logical replication slot
-  and publication. CI pins PostgreSQL 16; the local gate runs whatever instance
+  and publication. CI runs pinned PostgreSQL 16, 17, and 18 cells; the local gate
+  runs whatever instance
   `ASH_REPLICANT_TEST_URL` points at (derive the live version with
   `SELECT version();` — never assume it from this doc), and the support
   matrix is PG16–18
@@ -92,7 +93,8 @@ SIGINT/SIGTERM by stopping the active child process group before scratch cleanup
 
 The frozen host action contract is pinned by `test/ash_replicant/action_contract_freeze_test.exs`
 (the D8 table, asserted against live reflection) and the suppression/admission suites. Ash is a
-pinned dependency (`~> 3.31`); when bumping it, run the old-contract grep BEFORE trusting green
+floor-pinned dependency (`>= 3.33.4 and < 4.0.0-0`); when bumping the lock, run the old-contract
+grep BEFORE trusting green
 tests — a behavior change inside Ash can silently invalidate a pinned fact while the pin still
 passes against the NEW behavior:
 
@@ -159,7 +161,7 @@ affected tests in the same change, and record the Ash version contract delta in 
   pre-PR release battery, in addition to the checks in step 3.
 
   CI also resolves the exact Replicant 1.2.3 floor independently of the current
-  1.2.3 lock. To reproduce that selector in an isolated instrument worktree:
+  lock (1.2.4). To reproduce that selector in an isolated instrument worktree:
 
   ```bash
   ASH_REPLICANT_REPLICANT_VERSION=1.2.3 \

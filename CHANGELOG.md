@@ -5,6 +5,63 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **The Ash lock moves to 3.33.11** (from 3.33.9): 3.33.11 lands the
+  fix for EEF-CVE-2026-93477, so the lock no longer resolves to a vulnerable
+  patch. The public requirement is unchanged (`>= 3.33.4 and < 4.0.0-0`);
+  the requirement alone does not exclude the vulnerable patches, so consumers
+  holding an in-range lock below 3.33.11 should move their lock too.
+- **The optional Mint lock moves to 1.11.0** (from 1.10.1): 1.10.1 carries
+  EEF-CVE-2026-91043 (HIGH — HPACK-indexed cookie fields bypass
+  `max_header_list_size`), EEF-CVE-2026-92103, and EEF-CVE-2026-94194
+  (response smuggling through intermediaries). The optional requirement
+  (`~> 1.10 and >= 1.10.1`, `runtime: false`) already admits 1.11.0, so this
+  is a lock-only move surfaced by `mix deps.audit` on 2026-09-28.
+- **CI skips docs-only pushes** (`paths-ignore` over markdown, `docs/**`, and
+  license paths). Every push that touches code, config, or the workflow file
+  still runs the full battery.
+
+### Fixed
+
+- **A password in `ASH_REPLICANT_TEST_URL` is honored by the
+  dynamic-destination test fixtures** (the URL userinfo password is now split
+  correctly), so a shared, password-authenticated logical-replication server
+  works for the whole live lane. `CONTRIBUTING.md` documents the shared-server
+  role requirements (`LOGIN REPLICATION CREATEDB`, no superuser) and
+  `AGENTS.md` documents loading the gitignored `.env`
+  (`set -a; . ./.env; set +a`) before `scripts/prepush.sh`.
+- **Documentation reconciliation** (findings of the 2026-09-28 alignment
+  audit, all verified against live code): README's trailing "Append-log
+  delivery is not exported yet" was stale — it is exported (`sink_kind/0` +
+  `handle_slot_origin/2`, ADR-0018), and README's own append-log section
+  already documented it; README and CONTRIBUTING said "CI pins PostgreSQL 16"
+  while CI runs pinned 16/17/18 cells; CONTRIBUTING's Ash-bump note said
+  `~> 3.31` (the requirement is `>= 3.33.4 and < 4.0.0-0`) and its Replicant
+  selector note said "the current 1.2.3 lock" (1.2.4); usage-rules'
+  operator-label enumeration omitted `:append` (nine labels) and its
+  collision-window prose pinned "Replicant 1.2.2" (floor 1.2.3); usage-rules'
+  "See also" no longer ships a `../replicant` sibling path to consumers;
+  `AGENTS.md`'s boundary-body count said nine (ten since `handle_slot_origin/2`)
+  and carried the same label omission.
+- **The repository's repo-local tool state lives under `.kimosabe/` and
+  `graphify-out/` (gitignored).** The repository no longer references
+  `/docs/superpowers/` or `.forge/` as conventions (nor carries their
+  `.gitignore` entries); frozen July-2026 implementation handoffs keep their
+  historical mentions as records, and the release-contract package guards
+  keep refusing a `.forge` directory inside a built package.
+- **ADR reconciliation**: ADR-0021 promoted to Accepted (its bounds shipped
+  in 1.0.0); ADR-0020's PostgreSQL-lane decision amended to the shipped
+  PG16–18 matrix (PG15 dropped, no PG15 release shipped); ADR-0022's status
+  normalized to the corpus section shape; ADR-0024 (the install generator's
+  host-owned, never-guesses contract) and ADR-0025 (the doctor's read-only
+  three-leg surface) record the shipped decisions that had no ADR home; the
+  ADR index follows.
+- **`AGENTS.md` is condensed** to the root-contract line bound with every
+  critical rule's normative content preserved.
+
 ## [1.3.0] - 2026-09-22
 
 ### Changed
@@ -1327,9 +1384,12 @@ sensitive-column verification.
 
 - **Documentation** — `CLAUDE.md`, `AGENTS.md`, `README.md`, `CHANGELOG.md`,
   `usage-rules.md`, `CONTRIBUTING.md`, `LICENSE`, `NOTICE`; tracked charter at
-  `docs/CHARTER.md` (only `/docs/superpowers/` lifecycle artifacts are local-only).
+  `docs/CHARTER.md`.
 
-[Unreleased]: https://github.com/baselabs/ash_replicant/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/baselabs/ash_replicant/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/baselabs/ash_replicant/tree/v1.3.0
+[1.2.0]: https://github.com/baselabs/ash_replicant/tree/v1.2.0
+[1.1.0]: https://github.com/baselabs/ash_replicant/tree/v1.1.0
 [1.0.0]: https://github.com/baselabs/ash_replicant/tree/v1.0.0
 [0.4.0]: https://github.com/baselabs/ash_replicant/tree/v0.4.0
 [0.3.3]: https://github.com/baselabs/ash_replicant/commit/3b61d3a9ae553fb96ff26e9fcf581416af723843

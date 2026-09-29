@@ -21,7 +21,7 @@ not re-gated. It executes through the
 > first. A fuller project charter (architecture, scope, and the resolved effect-once
 > model) is **tracked** at
 > [`docs/CHARTER.md`](https://github.com/baselabs/ash_replicant/blob/main/docs/CHARTER.md).
-> Only the `/docs/superpowers/` lifecycle artifacts (specs, plans, handoffs) are local-only.
+> Repo-local tool state lives under `.kimosabe/` and `graphify-out/` (gitignored).
 
 ## Layering
 
@@ -62,10 +62,11 @@ The current 1.3.0 release baseline is built and tested with:
 - AshOnetime `>= 1.3.2 and < 2.0.0-0` (current lock 1.3.2); and
 - AshCloak `>= 0.4.0 and < 1.0.0-0` (current lock 0.4.0; every release below
   0.4.0 carries CVE-2026-81319 and CVE-2026-81322 and is not admitted); and
-- PostgreSQL with `wal_level=logical` for the live integration gate: CI pins
-  PostgreSQL 16, the local gate runs whatever instance `ASH_REPLICANT_TEST_URL`
-  points at (derive the live version with `SELECT version();` — never assume it
-  from this doc), and the support matrix is PG16–18.
+- PostgreSQL with `wal_level=logical` for the live integration gate: CI runs
+  pinned PostgreSQL 16, 17, and 18 cells, the local gate runs whatever instance
+  `ASH_REPLICANT_TEST_URL` points at (derive the live version with
+  `SELECT version();` — never assume it from this doc), and the support matrix
+  is PG16–18.
 
 The Ash lower bound excludes known-vulnerable patches, and the upper bound
 excludes Ash 4 prereleases. The AshCloak lower bound is a security floor:
@@ -1016,10 +1017,11 @@ rejected for WAL replay. Independent commits and external effects are rejected t
 A Replicant v1 retry and incremental resume are physically effect-once for resources
 declaring `snapshot_provenance true`: fingerprints suppress repeated host actions,
 and incremental progress commits atomically with each bounded chunk. Message (C1),
-sink-owned batch delivery (C2), and incremental progress (C3) are live —
-`batch_delivery` opts a pipeline into `handle_batch/1`, one destination transaction
-and one watermark write per flushed batch (ADR-0016). Append-log delivery is not
-exported yet and must compose with this same boundary. See
+sink-owned batch delivery (C2), incremental progress (C3), and append-log delivery
+(C4) are live — `batch_delivery` opts a pipeline into `handle_batch/1`, one
+destination transaction and one watermark write per flushed batch (ADR-0016), and
+append-log delivery exports `sink_kind/0` plus `handle_slot_origin/2` through the
+same boundary (ADR-0018). See
 [ADR-0006](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0006-destination-transaction-boundary.md).
 
 ## Multitenancy & Classification

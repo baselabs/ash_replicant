@@ -503,7 +503,7 @@ transactional, fail closed on store failure, accept a private non-null string
 supplies carries a per-invocation label (`invocation:`) that the derivation
 REQUIRES; manual minters (tests, replay probes) must pass the label the sink
 mints at that effect site (`:close_prior | :close_current | :open |
-:destroy_prior | :upsert | :message | :mark_seen | :retire_unseen`). AshOnetime one-time nonces
+:destroy_prior | :upsert | :message | :mark_seen | :retire_unseen | :append`). AshOnetime one-time nonces
 are rejected for WAL replay. Independent commits, external effects, opaque stores,
 and incomplete replay identities are rejected.
 
@@ -874,15 +874,16 @@ AshReplicant.start_link(
 3. **Concurrent stream.** Every streamed insert/update committed while the
    attempt is armed or active runs the normal host action, then stamps its new
    fingerprint and the same membership marker before the stream watermark
-   advances. Deletes remove or close normally. Replicant 1.2.2's collision
-   window makes the later stream image win.
+   advances. Deletes remove or close normally. The Replicant collision
+   window makes the later stream image win (the fetched 1.2.3-or-later
+   contract bounds the window; see below).
 4. **Complete.** Replicant sends one empty `handle_snapshot/2` callback with
    `backfill_complete?: true`. Completion retires unseen open rows, stores the
    exact complete token and matching progress/completion hashes, and does not alter
    the stream watermark. Redelivery of that token returns before any scan,
    including after a later stream write or admitted-contract deployment.
 
-The fetched Replicant 1.2.2 contract bounds keyed and keyless contention at
+The fetched Replicant contract (1.2.3 or later) bounds keyed and keyless contention at
 three discarded table attempts, distinguishes reconnect from contention, and
 applies pending-chunk backpressure. AshReplicant pins those behaviors with
 black-box tests rather than checking only for module/function presence.
@@ -1222,5 +1223,6 @@ reason they are separate libraries.
 ## See also
 
 - **`AGENTS.md`** — the working guide with critical rules (binding).
-- **`replicant` usage-rules** (`../replicant/usage-rules.md`) — CDC framework contract.
+- **`replicant` usage-rules** — the CDC framework contract, published with the
+  `replicant` Hex package (no sibling checkout is required).
 - **`CHANGELOG.md`** — version history.

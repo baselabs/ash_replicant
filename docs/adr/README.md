@@ -2,8 +2,8 @@
 
 Product-shaping decisions for `ash_replicant`, one file per decision (Nygard format:
 Status / Context / Decision / Consequences). Tracked (not gitignored) — a bare clone, CI,
-or a future maintainer needs them; the deliberation stays in the local `.forge/specs/`
-design notes, the DECISION lands here.
+or a future maintainer needs them; the deliberation stays in untracked local design
+notes, the DECISION lands here.
 
 **Authoring rule:** ADRs are authored **on-touch**, by the slice that owns or changes the
 surface — never bulk-authored from testimony. The charter (`docs/CHARTER.md`) still holds
@@ -33,9 +33,11 @@ the narrative "why"; an ADR is the tracked, per-decision record with code eviden
 | [0018](0018-append-log-delivery.md) | Accepted: append-log is an exclusive host-owned sink with explicit origin-floor and event identity | C4 |
 | [0019](0019-continuous-assurance-and-readiness.md) | Accepted: PipelineOwner owns continuous assurance and coherent readiness; remaining destination/migration census extensions retain their own acceptance | C5 / D2-D4 |
 | [0020](0020-support-package-and-release-identity.md) | Proposed: support, package, provenance, and consumer claims bind to one fetched release artifact | D1 / D6 / D8-D9 / E1-E2 |
-| [0021](0021-measured-performance-bounds.md) | Proposed: measured resource and performance budgets are release correctness gates | D5 |
+| [0021](0021-measured-performance-bounds.md) | Accepted: measured resource and performance budgets are release correctness gates (shipped in 1.0.0; promoted 2026-09-28) | D5 |
 | [0022](0022-recovery-horizon-and-typed-telemetry.md) | Recovery horizons alert before recovery becomes impossible: a declared `recovery_horizon` floors claim retention, an authenticated digest-key witness bounds key retirement, and three alert legs (census push, activation resume gate, doctor pull) cover running and halted phases; telemetry's typed gates are mutation-proven per key | D3 / O03 |
 | [0023](0023-public-api-and-compatibility.md) | The public API is a frozen module inventory (test-pinned); everything else is internal-by-convention; SemVer with no silent removals — a deprecation keeps working for at least one minor cycle | D8 / PKG01 |
+| [0024](0024-install-generator-host-owned-contract.md) | The install generator writes host-owned code and never guesses: four modules, no connection/publication/key material, a bootable no-op, write-nothing refusals as unit-tested planner decisions, and the README manual block test-tied to the installer's output | I01 |
+| [0025](0025-doctor-read-only-diagnosis-surface.md) | The diagnosis surface is read-only, an adapter, and never guesses: three independent no-writes legs, adapters (never copies) over the activation rules, one canonical check with a closed reason vocabulary, and `:skipped` — never `:pass` — for the unjudgeable | O01 |
 
 ## On-touch gap list
 
@@ -53,4 +55,8 @@ tenant-blind layering / pipeline ownership row is governed by
 [ADR-0019](0019-continuous-assurance-and-readiness.md) is accepted and records the
 implemented continuous census and status/tombstone child; its remaining destination/migration
 census extensions stay with their later roadmap children. This index follows each record's
-status and does not promote its remaining acceptance. ADR-0020 and ADR-0021 remain proposed.
+status and does not promote its remaining acceptance. ADR-0021 was promoted to Accepted on
+2026-09-28: its bounds, CI sentinels, and baseline receipts shipped in 1.0.0. ADR-0020
+remains Proposed — its Decision 1 PostgreSQL lanes are amended (2026-09-28) to the shipped
+PG16–18 matrix, and its Decision 5 per-release SBOM/license-report/attestation artifact is
+still produced by hand rather than wired into the release pipeline.

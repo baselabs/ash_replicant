@@ -4,7 +4,11 @@ Date: 2026-08-19
 
 ## Status
 
-Status: Proposed for the 1.0.0 release line (roadmap D5).
+Status: Accepted (promoted 2026-09-28 on reconciliation with the shipped
+artifact — roadmap D5 / B01 / issue #16). The bounds shipped in 1.0.0:
+`test/integration/performance_bounds_test.exs`, the CI "ADR-0021 sentinel
+bounds" steps, and `bench/BASELINES.md`. Before that release this record was
+Proposed for the 1.0.0 release line.
 
 ## Context
 

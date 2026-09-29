@@ -1,6 +1,6 @@
 # AshReplicant — Project Charter
 
-**Status: realized, latest published package 1.3.0.**
+**Status:** current — realized, latest published package 1.3.0 · **Kind:** charter (what & why; the binding *how* is `AGENTS.md`) · **Updated:** 2026-09-28 · **Governed by:** `AGENTS.md` critical rules + `docs/adr/` decisions · **Review when:** a release ships, a Critical Rule changes, or an ADR is added
 The original state-mirror and SCD2 capabilities are shipped. The canonical
 production-readiness scope and dependency order live in `docs/ROADMAP.md`.
 Product-shaping decisions are tracked in `docs/adr/`; historical lifecycle
@@ -129,7 +129,7 @@ classification. Those live here in `ash_replicant`. The split is enforced by
 separate repos and separate test fixtures. Never import `ash_replicant` in
 `replicant`.
 
-**Proof:** Arch in `../replicant/AGENTS.md` + separate usage tests.
+**Proof:** Arch in the `replicant` package's own docs + separate usage tests.
 
 ### [D5] Value-free at the boundary: no row value in error/log/telemetry
 
@@ -148,7 +148,10 @@ verifiers, tenant reassignment, a dedicated integration database, CI, and option
 checkpoint policy authorization followed through 0.4.0. The 2026-08-13 hardening
 foundation moved the repository to Elixir 1.20.3/OTP 29, Ash 3.31.3,
 AshPostgres 2.11, Postgrex 0.22.4, ymlr 5.1.6, and AshOnetime 0.6.0 with clean
-dependency audits and non-vacuous release gates.
+dependency audits and non-vacuous release gates. The 1.x line — 1.0.0
+(2026-08-24), 1.1.0 and 1.2.0 (2026-08-25), 1.3.0 (2026-09-22) — shipped the
+roadmap program; per-release entries live in `CHANGELOG.md` and the decisions
+in `docs/adr/`.
 
 Release history has one forensic caveat: Hex package 0.3.3 is real and its
 packaged bytes match commit `3b61d3a9ae553fb96ff26e9fcf581416af723843`,
@@ -172,8 +175,11 @@ This verifies the declaration, not the truth of an arbitrary Elixir body, so raw
 SQL, another Repo, asynchronous work, and external effects remain forbidden behind
 custom providers.
 
-AshOnetime 0.6.0 is now used for WAL-safe local auxiliary idempotency as well as
-being the governed mechanism for future C1 message actions. It does not replace
+AshOnetime (0.6.0 at the time of this section; the current floor and lock live
+in `AGENTS.md` and `CHANGELOG.md`) was adopted for WAL-safe local auxiliary
+idempotency and is the governed mechanism for the C1 message actions, which
+have since shipped ([ADR-0015](adr/0015-logical-message-effects.md)). It does
+not replace
 the transaction checkpoint. The accepted local profile is idempotency with the
 action, fail-closed PostgreSQL storage in the admitted Repo, no external effect,
 and the exact source-system/database/slot/commit-LSN/ordinal/participant identity.
@@ -188,7 +194,7 @@ action is implemented in 0.4.0. The full current boundary and trust limit are in
 
 ## References
 
-- **`replicant`** (`../replicant`) — CDC framework; see `AGENTS.md` and `usage-rules.md`
+- **`replicant`** — CDC framework (Hex package); see its published usage-rules
 - **`ash_postgres`** — Ash data layer for PostgreSQL
 - **`AshCloak`** — Ash encryption extension; verifiers + before_action hooks
 - **`CHANGELOG.md`** — version history
