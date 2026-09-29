@@ -3,7 +3,7 @@
 ```elixir
 Mix.install([
   # This notebook lives in `notebooks/`, so `..` is the repo root. Swap for
-  # `{:ash_replicant, "~> 1.3.0"}` to run it against the published Hex package.
+  # `{:ash_replicant, "~> 1.4.0"}` to run it against the published Hex package.
   {:ash_replicant, path: Path.join(__DIR__, "..")},
   {:kino, "~> 0.14"}
 ])
@@ -71,7 +71,7 @@ tangible and §11–§14 cover the later ones:
 
 ```elixir
 AshReplicant.version()
-# => "1.3.0"
+# => "1.4.0"
 ```
 
 ## 3 · The value-free boundary (rule 4)
@@ -121,7 +121,7 @@ err =
   )
 
 Exception.message(err)
-# => "ash_replicant error reason=tenant_required resource=MyApp.Shop.Order op=:upsert"
+# => "ash_replicant error reason=:tenant_required resource=MyApp.Shop.Order op=:upsert"
 ```
 
 `scrub/3` normalizes *any* raised or returned error into that value-free shape.
@@ -133,7 +133,7 @@ leaky = %RuntimeError{message: "PAN=4111111111111111 leaked into the message!"}
 
 AshReplicant.Error.scrub(leaky, MyApp.Shop.Order, :upsert)
 |> Exception.message()
-# => "ash_replicant error reason=sink_failed resource=MyApp.Shop.Order op=:upsert shape=RuntimeError"
+# => "ash_replicant error reason=:sink_failed resource=MyApp.Shop.Order op=:upsert shape=RuntimeError"
 ```
 
 ## 4 · Define a mirror resource, live
@@ -423,7 +423,7 @@ Resolver.build_index([Tour.DupDomain])
 
 ## 7 · The bug can't ship — compile-time verifiers (rules 1–3)
 
-AshReplicant moves misconfigurations to **build time**. Five verifiers run against the
+AshReplicant moves misconfigurations to **build time**. Seven verifiers run against the
 DSL and fail the compile *(build-blocking under `--warnings-as-errors`)*. These are
 shown as 📋 reference because Spark surfaces them during the compiler's parallel-check
 phase — copy one into a real resource and `mix compile` to watch it fire. The messages
@@ -474,6 +474,8 @@ The full verifier set (all in `lib/ash_replicant/resource/verifiers/`):
 | `ValidateTenantSource` | a non-global multitenant resource with **no** tenant source |
 | `ValidateActionMultitenancy` | `multitenancy :bypass` / `:bypass_all` on a sink-selected action |
 | `ValidateHistory` | an invalid SCD2 version-table shape (§10) |
+| `ValidateSnapshotProvenance` | a `snapshot_provenance true` resource missing its protected provenance attributes (`:replica_fingerprint` / `:replica_seen_attempt`) or a misshapen mark/retire action (ADR-0017) |
+| `ValidateAppendLog` | an append target missing its structural obligations (immutable create, append identity, structural attributes), or carrying state-mirror machinery (SCD2 history, snapshot provenance, `:mirror`/`:close` truncate); `on_truncate :append` on a non-append or tenant-scoped append target (ADR-0018) |
 
 ## 8 · Sensitive data & AshCloak (rule 3)
 
@@ -891,8 +893,8 @@ injection with append-only observers proving zero net duplicate/loss).
   — the fail-closed multitenancy decision record.
 * **[`usage-rules.md`](../usage-rules.md)** — the full host-integration contract,
   including the complete SCD2 version-table obligations.
-* **`replicant`** (`../../replicant`) — the tenant-blind CDC transport this executes
-  through.
+* **`replicant`** (the `replicant` Hex package) — the tenant-blind CDC transport this
+  executes through.
 
 *Everything in §2–§6 ran with no database. That's the adapter's whole design: the
 tenant, classification, and routing decisions are Ash-native and testable in isolation,

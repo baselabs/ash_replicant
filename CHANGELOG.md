@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.4.0] - 2026-09-29
 
 ### Changed
 
@@ -49,6 +49,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (response smuggling through intermediaries). The optional requirement
   (`~> 1.10 and >= 1.10.1`, `runtime: false`) already admits 1.11.0, so this
   is a lock-only move surfaced by `mix deps.audit` on 2026-09-28.
+- **Documentation accuracy pass (verified against live code):**
+  `usage-rules.md` documents external-route concurrent retries under
+  AshOnetime ≥ 1.4.0 (`:request_in_progress` from the pre-peer claim lock —
+  wait-or-retry; the watermark contract is unchanged); the tour notebook's
+  compile-verifier table now lists all SEVEN verifiers
+  (`ValidateSnapshotProvenance` and `ValidateAppendLog` were missing), its
+  scrubbed-error examples carry the actual `reason=:atom` format, its
+  "See also" no longer ships a `../replicant` sibling path, and its pinned
+  outputs (`allowed_meta_keys/0`, the 15-event `emitted_event_names/0`
+  inventory, `Status.classify/1`, `Error.scrub/3`) are verified byte-exact
+  against the shipped code.
 - **CI skips docs-only pushes** (`paths-ignore` over markdown, `docs/**`, and
   license paths). Every push that touches code, config, or the workflow file
   still runs the full battery.
@@ -1415,7 +1426,8 @@ sensitive-column verification.
   `usage-rules.md`, `CONTRIBUTING.md`, `LICENSE`, `NOTICE`; tracked charter at
   `docs/CHARTER.md`.
 
-[Unreleased]: https://github.com/baselabs/ash_replicant/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/baselabs/ash_replicant/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/baselabs/ash_replicant/tree/v1.4.0
 [1.3.0]: https://github.com/baselabs/ash_replicant/tree/v1.3.0
 [1.2.0]: https://github.com/baselabs/ash_replicant/tree/v1.2.0
 [1.1.0]: https://github.com/baselabs/ash_replicant/tree/v1.1.0

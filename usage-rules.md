@@ -135,6 +135,14 @@ Rules that are enforced, not advisory:
   with the watermark advancing only after finalized/replayed success (external
   route). An unknown prefix halts the pipeline fail-closed
   (`:message_prefix_unmapped`); an ignored prefix acknowledges with no effect.
+- **External-route concurrent retries (AshOnetime ≥ 1.4.0):** the claim row is
+  taken `FOR UPDATE` before any peer call, so an honest same-key retry racing
+  an in-flight execute waits and replays, or returns `:request_in_progress`
+  (terminal for that attempt) when the configured lock wait expires
+  (`external_lock_timeout_ms`, default 2000 ms) — treat that code as
+  wait-or-retry, like the pre-existing concurrent-retry semantics. The sink's
+  contract is unchanged: the watermark advances only after finalized/replayed
+  success.
 
 ### 3. Mark mirror resources with the extension
 

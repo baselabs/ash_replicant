@@ -1,7 +1,7 @@
 defmodule AshReplicant.MixProject do
   use Mix.Project
 
-  @version "1.3.0"
+  @version "1.4.0"
   @source_url "https://github.com/baselabs/ash_replicant"
   @ash_requirement ">= 3.33.11 and < 4.0.0-0"
   @replicant_requirement ">= 1.3.0 and < 2.0.0-0"

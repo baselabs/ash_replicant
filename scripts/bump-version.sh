@@ -60,8 +60,18 @@ replace_once README.md "The current $current release baseline is built and teste
 replace_once notebooks/ash_replicant_tour.livemd "\`{:ash_replicant, \"~> $current\"}\`" \
   "\`{:ash_replicant, \"~> $new_version\"}\`"
 replace_once notebooks/ash_replicant_tour.livemd "# => \"$current\"" "# => \"$new_version\""
-replace_once docs/CHARTER.md "**Status: realized, latest published package $current.**" \
-  "**Status: realized, latest published package $new_version.**"
+# The charter carries the five-field status stamp; bump its version segment and
+# its Updated field (the stamp line is the anchor, dated today).
+replace_once docs/CHARTER.md "latest published package $current" \
+  "latest published package $new_version"
+replace_once docs/CHARTER.md "**Updated:** $(grep -o '\*\*Updated:\*\* [0-9-]*' docs/CHARTER.md | cut -d' ' -f2)" \
+  "**Updated:** $today"
+# Bind the CHANGELOG link references: the [Unreleased] compare base moves to the
+# new tag and the new version gains its tree link ahead of its predecessor's.
+replace_once CHANGELOG.md "compare/v$current...HEAD" "compare/v$new_version...HEAD"
+replace_once CHANGELOG.md "[$current]: https://github.com/baselabs/ash_replicant/tree/v$current" \
+  "[$new_version]: https://github.com/baselabs/ash_replicant/tree/v$new_version
+[$current]: https://github.com/baselabs/ash_replicant/tree/v$current"
 
 echo "bump-version: $current -> $new_version"
 echo "bump-version: next — scripts/prepush.sh, commit, push, watch CI, then tag/release/publish from the green head"
