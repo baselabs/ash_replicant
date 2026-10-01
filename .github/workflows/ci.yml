@@ -280,6 +280,9 @@ jobs:
       MIX_ENV: test
       ELIXIR_VERSION: 1.20.3
       OTP_VERSION: "29"
+      # Job-level so ecto.create/migrate see the destination too.
+      ASH_REPLICANT_TEST_URL: postgres://postgres@localhost:5432/postgres
+      ASH_REPLICANT_PGOLD_URL: postgres://postgres@localhost:5433/postgres
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -329,9 +332,6 @@ jobs:
           mix ecto.migrate
 
       - name: Decoder admission lane (pglogical, wal2json, pgoutput-on-old)
-        env:
-          ASH_REPLICANT_TEST_URL: postgres://postgres@localhost:5432/postgres
-          ASH_REPLICANT_PGOLD_URL: postgres://postgres@localhost:5433/postgres
         run: scripts/run-structural-tests.sh test/integration/decoder_admission_test.exs --include pgold
 
   release-artifact:
