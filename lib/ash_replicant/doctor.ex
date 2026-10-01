@@ -54,7 +54,7 @@ defmodule AshReplicant.Doctor do
   # Duplicated from `mix.exs` because `mix.exs` is not loadable from a release.
   # `AshReplicant.DoctorTest` asserts the literals are equal, so changing one
   # without the other goes red.
-  @replicant_requirement ">= 1.3.0 and < 2.0.0-0"
+  @replicant_requirement ">= 1.4.0 and < 2.0.0-0"
   @ash_requirement ">= 3.33.11 and < 4.0.0-0"
 
   # The PostgreSQL 15 through 18 support matrix as `server_version_num`.
@@ -119,8 +119,10 @@ defmodule AshReplicant.Doctor do
   @doc """
   Run one diagnosis. `opts` is the same keyword list
   `AshReplicant.PipelineOwner` takes — `:sink`, `:connection`, `:publication`,
-  `:source_identity` — so an operator diagnoses with the configuration the
-  pipeline actually runs, never a hand-copied second one.
+  `:source_identity`, and the forwarded Replicant decoder options — so an
+  operator diagnoses with the configuration the pipeline actually runs, never
+  a hand-copied second one. A plugin decoder fails the plan with the same
+  `:decoder_unsupported` activation refuses it with (ADR-0026).
 
   An invocation this cannot build a plan from returns
   `AshReplicant.Doctor.Report.invalid/1` (exit `3`), never a health verdict.
@@ -138,6 +140,10 @@ defmodule AshReplicant.Doctor do
   defp plan(opts) do
     with {:ok, sink, config} <- planned_sink(opts),
          {:ok, identity} <- planned_identity(Keyword.get(opts, :source_identity)),
+         # ADR-0026: the SAME decoder admission body activation runs — the
+         # doctor never diagnoses a configuration activation would refuse with
+         # a different reason.
+         :ok <- AshReplicant.validate_decoder(opts),
          {:ok, publication} <- planned_publication(Keyword.get(opts, :publication)) do
       {:ok,
        %{

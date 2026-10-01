@@ -6,7 +6,7 @@ defmodule AshReplicant.ReleaseContract do
   @immutable_action ~r/\A[^@\s]+@[0-9a-f]{40}\z/
   @pg16_image "postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b"
   @ash_requirement ">= 3.33.11 and < 4.0.0-0"
-  @replicant_requirement ">= 1.3.0 and < 2.0.0-0"
+  @replicant_requirement ">= 1.4.0 and < 2.0.0-0"
   @onetime_requirement ">= 1.3.2 and < 2.0.0-0"
   @cloak_requirement ">= 0.4.0 and < 1.0.0-0"
   @checkout "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
@@ -76,7 +76,7 @@ defmodule AshReplicant.ReleaseContract do
 
   expected = %{
     ash: ">= 3.33.11 and < 4.0.0-0",
-    replicant: ">= 1.3.0 and < 2.0.0-0",
+    replicant: ">= 1.4.0 and < 2.0.0-0",
     ash_onetime: ">= 1.3.2 and < 2.0.0-0",
     ash_cloak: ">= 0.4.0 and < 1.0.0-0"
   }
@@ -156,9 +156,9 @@ defmodule AshReplicant.ReleaseContract do
       "ash_selector" => "3.33.11",
       "ash_unlock" => true,
       "ash_requirement" => "== 3.33.11",
-      "replicant_selector" => "1.3.0",
+      "replicant_selector" => "1.4.0",
       "replicant_unlock" => true,
-      "replicant_requirement" => "== 1.3.0",
+      "replicant_requirement" => "== 1.4.0",
       "onetime_selector" => "1.3.2",
       "onetime_unlock" => true,
       "onetime_requirement" => "== 1.3.2",
@@ -329,7 +329,7 @@ defmodule AshReplicant.ReleaseContract do
      [
        "- Elixir 1.20.3 on Erlang/OTP 29;",
        "- Ash `#{@ash_requirement}` and AshPostgres 2.13.x;",
-       "- Replicant `#{@replicant_requirement}` (current lock 1.3.0)",
+       "- Replicant `#{@replicant_requirement}` (current lock 1.4.0)",
        "- AshOnetime `#{@onetime_requirement}` (current lock 1.4.0)",
        "- AshCloak `#{@cloak_requirement}` (current lock 0.4.0"
      ]},
@@ -337,14 +337,14 @@ defmodule AshReplicant.ReleaseContract do
      [
        "- **Elixir 1.20.3** and **Erlang/OTP 29**",
        "- Ash `#{@ash_requirement}`; selector-free development uses this public range",
-       "- Replicant `#{@replicant_requirement}` from Hex; the lock is 1.3.0.",
+       "- Replicant `#{@replicant_requirement}` from Hex; the lock is 1.4.0.",
        "- AshCloak `#{@cloak_requirement}` from Hex; the current lock is 0.4.0 (the"
      ]},
     {"AGENTS.md", "## Development workflow",
      [
        "The supported release foundation is Elixir 1.20.3 on Erlang/OTP 29 with Ash\n" <>
          "`#{@ash_requirement}` and Replicant\n" <>
-         "`#{@replicant_requirement}` (current lock 1.3.0), plus\n" <>
+         "`#{@replicant_requirement}` (current lock 1.4.0), plus\n" <>
          "AshOnetime `#{@onetime_requirement}` (current lock 1.4.0) and AshCloak\n" <>
          "`#{@cloak_requirement}` (current lock 0.4.0; releases below 0.4.0 carry\n" <>
          "CVE-2026-81319 and CVE-2026-81322 and are not admitted)."
@@ -864,7 +864,7 @@ defmodule AshReplicant.ReleaseContract do
   defp expected_replicant_lock_version(lock) do
     case System.get_env("ASH_REPLICANT_REPLICANT_VERSION") do
       value when value in [nil, ""] ->
-        "1.3.0"
+        "1.4.0"
 
       "latest" ->
         lock

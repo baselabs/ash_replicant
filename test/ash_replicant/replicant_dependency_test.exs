@@ -1,6 +1,7 @@
 defmodule AshReplicant.ReplicantDependencyTest do
   use ExUnit.Case, async: true
 
+  alias Replicant.Decoder.Plugin
   alias Replicant.Snapshotter.Incremental
 
   defmodule SlotOriginSink do
@@ -30,7 +31,10 @@ defmodule AshReplicant.ReplicantDependencyTest do
     assert function_exported?(Replicant.Sink, :notify_slot_origin, 3)
 
     version = Application.spec(:replicant, :vsn) |> List.to_string()
-    assert Version.match?(version, ">= 1.3.0 and < 2.0.0-0")
+    assert Version.match?(version, ">= 1.4.0 and < 2.0.0-0")
+    # The 1.4 decoder grammar the adapter forwards (ADR-0026): the three
+    # behavior atoms are exactly what the admission rule enumerates against.
+    assert Plugin.decoder_atoms() == [:pgoutput, :pglogical, :wal2json]
     assert Code.ensure_loaded?(Incremental)
     assert function_exported?(Incremental, :keyed_retry_decision, 3)
     assert Replicant.SnapshotProgress.pending?(:backfill_pending)

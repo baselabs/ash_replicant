@@ -124,6 +124,17 @@ Four facts, all observed on 2026-09-28/29, move the floors:
   test fixtures unwrap the new tuple (under the tuple shape one prior
   assertion passed vacuously — Elixir orders tuples above integers), and the
   only `lib/` change is the doctor's runtime requirement literals.
+- **Replicant floor and lock move to 1.4.0** (`>= 1.4.0 and < 2.0.0-0`).
+  Replicant 1.4 added the decoder option grammar this package now forwards
+  (`decoder:` and its per-decoder keys, ADR-0026); the documented decoder
+  contract — the `:decoder_unsupported` admission refusal, Replicant's own
+  grammar and capability refusals — is only true of a 1.4 runtime, and a
+  1.3.x resolution would silently drop forwarded options instead of
+  validating them. No casting, checkpoint, or sink-callback changes ship in
+  1.4 that the adapter calls directly (PG15+ delivery is byte-identical to
+  1.3.0); the lock-only behaviors the adapter documents are the pre-PG15
+  empty-transaction suppression and the every-decoder dropped-column halt,
+  both transport-internal on the supported 16–18 matrix.
 - **AshOnetime lock moves to 1.4.0** (requirement unchanged): the pre-peer
   claim lock closes the in-flight-retry double-spend window on
   external-effect message routes; no ash_replicant code depends on new API.

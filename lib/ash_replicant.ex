@@ -44,6 +44,17 @@ defmodule AshReplicant do
       from the actual replication session, as
       `[system_identifier: "...", database: "..."]`.
     * `:go_forward_only` — passed through to `Replicant.start_link/1`.
+    * `:decoder`, `:replication_sets`, `:tables`, `:allow_keyless_tables`, and
+      `:schema_check_interval` — Replicant 1.4's decoder selection, passed
+      through to `Replicant.start_link/1` unchanged (ADR-0026): decoder choice
+      is a tenant-blind transport concern. ADMISSION is `:pgoutput`-only — the
+      adapter's source-coverage census, contract manifest, and doctor catalog
+      statements are publication-scoped — so `:pglogical`/`:wal2json` fail
+      closed at start (`{:error, :decoder_unsupported}`) and in the doctor's
+      plan. The rest of the per-decoder grammar (a table-set key belonging to
+      another decoder, an unknown decoder atom, a wal2json-only knob under
+      pgoutput) is Replicant's own validation and surfaces as its
+      `{:error, :config_invalid}`.
     * `:snapshot` — `false`, Replicant's v1 snapshot (`true`), or sink-owned
       incremental snapshot options (`[mode: :incremental, ...]`). Incremental
       mode requires every mapped resource to declare `snapshot_provenance true`.
@@ -573,6 +584,14 @@ defmodule AshReplicant do
   @replicant_option_keys [
     :connection,
     :publication,
+    # The Replicant 1.4 decoder grammar (ADR-0026) — forwarded so the transport
+    # owns every rule of its own option set; the adapter adds only the
+    # :pgoutput admission rule in validate_decoder/1.
+    :decoder,
+    :replication_sets,
+    :tables,
+    :allow_keyless_tables,
+    :schema_check_interval,
     :go_forward_only,
     :snapshot,
     :messages,
@@ -582,6 +601,23 @@ defmodule AshReplicant do
     :max_command_retries,
     :failover
   ]
+
+  # ADR-0026: the one adapter-side rule on Replicant 1.4's decoder selection.
+  # The coverage census (`pg_publication_tables`), the contract manifest
+  # (publication-scoped), and the doctor's catalog statements are
+  # pgoutput-shaped, so the two plugin decoders are refused HERE with the
+  # named error — never the misleading nil-publication `:config_invalid` a
+  # plugin-shaped config would otherwise produce. Any other decoder value is
+  # forwarded untouched: the grammar (including misspellings) is the
+  # transport's, and Replicant's own `:config_invalid` names it.
+  @doc false
+  @spec validate_decoder(keyword()) :: :ok | {:error, :decoder_unsupported}
+  def validate_decoder(opts) do
+    case Keyword.get(opts, :decoder, :pgoutput) do
+      decoder when decoder in [:pglogical, :wal2json] -> {:error, :decoder_unsupported}
+      _forwarded_to_the_transport -> :ok
+    end
+  end
 
   # The owner's activation body (ADR-0014): the full validate + preflight +
   # lock chain, run in the STARTING CALLER (PipelineOwner.start_link/1) so
@@ -604,6 +640,7 @@ defmodule AshReplicant do
     with {:ok, sink, sink_config} <- validate_sink(opts),
          {:ok, census} <- Census.options(opts),
          {:ok, source_identity} <- validate_source_identity(opts),
+         :ok <- validate_decoder(opts),
          {:ok, publication} <- normalize_publication(Keyword.get(opts, :publication)) do
       activation_lock(sink_config.slot_name, fn ->
         activate_slot(

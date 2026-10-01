@@ -503,7 +503,7 @@ defmodule AshReplicant.DoctorTest do
     end
 
     test "loaded versions inside the requirements pass" do
-      check = Doctor.check_dependency_requirements(%{replicant: "1.3.0", ash: "3.33.11"})
+      check = Doctor.check_dependency_requirements(%{replicant: "1.4.0", ash: "3.33.11"})
 
       assert check.status == :pass
     end

@@ -5,6 +5,53 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **The Replicant requirement floor and lock move to 1.4.0**
+  (`>= 1.4.0 and < 2.0.0-0`). Replicant 1.4 adds the logical-decoding
+  decoder option grammar this package now forwards, and the documented
+  decoder contract is only true of a 1.4 runtime — a 1.3.x resolution would
+  silently drop the forwarded options instead of validating them. On the
+  supported PostgreSQL 16–18 matrix Replicant 1.4's delivery is
+  byte-identical to 1.3.0; its empty-transaction suppression (pre-15 servers
+  only) and its every-decoder dropped-column halts are transport-internal
+  and documented posture, not adapter behavior. No sink-callback, checkpoint, or
+  `Replicant.Error` contract the adapter consumes changed
+  ([ADR-0026](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0026-decoder-options-passthrough-and-pgoutput-admission.md)).
+- **Replicant 1.4's five decoder options are passed through to the transport
+  unchanged, and admission is `:pgoutput`-only.** `decoder:`,
+  `replication_sets:`, `tables:`, `allow_keyless_tables:`, and
+  `schema_check_interval:` are forwarded to `Replicant.start_link/1`
+  (decoder selection is a tenant-blind transport concern; the sink contract
+  is decoder-invariant upstream). Because the adapter's source-coverage
+  census, contract manifest, and doctor catalog statements are
+  publication-scoped, `decoder: :pglogical` or `decoder: :wal2json` now
+  fails closed at start and in `mix ash_replicant.preflight` with the named
+  structural error `{:error, :decoder_unsupported}` (the doctor reports it
+  as an invalid invocation, exit 3) — plugin-decoder admission is recorded
+  work with its inventory in ADR-0026 §5 and ROADMAP F1. This closes a
+  misconfiguration trap: before the change a config carrying
+  `decoder: :pglogical` alongside a publication STARTED on pgoutput with the
+  decoder key silently dropped. The rest of the decoder grammar is
+  Replicant's own validation surfaced raw and value-free — a table-set key
+  belonging to another decoder or a wal2json-only knob under pgoutput
+  returns `{:error, :config_invalid}`, and a capability the chosen decoder
+  cannot express (`streaming:`/`failover:` off pgoutput, `messages:` on
+  pglogical — relevant because a routed sink auto-starts `messages: true`)
+  returns `{:error, :decoder_capability_unsupported}`. Replicant's
+  connect-time decoder halts (`{:decoder, :table_missing}`,
+  `{:decoder, :extension_missing}`, `{:decoder, :table_keyless}`,
+  `{:config, :decoder_unsupported_on_server}`) remain transport-owned: none
+  arises for a pgoutput publication on the supported matrix, the tombstone
+  carries the existing generic `:pipeline_terminated`, and the precise
+  reason rides Replicant's `[:replicant, :connection, :slot_invalidated]`
+  telemetry — now documented in `usage-rules.md`.
+- The doctor's runtime requirement literals and the exact-floors CI cell move
+  with the floor (the current-lock, latest-compatible, and release-contract
+  cells follow the public requirement).
+
 ## [1.4.0] - 2026-09-29
 
 ### Changed
