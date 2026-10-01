@@ -172,6 +172,7 @@ defmodule AshReplicant.StatusLifecycleTest do
       end)
     end
 
+    @tag timeout: 120_000
     test "when the durable leg cannot write, the value-free telemetry IS the record" do
       # The repo is not running in this suite — exactly the destination-down
       # halt condition. The node-local leg still answers, and the durable
@@ -208,22 +209,23 @@ defmodule AshReplicant.StatusLifecycleTest do
           match?({:halted, :pipeline_terminated}, AshReplicant.status(LifecycleSink))
         end)
 
-        # 20s budget (the suite's poll standard): the status answer comes
-        # from the node-local leg, which precedes the durable attempt's
-        # telemetry — under a loaded full battery that transaction can out-
-        # run a 5s window without any behavior change (the flake O02 fought;
-        # the event itself is deterministic in both environments). A lawful
-        # SKIP is the one outcome that emits nothing: the durable leg only
-        # writes when a checkpoint row under the entry's identity already
-        # exists — so a missing event must be PROVEN to be the skip (row
-        # absent with the repo up), never assumed.
+        # 60s budget: the status answer comes from the node-local leg,
+        # which precedes the durable attempt's telemetry — under a loaded
+        # full battery on CI's 4-core runners that transaction has now out-
+        # run BOTH the historical 5s and 20s windows (CI 2026-10-01, twice,
+        # two cells) with no behavior change; the event itself is
+        # deterministic in both environments. A lawful SKIP is the one
+        # outcome that emits nothing: the durable leg only writes when a
+        # checkpoint row under the entry's identity already exists — so a
+        # missing event must be PROVEN to be the skip (row absent with the
+        # repo up), never assumed.
         received =
           receive do
             {:telemetry, [:ash_replicant, :status, :tombstone_write_failed],
              %{slot_name: @slot, reason: reason}} ->
               {:event, reason}
           after
-            20_000 ->
+            60_000 ->
               :no_event
           end
 
