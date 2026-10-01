@@ -30,7 +30,7 @@ defmodule AshReplicant.SinkTest do
 
     TestSink.handle_session_identity(identity, %{
       slot_name: "sink_test_slot",
-      publication: generation.publication
+      publication: generation.source_set.publication
     })
 
     on_exit(fn ->
@@ -115,7 +115,7 @@ defmodule AshReplicant.SinkTest do
         source_connection: generation.source_connection,
         coverage: generation.coverage,
         source_identity: generation.source_identity,
-        publication: generation.publication,
+        source_set: generation.source_set,
         generation: generation.reference,
         dynamic_repo: generation.dynamic_repo,
         authorize?: false,

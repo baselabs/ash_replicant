@@ -45,7 +45,7 @@ defmodule AshReplicant.SnapshotV1RetryTest do
         current_lsn: 0,
         database: generation.source_identity.database
       },
-      %{slot_name: @slot, publication: generation.publication}
+      %{slot_name: @slot, publication: generation.source_set.publication}
     )
 
     SnapshotEffects.reset!()

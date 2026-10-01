@@ -129,7 +129,10 @@ defmodule AshReplicant.ScrubBoundaryTest do
       resolver_index: Keyword.get(opts, :index, @index),
       checkpoint_resource: Checkpoint,
       slot_name: "scrub_boundary_slot",
-      publication: "scrub_boundary_pub",
+      source_set: %AshReplicant.SourceSet{
+        decoder: :pgoutput,
+        publication: ["scrub_boundary_pub"]
+      },
       source_identity: %{system_identifier: "sys", database: "db"},
       authorize?: false
     }
@@ -218,7 +221,7 @@ defmodule AshReplicant.ScrubBoundaryTest do
         assert_value_free(fn ->
           Impl.handle_session_identity(cfg_raise, session_identity(), %{
             slot_name: "scrub_boundary_slot",
-            publication: "scrub_boundary_pub"
+            publication: ["scrub_boundary_pub"]
           })
         end)
 
@@ -233,7 +236,7 @@ defmodule AshReplicant.ScrubBoundaryTest do
         assert_value_free(fn ->
           Impl.handle_session_identity(cfg_exit, session_identity(), %{
             slot_name: "scrub_boundary_slot",
-            publication: "scrub_boundary_pub"
+            publication: ["scrub_boundary_pub"]
           })
         end)
     end

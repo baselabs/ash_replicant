@@ -50,6 +50,7 @@ defmodule AshReplicant.Doctor do
   alias AshReplicant.Error
   alias AshReplicant.Horizon
   alias AshReplicant.Snapshot.{Provenance, State}
+  alias AshReplicant.SourceSet
 
   # Duplicated from `mix.exs` because `mix.exs` is not loadable from a release.
   # `AshReplicant.DoctorTest` asserts the literals are equal, so changing one
@@ -57,8 +58,12 @@ defmodule AshReplicant.Doctor do
   @replicant_requirement ">= 1.4.0 and < 2.0.0-0"
   @ash_requirement ">= 3.33.11 and < 4.0.0-0"
 
-  # The PostgreSQL 15 through 18 support matrix as `server_version_num`.
-  @source_release_floor 150_000
+  # The source release matrix as `server_version_num`, per decoder
+  # (ADR-0026): pgoutput needs publications (PostgreSQL 10+; the 12 floor is
+  # the oldest major this adapter claims and CI runs), the plugin decoders
+  # reach 9.6 — the majors the decoder-old-majors CI cells run. Above
+  # the ceiling nothing is tested; below the floor nothing works.
+  @source_release_floors %{pgoutput: 120_000, pglogical: 90_600, wal2json: 90_600}
   @source_release_ceiling 190_000
 
   @expected_plugin "pgoutput"
@@ -85,6 +90,7 @@ defmodule AshReplicant.Doctor do
     :destination_repo,
     :source_reachable,
     :source_release,
+    :source_plugin,
     :source_privileges,
     :source_identity,
     :source_coverage,
@@ -118,11 +124,13 @@ defmodule AshReplicant.Doctor do
 
   @doc """
   Run one diagnosis. `opts` is the same keyword list
-  `AshReplicant.PipelineOwner` takes — `:sink`, `:connection`, `:publication`,
+  `AshReplicant.PipelineOwner` takes — `:sink`, `:connection`, `:publication`
+  (or the plugin decoders' `:replication_sets:`/`:tables:` with `:decoder:`),
   `:source_identity`, and the forwarded Replicant decoder options — so an
-  operator diagnoses with the configuration the pipeline actually runs, never
-  a hand-copied second one. A plugin decoder fails the plan with the same
-  `:decoder_unsupported` activation refuses it with (ADR-0026).
+  operator diagnoses with the configuration the pipeline actually runs,
+  never a hand-copied second one. The decoder-scoped census, release floor,
+  plugin-presence, and privilege checks all follow the admitted decoder
+  (ADR-0026).
 
   An invocation this cannot build a plan from returns
   `AshReplicant.Doctor.Report.invalid/1` (exit `3`), never a health verdict.
@@ -140,17 +148,13 @@ defmodule AshReplicant.Doctor do
   defp plan(opts) do
     with {:ok, sink, config} <- planned_sink(opts),
          {:ok, identity} <- planned_identity(Keyword.get(opts, :source_identity)),
-         # ADR-0026: the SAME decoder admission body activation runs — the
-         # doctor never diagnoses a configuration activation would refuse with
-         # a different reason.
-         :ok <- AshReplicant.validate_decoder(opts),
-         {:ok, publication} <- planned_publication(Keyword.get(opts, :publication)) do
+         {:ok, source_set} <- SourceSet.normalize(opts) do
       {:ok,
        %{
          sink: sink,
          config: config,
          identity: identity,
-         publication: publication,
+         source_set: source_set,
          connection: Keyword.get(opts, :connection) || []
        }}
     end
@@ -196,14 +200,6 @@ defmodule AshReplicant.Doctor do
 
   defp planned_identity(_identity), do: {:error, :source_identity_required}
 
-  defp planned_publication(publication) when is_binary(publication) and publication != "",
-    do: {:ok, [publication]}
-
-  defp planned_publication(publication) when is_list(publication) and publication != [],
-    do: {:ok, publication}
-
-  defp planned_publication(_publication), do: {:error, :config_invalid}
-
   # --- the run ---
 
   defp checks(mode, plan) do
@@ -235,7 +231,7 @@ defmodule AshReplicant.Doctor do
   # `Identity.build_contract/2` activation admits — so a resolver conflict or an
   # unmappable resource surfaces here rather than at the first connect.
   defp check_sink_configuration(plan) do
-    case Identity.build_contract(plan.config, plan.publication) do
+    case Identity.build_contract(plan.config, plan.source_set) do
       {:ok, contract} ->
         {pass(:sink_configuration, :runtime, :ok), contract}
 
@@ -283,6 +279,7 @@ defmodule AshReplicant.Doctor do
 
   @source_check_names [
     :source_release,
+    :source_plugin,
     :source_privileges,
     :source_identity,
     :source_coverage,
@@ -293,7 +290,7 @@ defmodule AshReplicant.Doctor do
   ]
 
   defp source_checks(plan, contract, durable) do
-    case Probe.gather(plan.connection, plan.publication, plan.config.slot_name) do
+    case Probe.gather(plan.connection, plan.source_set, plan.config.slot_name) do
       {:ok, probed} ->
         [check_source_reachable(:ok) | judged_source_checks(plan, contract, probed, durable)]
 
@@ -330,7 +327,8 @@ defmodule AshReplicant.Doctor do
     coverage = coverage_verdicts(plan, contract, probed)
 
     [
-      check_source_release(probed.release),
+      check_source_release(probed.release, plan.source_set.decoder),
+      check_source_plugin(probed.extension, plan.source_set),
       check_privileges(%{
         superuser?: probed.role.superuser?,
         replication?: probed.role.replication?,
@@ -576,10 +574,12 @@ defmodule AshReplicant.Doctor do
   a failure; above the tested ceiling is a warning, because a newer major is
   likely fine and refusing it would be a false negative.
   """
-  @spec check_source_release(integer() | nil) :: Check.t()
-  def check_source_release(version) when is_integer(version) do
+  @spec check_source_release(integer() | nil, :pgoutput | :pglogical | :wal2json) :: Check.t()
+  def check_source_release(version, decoder) when is_integer(version) do
+    floor = Map.fetch!(@source_release_floors, decoder)
+
     cond do
-      version < @source_release_floor ->
+      version < floor ->
         fail(:source_release, :source, :source_release_unsupported)
 
       version >= @source_release_ceiling ->
@@ -590,7 +590,32 @@ defmodule AshReplicant.Doctor do
     end
   end
 
-  def check_source_release(_unknown), do: warn(:source_release, :source, :source_release_unknown)
+  def check_source_release(_unknown, _decoder),
+    do: warn(:source_release, :source, :source_release_unknown)
+
+  @doc """
+  The chosen decoder's output-plugin presence on the source server. pglogical
+  ships as an extension, so its catalog row is proof (ADR-0026); wal2json is a
+  decoding library with no extension row — its presence is only provable at
+  `START_REPLICATION`, which stays the transport's connect-time probe, so the
+  check reports the fact it cannot judge rather than passing vacuously.
+  """
+  @spec check_source_plugin(:not_applicable | :not_provable | map() | nil, SourceSet.t()) ::
+          Check.t()
+  def check_source_plugin(:not_applicable, _source_set),
+    do: pass(:source_plugin, :source, :ok)
+
+  def check_source_plugin(:not_provable, _source_set),
+    do: skipped_check(:source_plugin, :source, :plugin_presence_not_provable)
+
+  def check_source_plugin(nil, %SourceSet{decoder: :pglogical}),
+    do: fail(:source_plugin, :source, :source_plugin_missing)
+
+  def check_source_plugin(%{installed?: true}, %SourceSet{decoder: :pglogical}),
+    do: pass(:source_plugin, :source, :ok)
+
+  def check_source_plugin(%{installed?: false}, %SourceSet{decoder: :pglogical}),
+    do: fail(:source_plugin, :source, :source_plugin_missing)
 
   @doc """
   The connecting role's capability: REPLICATION (or superuser) for the stream,
@@ -817,6 +842,6 @@ defmodule AshReplicant.Doctor do
   @doc false
   # Kept referenced so the probe module is a compile-time dependency of the one
   # module that documents the no-writes guarantee.
-  @spec read_only_statements([String.t()]) :: [String.t()]
-  def read_only_statements(publication), do: Probe.statements(publication)
+  @spec read_only_statements(SourceSet.t()) :: [String.t()]
+  def read_only_statements(source_set), do: Probe.statements(source_set)
 end

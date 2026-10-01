@@ -31,9 +31,9 @@ Ash core        multitenancy DSL, policies, the tenant concept
 AshReplicant ← HERE   Ash resource extension: tenant routing, sensitive verification,
    │                   resource mapping, mirror actions
    │
-replicant       Postgres logical replication (pgoutput), WAL ordering and delivery
+replicant       Postgres logical replication, WAL ordering and delivery
    │
-Postgres        logical decoding output (pgoutput protocol)
+Postgres        logical decoding output (pgoutput, pglogical, or wal2json)
 ```
 
 Multitenancy lives **here**, not in `replicant` — exactly as `ash_postgres` (not
@@ -61,18 +61,21 @@ The current 1.5.0 release baseline is built and tested with:
 - Replicant `>= 1.4.0 and < 2.0.0-0` (current lock 1.4.0); and
 - Replicant 1.4's decoder options (`decoder:`, `replication_sets:`, `tables:`,
   `allow_keyless_tables:`, `schema_check_interval:`) are forwarded to the
-  transport unchanged, but admission is `:pgoutput`-only — a plugin decoder
-  is refused fail-closed with `{:error, :decoder_unsupported}` until the
-  adapter's coverage census, contract manifest, and doctor statements grow
-  decoder awareness ([ADR-0026](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0026-decoder-options-passthrough-and-pgoutput-admission.md)); and
+  transport unchanged and ADMITTED for all three decoders — the table-set
+  key (`publication:` / `replication_sets:` / `tables:`) feeds the adapter's
+  own coverage census, contract manifest, and doctor checks
+  ([ADR-0026](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0026-decoder-options-passthrough-and-full-admission.md)); the supported SOURCE matrix is pgoutput on
+  PostgreSQL 12 and 15–18, pglogical 2.x and wal2json ≥ 2.6 on 9.6 and 12
+  (the `decoder-old-majors` CI cells run exactly that); and
 - AshOnetime `>= 1.3.2 and < 2.0.0-0` (current lock 1.4.0); and
 - AshCloak `>= 0.4.0 and < 1.0.0-0` (current lock 0.4.0; every release below
   0.4.0 carries CVE-2026-81319 and CVE-2026-81322 and is not admitted); and
 - PostgreSQL with `wal_level=logical` for the live integration gate: CI runs
   pinned PostgreSQL 16, 17, and 18 cells, the local gate runs whatever instance
   `ASH_REPLICANT_TEST_URL` points at (derive the live version with
-  `SELECT version();` — never assume it from this doc), and the support matrix
-  is PG16–18.
+  `SELECT version();` — never assume it from this doc). The SOURCE support
+  matrix is pgoutput on PostgreSQL 12 and 15–18, pglogical 2.x and
+  wal2json ≥ 2.6 on 9.6 and 12 — exactly what CI runs.
 
 The Ash lower bound excludes known-vulnerable patches, and the upper bound
 excludes Ash 4 prereleases. The AshCloak lower bound is a security floor:

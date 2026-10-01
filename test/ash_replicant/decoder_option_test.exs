@@ -2,19 +2,25 @@ defmodule AshReplicant.DecoderOptionTest do
   @moduledoc """
   The Replicant 1.4 decoder-option contract (ADR-0026): every transport
   option Replicant 1.4 accepts is FORWARDED (`decoder:`, `replication_sets:`,
-  `tables:`, `allow_keyless_tables:`, `schema_check_interval:`), and the one
-  adapter-side admission rule — the decoder must be `:pgoutput`, because the
-  adapter's coverage census, contract manifest, and doctor statements are
-  publication-scoped — refuses a plugin decoder with the named structural
-  error `:decoder_unsupported` at BOTH the activation and the doctor plan,
-  before the nil-publication `:config_invalid` could mislabel it.
+  `tables:`, `allow_keyless_tables:`, `schema_check_interval:`), and the
+  adapter ADMITS all three decoders — the table-set key names the source for
+  the adapter's own census (`AshReplicant.SourceSet`), the rest of the
+  grammar is the transport's own validation surfaced raw. The port-1
+  (unreachable) fixtures ride the deferred-preflight path, so admission is
+  observable without a plugin substrate; the plugin census itself runs live
+  in the integration decoder lane.
   """
 
   use ExUnit.Case, async: false
 
   # The unreachable-port fixture (port 1) lets Postgrex fail to connect and
-  # retry; its protocol-level [error] logs are expected test behavior.
+  # retry; its protocol-level [error] logs are expected test behavior — the
+  # ADMITTED starts are wrapped in capture_log so the retry logs stay inside
+  # a window and the pipeline is stopped before it ends (the structural
+  # harness counts uncontrolled [error] lines).
   @moduletag capture_log: true
+
+  import ExUnit.CaptureLog
 
   defmodule DecoderSink do
     use AshReplicant.Sink,
@@ -62,27 +68,67 @@ defmodule AshReplicant.DecoderOptionTest do
     :ok
   end
 
-  describe "the admission rule" do
-    test "a wal2json decoder is refused with the named error, not the nil-publication config error" do
-      # wal2json's real configuration shape: `tables:`, NO publication — the
-      # shape the pre-rule chain would have mislabeled {:error, :config_invalid}.
-      opts =
-        start_opts()
-        |> Keyword.delete(:publication)
-        |> Keyword.merge(decoder: :wal2json, tables: [{"public", "orders"}])
+  describe "the admission rule — one table-set key per decoder" do
+    # Load-budget class (the start_link_test note): every port-1 activation
+    # walks the code fingerprint through the serialized code server.
+    @tag timeout: 180_000
+    test "a wal2json config with tables: (and no publication) is admitted" do
+      capture_log(fn ->
+        opts =
+          start_opts()
+          |> Keyword.delete(:publication)
+          |> Keyword.merge(decoder: :wal2json, tables: [{"public", "orders"}])
 
-      assert {:error, :decoder_unsupported} = AshReplicant.start_link(opts)
+        assert {:ok, _pid} = AshReplicant.start_link(opts)
+        assert match?(%AshReplicant.Destination.Generation{}, pipeline_entry())
+        assert entry_source_set().decoder == :wal2json
+
+        :ok = AshReplicant.stop_supervised("decoder_slot")
+        assert :none == pipeline_entry()
+      end)
+    end
+
+    @tag timeout: 180_000
+    test "a pglogical config with replication_sets: is admitted" do
+      capture_log(fn ->
+        opts =
+          start_opts()
+          |> Keyword.delete(:publication)
+          |> Keyword.merge(decoder: :pglogical, replication_sets: ["default"])
+
+        assert {:ok, _pid} = AshReplicant.start_link(opts)
+        assert entry_source_set().decoder == :pglogical
+
+        :ok = AshReplicant.stop_supervised("decoder_slot")
+        assert :none == pipeline_entry()
+      end)
+    end
+
+    test "a plugin config missing its table-set key fails with the config atom" do
+      assert {:error, :config_invalid} =
+               AshReplicant.start_link(
+                 start_opts(decoder: :wal2json)
+                 |> Keyword.delete(:publication)
+               )
+
+      assert {:error, :config_invalid} =
+               AshReplicant.start_link(
+                 start_opts(decoder: :pglogical)
+                 |> Keyword.delete(:publication)
+               )
+
       assert :persistent_term.get({AshReplicant, "decoder_slot"}, :none) == :none
     end
 
-    test "a pglogical decoder is refused even when a publication is present" do
-      opts = start_opts(decoder: :pglogical, replication_sets: ["default"])
-
-      assert {:error, :decoder_unsupported} = AshReplicant.start_link(opts)
-      assert :persistent_term.get({AshReplicant, "decoder_slot"}, :none) == :none
+    test "a wal2json config with a malformed tables list fails closed" do
+      assert {:error, :config_invalid} =
+               AshReplicant.start_link(
+                 start_opts(tables: ["public.orders"], decoder: :wal2json)
+                 |> Keyword.delete(:publication)
+               )
     end
 
-    test "the doctor plan refuses a plugin decoder with the same named error" do
+    test "the doctor plan admits a plugin config (the unreachable source reports skipped, not invalid)" do
       opts =
         start_opts()
         |> Keyword.delete(:publication)
@@ -90,20 +136,39 @@ defmodule AshReplicant.DecoderOptionTest do
 
       report = AshReplicant.preflight(opts)
 
+      # The plan BUILDS: an unreachable source is the probe-failure class
+      # (exit 1/2 with skipped source checks), never exit 3 (undiagnosable).
+      # The new :source_plugin check rides the same skip class; its
+      # wal2json `:plugin_presence_not_provable` shape is asserted on the
+      # reachable source in the integration decoder lane.
+      assert report.status in [:fail, :warn]
+      assert report.exit_code in [1, 2]
+
+      assert Enum.any?(
+               report.checks,
+               &(&1.name == :source_plugin and &1.reason == :source_unreachable)
+             )
+    end
+
+    test "the doctor plan rejects the missing table-set key with the config atom" do
+      report =
+        AshReplicant.preflight(start_opts(decoder: :pglogical) |> Keyword.delete(:publication))
+
       assert report.status == :invalid
       assert report.exit_code == 3
 
-      assert [%AshReplicant.Doctor.Check{name: :invocation, reason: :decoder_unsupported}] =
+      assert [%AshReplicant.Doctor.Check{name: :invocation, reason: :config_invalid}] =
                report.checks
     end
   end
 
   describe "the pass-through" do
-    # Load-budget class (the start_link_test note): every port-1 activation
-    # walks the code fingerprint through the serialized code server.
     @tag timeout: 180_000
     test "an explicit :pgoutput decoder is admitted unchanged" do
-      assert {:ok, _pid} = AshReplicant.start_link(start_opts(decoder: :pgoutput))
+      capture_log(fn ->
+        assert {:ok, _pid} = AshReplicant.start_link(start_opts(decoder: :pgoutput))
+        :ok = AshReplicant.stop_supervised("decoder_slot")
+      end)
     end
 
     test "cross-decoder table-set keys are forwarded to Replicant's grammar validation" do
@@ -122,12 +187,18 @@ defmodule AshReplicant.DecoderOptionTest do
                AshReplicant.start_link(start_opts(schema_check_interval: 5_000))
     end
 
-    test "an unknown decoder value is forwarded, not re-validated in the adapter" do
-      # The decoder GRAMMAR is the transport's: only the admission of the two
-      # plugin atoms is ours, so a misspelled decoder reaches upstream's
-      # :config_invalid rather than a lookalike local error.
+    test "an unknown decoder value fails with the transport's own grammar atom" do
       assert {:error, :config_invalid} =
                AshReplicant.start_link(start_opts(decoder: :pg_logical))
+    end
+  end
+
+  defp pipeline_entry, do: :persistent_term.get({AshReplicant, "decoder_slot"}, :none)
+
+  defp entry_source_set do
+    case pipeline_entry() do
+      %AshReplicant.Destination.Generation{source_set: set} -> set
+      other -> other
     end
   end
 end

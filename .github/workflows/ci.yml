@@ -261,6 +261,79 @@ jobs:
       - name: Performance bound sentinels
         run: scripts/run-structural-tests.sh test/integration/performance_bounds_test.exs --include integration
 
+  decoder-old-majors:
+    name: Plugin decoders / PostgreSQL ${{ matrix.pg_major }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ADR-0026 / upstream ADR-0009's old-major substrate: the SAME
+          # commit-pinned plugins (pglogical 2.4.8, wal2json master + the
+          # 2.4 rejection lever), one cell per major. The destination stays
+          # the pinned PostgreSQL 16 cell image.
+          - pg_major: "12"
+            base: postgres:12@sha256:2f2a8c2a7d10862e7fba2602e304523554f9df8244c632dafe2628ccb398fb5c
+          - pg_major: "9.6"
+            base: postgres:9.6@sha256:caddd35b05cdd56c614ab1f674e63be778e0abdf54e71a7507ff3e28d4902698
+    env:
+      MIX_ENV: test
+      ELIXIR_VERSION: 1.20.3
+      OTP_VERSION: "29"
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236 # v1
+        with:
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+          otp-version: ${{ env.OTP_VERSION }}
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-decoder-${{ matrix.pg_major }}-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}
+
+      - name: Build the old-major plugin substrate image
+        run: docker build -f test/support/pg_old.dockerfile --build-arg BASE=${{ matrix.base }} -t pgold-plugins:ci .
+
+      - name: Start the destination and the old-major source
+        run: |
+          # The old images' entrypoint never appends a `host replication`
+          # pg_hba line (unlike 12+), so the walsender needs this file.
+          printf 'local all all trust\nhost all all all trust\nhost replication all all trust\n' > /tmp/pgold-hba.conf
+          docker run -d --name pg \
+            -e POSTGRES_HOST_AUTH_METHOD=trust \
+            -p 5432:5432 \
+            postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b \
+            -c wal_level=logical -c max_replication_slots=20 -c max_wal_senders=20
+          docker run -d --name pgold \
+            -e POSTGRES_HOST_AUTH_METHOD=trust \
+            -p 5433:5432 \
+            -v /tmp/pgold-hba.conf:/hba.conf:ro \
+            pgold-plugins:ci \
+            -c wal_level=logical -c max_wal_senders=20 -c max_replication_slots=20 \
+            -c shared_preload_libraries=pglogical -c hba_file=/hba.conf
+          scripts/wait-for-postgres.sh pg
+          scripts/wait-for-postgres.sh pgold
+
+      - run: mix deps.get
+      - run: mix deps.compile
+      - run: mix compile --warnings-as-errors
+
+      - name: Create and migrate the integration database
+        run: |
+          mix ecto.create
+          mix ecto.migrate
+
+      - name: Decoder admission lane (pglogical, wal2json, pgoutput-on-old)
+        env:
+          ASH_REPLICANT_TEST_URL: postgres://postgres@localhost:5432/postgres
+          ASH_REPLICANT_PGOLD_URL: postgres://postgres@localhost:5433/postgres
+        run: scripts/run-structural-tests.sh test/integration/decoder_admission_test.exs --include pgold
+
   release-artifact:
     name: Selector-free docs and package
     runs-on: ubuntu-24.04

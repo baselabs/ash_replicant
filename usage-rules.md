@@ -268,20 +268,26 @@ AshReplicant.start_link(
   passed through unchanged to Replicant 1.x.
 - `:decoder`, `:replication_sets`, `:tables`, `:allow_keyless_tables`, and
   `:schema_check_interval` — Replicant 1.4's logical-decoding output-plugin
-  selection, passed through unchanged (ADR-0026). **Admission is
-  `:pgoutput`-only**: the adapter's source-coverage census, contract manifest,
-  and doctor catalog statements are publication-scoped, so `decoder:
-  :pglogical` or `decoder: :wal2json` is refused at start and by
-  `mix ash_replicant.preflight` with the named structural error
-  `{:error, :decoder_unsupported}` — plugin-decoder admission is recorded
-  roadmap work. Everything else about the decoder grammar is the transport's
-  own validation: a table-set key belonging to another decoder
-  (`replication_sets:`/`tables:` under pgoutput), a wal2json-only knob
-  (`allow_keyless_tables:`/`schema_check_interval:` under pgoutput), or an
-  unknown decoder atom surfaces as Replicant's own
-  `{:error, :config_invalid}`, and `streaming:`/`messages:`/`failover:` on a
-  decoder lacking the capability is refused by Replicant at start with
-  `{:error, :decoder_capability_unsupported}`.
+  selection, passed through unchanged and ADMITTED for all three decoders
+  (ADR-0026): `:pgoutput` (the default — unchanged), `:pglogical` (pglogical
+  2.x, PostgreSQL 9.6/12) or `:wal2json` (wal2json ≥ 2.6, PostgreSQL 9.6/12).
+  The table-set key names the source for the adapter's own census:
+  `publication:` for pgoutput, `replication_sets:` for pglogical, `tables:`
+  (`{schema, table}` pairs) for wal2json — a missing or mis-shaped one fails
+  closed with `{:error, :config_invalid}` at start and in
+  `mix ash_replicant.preflight`. The rest of the grammar is the transport's
+  own validation: a key belonging to another decoder, a wal2json-only knob
+  under pgoutput, or an unknown decoder atom surfaces as Replicant's own
+  `{:error, :config_invalid}`, and a capability the chosen decoder cannot
+  express (`messages:` on pglogical — relevant because a routed sink
+  auto-starts `messages: true`; `streaming:`/`failover:` off pgoutput) is
+  refused by Replicant at start with
+  `{:error, :decoder_capability_unsupported}`. On the plugin decoders the
+  adapter's strict-coverage census, contract manifest, and doctor checks
+  judge the decoder-scoped table set exactly as they judge a publication —
+  and a stored pgoutput contract is untouched (a plugin set records its own
+  decoder-scoped shape; switching decoders or sets on an existing checkpoint
+  halts `{:incompatible, :decoder}`, an operator reset decision).
 - `:census` — continuous invariant checks owned by the `PipelineOwner`. Closed
   keys: `enabled?` (default `true`), `interval_ms` (default `60_000`),
   `jitter_ratio` (default `0.1`), `timeout_ms` (default `10_000`), and
@@ -1028,18 +1034,19 @@ Rules for reading it:
   a foreign persisted cause decodes to `{:halted, :tombstone_unknown}`.
 - **A transport-initiated halt reports `{:halted, :pipeline_terminated}`.**
   Replicant discards the halt cause at teardown, so a pipeline it killed —
-  including Replicant 1.4's connect-time decoder halts
-  (`{:decoder, :table_missing}`, `{:decoder, :extension_missing}`,
-  `{:decoder, :table_keyless}`, `{:config, :decoder_unsupported_on_server}`,
-  none of which arise for a pgoutput publication on the supported matrix) —
-  leaves the generic cause. The precise reason rides Replicant's own
-  `[:replicant, :connection, :slot_invalidated]` telemetry (`reason`
+  including Replicant 1.4's connect-time decoder halts (`{:decoder,
+  :table_missing}` for a configured pglogical/wal2json table absent on the
+  server, `{:decoder, :extension_missing}` for a missing plugin build,
+  `{:decoder, :table_keyless}` for a wal2json table with no replica-identity
+  index and `REPLICA IDENTITY ≠ FULL` without `allow_keyless_tables: true`,
+  and `{:config, :decoder_unsupported_on_server}` for pgoutput on a pre-10
+  server) — leaves the generic cause. The precise reason rides Replicant's
+  own `[:replicant, :connection, :slot_invalidated]` telemetry (`reason`
   metadata): that event is the first stop when a tombstone says
   `:pipeline_terminated`. Start-time refusals are different and synchronous —
-  `{:error, :config_invalid}` for a decoder-grammar violation,
-  `{:error, :decoder_capability_unsupported}` for a capability the chosen
-  decoder cannot express, and `{:error, :decoder_unsupported}` for this
-  adapter's own admission rule (below).
+  `{:error, :config_invalid}` for a decoder-grammar violation (including a
+  missing table-set key) and `{:error, :decoder_capability_unsupported}` for
+  a capability the chosen decoder cannot express.
 
 ## Source-bound checkpoints, binding, and operator recovery
 
@@ -1258,29 +1265,23 @@ atomic checkpoint. Host policies are not re-gated.
 Never add multitenancy or classification logic to `replicant`. The split is the
 reason they are separate libraries.
 
-**Decoder selection is passed through; admission stays `:pgoutput`-only
+**Decoder selection is passed through AND admitted — all three decoders
 (ADR-0026).** Replicant 1.4 added logical-decoding output-plugin selection
 (`decoder: :pgoutput | :pglogical | :wal2json`, with the per-decoder table-set
 keys `publication:` / `replication_sets:` / `tables:` and the wal2json-only
-`allow_keyless_tables:` / `schema_check_interval:`). AshReplicant forwards all
-five options unchanged, because decoder selection is a tenant-blind transport
-concern — the same split that keeps multitenancy here — and Replicant proves
-the sink contract (delivery semantics, the `commit_lsn` watermark, checkpoint
-modes, halts) decoder-invariant. Admission, however, is the adapter's own, and
-its coverage census reads `pg_publication_tables`, its durable contract
-manifest records the publication list, and its doctor statements are
-publication-scoped — none of those surfaces can vouch for a replication set
-or a configured table list as the source of coverage truth, so a plugin
-decoder is refused fail-closed with `{:error, :decoder_unsupported}` at start
-and in `mix ash_replicant.preflight`, rather than admitted on transport
-parity the adapter cannot verify. Lifting the refusal is recorded roadmap
-work: the census grows decoder-aware table-set reads (Replicant already ships
-the query surface — `QueryBuilder.replication_set_tables/1`,
-`configured_table_info/1`, `table_columns_for/1`, `pk_columns_for/1`), the
-contract manifest records the decoder-scoped table set, and the doctor's
-probe statements follow; until then the supported source matrix stays
-pgoutput on PostgreSQL 16–18, with upstream's own tested majors (9.6 and 12
-through pglogical 2.x or wal2json ≥ 2.6) reachable only after that work.
+`allow_keyless_tables:` / `schema_check_interval:`). AshReplicant forwards
+all five options unchanged — decoder selection is a tenant-blind transport
+concern, the same split that keeps multitenancy here — and admits all three
+decoders through one table-set home (`AshReplicant.SourceSet`): the census,
+the contract manifest, the doctor, and the C01 re-check all judge the
+decoder-scoped table set exactly as they always judged a publication.
+`AshReplicant.SourceSetTest`, the decoder-lane integration suite, and the
+`decoder-old-majors` CI cells carry the evidence: pgoutput on PostgreSQL 12
+and 15–18, pglogical 2.x and wal2json ≥ 2.6 on PostgreSQL 9.6 and 12 — the
+matrix CI actually runs. A stored pgoutput contract is byte-untouched
+(upgrade-in-place); switching decoders or table sets on an existing
+checkpoint halts `{:incompatible, :decoder}` — an explicit operator reset
+decision.
 
 ## See also
 

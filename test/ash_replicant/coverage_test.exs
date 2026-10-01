@@ -74,11 +74,14 @@ defmodule AshReplicant.CoverageTest do
 
     @identity %{system_identifier: "741852963", database: "ash_replicant_test"}
 
+    defp pgoutput_set(publication),
+      do: %AshReplicant.SourceSet{decoder: :pgoutput, publication: publication}
+
     test "preflight: opts without :database defer immediately and silently" do
       log =
         capture_log(fn ->
           assert {:ok, :deferred} =
-                   Coverage.preflight([], @identity, ["pub"], %{}, %{}, %{})
+                   Coverage.preflight([], @identity, pgoutput_set(["pub"]), %{}, %{}, %{})
         end)
 
       refute log =~ "[error]", "the census must not log against a pool that can never connect"
@@ -87,7 +90,8 @@ defmodule AshReplicant.CoverageTest do
     test "preflight: a nil opts list (host omitted :connection) defers the same way" do
       log =
         capture_log(fn ->
-          assert {:ok, :deferred} = Coverage.preflight(nil, @identity, ["pub"], %{}, %{}, %{})
+          assert {:ok, :deferred} =
+                   Coverage.preflight(nil, @identity, pgoutput_set(["pub"]), %{}, %{}, %{})
         end)
 
       refute log =~ "[error]", "the census must not log against a pool that can never connect"
@@ -100,7 +104,7 @@ defmodule AshReplicant.CoverageTest do
                    Coverage.preflight(
                      [hostname: "127.0.0.1", port: 1, database: nil],
                      @identity,
-                     ["pub"],
+                     pgoutput_set(["pub"]),
                      %{},
                      %{},
                      %{}
@@ -114,7 +118,7 @@ defmodule AshReplicant.CoverageTest do
     test "reconnect_check: opts without :database return :ok immediately and silently" do
       log =
         capture_log(fn ->
-          assert :ok = Coverage.reconnect_check([], @identity, ["pub"], %{}, %{})
+          assert :ok = Coverage.reconnect_check([], @identity, pgoutput_set(["pub"]), %{}, %{})
         end)
 
       refute log =~ "[error]", "the census must not log against a pool that can never connect"

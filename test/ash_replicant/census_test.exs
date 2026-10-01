@@ -27,8 +27,12 @@ defmodule AshReplicant.CensusTest do
     }
   end
 
+  defp source_set do
+    %AshReplicant.SourceSet{decoder: :pgoutput, publication: @publication}
+  end
+
   defp admitted_contract do
-    {:ok, contract} = Identity.build_contract(sink_config(), @publication)
+    {:ok, contract} = Identity.build_contract(sink_config(), source_set())
     contract
   end
 
@@ -308,6 +312,6 @@ defmodule AshReplicant.CensusTest do
   end
 
   defp config do
-    Map.merge(sink_config(), %{publication: @publication, ignored_sources: []})
+    Map.merge(sink_config(), %{source_set: source_set(), ignored_sources: []})
   end
 end

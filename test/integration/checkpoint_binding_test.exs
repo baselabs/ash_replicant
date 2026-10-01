@@ -177,6 +177,12 @@ defmodule AshReplicant.CheckpointBindingTest do
     :ok
   end
 
+  defp pgoutput_set(publication) when is_binary(publication),
+    do: %AshReplicant.SourceSet{decoder: :pgoutput, publication: [publication]}
+
+  defp pgoutput_set(publication),
+    do: %AshReplicant.SourceSet{decoder: :pgoutput, publication: publication}
+
   test "fresh bind: the actual session identity, timeline, and contract durably bind the row" do
     ref = attach_events()
 
@@ -195,7 +201,10 @@ defmodule AshReplicant.CheckpointBindingTest do
     assert row.commit_lsn == nil
 
     {:ok, contract} =
-      Identity.build_contract(FreshSink.__ash_replicant_config__(), [Marquee.publication()])
+      Identity.build_contract(
+        FreshSink.__ash_replicant_config__(),
+        pgoutput_set(Marquee.publication())
+      )
 
     assert row.publication_fingerprint == contract.fingerprint
     assert Identity.decode(row.publication_contract) == {:ok, contract.manifest}
@@ -817,7 +826,7 @@ defmodule AshReplicant.CheckpointBindingTest do
                AshReplicant.Coverage.preflight(
                  endpoint,
                  %{system_identifier: "sentinel-system", database: "sentinel-database"},
-                 ["ash_replicant_no_such_publication"],
+                 pgoutput_set(["ash_replicant_no_such_publication"]),
                  %{},
                  %{},
                  %{}
@@ -877,7 +886,8 @@ defmodule AshReplicant.CheckpointBindingTest do
         _sink -> [@bind_publication]
       end
 
-    {:ok, contract} = Identity.build_contract(sink.__ash_replicant_config__(), publication)
+    {:ok, contract} =
+      Identity.build_contract(sink.__ash_replicant_config__(), pgoutput_set(publication))
 
     contract
   end

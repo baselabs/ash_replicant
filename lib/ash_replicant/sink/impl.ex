@@ -44,10 +44,15 @@ defmodule AshReplicant.Sink.Impl do
   @snapshot_transaction_timeout 120_000
 
   @doc false
+  # The transport's context names the slot and the publication AS THE
+  # TRANSPORT SEES IT (nil under a plugin decoder, whose table set is not a
+  # publication — ADR-0026), so the guard compares that view against the
+  # admitted source set: a generation whose set drifted from the pipeline the
+  # transport actually started fails closed here.
   def handle_session_identity(
         %{
           slot_name: expected_slot,
-          publication: expected_publication,
+          source_set: expected_set,
           source_identity: %{
             system_identifier: expected_system,
             database: expected_database
@@ -57,8 +62,9 @@ defmodule AshReplicant.Sink.Impl do
           system_identifier: expected_system,
           database: expected_database
         } = identity,
-        %{slot_name: expected_slot, publication: expected_publication}
-      ) do
+        %{slot_name: expected_slot, publication: transport_publication}
+      )
+      when transport_publication == expected_set.publication do
     # The verdict event stays AT the verdict point, BEFORE any bind write —
     # the first-event ordering red gate depends on it.
     Telemetry.event([:ash_replicant, :sink, :session_identity_accepted], %{}, %{})
@@ -318,7 +324,7 @@ defmodule AshReplicant.Sink.Impl do
     AshReplicant.Coverage.reconnect_check(
       connection,
       config.source_identity,
-      config.publication,
+      config.source_set,
       config.resolver_index,
       config.source_contract.manifest
     )

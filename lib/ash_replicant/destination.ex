@@ -92,7 +92,7 @@ defmodule AshReplicant.Destination do
       :code_modules,
       :code_fingerprint,
       :source_identity,
-      :publication,
+      :source_set,
       :dynamic_repo,
       :delivery_run,
       :owner
@@ -113,7 +113,7 @@ defmodule AshReplicant.Destination do
             code_modules: [module()],
             code_fingerprint: binary(),
             source_identity: map(),
-            publication: [String.t()],
+            source_set: AshReplicant.SourceSet.t(),
             dynamic_repo: atom() | pid(),
             delivery_run: binary(),
             owner: pid()

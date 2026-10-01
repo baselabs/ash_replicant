@@ -58,6 +58,10 @@ defmodule AshReplicant.Integration.DoctorTest do
   end
 
   describe "the probe session is read-only at the SERVER" do
+    defp pgoutput_set do
+      %AshReplicant.SourceSet{decoder: :pgoutput, publication: [@publication]}
+    end
+
     test "PostgreSQL itself refuses DDL on the probe connection", %{conn: conn} do
       # Bypasses `admit!/1` deliberately: this asserts leg 2 of the no-writes
       # guarantee INDEPENDENTLY of leg 1.
@@ -82,7 +86,7 @@ defmodule AshReplicant.Integration.DoctorTest do
 
   describe "every probe statement runs on this server" do
     test "each admitted statement parses and executes", %{conn: conn} do
-      for sql <- Probe.statements([@publication]) do
+      for sql <- Probe.statements(pgoutput_set()) do
         assert {:ok, %Postgrex.Result{}} = Postgrex.query(conn, sql, statement_params(sql)),
                "statement failed on the live server: #{first_line(sql)}"
       end
@@ -91,7 +95,7 @@ defmodule AshReplicant.Integration.DoctorTest do
 
   describe "gather/3 returns real source facts" do
     test "the identity probe, census, role, privileges, and slot come back" do
-      assert {:ok, probed} = Probe.gather(Marquee.conn(), [@publication], @slot)
+      assert {:ok, probed} = Probe.gather(Marquee.conn(), pgoutput_set(), @slot)
 
       assert is_integer(probed.release)
       assert probed.release >= 150_000
@@ -112,16 +116,16 @@ defmodule AshReplicant.Integration.DoctorTest do
     end
 
     test "this server's release classifies as supported" do
-      assert {:ok, probed} = Probe.gather(Marquee.conn(), [@publication], @slot)
+      assert {:ok, probed} = Probe.gather(Marquee.conn(), pgoutput_set(), @slot)
 
-      check = Doctor.check_source_release(probed.release)
+      check = Doctor.check_source_release(probed.release, :pgoutput)
 
       assert check.status in [:pass, :warn]
       refute check.reason == :source_release_unsupported
     end
 
     test "the live replica identity is judged by the same rule activation uses" do
-      assert {:ok, probed} = Probe.gather(Marquee.conn(), [@publication], @slot)
+      assert {:ok, probed} = Probe.gather(Marquee.conn(), pgoutput_set(), @slot)
 
       assert probed.tables[{"public", @source_table}].relreplident == "f"
     end
@@ -273,6 +277,8 @@ defmodule AshReplicant.Integration.DoctorTest do
   defp statement_params(sql) do
     cond do
       String.contains?(sql, "pg_replication_slots WHERE slot_name") -> [@slot]
+      # The output-plugin extension probe binds the fixed plugin name.
+      String.contains?(sql, "pg_available_extensions") -> ["pglogical"]
       String.contains?(sql, "$1") -> [[@publication]]
       true -> []
     end

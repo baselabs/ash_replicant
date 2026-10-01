@@ -7,8 +7,9 @@ defmodule AshReplicant.Coverage do
   # CATALOGS only — no row data crosses, publication names bind `$1`, and
   # every error is a value-free structural reason (Critical Rule 4).
 
-  alias AshReplicant.{Checkpoint.Identity, Error, Resource.Info}
+  alias AshReplicant.{Checkpoint.Identity, Error, Resource.Info, SourceSet}
   alias Replicant.Decoder.OidDatabase
+  alias Replicant.Identifier
 
   @typedoc "Per-table catalog census: the live column shape + identity flags."
   @type census :: %{
@@ -639,15 +640,15 @@ defmodule AshReplicant.Coverage do
   unreachable — it cannot stream, so the bind proceeds and the next reachable
   re-check renders the verdict). Value-free reasons on violation.
   """
-  @spec reconnect_check(keyword(), map(), [String.t()], map(), Identity.manifest()) ::
+  @spec reconnect_check(keyword(), map(), SourceSet.t(), map(), Identity.manifest()) ::
           :ok | {:error, Error.t()}
-  def reconnect_check(connection_opts, source_identity, publication, index, contract) do
+  def reconnect_check(connection_opts, source_identity, source_set, index, contract) do
     opts = Keyword.merge(connection_opts || [], pool_size: 1)
     conn = start_preflight_connection(opts)
 
     result =
       with {:ok, conn} <- conn,
-           {:ok, census} <- collect_census(conn, publication),
+           {:ok, census} <- collect_census(conn, source_set),
            :ok <- verify_probe_identity(census.identity, source_identity) do
         facts = relation_facts(index, contract)
         ignored = MapSet.new(contract.ignores, &{&1.schema, &1.table})
@@ -713,6 +714,41 @@ defmodule AshReplicant.Coverage do
       "JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = p.schemaname"
   end
 
+  @doc """
+  The `sql_relreplident/0` row shape for an EXPLICIT table list (the plugin
+  decoders' census, ADR-0026): the table set comes from the caller — both
+  parts of every pair `Replicant.Identifier`-validated before the `VALUES`
+  interpolation, the same rule the framework's own `table_columns_for/1`
+  applies.
+  """
+  @spec sql_relreplident_for([{String.t(), String.t()}]) ::
+          {:ok, String.t()} | {:error, :invalid_identifier}
+  def sql_relreplident_for(tables) when is_list(tables) and tables != [] do
+    with :ok <- validate_table_pairs(tables) do
+      values = Enum.map_join(tables, ", ", fn {schema, table} -> "('#{schema}','#{table}')" end)
+
+      {:ok,
+       "SELECT n.nspname, c.relname, c.relreplident " <>
+         "FROM (VALUES #{values}) AS p0(nsp, rel) " <>
+         "JOIN pg_namespace n ON n.nspname = p0.nsp " <>
+         "JOIN pg_class c ON c.relname = p0.rel AND c.relnamespace = n.oid"}
+    end
+  end
+
+  def sql_relreplident_for(_other), do: {:error, :invalid_identifier}
+
+  defp validate_table_pairs(tables) do
+    tables
+    |> Enum.reduce_while(:ok, fn {schema, table}, :ok ->
+      with :ok <- Identifier.validate(schema),
+           :ok <- Identifier.validate(table) do
+        {:cont, :ok}
+      else
+        {:error, :invalid_identifier} = error -> {:halt, error}
+      end
+    end)
+  end
+
   # --- the activation preflight ---
 
   @doc """
@@ -726,20 +762,20 @@ defmodule AshReplicant.Coverage do
   @spec preflight(
           keyword(),
           map(),
-          [String.t()],
+          SourceSet.t(),
           map(),
           map(),
           AshReplicant.Checkpoint.Identity.manifest()
         ) ::
           {:ok, %{facts: relation_facts(), ignored: MapSet.t()}} | {:error, Error.t()}
-  def preflight(connection_opts, source_identity, publication, _sink_config, index, contract) do
+  def preflight(connection_opts, source_identity, source_set, _sink_config, index, contract) do
     opts = Keyword.merge(connection_opts || [], pool_size: 1)
 
     conn = start_preflight_connection(opts)
 
     result =
       with {:ok, conn} <- conn,
-           {:ok, census} <- collect_census(conn, publication),
+           {:ok, census} <- collect_census(conn, source_set),
            :ok <- verify_probe_identity(census.identity, source_identity) do
         coverage = __MODULE__.from_manifest(index, contract)
 
@@ -822,22 +858,19 @@ defmodule AshReplicant.Coverage do
     end
   end
 
-  # The census: identity probe + the three framework statements + the
-  # relreplident query, all read-only, publication bound $1.
-  defp collect_census(conn, publication) do
+  # The census: identity probe + the table-set statements. pgoutput keeps the
+  # publication-bound single pass (byte-identical to the pre-decoder census);
+  # the plugin decoders census an EXPLICIT table list — pglogical's members
+  # discovered from `pglogical.tables`, wal2json's the configured set — read
+  # through the framework's own `*_for/1` builders plus the adapter's
+  # `sql_relreplident_for/1`. All read-only; names validated before any
+  # interpolation.
+  defp collect_census(conn, %SourceSet{} = source_set) do
     with {:ok, %{rows: [[version, system_identifier, database]]}} <-
            query(conn, sql_identity_probe()),
-         {:ok, %Postgrex.Result{} = pub_rows} <-
-           query_framework(
-             conn,
-             fn -> Replicant.QueryBuilder.publication_tables(publication) end,
-             publication
-           ),
-         {:ok, %Postgrex.Result{} = column_rows} <-
-           query_framework(conn, fn -> Replicant.QueryBuilder.table_columns() end, publication),
-         {:ok, %Postgrex.Result{} = pk_rows} <-
-           query_framework(conn, fn -> Replicant.QueryBuilder.pk_columns() end, publication),
-         {:ok, %Postgrex.Result{} = ident_rows} <- query(conn, sql_relreplident(), [publication]) do
+         {:ok, table_rows} <- census_table_rows(conn, SourceSet.census_member(source_set)) do
+      {pub_rows, column_rows, pk_rows, ident_rows} = table_rows
+
       columns_by_table = group_columns(column_rows)
       pk_by_table = group_pk(pk_rows)
 
@@ -862,6 +895,66 @@ defmodule AshReplicant.Coverage do
        }}
     end
   end
+
+  # pgoutput: the publication-bound single pass, unchanged.
+  defp census_table_rows(conn, {:publication, publication}) do
+    with {:ok, %Postgrex.Result{} = pub_rows} <-
+           query_framework(
+             conn,
+             fn -> Replicant.QueryBuilder.publication_tables(publication) end,
+             publication
+           ),
+         {:ok, %Postgrex.Result{} = column_rows} <-
+           query_framework(conn, fn -> Replicant.QueryBuilder.table_columns() end, publication),
+         {:ok, %Postgrex.Result{} = pk_rows} <-
+           query_framework(conn, fn -> Replicant.QueryBuilder.pk_columns() end, publication),
+         {:ok, %Postgrex.Result{} = ident_rows} <- query(conn, sql_relreplident(), [publication]) do
+      {:ok, {pub_rows, column_rows, pk_rows, ident_rows}}
+    end
+  end
+
+  # wal2json: the configured tables ARE the table set.
+  defp census_table_rows(conn, {:tables, tables}) do
+    plugin_census(conn, tables)
+  end
+
+  # pglogical: the members of the configured replication sets, from
+  # pglogical's own catalog — the set plays the publication's role. A set
+  # with no members mirrors an empty publication: the coverage rules judge
+  # the (missing-everything) census.
+  defp census_table_rows(conn, {:replication_sets, sets}) do
+    with {:ok, sql} <- Replicant.QueryBuilder.replication_set_tables(sets),
+         {:ok, %Postgrex.Result{} = pub_rows} <- query(conn, sql, []) do
+      tables = Enum.map(pub_rows.rows, fn [schema, table, _qualified] -> {schema, table} end)
+      plugin_census(conn, tables)
+    end
+  end
+
+  defp plugin_census(_conn, []) do
+    {:ok, {empty_result(), empty_result(), empty_result(), empty_result()}}
+  end
+
+  defp plugin_census(conn, tables) do
+    with {:ok, column_sql} <- Replicant.QueryBuilder.table_columns_for(tables),
+         {:ok, %Postgrex.Result{} = column_rows} <- query(conn, column_sql, []),
+         {:ok, pk_sql} <- Replicant.QueryBuilder.pk_columns_for(tables),
+         {:ok, %Postgrex.Result{} = pk_rows} <- query(conn, pk_sql, []),
+         {:ok, ident_sql} <- sql_relreplident_for(tables),
+         {:ok, %Postgrex.Result{} = ident_rows} <- query(conn, ident_sql, []) do
+      # Only server-PRESENT tables enter the synthesized table set: a
+      # configured-but-absent table must hit the missing-expected-table rule
+      # (:source_table_missing), never a column-shape verdict.
+      present = MapSet.new(column_rows.rows, fn [schema, table | _rest] -> {schema, table} end)
+      tables = Enum.filter(tables, &MapSet.member?(present, &1))
+      {:ok, {table_set_result(tables), column_rows, pk_rows, ident_rows}}
+    end
+  end
+
+  defp table_set_result(tables) do
+    %Postgrex.Result{rows: Enum.map(tables, fn {schema, table} -> [schema, table, nil] end)}
+  end
+
+  defp empty_result, do: %Postgrex.Result{rows: []}
 
   defp group_columns(%{rows: rows}) do
     Map.new(rows, fn [schema, table, _qualified, col_raw, _col_quoted, col_type_oids] ->

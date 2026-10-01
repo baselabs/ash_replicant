@@ -261,8 +261,9 @@ The supported release foundation is Elixir 1.20.3 on Erlang/OTP 29 with Ash
 AshOnetime `>= 1.3.2 and < 2.0.0-0` (current lock 1.4.0) and AshCloak
 `>= 0.4.0 and < 1.0.0-0` (current lock 0.4.0; releases below 0.4.0 carry
 CVE-2026-81319 and CVE-2026-81322 and are not admitted). Replicant 1.4's
-decoder options are forwarded pass-through with `:pgoutput`-only admission
-(ADR-0026).
+decoder options pass through with FULL decoder admission —
+pgoutput/pglogical/wal2json, the plugin decoders live-tested on PostgreSQL
+9.6 and 12 (ADR-0026).
 
 ```bash
 asdf install

@@ -31,9 +31,10 @@ defmodule AshReplicant.Doctor.Probe do
   # Everything here reads CATALOGS only. Publication names bind `$1`; the slot
   # name binds `$1`. No row data crosses (Critical Rule 4).
 
-  alias AshReplicant.Coverage
+  alias AshReplicant.{Coverage, SourceSet}
   alias AshReplicant.Doctor.Error
   alias Replicant.Decoder.OidDatabase
+  alias Replicant.Identifier
 
   # Any of these appearing as a WHOLE WORD refuses the statement. The set is a
   # fail-closed superset: `ANALYZE`, `SET`, and `LOCK` are harmless in isolation
@@ -83,23 +84,27 @@ defmodule AshReplicant.Doctor.Probe do
   end
 
   @doc """
-  Every statement the probes issue for a publication list. The non-vacuity
-  anchor for `admit!/1`: a guard that admits nothing would be green and useless,
-  so the test asserts this whole list is admitted.
+  Every statement the probes issue for an admitted source set — the
+  non-vacuity anchor for `admit!/1`: a guard that admits nothing would be
+  green and useless, so the test asserts this whole list is admitted, for
+  EVERY decoder's statement set plus BOTH release forms of the slot
+  statement (ADR-0026).
   """
-  @spec statements([String.t()]) :: [String.t()]
-  def statements(publication) when is_list(publication) do
+  @spec statements(SourceSet.t()) :: [String.t()]
+  def statements(%SourceSet{} = source_set) do
     [
       Coverage.sql_identity_probe(),
-      Coverage.sql_relreplident(),
       sql_role_privileges(),
-      sql_table_privileges(),
-      sql_replication_slot()
-    ] ++ framework_statements(publication)
+      sql_output_plugin_extension(),
+      sql_replication_slot(130_000),
+      sql_replication_slot(90_600)
+    ] ++ table_set_statements(SourceSet.census_member(source_set))
   end
 
-  defp framework_statements(publication) do
+  defp table_set_statements({:publication, publication}) do
     [
+      Coverage.sql_relreplident(),
+      sql_table_privileges(),
       framework_sql(fn -> Replicant.QueryBuilder.publication_tables(publication) end),
       framework_sql(fn -> Replicant.QueryBuilder.table_columns() end),
       framework_sql(fn -> Replicant.QueryBuilder.pk_columns() end)
@@ -107,10 +112,42 @@ defmodule AshReplicant.Doctor.Probe do
     |> Enum.reject(&is_nil/1)
   end
 
+  # pglogical's members are server state, not config, so its per-table
+  # statements cannot be built at plan time — the statement set carries the
+  # (identifier-validated) set-name discovery query, and `gather` builds the
+  # per-table statements from the discovered members.
+  defp table_set_statements({:replication_sets, sets}) do
+    [framework_sql(fn -> Replicant.QueryBuilder.replication_set_tables(sets) end)]
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp table_set_statements({:tables, tables}) do
+    case tables do
+      [] ->
+        []
+
+      _ ->
+        [
+          ok_sql(fn -> Coverage.sql_relreplident_for(tables) end),
+          ok_sql(fn -> sql_table_privileges_for(tables) end),
+          ok_sql(fn -> Replicant.QueryBuilder.table_columns_for(tables) end),
+          ok_sql(fn -> Replicant.QueryBuilder.pk_columns_for(tables) end)
+        ]
+        |> Enum.reject(&is_nil/1)
+    end
+  end
+
   defp framework_sql(builder) do
     case builder.() do
       {:ok, sql} when is_binary(sql) -> sql
       sql when is_binary(sql) -> sql
+      _invalid -> nil
+    end
+  end
+
+  defp ok_sql(builder) do
+    case builder.() do
+      {:ok, sql} when is_binary(sql) -> sql
       _invalid -> nil
     end
   end
@@ -135,19 +172,71 @@ defmodule AshReplicant.Doctor.Probe do
   end
 
   @doc """
-  The slot's type, plugin, liveness, and retention horizon. `wal_status` and
-  `safe_wal_size` exist from PostgreSQL 13, so this is portable across the whole
-  PostgreSQL 15 through 18 support matrix — unlike `invalidation_reason` (PG18), `conflicting`
-  (PG16), and `inactive_since` (PG17). O03 (ADR-0022) added `safe_wal_size`
-  itself (not just its exhaustion) so `AshReplicant.Horizon` reads byte
-  headroom from the SAME statement — one SQL home (rule 11). The slot name
-  binds `$1`.
+  The `sql_table_privileges/0` row shape for an EXPLICIT table list (the
+  plugin decoders, ADR-0026): both parts of every pair
+  `Replicant.Identifier`-validated before the `VALUES` interpolation, the
+  framework's own `*_for/1` rule.
   """
-  @spec sql_replication_slot() :: String.t()
-  def sql_replication_slot do
+  @spec sql_table_privileges_for([{String.t(), String.t()}]) ::
+          {:ok, String.t()} | {:error, :invalid_identifier}
+  def sql_table_privileges_for(tables) when is_list(tables) and tables != [] do
+    with :ok <- validate_table_pairs(tables) do
+      values = Enum.map_join(tables, ", ", fn {schema, table} -> "('#{schema}','#{table}')" end)
+
+      {:ok,
+       "SELECT n.nspname, c.relname, " <>
+         "has_table_privilege(format('%I.%I', n.nspname, c.relname), 'SELECT') " <>
+         "FROM (VALUES #{values}) AS p0(nsp, rel) " <>
+         "JOIN pg_namespace n ON n.nspname = p0.nsp " <>
+         "JOIN pg_class c ON c.relname = p0.rel AND c.relnamespace = n.oid"}
+    end
+  end
+
+  def sql_table_privileges_for(_other), do: {:error, :invalid_identifier}
+
+  @doc """
+  Whether an output plugin's EXTENSION is available on the server — the one
+  plugin-presence fact a catalog read can prove (pglogical ships as an
+  extension; wal2json is a decoding library with no extension row, so its
+  presence stays the transport's connect-time probe). The fixed name binds
+  `$1`; value-free.
+  """
+  @spec sql_output_plugin_extension() :: String.t()
+  def sql_output_plugin_extension do
+    "SELECT name, installed_version IS NOT NULL FROM pg_available_extensions WHERE name = $1"
+  end
+
+  defp validate_table_pairs(tables) do
+    tables
+    |> Enum.reduce_while(:ok, fn {schema, table}, :ok ->
+      with :ok <- Identifier.validate(schema),
+           :ok <- Identifier.validate(table) do
+        {:cont, :ok}
+      else
+        {:error, :invalid_identifier} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  @doc """
+  The slot's type, plugin, liveness, and retention horizon, for the server
+  release the probe already read. `wal_status` and `safe_wal_size` exist from
+  PostgreSQL 13 — a pre-13 release gets the same row shape with NULL for both,
+  and the risk classifier reads an absent status as `:unknown`, never a
+  guess. O03 (ADR-0022) reads `safe_wal_size` from the SAME statement — one
+  SQL home (rule 11). The slot name binds `$1`.
+  """
+  @spec sql_replication_slot(pos_integer()) :: String.t()
+  def sql_replication_slot(release) when is_integer(release) and release >= 130_000 do
     "SELECT slot_type, plugin, active, wal_status, " <>
       "(safe_wal_size IS NOT NULL AND safe_wal_size <= 0) AS exhausted, " <>
       "safe_wal_size " <>
+      "FROM pg_replication_slots WHERE slot_name = $1"
+  end
+
+  def sql_replication_slot(_pre_13_release) do
+    "SELECT slot_type, plugin, active, NULL::text AS wal_status, " <>
+      "NULL::bool AS exhausted, NULL::int8 AS safe_wal_size " <>
       "FROM pg_replication_slots WHERE slot_name = $1"
   end
 
@@ -165,15 +254,15 @@ defmodule AshReplicant.Doctor.Probe do
   caller can therefore preserve established reachability and report the
   unjudgeable checks without calling a responding server unreachable.
   """
-  @spec gather(keyword(), [String.t()], String.t()) ::
+  @spec gather(keyword(), SourceSet.t(), String.t()) ::
           {:ok, map()} | {:error, :unreachable | :permission_denied | :query_failed}
-  def gather(connection_opts, publication, slot_name) do
+  def gather(connection_opts, source_set, slot_name) do
     opts = connection_options(connection_opts || [])
 
     case open(opts) do
       {:ok, conn} ->
         try do
-          collect(conn, publication, slot_name)
+          collect(conn, source_set, slot_name)
         after
           GenServer.stop(conn)
         end
@@ -223,11 +312,7 @@ defmodule AshReplicant.Doctor.Probe do
     case open(opts) do
       {:ok, conn} ->
         try do
-          case query(conn, sql_replication_slot(), [slot_name]) do
-            {:ok, %{rows: []}} -> nil
-            {:ok, result} -> slot(result)
-            {:error, _reason} -> :unreachable
-          end
+          read_slot(conn, slot_name)
         after
           GenServer.stop(conn)
         end
@@ -237,21 +322,20 @@ defmodule AshReplicant.Doctor.Probe do
     end
   end
 
-  defp collect(conn, publication, slot_name) do
+  defp collect(conn, source_set, slot_name) do
     with {:ok, %{rows: [[release, system_identifier, database]]}} <-
            query(conn, Coverage.sql_identity_probe()),
-         {:ok, pub_rows} <-
-           framework_query(conn, publication, fn ->
-             Replicant.QueryBuilder.publication_tables(publication)
-           end),
-         {:ok, column_rows} <-
-           framework_query(conn, publication, fn -> Replicant.QueryBuilder.table_columns() end),
-         {:ok, pk_rows} <-
-           framework_query(conn, publication, fn -> Replicant.QueryBuilder.pk_columns() end),
-         {:ok, ident_rows} <- query(conn, Coverage.sql_relreplident(), [publication]),
+         # The extension read runs BEFORE the table-set probes: with the
+         # pglogical extension absent, `pglogical.tables` does not exist and
+         # the census query faults — the plugin verdict must SURVIVE that
+         # failure to be reportable at all (ADR-0026).
+         {:ok, extension} <- probe_extension(conn, source_set),
+         {:ok, table_rows} <- probe_table_rows(conn, SourceSet.census_member(source_set)),
+         {:ok, privilege_rows} <- probe_privileges(conn, SourceSet.census_member(source_set)),
          {:ok, role_rows} <- query(conn, sql_role_privileges()),
-         {:ok, privilege_rows} <- query(conn, sql_table_privileges(), [publication]),
-         {:ok, slot_rows} <- query(conn, sql_replication_slot(), [slot_name]) do
+         {:ok, slot_rows} <- query(conn, sql_replication_slot(release), [slot_name]) do
+      {pub_rows, column_rows, pk_rows, ident_rows} = table_rows
+
       {:ok,
        %{
          release: release,
@@ -259,6 +343,7 @@ defmodule AshReplicant.Doctor.Probe do
          tables: census(pub_rows, column_rows, pk_rows, ident_rows),
          role: role(role_rows),
          table_privileges: table_privileges(privilege_rows),
+         extension: extension,
          slot: slot(slot_rows)
        }}
     else
@@ -269,6 +354,125 @@ defmodule AshReplicant.Doctor.Probe do
         {:error, :query_failed}
     end
   end
+
+  # The census table rows per decoder — the same statements
+  # `AshReplicant.Coverage.collect_census/2` runs, re-derived through the
+  # same builders (rule 11: one SQL home).
+  defp probe_table_rows(conn, {:publication, publication}) do
+    with {:ok, pub_rows} <-
+           framework_query(conn, publication, fn ->
+             Replicant.QueryBuilder.publication_tables(publication)
+           end),
+         {:ok, column_rows} <-
+           framework_query(conn, publication, fn -> Replicant.QueryBuilder.table_columns() end),
+         {:ok, pk_rows} <-
+           framework_query(conn, publication, fn -> Replicant.QueryBuilder.pk_columns() end),
+         {:ok, ident_rows} <- query(conn, Coverage.sql_relreplident(), [publication]) do
+      {:ok, {pub_rows, column_rows, pk_rows, ident_rows}}
+    end
+  end
+
+  defp probe_table_rows(conn, {:tables, tables}) do
+    probe_tables_explicit(conn, tables)
+  end
+
+  defp probe_table_rows(conn, {:replication_sets, sets}) do
+    with {:ok, sql} <- Replicant.QueryBuilder.replication_set_tables(sets),
+         {:ok, %Postgrex.Result{} = pub_rows} <- query(conn, sql, []) do
+      tables = Enum.map(pub_rows.rows, fn [schema, table, _qualified] -> {schema, table} end)
+      probe_tables_explicit(conn, tables)
+    else
+      {:error, :invalid_identifier} -> {:error, :query_failed}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp probe_tables_explicit(_conn, []) do
+    {:ok, {empty(), empty(), empty(), empty()}}
+  end
+
+  defp probe_tables_explicit(conn, tables) do
+    with {:ok, column_sql} <- Replicant.QueryBuilder.table_columns_for(tables),
+         {:ok, column_rows} <- query(conn, column_sql, []),
+         {:ok, pk_sql} <- Replicant.QueryBuilder.pk_columns_for(tables),
+         {:ok, pk_rows} <- query(conn, pk_sql, []),
+         {:ok, ident_sql} <- Coverage.sql_relreplident_for(tables),
+         {:ok, ident_rows} <- query(conn, ident_sql, []) do
+      # Only server-PRESENT tables enter the synthesized table set: a
+      # configured-but-absent table must hit the missing-expected-table rule
+      # (:source_table_missing), never a column-shape verdict.
+      {:ok, {present_table_set(tables, column_rows), column_rows, pk_rows, ident_rows}}
+    else
+      {:error, :invalid_identifier} -> {:error, :query_failed}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp present_table_set(tables, column_rows) do
+    present =
+      column_rows.rows
+      |> MapSet.new(fn [schema, table | _rest] -> {schema, table} end)
+
+    tables
+    |> Enum.filter(&MapSet.member?(present, &1))
+    |> table_set_result()
+  end
+
+  defp probe_privileges(conn, {:publication, publication}) do
+    query(conn, sql_table_privileges(), [publication])
+  end
+
+  defp probe_privileges(conn, {:tables, tables}), do: explicit_privileges(conn, tables)
+
+  defp probe_privileges(conn, {:replication_sets, sets}) do
+    with {:ok, sql} <- Replicant.QueryBuilder.replication_set_tables(sets),
+         {:ok, %Postgrex.Result{} = pub_rows} <- query(conn, sql, []) do
+      tables = Enum.map(pub_rows.rows, fn [schema, table, _qualified] -> {schema, table} end)
+      explicit_privileges(conn, tables)
+    else
+      {:error, :invalid_identifier} -> {:error, :query_failed}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp explicit_privileges(_conn, []) do
+    {:ok, %Postgrex.Result{rows: []}}
+  end
+
+  defp explicit_privileges(conn, tables) do
+    case sql_table_privileges_for(tables) do
+      {:ok, sql} -> query(conn, sql, [])
+      {:error, :invalid_identifier} -> {:error, :query_failed}
+    end
+  end
+
+  # The output-plugin extension fact, for the decoders whose presence a
+  # catalog read can prove.
+  defp probe_extension(conn, %SourceSet{decoder: :pglogical}) do
+    case query(conn, sql_output_plugin_extension(), ["pglogical"]) do
+      {:ok, result} -> {:ok, extension(result)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp probe_extension(_conn, %SourceSet{decoder: :pgoutput}), do: {:ok, :not_applicable}
+
+  # wal2json is a decoding library, not an extension: no catalog row can
+  # prove it, and the transport's connect-time probe stays the authority.
+  defp probe_extension(_conn, %SourceSet{decoder: :wal2json}), do: {:ok, :not_provable}
+
+  defp extension(%{rows: rows}) do
+    case rows do
+      [[name, installed?]] -> %{name: name, installed?: installed? == true}
+      [] -> nil
+    end
+  end
+
+  defp table_set_result(tables) do
+    %Postgrex.Result{rows: Enum.map(tables, fn {schema, table} -> [schema, table, nil] end)}
+  end
+
+  defp empty, do: %Postgrex.Result{rows: []}
 
   defp census(pub_rows, column_rows, pk_rows, ident_rows) do
     columns_by_table =
@@ -350,6 +554,25 @@ defmodule AshReplicant.Doctor.Probe do
 
   def classify_query_error(%DBConnection.ConnectionError{}), do: :unreachable
   def classify_query_error(_error), do: :query_failed
+
+  defp read_slot(conn, slot_name) do
+    with {:ok, release} <- release_of(conn),
+         {:ok, result} <- query(conn, sql_replication_slot(release), [slot_name]) do
+      case result do
+        %{rows: []} -> nil
+        _read -> slot(result)
+      end
+    else
+      _fault -> :unreachable
+    end
+  end
+
+  defp release_of(conn) do
+    case query(conn, "SELECT current_setting('server_version_num')::int", []) do
+      {:ok, %{rows: [[release]]}} when is_integer(release) -> {:ok, release}
+      _other -> {:error, :query_failed}
+    end
+  end
 
   @doc """
   The probe connection options: the operator's own connection facts, with the

@@ -8,9 +8,17 @@ defmodule AshReplicant.Test.AdmittedGeneration do
 
   def put!(sink, opts \\ []) when is_atom(sink) do
     config = sink.__ash_replicant_config__()
-    publication = Keyword.get(opts, :publication, ["test_publication"])
+
+    source_set =
+      Keyword.get_lazy(opts, :source_set, fn ->
+        %AshReplicant.SourceSet{
+          decoder: :pgoutput,
+          publication: Keyword.get(opts, :publication, ["test_publication"])
+        }
+      end)
+
     {:ok, manifest} = Destination.manifest(config)
-    {:ok, source_contract} = Identity.build_contract(config, publication)
+    {:ok, source_contract} = Identity.build_contract(config, source_set)
 
     coverage =
       case Keyword.get(opts, :coverage) do
@@ -45,7 +53,7 @@ defmodule AshReplicant.Test.AdmittedGeneration do
           system_identifier: "test-system",
           database: "test-database"
         }),
-      publication: publication,
+      source_set: source_set,
       dynamic_repo: dynamic_repo,
       delivery_run:
         Keyword.get_lazy(opts, :delivery_run, fn ->

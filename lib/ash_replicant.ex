@@ -27,6 +27,7 @@ defmodule AshReplicant do
   alias AshReplicant.Sink.Impl
   alias AshReplicant.Snapshot.Provenance
   alias AshReplicant.Snapshot.State
+  alias AshReplicant.SourceSet
   alias AshReplicant.Status
 
   @doc "The library version string."
@@ -44,17 +45,18 @@ defmodule AshReplicant do
       from the actual replication session, as
       `[system_identifier: "...", database: "..."]`.
     * `:go_forward_only` — passed through to `Replicant.start_link/1`.
-    * `:decoder`, `:replication_sets`, `:tables`, `:allow_keyless_tables`, and
-      `:schema_check_interval` — Replicant 1.4's decoder selection, passed
-      through to `Replicant.start_link/1` unchanged (ADR-0026): decoder choice
-      is a tenant-blind transport concern. ADMISSION is `:pgoutput`-only — the
-      adapter's source-coverage census, contract manifest, and doctor catalog
-      statements are publication-scoped — so `:pglogical`/`:wal2json` fail
-      closed at start (`{:error, :decoder_unsupported}`) and in the doctor's
-      plan. The rest of the per-decoder grammar (a table-set key belonging to
-      another decoder, an unknown decoder atom, a wal2json-only knob under
-      pgoutput) is Replicant's own validation and surfaces as its
-      `{:error, :config_invalid}`.
+    * `:decoder`, `:replication_sets`, `:tables`, `:allow_keyless_tables:`,
+      and `:schema_check_interval` — Replicant 1.4's decoder selection,
+      passed through to `Replicant.start_link/1` unchanged and ADMITTED for
+      all three decoders (ADR-0026): the table-set key names the source for
+      the adapter's own census (`publication:` for `:pgoutput`, the default;
+      `replication_sets:` for `:pglogical`; `tables:` for `:wal2json`) — a
+      missing or mis-shaped one fails closed with
+      `{:error, :config_invalid}`. Everything else about the decoder grammar
+      (a key belonging to another decoder, a wal2json-only knob under
+      pgoutput, a capability the chosen decoder cannot express — `messages:`
+      on pglogical, `streaming:`/`failover:` off pgoutput) is Replicant's own
+      validation surfaced raw.
     * `:snapshot` — `false`, Replicant's v1 snapshot (`true`), or sink-owned
       incremental snapshot options (`[mode: :incremental, ...]`). Incremental
       mode requires every mapped resource to declare `snapshot_provenance true`.
@@ -585,8 +587,8 @@ defmodule AshReplicant do
     :connection,
     :publication,
     # The Replicant 1.4 decoder grammar (ADR-0026) — forwarded so the transport
-    # owns every rule of its own option set; the adapter adds only the
-    # :pgoutput admission rule in validate_decoder/1.
+    # owns every rule of its own option set; the adapter owns only the
+    # table-set admission SourceSet.normalize/1 decides (and the census reads).
     :decoder,
     :replication_sets,
     :tables,
@@ -601,23 +603,6 @@ defmodule AshReplicant do
     :max_command_retries,
     :failover
   ]
-
-  # ADR-0026: the one adapter-side rule on Replicant 1.4's decoder selection.
-  # The coverage census (`pg_publication_tables`), the contract manifest
-  # (publication-scoped), and the doctor's catalog statements are
-  # pgoutput-shaped, so the two plugin decoders are refused HERE with the
-  # named error — never the misleading nil-publication `:config_invalid` a
-  # plugin-shaped config would otherwise produce. Any other decoder value is
-  # forwarded untouched: the grammar (including misspellings) is the
-  # transport's, and Replicant's own `:config_invalid` names it.
-  @doc false
-  @spec validate_decoder(keyword()) :: :ok | {:error, :decoder_unsupported}
-  def validate_decoder(opts) do
-    case Keyword.get(opts, :decoder, :pgoutput) do
-      decoder when decoder in [:pglogical, :wal2json] -> {:error, :decoder_unsupported}
-      _forwarded_to_the_transport -> :ok
-    end
-  end
 
   # The owner's activation body (ADR-0014): the full validate + preflight +
   # lock chain, run in the STARTING CALLER (PipelineOwner.start_link/1) so
@@ -640,15 +625,14 @@ defmodule AshReplicant do
     with {:ok, sink, sink_config} <- validate_sink(opts),
          {:ok, census} <- Census.options(opts),
          {:ok, source_identity} <- validate_source_identity(opts),
-         :ok <- validate_decoder(opts),
-         {:ok, publication} <- normalize_publication(Keyword.get(opts, :publication)) do
+         {:ok, source_set} <- SourceSet.normalize(opts) do
       activation_lock(sink_config.slot_name, fn ->
         activate_slot(
           opts,
           sink,
           sink_config,
           source_identity,
-          publication,
+          source_set,
           owner_pid,
           census
         )
@@ -661,17 +645,17 @@ defmodule AshReplicant do
          sink,
          sink_config,
          source_identity,
-         publication,
+         source_set,
          owner_pid,
          census
        ) do
     with {:ok, admitted} <-
-           admit_slot(opts, sink, sink_config, source_identity, publication, owner_pid) do
+           admit_slot(opts, sink, sink_config, source_identity, source_set, owner_pid) do
       {:ok, Map.merge(admitted, %{sink: sink, census: census})}
     end
   end
 
-  defp admit_slot(opts, sink, sink_config, source_identity, publication, owner_pid) do
+  defp admit_slot(opts, sink, sink_config, source_identity, source_set, owner_pid) do
     key = {AshReplicant, sink_config.slot_name}
 
     case :persistent_term.get(key, :none) do
@@ -682,7 +666,7 @@ defmodule AshReplicant do
           sink,
           sink_config,
           source_identity,
-          publication,
+          source_set,
           owner_pid
         )
 
@@ -693,7 +677,7 @@ defmodule AshReplicant do
           sink,
           sink_config,
           source_identity,
-          publication,
+          source_set,
           owner_pid,
           owner
         )
@@ -709,7 +693,7 @@ defmodule AshReplicant do
          sink,
          sink_config,
          source_identity,
-         publication,
+         source_set,
          owner_pid,
          owner
        ) do
@@ -719,7 +703,7 @@ defmodule AshReplicant do
       _ = safe_stop(sink_config.slot_name)
       :persistent_term.erase(key)
 
-      start_with_generation(key, opts, sink, sink_config, source_identity, publication, owner_pid)
+      start_with_generation(key, opts, sink, sink_config, source_identity, source_set, owner_pid)
     end
   end
 
@@ -729,12 +713,12 @@ defmodule AshReplicant do
          sink,
          sink_config,
          source_identity,
-         publication,
+         source_set,
          owner_pid
        ) do
     with {:ok, manifest} <- AshReplicant.Destination.manifest(sink_config),
          {:ok, source_contract} <-
-           Identity.build_contract(sink_config, publication),
+           Identity.build_contract(sink_config, source_set),
          {:ok, index} <- AshReplicant.Resolver.build_index(sink_config.domains),
          :ok <- validate_sink_kind(sink_config, index),
          :ok <- validate_initial_state(opts, sink_config, index),
@@ -743,7 +727,7 @@ defmodule AshReplicant do
            Coverage.preflight(
              Keyword.get(opts, :connection),
              source_identity,
-             publication,
+             source_set,
              sink_config,
              index,
              source_contract.manifest
@@ -793,7 +777,7 @@ defmodule AshReplicant do
         code_modules: code_modules,
         code_fingerprint: code_fingerprint,
         source_identity: source_identity,
-        publication: publication,
+        source_set: source_set,
         dynamic_repo: dynamic_repo,
         # The V1 delivery-run id (S02 / ADR-0017): minted PER ACTIVATION, from
         # nothing. A newly exported, operator-authorized snapshot retry under a
@@ -1000,7 +984,7 @@ defmodule AshReplicant do
          true <- config.resolver_index == generation.resolver_index,
          true <- config.destination_manifest == generation.manifest,
          true <- config.source_identity == generation.source_identity,
-         true <- config.publication == generation.publication,
+         true <- config.source_set == generation.source_set,
          true <- config.source_contract == generation.source_contract,
          true <- config.coverage == generation.coverage,
          true <- config.dynamic_repo == generation.dynamic_repo,
@@ -1035,7 +1019,7 @@ defmodule AshReplicant do
       source_connection: generation.source_connection,
       coverage: generation.coverage,
       source_identity: generation.source_identity,
-      publication: generation.publication,
+      source_set: generation.source_set,
       generation: generation.reference,
       dynamic_repo: generation.dynamic_repo,
       # The MODULE repo in the Ash data-layer context (callable); the
@@ -1139,13 +1123,6 @@ defmodule AshReplicant do
 
   defp nonempty_binary(value) when is_binary(value) and value != "", do: {:ok, value}
   defp nonempty_binary(_value), do: :error
-
-  defp normalize_publication(publication) when is_binary(publication), do: {:ok, [publication]}
-
-  defp normalize_publication(publication) when is_list(publication) and publication != [],
-    do: {:ok, publication}
-
-  defp normalize_publication(_publication), do: {:error, :config_invalid}
 
   # A generation is owned only by a live local owner (ADR-0014): anything
   # else — a dead owner, a foreign pid shape — fails closed at every

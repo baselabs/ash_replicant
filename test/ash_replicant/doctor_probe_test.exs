@@ -121,7 +121,12 @@ defmodule AshReplicant.DoctorProbeTest do
 
   describe "admit!/1 non-vacuity" do
     test "every statement the probes actually issue is admitted" do
-      statements = Probe.statements(["pub_one", "pub_two"])
+      source_set = %AshReplicant.SourceSet{
+        decoder: :pgoutput,
+        publication: ["pub_one", "pub_two"]
+      }
+
+      statements = Probe.statements(source_set)
 
       assert length(statements) >= 5
 

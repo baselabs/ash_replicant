@@ -56,7 +56,13 @@ defmodule AshReplicant.Pipeline do
   supervisor simply stays up with no children until the operator acts.
   """
 
-  @required_options [:connection, :publication, :source_identity]
+  @required_options [:connection, :source_identity]
+
+  # The table-set key the configured decoder names its source by (ADR-0026):
+  # `publication:` for pgoutput (the default), `replication_sets:` for
+  # pglogical, `tables:` for wal2json. Presence only — the values are never
+  # read, exactly like every other required key here.
+  @table_set_keys %{pgoutput: :publication, pglogical: :replication_sets, wal2json: :tables}
 
   @macro_options [:otp_app, :sink]
 
@@ -194,12 +200,51 @@ defmodule AshReplicant.Pipeline do
   end
 
   defp require_options!(options, otp_app, module) do
-    case Enum.reject(@required_options, &supplied?(options, &1)) do
-      [] -> :ok
-      missing -> raise ArgumentError, missing_message(missing, otp_app, module)
+    case table_set_decoder(options) do
+      {:ok, decoder} ->
+        required = @required_options ++ [@table_set_keys[decoder]]
+
+        case Enum.reject(required, &supplied?(options, &1)) do
+          [] -> :ok
+          missing -> raise ArgumentError, missing_message(missing, otp_app, module)
+        end
+
+      :error ->
+        raise ArgumentError, unknown_decoder_message(otp_app, module)
     end
   end
 
+  # A `decoder:` the transport itself would not accept fails closed HERE —
+  # naming the three accepted atoms, never a silent fall back to the
+  # pgoutput key (the transport rejects the same value at start).
+  defp table_set_decoder(options) do
+    case Keyword.get(options, :decoder, :pgoutput) do
+      decoder when is_map_key(@table_set_keys, decoder) -> {:ok, decoder}
+      _other -> :error
+    end
+  end
+
+  defp unknown_decoder_message(otp_app, module) do
+    """
+    #{inspect(module)} is configured with a decoder AshReplicant does not admit.
+
+    The admitted decoders are :pgoutput, :pglogical, and :wal2json; the \
+    table-set key follows the decoder (`publication:`, `replication_sets:`, \
+    `tables:`):
+
+        config #{inspect(otp_app)}, #{inspect(module)},
+          connection: [hostname: "...", database: "..."],
+          decoder: :pglogical,
+          replication_sets: ["default"],
+          source_identity: [system_identifier: "...", database: "..."]
+
+    The configured value is never shown: it may carry anything at all.
+    """
+  end
+
+  # An unknown decoder leaves the pipeline without a nameable table-set key:
+  # fail closed naming the decoder key, before activation's own grammar
+  # refusal runs (the transport rejects the same atom at start).
   # A key present but empty is not supplied: `publication: ""` would reach
   # activation as a config error far from the operator who wrote it.
   defp supplied?(options, key) do
@@ -223,7 +268,9 @@ defmodule AshReplicant.Pipeline do
     #{inspect(module)} is configured but incomplete: #{inspect(missing)} missing.
 
     AshReplicant will not supervise a partially-configured pipeline — an owner that \
-    never starts is a silent outage, not a safe default. Supply every required key:
+    never starts is a silent outage, not a safe default. Supply every required key \
+    (the table-set key follows the configured decoder: `publication:` for \
+    pgoutput, `replication_sets:` for pglogical, `tables:` for wal2json):
 
         config #{inspect(otp_app)}, #{inspect(module)},
           connection: [hostname: "...", database: "..."],

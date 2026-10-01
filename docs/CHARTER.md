@@ -38,7 +38,7 @@ This is "the `ash_postgres` of `replicant`" — just as `ash_postgres` is not
 |-------|-----------------|
 | **Ash core** | multitenancy DSL, policies, the tenant concept |
 | **AshReplicant** ← HERE | resource resolution, tenant routing, sensitive-column verification, mirror actions |
-| **replicant** | PostgreSQL logical replication (pgoutput), transaction assembly, WAL ordering and acknowledgement |
+| **replicant** | PostgreSQL logical replication (pgoutput, pglogical, wal2json), transaction assembly, WAL ordering and acknowledgement |
 | **Postgres** | logical decoding output |
 
 ## Scope
@@ -62,9 +62,9 @@ This is "the `ash_postgres` of `replicant`" — just as `ash_postgres` is not
 - Transport, protocol, socket lifecycle
 - Postgres logical replication slot / publication management
 - WAL message decoding
-- Logical-decoding output-plugin (decoder) selection — the options pass
-  through unchanged; the grammar, capabilities, and decoder halts are the
-  transport's, with `:pgoutput`-only admission here (ADR-0026)
+- The output-plugin (decoder) GRAMMAR, capabilities, and decoder halts —
+  the options pass through unchanged; the decoder-scoped table set feeds
+  this adapter's own census, contract, and doctor (ADR-0026)
 - Transaction assembly and commit-LSN ordering
 - Schema-change detection
 - Snapshot extraction, chunking, and transport
@@ -154,8 +154,8 @@ AshPostgres 2.11, Postgrex 0.22.4, ymlr 5.1.6, and AshOnetime 0.6.0 with clean
 dependency audits and non-vacuous release gates. The 1.x line — 1.0.0
 (2026-08-24), 1.1.0 and 1.2.0 (2026-08-25), 1.3.0 (2026-09-22) — shipped the
 roadmap program; 1.4.0 (2026-09-29) moved the sibling-economy dependency
-floors; 1.5.0 (2026-10-01) folded in Replicant 1.4's decoder-option surface
-with `:pgoutput`-only admission (ADR-0026); per-release entries live in
+floors; 1.5.0 (2026-10-01) folded in Replicant 1.4's decoder-option surface with
+full pglogical/wal2json admission on PostgreSQL 9.6 and 12 (ADR-0026); per-release entries live in
 `CHANGELOG.md` and the decisions in `docs/adr/`.
 
 Release history has one forensic caveat: Hex package 0.3.3 is real and its

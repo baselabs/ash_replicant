@@ -43,6 +43,16 @@ else
   performance_excluded=1
 fi
 
+# The old-major decoder lanes carry :pgold; an --include on the command
+# line lifts configure-excludes, so the runner owns this exclusion explicitly
+# exactly as it owns the performance one: run the lanes only when the plugin
+# substrate URL is set (CI's decoder-old-majors cells set it).
+pgold_excluded=0
+if [[ "${ASH_REPLICANT_PGOLD_URL:-}" == "" ]]; then
+  mix_args+=("--exclude" "pgold")
+  pgold_excluded=1
+fi
+
 for argument in "$@"; do
   if [[ "$argument" == "--allow-excluded" ]]; then
     if [[ -n "$allow_excluded" ]]; then
@@ -59,7 +69,7 @@ done
 # The default performance exclusion puts ', N excluded' on the Result line;
 # the evidence gate accepts that ONLY with --allow-excluded, so the runner
 # owns the flag whenever it owns the exclusion (an explicit pass wins first).
-if [[ "$performance_excluded" -eq 1 && -z "$allow_excluded" ]]; then
+if [[ "$performance_excluded" -eq 1 || "$pgold_excluded" -eq 1 ]] && [[ -z "$allow_excluded" ]]; then
   allow_excluded="--allow-excluded"
 fi
 

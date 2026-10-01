@@ -33,7 +33,7 @@ defmodule AshReplicant.MessageActionsTest do
 
     Messages.MarqueeSink.handle_session_identity(identity, %{
       slot_name: @slot,
-      publication: generation.publication
+      publication: generation.source_set.publication
     })
 
     run_id = "c1-direct-#{System.unique_integer([:positive])}"
@@ -481,7 +481,7 @@ defmodule AshReplicant.MessagePipelineTest do
     :ok =
       Messages.MarqueeSink.handle_session_identity(identity, %{
         slot_name: @slot,
-        publication: generation.publication
+        publication: generation.source_set.publication
       })
 
     generation

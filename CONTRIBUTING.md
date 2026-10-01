@@ -14,11 +14,15 @@ Thank you for your interest in contributing to AshReplicant!
   vulnerable and the requirement refuses to resolve to one).
 - **PostgreSQL** with `wal_level=logical` for the live integration gate; the
   integration suite runs against a live Postgres with a logical replication slot
-  and publication. CI runs pinned PostgreSQL 16, 17, and 18 cells; the local gate
-  runs whatever instance
+  and publication. CI runs pinned PostgreSQL 16, 17, and 18 cells plus the
+  `decoder-old-majors` cells (PostgreSQL 12 and 9.6 with the plugin substrate —
+  `test/support/pg_old.dockerfile`, the commit-pinned pglogical 2.4.8 +
+  wal2json build); the local gate runs whatever instance
   `ASH_REPLICANT_TEST_URL` points at (derive the live version with
-  `SELECT version();` — never assume it from this doc), and the support
-  matrix is PG16–18
+  `SELECT version();` — never assume it from this doc). The support matrix:
+  pgoutput on PG12 and 15–18, pglogical/wal2json on PG9.6 and 12; locally
+  the decoder lane runs against a cluster-hosted old-major source via
+  `ASH_REPLICANT_PGOLD_URL` (skipped when unset)
 
 ## Getting Started
 

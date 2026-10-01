@@ -140,7 +140,7 @@ defmodule AshReplicant.Census do
   @doc false
   @spec classify_contract(map(), Identity.contract()) :: Report.verdict()
   def classify_contract(config, admitted_contract) do
-    case Identity.build_contract(config, config.publication) do
+    case Identity.build_contract(config, config.source_set) do
       {:ok, ^admitted_contract} -> :pass
       {:ok, _other} -> {:drift, :publication_contract_incompatible}
       {:error, _reason} -> {:drift, :publication_contract_incompatible}
@@ -300,7 +300,7 @@ defmodule AshReplicant.Census do
     config.source_connection
     |> Coverage.preflight(
       config.source_identity,
-      config.publication,
+      config.source_set,
       config,
       config.resolver_index,
       config.source_contract.manifest

@@ -169,7 +169,7 @@ defmodule AshReplicant.NotifierLoadBindingIntegrationTest do
 
     DriftLoadSink.handle_session_identity(identity, %{
       slot_name: @slot,
-      publication: generation.publication
+      publication: generation.source_set.publication
     })
 
     Application.put_env(:ash_replicant, key, [:spy_probe, :other_probe])

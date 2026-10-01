@@ -44,7 +44,7 @@ re-implement Ash core's multitenancy concept.
 flowchart TD
   A["Ash core<br/>multitenancy DSL · policies · the tenant concept"]
   B["AshReplicant  ← HERE<br/>resource resolution · tenant routing<br/>sensitive-column verification · mirror actions"]
-  C["replicant<br/>Postgres logical replication (pgoutput)<br/>transaction assembly · WAL ordering"]
+  C["replicant<br/>Postgres logical replication (pgoutput · pglogical · wal2json)<br/>transaction assembly · WAL ordering"]
   D["Postgres<br/>logical decoding output"]
   A --> B --> C --> D
 ```
@@ -607,13 +607,14 @@ declares `snapshot_provenance true`; activation otherwise fails closed with
 
 Replicant 1.4's decoder options (`decoder:`, `replication_sets:`, `tables:`,
 `allow_keyless_tables:`, `schema_check_interval:`) are forwarded to the transport
-unchanged, with one adapter-side admission rule: the decoder must be `:pgoutput`
-(the default), because this adapter's coverage census and contract manifest are
-publication-scoped. `decoder: :pglogical` or `decoder: :wal2json` fails closed at
-start with `{:error, :decoder_unsupported}` — never a silent pgoutput run
-(ADR-0026). The rest of the decoder grammar is Replicant's own validation: a
-table-set key belonging to another decoder, or a wal2json-only knob under
-pgoutput, comes back as Replicant's `{:error, :config_invalid}`.
+unchanged and admitted for all three decoders. The table-set key names the
+source for this adapter's own census — `publication:` for pgoutput (the
+default), `replication_sets:` for pglogical, `tables:` for wal2json — so the
+coverage, contract, and doctor checks judge a plugin decoder's table set
+exactly as they judge a publication (ADR-0026). The rest of the decoder
+grammar is Replicant's own validation: a table-set key belonging to another
+decoder, or a wal2json-only knob under pgoutput, comes back as Replicant's
+`{:error, :config_invalid}`.
 
 Stop it (idempotent; clears the cached index) with
 `AshReplicant.stop_supervised("shop_orders")`.

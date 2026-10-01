@@ -178,7 +178,7 @@ defmodule AshReplicant.NotifierSuppressionTest do
 
     SnapshotLoadSink.handle_session_identity(identity, %{
       slot_name: "notifier_snapshot_slot",
-      publication: generation.publication
+      publication: generation.source_set.publication
     })
 
     changes = [

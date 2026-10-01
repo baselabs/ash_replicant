@@ -7,59 +7,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.5.0] - 2026-10-01
 
+### Added
+
+- **All three Replicant 1.4 decoders are admitted: `:pgoutput` (default,
+  unchanged), `:pglogical` (pglogical 2.x), and `:wal2json` (wal2json ≥ 2.6)
+  — PostgreSQL 9.6 and 12 sources join the support matrix
+  ([ADR-0026](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0026-decoder-options-passthrough-and-full-admission.md)).** The five decoder options pass through to
+  `Replicant.start_link/1` unchanged, and the table-set key the decoder
+  names (`publication:` / `replication_sets:` / `tables:`) feeds the
+  adapter's OWN admission surfaces through one home,
+  `AshReplicant.SourceSet`:
+  - the source-coverage census is decoder-scoped — the pgoutput pass stays
+    byte-identical; pglogical's table set is its replication sets' members
+    (via Replicant's `QueryBuilder.replication_set_tables/1`), wal2json's is
+    the configured `tables:`; columns, primary keys, and replica identity
+    read through the framework's `*_for/1` builders plus a `VALUES`-joined
+    adapter variant, every identifier validated;
+  - the durable contract manifest records the decoder-scoped set — a stored
+    pgoutput manifest is byte-untouched and keeps classifying `:equal`
+    (upgrade-in-place); a decoder or table-set switch on an existing
+    checkpoint halts `{:incompatible, :decoder}` (an explicit operator
+    reset decision);
+  - the doctor is decoder-aware — per-decoder release floors (pgoutput from
+    PostgreSQL 12, the plugin decoders from 9.6), a release-conditional
+    slot statement (`wal_status`/`safe_wal_size` are PG13+; pre-13 probes
+    read NULL and the WAL-risk classifier answers `:unknown`, never a
+    guess), a `:source_plugin` check that proves pglogical's extension row
+    and honestly reports wal2json's presence as
+    `:plugin_presence_not_provable` (no catalog row exists; the transport's
+    connect probe stays the authority), and per-table privileges for the
+    plugin paths;
+  - live evidence per major: the `decoder-old-majors` CI cells build
+    upstream's commit-pinned plugin substrate (`test/support/pg_old.dockerfile`)
+    and run the decoder lanes — pglogical and wal2json mirror
+    insert/update/delete through the host's own actions, tolerate the
+    pre-15 empty-transaction suppression (a catalog-touching zero-change
+    transaction between mirrored writes), and prove effect-once across
+    stop/resume; PostgreSQL 12 additionally mirrors the pgoutput publication
+    path, and 9.6 asserts the honest pre-10 pgoutput refusal. A config that
+    previously carried `decoder: :pglogical` alongside a publication
+    SILENTLY RAN pgoutput (the key was dropped); it now runs the decoder it
+    names, under the adapter's census and contract.
+- **The grammar stays the transport's.** A table-set key belonging to
+  another decoder, a wal2json-only knob under pgoutput, or an unknown
+  decoder atom surfaces as Replicant's own `{:error, :config_invalid}`;
+  a capability the chosen decoder cannot express (`messages:` on pglogical
+  — relevant because a routed sink auto-starts `messages: true`;
+  `streaming:`/`failover:` off pgoutput) returns
+  `{:error, :decoder_capability_unsupported}` at start. Replicant's
+  connect-time decoder halts stay transport-owned: the tombstone carries
+  the generic `:pipeline_terminated` and the precise reason rides
+  `[:replicant, :connection, :slot_invalidated]` telemetry — documented as
+  the operator's first stop.
+
 ### Changed
 
 - **The Replicant requirement floor and lock move to 1.4.0**
-  (`>= 1.4.0 and < 2.0.0-0`). Replicant 1.4 adds the logical-decoding
-  decoder option grammar this package now forwards, and the documented
-  decoder contract is only true of a 1.4 runtime — a 1.3.x resolution would
-  silently drop the forwarded options instead of validating them. On the
-  supported PostgreSQL 16–18 matrix Replicant 1.4's delivery is
-  byte-identical to 1.3.0; its empty-transaction suppression (pre-15 servers
-  only) and its every-decoder dropped-column halts are transport-internal
-  and documented posture, not adapter behavior. No sink-callback, checkpoint, or
-  `Replicant.Error` contract the adapter consumes changed
-  ([ADR-0026](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0026-decoder-options-passthrough-and-pgoutput-admission.md)).
-- **Replicant 1.4's five decoder options are passed through to the transport
-  unchanged, and admission is `:pgoutput`-only.** `decoder:`,
-  `replication_sets:`, `tables:`, `allow_keyless_tables:`, and
-  `schema_check_interval:` are forwarded to `Replicant.start_link/1`
-  (decoder selection is a tenant-blind transport concern; the sink contract
-  is decoder-invariant upstream). Because the adapter's source-coverage
-  census, contract manifest, and doctor catalog statements are
-  publication-scoped, `decoder: :pglogical` or `decoder: :wal2json` now
-  fails closed at start and in `mix ash_replicant.preflight` with the named
-  structural error `{:error, :decoder_unsupported}` (the doctor reports it
-  as an invalid invocation, exit 3) — plugin-decoder admission is recorded
-  work with its inventory in ADR-0026 §5 and ROADMAP F1. This closes a
-  misconfiguration trap: before the change a config carrying
-  `decoder: :pglogical` alongside a publication STARTED on pgoutput with the
-  decoder key silently dropped. The rest of the decoder grammar is
-  Replicant's own validation surfaced raw and value-free — a table-set key
-  belonging to another decoder or a wal2json-only knob under pgoutput
-  returns `{:error, :config_invalid}`, and a capability the chosen decoder
-  cannot express (`streaming:`/`failover:` off pgoutput, `messages:` on
-  pglogical — relevant because a routed sink auto-starts `messages: true`)
-  returns `{:error, :decoder_capability_unsupported}`. Replicant's
-  connect-time decoder halts (`{:decoder, :table_missing}`,
-  `{:decoder, :extension_missing}`, `{:decoder, :table_keyless}`,
-  `{:config, :decoder_unsupported_on_server}`) remain transport-owned: none
-  arises for a pgoutput publication on the supported matrix, the tombstone
-  carries the existing generic `:pipeline_terminated`, and the precise
-  reason rides Replicant's `[:replicant, :connection, :slot_invalidated]`
-  telemetry — now documented in `usage-rules.md`.
-- The doctor's runtime requirement literals and the exact-floors CI cell move
-  with the floor (the current-lock, latest-compatible, and release-contract
-  cells follow the public requirement).
+  (`>= 1.4.0 and < 2.0.0-0`): the decoder option grammar this package
+  forwards is only real on a 1.4 runtime, and a 1.3.x resolution would
+  silently drop the forwarded options instead of validating them. On
+  PostgreSQL 15+ Replicant 1.4's delivery is byte-identical to 1.3.0; its
+  empty-transaction suppression (pre-15 only) and every-decoder
+  dropped-column halts are transport-internal. No sink-callback,
+  checkpoint, or `Replicant.Error` contract the adapter consumes changed.
+- The doctor's runtime requirement literals and the exact-floors CI cell
+  move with the floor (the current-lock, latest-compatible, and
+  release-contract cells follow the public requirement).
 - **Documentation:** the decoder contract is documented end to end — the
-  start options and the named refusal (`usage-rules.md`), the decision
-  rationale (ADR-0026, indexed; recorded again as roadmap work with its
-  inventory in `docs/ROADMAP.md` F1), the transport-halt mapping and the
-  `[:replicant, :connection, :slot_invalidated]` first-stop pointer
-  (`usage-rules.md` status section), the two decoder rows in
-  `docs/RECOVERY.md` (the start refusal and the connect-time halt), the
-  production-integration note in the tour notebook, the scope line and build
-  log in `docs/CHARTER.md`, and the supported-foundation block in the README.
+  admitted options and matrix (`usage-rules.md`), the decision record
+  (ADR-0026, indexed; ROADMAP F1 closed), the transport-halt mapping and
+  the telemetry first-stop pointer (`usage-rules.md` status section), the
+  two decoder rows in `docs/RECOVERY.md`, the production-integration note
+  in the tour notebook, the scope line and build log in `docs/CHARTER.md`,
+  and the supported-foundation block in the README.
 
 ## [1.4.0] - 2026-09-29
 

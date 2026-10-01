@@ -12,6 +12,7 @@ defmodule AshReplicant.StartLinkTest do
   alias Ecto.Adapters.SQL
 
   alias AshReplicant.Destination.Generation
+  alias AshReplicant.Sink.Impl
   alias AshReplicant.Test.DestinationFixtures
 
   defmodule DupSink do
@@ -104,6 +105,60 @@ defmodule AshReplicant.StartLinkTest do
 
     # fail-closed: no index cached (slot_name is baked in DupSink), no pipeline.
     assert :persistent_term.get({AshReplicant, "dup_slot"}, :none) == :none
+  end
+
+  test "the session-identity guard is decoder-shape aware (direct drive)" do
+    # ADR-0026: the transport's context names `publication:` as the list for
+    # pgoutput and nil for the plugin decoders — the guard compares that view
+    # against the admitted source set, failing closed in both cross-shape
+    # directions. The plugin ACCEPT side is the live decoder lanes' job.
+    identity = %Replicant.SessionIdentity{
+      system_identifier: "741852963",
+      timeline_id: 1,
+      current_lsn: 0,
+      database: "postgres"
+    }
+
+    pgoutput_set = %AshReplicant.SourceSet{decoder: :pgoutput, publication: ["valid_pub"]}
+
+    wal2json_set = %AshReplicant.SourceSet{
+      decoder: :wal2json,
+      tables: [{"public", "orders"}]
+    }
+
+    config = fn set ->
+      %{
+        slot_name: "valid_slot",
+        source_set: set,
+        source_identity: %{system_identifier: "741852963", database: "postgres"},
+        checkpoint_resource: AshReplicant.Test.Checkpoint,
+        source_contract: %{}
+      }
+    end
+
+    # Cross-shape both directions: fail closed BEFORE any bind work.
+    assert {:error, :source_identity_mismatch} =
+             Impl.handle_session_identity(
+               config.(wal2json_set),
+               identity,
+               %{slot_name: "valid_slot", publication: ["valid_pub"]}
+             )
+
+    assert {:error, :source_identity_mismatch} =
+             Impl.handle_session_identity(
+               config.(pgoutput_set),
+               identity,
+               %{slot_name: "valid_slot", publication: nil}
+             )
+
+    # The plugin ACCEPT side passes the guard (and dies in the bind body on
+    # the contract-less config, scrubbed — the scrub_boundary pattern).
+    assert {:error, %AshReplicant.Error{reason: :sink_failed}} =
+             Impl.handle_session_identity(
+               config.(wal2json_set),
+               identity,
+               %{slot_name: "valid_slot", publication: nil}
+             )
   end
 
   test "a rejected Replicant configuration leaves no resolver generation cached" do

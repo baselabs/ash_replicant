@@ -515,27 +515,44 @@ defmodule AshReplicant.DoctorTest do
       assert mix =~ ~s(@ash_requirement "#{Doctor.ash_requirement()}")
     end
 
-    test "a source below the supported floor fails" do
-      check = Doctor.check_source_release(140_000)
+    test "a source below the decoder's floor fails" do
+      # pgoutput's floor is 12; a pre-12 server has no tested pgoutput path.
+      check = Doctor.check_source_release(110_000, :pgoutput)
 
       assert check.status == :fail
       assert check.reason == :source_release_unsupported
+
+      # The plugin decoders reach 9.6 — a 9.4 server is below their floor.
+      assert Doctor.check_source_release(90_004, :wal2json).status == :fail
+      assert Doctor.check_source_release(90_004, :pglogical).status == :fail
+    end
+
+    test "the plugin decoders admit the 9.6 floor pgoutput does not" do
+      # 9.6 and 12 are the plugin majors (ADR-0026): plugins pass, pgoutput
+      # fails 9.6 (no publications on a pre-10 server).
+      for decoder <- [:pglogical, :wal2json] do
+        assert Doctor.check_source_release(90_624, decoder).status == :pass
+        assert Doctor.check_source_release(120_004, decoder).status == :pass
+      end
+
+      assert Doctor.check_source_release(90_624, :pgoutput).status == :fail
+      assert Doctor.check_source_release(120_004, :pgoutput).status == :pass
     end
 
     test "a source above the tested ceiling warns rather than fails" do
-      check = Doctor.check_source_release(190_000)
+      check = Doctor.check_source_release(190_000, :pgoutput)
 
       assert check.status == :warn
       assert check.reason == :source_release_untested
     end
 
     test "a supported source passes" do
-      assert Doctor.check_source_release(180_004).status == :pass
+      assert Doctor.check_source_release(180_004, :pgoutput).status == :pass
     end
 
     test "the two version axes never share a reason" do
       dependency = Doctor.check_dependency_requirements(%{replicant: "1.0.0", ash: "3.33.11"})
-      source = Doctor.check_source_release(140_000)
+      source = Doctor.check_source_release(140_000, :pgoutput)
 
       assert dependency.reason != source.reason
       assert dependency.name != source.name

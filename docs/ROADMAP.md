@@ -91,4 +91,4 @@ named ADR; status derives from commits and `CHANGELOG.md` as everywhere else.
 
 | ID | What | Governing decision |
 |---|---|---|
-| F1 | **Admit the Replicant 1.4 plugin decoders** — grow the source-coverage census, contract manifest, and doctor statements decoder-aware (pglogical replication sets, wal2json configured tables), verify every probe statement on the pre-15 majors, and host plugin integration cells; lift `:decoder_unsupported` once every surface can vouch for a non-publication table set | [ADR-0026](adr/0026-decoder-options-passthrough-and-pgoutput-admission.md) §5 |
+| F1 | **Admit the Replicant 1.4 plugin decoders** — DELIVERED in 1.5.0: decoder-scoped census/contract/doctor (`AshReplicant.SourceSet`), pre-13-safe slot probes, `decoder-old-majors` CI cells on 9.6/12, and the live decoder lanes (`test/integration/decoder_admission_test.exs`) | [ADR-0026](adr/0026-decoder-options-passthrough-and-full-admission.md) |

@@ -21,6 +21,9 @@ defmodule AshReplicant.Checkpoint.Identity do
   @type manifest :: %{
           required(:contract_version) => pos_integer(),
           required(:publication) => [String.t()],
+          optional(:decoder) => :pglogical | :wal2json,
+          optional(:replication_sets) => [String.t()],
+          optional(:tables) => [{String.t(), String.t()}],
           required(:relations) => [relation()],
           required(:ignores) => [term()]
         }
@@ -48,25 +51,62 @@ defmodule AshReplicant.Checkpoint.Identity do
 
   @doc """
   Build the admission-threaded contract bundle (manifest + deterministic
-  encoding + sha256 fingerprint) for a sink config and publication list.
+  encoding + sha256 fingerprint) for a sink config and the admitted
+  decoder-scoped source set (ADR-0026).
   """
-  @spec build_contract(map(), [String.t()]) :: {:ok, contract()} | {:error, term()}
-  def build_contract(sink_config, publication) do
-    with {:ok, manifest} <- canonical_contract(sink_config, publication) do
+  @spec build_contract(map(), AshReplicant.SourceSet.t()) ::
+          {:ok, contract()} | {:error, term()}
+  def build_contract(sink_config, source_set) do
+    with {:ok, manifest} <- canonical_contract(sink_config, source_set) do
       encoded = encode(manifest)
       {:ok, %{manifest: manifest, encoded: encoded, fingerprint: fingerprint(encoded)}}
     end
   end
 
   @doc """
-  Build the canonical contract from the admitted sink config and the normalized
-  publication list. Deterministic: relations sorted by `{schema, table}`,
-  columns sorted by source name, skips sorted, publication sorted. Value-free
-  by construction (schema/table/column names, module atoms, type terms).
+  Build the canonical contract from the admitted sink config and the
+  normalized decoder-scoped source set. Deterministic: relations sorted by
+  `{schema, table}`, columns sorted by source name, skips sorted, the
+  decoder-scoped table-set names sorted. Value-free by construction
+  (schema/table/column names, module atoms, type terms).
+
+  A `:pgoutput` set builds the EXACT pre-decoder manifest shape — no
+  `:decoder` key — so a stored v1 manifest keeps classifying `:equal`
+  (upgrade-in-place). A plugin set records `decoder:`, its own table-set
+  names, and `publication: []`.
   """
-  @spec canonical_contract(map(), [String.t()]) :: {:ok, manifest()} | {:error, term()}
-  def canonical_contract(%{domains: domains} = sink_config, publication)
-      when is_list(domains) and is_list(publication) do
+  @spec canonical_contract(map(), AshReplicant.SourceSet.t()) ::
+          {:ok, manifest()} | {:error, term()}
+  def canonical_contract(
+        %{domains: domains} = sink_config,
+        %AshReplicant.SourceSet{} = source_set
+      )
+      when is_list(domains) do
+    source_fields =
+      case source_set.decoder do
+        :pgoutput ->
+          %{publication: Enum.sort(source_set.publication)}
+
+        :pglogical ->
+          %{
+            decoder: :pglogical,
+            publication: [],
+            replication_sets: Enum.sort(source_set.replication_sets)
+          }
+
+        :wal2json ->
+          %{
+            decoder: :wal2json,
+            publication: [],
+            tables: Enum.sort(source_set.tables)
+          }
+      end
+
+    build_canonical(sink_config, source_fields)
+  end
+
+  defp build_canonical(%{domains: domains} = sink_config, source_fields)
+       when is_list(domains) and is_map(source_fields) do
     with {:ok, index} <- Resolver.build_index(domains) do
       relations =
         index
@@ -85,12 +125,15 @@ defmodule AshReplicant.Checkpoint.Identity do
         |> Enum.sort_by(&{&1.schema, &1.table})
 
       {:ok,
-       %{
-         contract_version: @contract_version,
-         publication: Enum.sort(publication),
-         relations: relations,
-         ignores: ignores
-       }}
+       Map.merge(
+         %{
+           contract_version: @contract_version,
+           publication: [],
+           relations: relations,
+           ignores: ignores
+         },
+         source_fields
+       )}
     end
   end
 
@@ -182,6 +225,14 @@ defmodule AshReplicant.Checkpoint.Identity do
 
       stored.contract_version != current.contract_version ->
         {:incompatible, :version}
+
+      # ADR-0026: the decoder-scoped table set is one fact — a decoder switch
+      # (pgoutput's absent key reads as :pgoutput) or a change of the chosen
+      # decoder's set names re-targets the source contract wholesale.
+      decoder_name(stored) != decoder_name(current) or
+        Map.get(stored, :replication_sets) != Map.get(current, :replication_sets) or
+          Map.get(stored, :tables) != Map.get(current, :tables) ->
+        {:incompatible, :decoder}
 
       stored.publication != current.publication ->
         {:incompatible, :publication}
@@ -427,6 +478,8 @@ defmodule AshReplicant.Checkpoint.Identity do
   rescue
     ArgumentError -> nil
   end
+
+  defp decoder_name(manifest), do: Map.get(manifest, :decoder, :pgoutput)
 
   defp index_relations(relations), do: Map.new(relations, &{{&1.schema, &1.table}, &1})
 

@@ -270,7 +270,7 @@ defmodule AshReplicant.AppendTest do
       assert :ok =
                AppendSink.handle_session_identity(identity, %{
                  slot_name: @slot,
-                 publication: generation.publication
+                 publication: generation.source_set.publication
                })
 
       assert :ok = AppendSink.handle_slot_origin(650, %{slot_name: @slot, reused?: false})

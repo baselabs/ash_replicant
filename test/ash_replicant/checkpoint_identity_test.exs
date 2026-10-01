@@ -57,7 +57,7 @@ defmodule AshReplicant.CheckpointIdentityTest do
   @publication ["orders_pub"]
 
   test "canonical_contract/2 builds the value-free structure" do
-    assert {:ok, contract} = Identity.canonical_contract(sink_config(), @publication)
+    assert {:ok, contract} = Identity.canonical_contract(sink_config(), pgoutput_set())
 
     assert contract.contract_version == 1
     assert contract.publication == @publication
@@ -78,19 +78,23 @@ defmodule AshReplicant.CheckpointIdentityTest do
   end
 
   test "determinism: repeated and input-order-shuffled builds are identical" do
-    assert {:ok, first} = Identity.canonical_contract(sink_config(), @publication)
-    assert {:ok, second} = Identity.canonical_contract(sink_config(), @publication)
+    assert {:ok, first} = Identity.canonical_contract(sink_config(), pgoutput_set())
+    assert {:ok, second} = Identity.canonical_contract(sink_config(), pgoutput_set())
     assert first == second
     assert Identity.encode(first) == Identity.encode(second)
 
-    assert {:ok, shuffled} =
-             Identity.canonical_contract(sink_config(), Enum.reverse(@publication))
+    shuffled_set = %AshReplicant.SourceSet{
+      decoder: :pgoutput,
+      publication: Enum.reverse(@publication)
+    }
+
+    assert {:ok, shuffled} = Identity.canonical_contract(sink_config(), shuffled_set)
 
     assert shuffled == first
   end
 
   test "value-free: every binary in the contract is an identifier-shaped name" do
-    {:ok, contract} = Identity.canonical_contract(sink_config(), @publication)
+    {:ok, contract} = Identity.canonical_contract(sink_config(), pgoutput_set())
 
     for binary <- deep_binaries(contract) do
       assert String.match?(binary, ~r/^[a-zA-Z0-9_]+$/),
@@ -103,9 +107,7 @@ defmodule AshReplicant.CheckpointIdentityTest do
       {:ok, contract} =
         Identity.canonical_contract(
           %{domains: [AshReplicant.Test.CheckpointIdentitySkipDomain]},
-          [
-            "skip_pub"
-          ]
+          %AshReplicant.SourceSet{decoder: :pgoutput, publication: ["skip_pub"]}
         )
 
       %{base: contract}
@@ -262,7 +264,7 @@ defmodule AshReplicant.CheckpointIdentityTest do
 
   describe "encode/decode/fingerprint round trip" do
     test "round trip preserves the manifest and the digest-of-stored-bytes rule" do
-      {:ok, contract} = Identity.canonical_contract(sink_config(), @publication)
+      {:ok, contract} = Identity.canonical_contract(sink_config(), pgoutput_set())
       encoded = Identity.encode(contract)
       assert {:ok, ^contract} = Identity.decode(encoded)
       assert Identity.fingerprint(encoded) == :crypto.hash(:sha256, encoded)
@@ -276,6 +278,114 @@ defmodule AshReplicant.CheckpointIdentityTest do
   end
 
   # --- helpers ---
+
+  describe "decoder-scoped source sets (ADR-0026)" do
+    test "a pgoutput set builds the EXACT pre-decoder manifest shape" do
+      # No decoder key: a stored v1 manifest must keep classifying :equal
+      # against a freshly built one (the upgrade-in-place guarantee).
+      assert {:ok, contract} = Identity.canonical_contract(sink_config(), pgoutput_set())
+
+      refute Map.has_key?(contract, :decoder)
+      assert contract.publication == @publication
+    end
+
+    test "a stored pre-decoder pgoutput manifest classifies :equal against a fresh pgoutput set build" do
+      {:ok, fresh} = Identity.canonical_contract(sink_config(), pgoutput_set())
+
+      # The literal pre-decoder stored shape: exactly the four v1 keys, built
+      # by an earlier release against the same relations.
+      stored = %{
+        contract_version: 1,
+        publication: Enum.sort(@publication),
+        relations: fresh.relations,
+        ignores: []
+      }
+
+      assert Identity.classify(stored, fresh) == :equal
+      assert Identity.classify(fresh, stored) == :equal
+    end
+
+    test "a wal2json set carries the decoder, its tables, and an empty publication" do
+      set = %AshReplicant.SourceSet{
+        decoder: :wal2json,
+        publication: nil,
+        replication_sets: nil,
+        tables: [{"public", "orders"}]
+      }
+
+      assert {:ok, contract} = Identity.canonical_contract(sink_config(), set)
+      assert contract.decoder == :wal2json
+      assert contract.tables == [{"public", "orders"}]
+      assert contract.publication == []
+    end
+
+    test "a pglogical set carries the decoder and its replication sets, sorted" do
+      set = %AshReplicant.SourceSet{
+        decoder: :pglogical,
+        publication: nil,
+        replication_sets: ["beta_set", "alpha_set"],
+        tables: nil
+      }
+
+      assert {:ok, contract} = Identity.canonical_contract(sink_config(), set)
+      assert contract.decoder == :pglogical
+      assert contract.replication_sets == ["alpha_set", "beta_set"]
+      assert contract.publication == []
+    end
+
+    test "a decoder switch is incompatible with its own reason" do
+      {:ok, pgoutput} = Identity.canonical_contract(sink_config(), pgoutput_set())
+
+      wal2json_set = %AshReplicant.SourceSet{
+        decoder: :wal2json,
+        publication: nil,
+        replication_sets: nil,
+        tables: [{"public", "orders"}]
+      }
+
+      {:ok, wal2json} = Identity.canonical_contract(sink_config(), wal2json_set)
+
+      assert Identity.classify(pgoutput, wal2json) == {:incompatible, :decoder}
+      assert Identity.classify(wal2json, pgoutput) == {:incompatible, :decoder}
+    end
+
+    test "a table-set change under the same decoder is incompatible" do
+      set_a = %AshReplicant.SourceSet{decoder: :wal2json, tables: [{"public", "orders"}]}
+      set_b = %AshReplicant.SourceSet{decoder: :wal2json, tables: [{"public", "events"}]}
+
+      {:ok, a} = Identity.canonical_contract(sink_config(), set_a)
+      {:ok, b} = Identity.canonical_contract(sink_config(), set_b)
+
+      assert Identity.classify(a, b) == {:incompatible, :decoder}
+    end
+
+    test "a replication-set change under pglogical is incompatible" do
+      set_a = %AshReplicant.SourceSet{decoder: :pglogical, replication_sets: ["default"]}
+      set_b = %AshReplicant.SourceSet{decoder: :pglogical, replication_sets: ["default", "extra"]}
+
+      {:ok, a} = Identity.canonical_contract(sink_config(), set_a)
+      {:ok, b} = Identity.canonical_contract(sink_config(), set_b)
+
+      assert Identity.classify(a, b) == {:incompatible, :decoder}
+    end
+
+    test "a plugin manifest round-trips through encode/decode" do
+      set = %AshReplicant.SourceSet{decoder: :pglogical, replication_sets: ["default"]}
+
+      {:ok, contract} = Identity.canonical_contract(sink_config(), set)
+      encoded = Identity.encode(contract)
+      assert {:ok, decoded} = Identity.decode(encoded)
+      assert decoded == contract
+
+      wal2json = %AshReplicant.SourceSet{decoder: :wal2json, tables: [{"public", "orders"}]}
+      {:ok, contract_2} = Identity.canonical_contract(sink_config(), wal2json)
+      assert {:ok, contract_2} = Identity.decode(Identity.encode(contract_2))
+    end
+  end
+
+  defp pgoutput_set do
+    %AshReplicant.SourceSet{decoder: :pgoutput, publication: @publication}
+  end
 
   defp sink_config do
     %{

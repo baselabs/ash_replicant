@@ -158,7 +158,7 @@ defmodule AshReplicant.BatchDeliveryTest do
 
     BatchMarqueeSink.handle_session_identity(identity, %{
       slot_name: @slot,
-      publication: generation.publication
+      publication: generation.source_set.publication
     })
 
     run_id = "c2-direct-#{System.unique_integer([:positive])}"
@@ -429,7 +429,7 @@ defmodule AshReplicant.BatchDeliveryTest do
 
       Marquee.Scd2Sink.handle_session_identity(identity, %{
         slot_name: @scd2_slot,
-        publication: generation.publication
+        publication: generation.source_set.publication
       })
 
       on_exit(fn ->
@@ -510,7 +510,7 @@ defmodule AshReplicant.BatchDeliveryTest do
 
       BatchTenantSink.handle_session_identity(identity, %{
         slot_name: "batch_tenant_slot",
-        publication: generation.publication
+        publication: generation.source_set.publication
       })
 
       tenant_ins = fn id, org, ordinal, lsn ->

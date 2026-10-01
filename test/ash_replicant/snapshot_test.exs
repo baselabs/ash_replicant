@@ -46,7 +46,7 @@ defmodule AshReplicant.SnapshotTest do
 
     Sink.handle_session_identity(identity, %{
       slot_name: "snap_slot",
-      publication: generation.publication
+      publication: generation.source_set.publication
     })
 
     on_exit(fn ->
