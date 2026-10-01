@@ -1,6 +1,6 @@
 # AshReplicant — Project Charter
 
-**Status:** current — realized, latest published package 1.4.0 · **Kind:** charter (what & why; the binding *how* is `AGENTS.md`) · **Updated:** 2026-09-29 · **Governed by:** `AGENTS.md` critical rules + `docs/adr/` decisions · **Review when:** a release ships, a Critical Rule changes, or an ADR is added
+**Status:** current — realized, latest published package 1.5.0 · **Kind:** charter (what & why; the binding *how* is `AGENTS.md`) · **Updated:** 2026-10-01 · **Governed by:** `AGENTS.md` critical rules + `docs/adr/` decisions · **Review when:** a release ships, a Critical Rule changes, or an ADR is added
 The original state-mirror and SCD2 capabilities are shipped. The canonical
 production-readiness scope and dependency order live in `docs/ROADMAP.md`.
 Product-shaping decisions are tracked in `docs/adr/`; historical lifecycle
@@ -62,6 +62,9 @@ This is "the `ash_postgres` of `replicant`" — just as `ash_postgres` is not
 - Transport, protocol, socket lifecycle
 - Postgres logical replication slot / publication management
 - WAL message decoding
+- Logical-decoding output-plugin (decoder) selection — the options pass
+  through unchanged; the grammar, capabilities, and decoder halts are the
+  transport's, with `:pgoutput`-only admission here (ADR-0026)
 - Transaction assembly and commit-LSN ordering
 - Schema-change detection
 - Snapshot extraction, chunking, and transport
@@ -150,8 +153,10 @@ foundation moved the repository to Elixir 1.20.3/OTP 29, Ash 3.31.3,
 AshPostgres 2.11, Postgrex 0.22.4, ymlr 5.1.6, and AshOnetime 0.6.0 with clean
 dependency audits and non-vacuous release gates. The 1.x line — 1.0.0
 (2026-08-24), 1.1.0 and 1.2.0 (2026-08-25), 1.3.0 (2026-09-22) — shipped the
-roadmap program; per-release entries live in `CHANGELOG.md` and the decisions
-in `docs/adr/`.
+roadmap program; 1.4.0 (2026-09-29) moved the sibling-economy dependency
+floors; 1.5.0 (2026-10-01) folded in Replicant 1.4's decoder-option surface
+with `:pgoutput`-only admission (ADR-0026); per-release entries live in
+`CHANGELOG.md` and the decisions in `docs/adr/`.
 
 Release history has one forensic caveat: Hex package 0.3.3 is real and its
 packaged bytes match commit `3b61d3a9ae553fb96ff26e9fcf581416af723843`,

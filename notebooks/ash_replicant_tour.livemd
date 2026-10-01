@@ -3,7 +3,7 @@
 ```elixir
 Mix.install([
   # This notebook lives in `notebooks/`, so `..` is the repo root. Swap for
-  # `{:ash_replicant, "~> 1.4.0"}` to run it against the published Hex package.
+  # `{:ash_replicant, "~> 1.5.0"}` to run it against the published Hex package.
   {:ash_replicant, path: Path.join(__DIR__, "..")},
   {:kino, "~> 0.14"}
 ])
@@ -71,7 +71,7 @@ tangible and §11–§14 cover the later ones:
 
 ```elixir
 AshReplicant.version()
-# => "1.4.0"
+# => "1.5.0"
 ```
 
 ## 3 · The value-free boundary (rule 4)
@@ -604,6 +604,16 @@ AshReplicant.start_link(
 snapshot. Replicant's incremental options are accepted when every mapped resource
 declares `snapshot_provenance true`; activation otherwise fails closed with
 `:snapshot_unsupported` before transport starts.
+
+Replicant 1.4's decoder options (`decoder:`, `replication_sets:`, `tables:`,
+`allow_keyless_tables:`, `schema_check_interval:`) are forwarded to the transport
+unchanged, with one adapter-side admission rule: the decoder must be `:pgoutput`
+(the default), because this adapter's coverage census and contract manifest are
+publication-scoped. `decoder: :pglogical` or `decoder: :wal2json` fails closed at
+start with `{:error, :decoder_unsupported}` — never a silent pgoutput run
+(ADR-0026). The rest of the decoder grammar is Replicant's own validation: a
+table-set key belonging to another decoder, or a wal2json-only knob under
+pgoutput, comes back as Replicant's `{:error, :config_invalid}`.
 
 Stop it (idempotent; clears the cached index) with
 `AshReplicant.stop_supervised("shop_orders")`.

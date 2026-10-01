@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.5.0] - 2026-10-01
 
 ### Changed
 
@@ -51,6 +51,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The doctor's runtime requirement literals and the exact-floors CI cell move
   with the floor (the current-lock, latest-compatible, and release-contract
   cells follow the public requirement).
+- **Documentation:** the decoder contract is documented end to end — the
+  start options and the named refusal (`usage-rules.md`), the decision
+  rationale (ADR-0026, indexed; recorded again as roadmap work with its
+  inventory in `docs/ROADMAP.md` F1), the transport-halt mapping and the
+  `[:replicant, :connection, :slot_invalidated]` first-stop pointer
+  (`usage-rules.md` status section), the two decoder rows in
+  `docs/RECOVERY.md` (the start refusal and the connect-time halt), the
+  production-integration note in the tour notebook, the scope line and build
+  log in `docs/CHARTER.md`, and the supported-foundation block in the README.
 
 ## [1.4.0] - 2026-09-29
 
@@ -1473,7 +1482,8 @@ sensitive-column verification.
   `usage-rules.md`, `CONTRIBUTING.md`, `LICENSE`, `NOTICE`; tracked charter at
   `docs/CHARTER.md`.
 
-[Unreleased]: https://github.com/baselabs/ash_replicant/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/baselabs/ash_replicant/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/baselabs/ash_replicant/tree/v1.5.0
 [1.4.0]: https://github.com/baselabs/ash_replicant/tree/v1.4.0
 [1.3.0]: https://github.com/baselabs/ash_replicant/tree/v1.3.0
 [1.2.0]: https://github.com/baselabs/ash_replicant/tree/v1.2.0
