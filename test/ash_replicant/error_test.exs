@@ -127,6 +127,8 @@ defmodule AshReplicant.ErrorTest do
           :source_timeline_changed,
           :source_behind_watermark,
           :publication_contract_incompatible,
+          :decoder_contract_incompatible,
+          :source_release_unsupported,
           :source_column_missing,
           :source_column_unmapped,
           :source_replica_identity,

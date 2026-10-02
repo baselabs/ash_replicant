@@ -93,6 +93,7 @@ defmodule AshReplicant.Doctor.Probe do
   @spec statements(SourceSet.t()) :: [String.t()]
   def statements(%SourceSet{} = source_set) do
     [
+      Coverage.sql_release_probe(),
       Coverage.sql_identity_probe(),
       sql_role_privileges(),
       sql_output_plugin_extension(),
@@ -255,7 +256,9 @@ defmodule AshReplicant.Doctor.Probe do
   unjudgeable checks without calling a responding server unreachable.
   """
   @spec gather(keyword(), SourceSet.t(), String.t()) ::
-          {:ok, map()} | {:error, :unreachable | :permission_denied | :query_failed}
+          {:ok, map()}
+          | {:error, :unreachable | :permission_denied | :query_failed}
+          | {:error, {:below_floor, integer()}}
   def gather(connection_opts, source_set, slot_name) do
     opts = connection_options(connection_opts || [])
 
@@ -323,7 +326,9 @@ defmodule AshReplicant.Doctor.Probe do
   end
 
   defp collect(conn, source_set, slot_name) do
-    with {:ok, %{rows: [[release, system_identifier, database]]}} <-
+    with {:ok, %{rows: [[release]]}} <- query(conn, Coverage.sql_release_probe()),
+         :ok <- release_floor_guard(release, source_set),
+         {:ok, %{rows: [[^release, system_identifier, database]]}} <-
            query(conn, Coverage.sql_identity_probe()),
          # The extension read runs BEFORE the table-set probes: with the
          # pglogical extension absent, `pglogical.tables` does not exist and
@@ -347,11 +352,26 @@ defmodule AshReplicant.Doctor.Probe do
          slot: slot(slot_rows)
        }}
     else
+      {:error, {:below_floor, release}} ->
+        {:error, {:below_floor, release}}
+
       {:error, reason} when reason in [:unreachable, :permission_denied, :query_failed] ->
         {:error, reason}
 
       _fault ->
         {:error, :query_failed}
+    end
+  end
+
+  # Mirrors the activation-enforced floor (ADR-0026): the release probe is
+  # the one statement every connectable release answers, so the BELOW-FLOOR
+  # verdict is reportable even where the 9.6-dependent identity probe would
+  # fault — the doctor names the floor instead of degrading to
+  # :query_failed skips (rule 11: an adapter over the rules activation runs).
+  defp release_floor_guard(release, %SourceSet{decoder: decoder}) do
+    case SourceSet.check_release_floor(release, decoder) do
+      :ok -> :ok
+      {:error, :source_release_unsupported} -> {:error, {:below_floor, release}}
     end
   end
 

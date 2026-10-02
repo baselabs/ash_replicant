@@ -8,6 +8,7 @@ defmodule AshReplicant.CoverageTest do
   use ExUnit.Case, async: true
 
   alias AshReplicant.Coverage
+  alias AshReplicant.SourceSet
 
   @table {"public", "orders"}
   @other {"public", "other"}
@@ -422,12 +423,36 @@ defmodule AshReplicant.CoverageTest do
       refute sql =~ "ELSE NULL"
     end
 
+    test "the release probe answers on EVERY connectable release, pre-9.6 included" do
+      # pg_control_system() exists from 9.6 only: bundling it with the version
+      # read faulted the whole probe on a pre-9.6 source, so the floor below
+      # which nothing works never got named (it landed in the unreachable
+      # class instead). The release probe is the one statement every release
+      # can answer; the floor check runs on its answer BEFORE the
+      # 9.6-dependent identity probe.
+      sql = Coverage.sql_release_probe()
+
+      assert sql =~ "server_version_num"
+      refute sql =~ "pg_control_system"
+      refute sql =~ ";"
+    end
+
     test "the relreplident census mirrors pk_columns' join shape with $1 binding" do
       sql = Coverage.sql_relreplident()
 
       assert sql =~ "pg_publication_tables"
       assert sql =~ "ANY($1)"
       assert sql =~ "relreplident"
+    end
+  end
+
+  describe "release floors — enforced at activation (ADR-0026)" do
+    test "a version below the decoder's floor is the named refusal, not a fault" do
+      assert {:error, :source_release_unsupported} =
+               SourceSet.check_release_floor(90_500, :wal2json)
+
+      assert {:error, :source_release_unsupported} =
+               SourceSet.check_release_floor(110_000, :pgoutput)
     end
   end
 

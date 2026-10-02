@@ -48,7 +48,11 @@ defmodule AshReplicant.Sink.Impl do
   # TRANSPORT SEES IT (nil under a plugin decoder, whose table set is not a
   # publication — ADR-0026), so the guard compares that view against the
   # admitted source set: a generation whose set drifted from the pipeline the
-  # transport actually started fails closed here.
+  # transport actually started fails closed here. The comparison is
+  # ORDER-INSENSITIVE: the transport reports the list as it sees it, the
+  # source set stores it as the host declared it, and the contract manifest
+  # sorts its own canonical form — a multi-publication host can hand the two
+  # sides different orders of the SAME set.
   def handle_session_identity(
         %{
           slot_name: expected_slot,
@@ -63,17 +67,27 @@ defmodule AshReplicant.Sink.Impl do
           database: expected_database
         } = identity,
         %{slot_name: expected_slot, publication: transport_publication}
-      )
-      when transport_publication == expected_set.publication do
-    # The verdict event stays AT the verdict point, BEFORE any bind write —
-    # the first-event ordering red gate depends on it.
-    Telemetry.event([:ash_replicant, :sink, :session_identity_accepted], %{}, %{})
+      ) do
+    if publication_view_matches?(transport_publication, expected_set.publication) do
+      # The verdict event stays AT the verdict point, BEFORE any bind write —
+      # the first-event ordering red gate depends on it.
+      Telemetry.event([:ash_replicant, :sink, :session_identity_accepted], %{}, %{})
 
-    bind_session(config, identity)
+      bind_session(config, identity)
+    else
+      {:error, :source_identity_mismatch}
+    end
   end
 
   def handle_session_identity(_config, _identity, _context),
     do: {:error, :source_identity_mismatch}
+
+  defp publication_view_matches?(nil, nil), do: true
+
+  defp publication_view_matches?(a, b) when is_list(a) and is_list(b),
+    do: Enum.sort(a) == Enum.sort(b)
+
+  defp publication_view_matches?(_a, _b), do: false
 
   @doc """
   Admit the replication slot's consistent-point origin for a GO-FORWARD append

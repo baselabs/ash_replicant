@@ -60,9 +60,12 @@ defmodule AshReplicant.Pipeline do
 
   # The table-set key the configured decoder names its source by (ADR-0026):
   # `publication:` for pgoutput (the default), `replication_sets:` for
-  # pglogical, `tables:` for wal2json. Presence only — the values are never
-  # read, exactly like every other required key here.
-  @table_set_keys %{pgoutput: :publication, pglogical: :replication_sets, wal2json: :tables}
+  # pglogical, `tables:` for wal2json. DERIVED from the ONE admission home —
+  # `AshReplicant.SourceSet` owns the decoder-fact structure, so a decoder
+  # added there is admitted here at once and a diverging local copy is
+  # unconstructible. Presence only — the values are never read, exactly like
+  # every other required key here.
+  @table_set_keys AshReplicant.SourceSet.table_set_keys()
 
   @macro_options [:otp_app, :sink]
 
@@ -225,12 +228,16 @@ defmodule AshReplicant.Pipeline do
   end
 
   defp unknown_decoder_message(otp_app, module) do
+    {decoders, keys} =
+      @table_set_keys
+      |> Enum.map(fn {decoder, key} -> {inspect(decoder), "#{key}:"} end)
+      |> Enum.unzip()
+
     """
     #{inspect(module)} is configured with a decoder AshReplicant does not admit.
 
-    The admitted decoders are :pgoutput, :pglogical, and :wal2json; the \
-    table-set key follows the decoder (`publication:`, `replication_sets:`, \
-    `tables:`):
+    The admitted decoders are #{Enum.join(decoders, ", ")}; the \
+    table-set key follows the decoder (#{Enum.join(keys, ", ")}):
 
         config #{inspect(otp_app)}, #{inspect(module)},
           connection: [hostname: "...", database: "..."],
@@ -264,13 +271,18 @@ defmodule AshReplicant.Pipeline do
   end
 
   defp missing_message(missing, otp_app, module) do
+    # The per-decoder rule renders FROM the derived map, so the prose can
+    # never lag the structure it explains.
+    rule =
+      @table_set_keys
+      |> Enum.map_join(", ", fn {decoder, key} -> "`#{key}:` for #{decoder}" end)
+
     """
     #{inspect(module)} is configured but incomplete: #{inspect(missing)} missing.
 
     AshReplicant will not supervise a partially-configured pipeline — an owner that \
     never starts is a silent outage, not a safe default. Supply every required key \
-    (the table-set key follows the configured decoder: `publication:` for \
-    pgoutput, `replication_sets:` for pglogical, `tables:` for wal2json):
+    (the table-set key follows the configured decoder: #{rule}):
 
         config #{inspect(otp_app)}, #{inspect(module)},
           connection: [hostname: "...", database: "..."],

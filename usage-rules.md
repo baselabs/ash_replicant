@@ -1019,7 +1019,16 @@ Rules for reading it:
   reported as `:not_started`.
 - **`{:misconfigured, reason}` names the config/contract drift** an operator
   fixes before a restart can succeed (identity rebinding, contract drift,
-  source mapping gaps). Other halt causes report `{:halted, reason}`.
+  source mapping gaps). Other halt causes report `{:halted, reason}`. Two
+  decoder-surface entries (ADR-0026): `{:misconfigured,
+  :decoder_contract_incompatible}` — the stored contract and the live one
+  disagree on the decoder or its table set (a decoder switch re-targets the
+  source wholesale), distinct from `:publication_contract_incompatible`
+  (publication-shape drift); and `{:misconfigured,
+  :source_release_unsupported}` — the source's release is below the
+  configured decoder's floor (pgoutput 12+, plugin decoders 9.6+), enforced
+  at activation BEFORE any 9.6-dependent probe runs, never left to the
+  transport's connect halt.
 - **A deliberate stop is `:not_started`.** The tombstone distinguishes it on
   the lifecycle surface (`AshReplicant.Status.derive/2` returns
   `:stopped`), but the public five-state set treats "cleanly stopped" and
@@ -1029,7 +1038,16 @@ Rules for reading it:
   (`terminal_cause`/`terminal_class`/`terminal_at`), cleared by every
   admitted checkpoint write. If the destination was unreachable at halt
   time, only the node-local leg survives; after a node restart such a slot
-  reports `:not_started` and the halt telemetry is the record.
+  reports `:not_started` and the halt telemetry is the record. The durable
+  leg is observable and bounded: `[:ash_replicant, :status,
+  :tombstone_write_attempted]` fires at attempt time (before any destination
+  work — observing it proves the write was undertaken, which is what
+  distinguishes a lawful skip from a write that never ran), and the write's
+  own pool/transaction deadline bounds when its terminal state settles —
+  a refusal or failure fires `[:ash_replicant, :status,
+  :tombstone_write_failed]` (`:destination_unavailable` /
+  `:destination_write_failed`); a lawful skip emits nothing after the
+  attempt (no checkpoint row existed to carry the record).
 - Reasons never carry row values, message prefixes, or progress tokens, and
   a foreign persisted cause decodes to `{:halted, :tombstone_unknown}`.
 - **A transport-initiated halt reports `{:halted, :pipeline_terminated}`.**

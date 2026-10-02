@@ -691,9 +691,23 @@ defmodule AshReplicant.Coverage do
   # --- verbatim where they already expose the required census) ---
 
   @doc """
+  ONE round-trip release probe: `server_version_num` on a statement EVERY
+  connectable PostgreSQL release can answer. It runs BEFORE the
+  `pg_control_system()` identity probe (a 9.6+ view), so a below-floor source
+  — 9.4/9.5 against a plugin decoder, pre-12 against pgoutput — is refused
+  by its NAME (`:source_release_unsupported`, ADR-0026) instead of faulting
+  the identity probe into the unreachable class.
+  """
+  @spec sql_release_probe() :: String.t()
+  def sql_release_probe do
+    "SELECT current_setting('server_version_num')::int"
+  end
+
+  @doc """
   ONE round-trip identity + version probe. `pg_control_system()` exposes the
-  system identifier across the supported PostgreSQL 15 through 18 matrix, so
-  every supported release verifies the same system-and-database pair.
+  system identifier across the supported PostgreSQL matrix (9.6 through 18),
+  so every supported release verifies the same system-and-database pair; the
+  release probe above admits or refuses the release BEFORE this runs.
   """
   @spec sql_identity_probe() :: String.t()
   def sql_identity_probe do
@@ -858,15 +872,22 @@ defmodule AshReplicant.Coverage do
     end
   end
 
-  # The census: identity probe + the table-set statements. pgoutput keeps the
-  # publication-bound single pass (byte-identical to the pre-decoder census);
-  # the plugin decoders census an EXPLICIT table list — pglogical's members
-  # discovered from `pglogical.tables`, wal2json's the configured set — read
-  # through the framework's own `*_for/1` builders plus the adapter's
+  # The census: release probe + floor gate + identity probe + the table-set
+  # statements. The release probe is the one statement every connectable
+  # release answers; the floor gate runs on its answer BEFORE the
+  # `pg_control_system()` identity probe (a 9.6+ view) so a below-floor
+  # source is a NAMED rule verdict — `{:error, :source_release_unsupported}`
+  # — never an unreachable-class fault. pgoutput keeps the publication-bound
+  # single pass (byte-identical to the pre-decoder census); the plugin
+  # decoders census an EXPLICIT table list — pglogical's members discovered
+  # from `pglogical.tables`, wal2json's the configured set — read through the
+  # framework's own `*_for/1` builders plus the adapter's
   # `sql_relreplident_for/1`. All read-only; names validated before any
   # interpolation.
   defp collect_census(conn, %SourceSet{} = source_set) do
-    with {:ok, %{rows: [[version, system_identifier, database]]}} <-
+    with {:ok, %{rows: [[version]]}} <- query(conn, sql_release_probe()),
+         :ok <- release_floor_gate(version, source_set.decoder),
+         {:ok, %{rows: [[^version, system_identifier, database]]}} <-
            query(conn, sql_identity_probe()),
          {:ok, table_rows} <- census_table_rows(conn, SourceSet.census_member(source_set)) do
       {pub_rows, column_rows, pk_rows, ident_rows} = table_rows
@@ -893,6 +914,19 @@ defmodule AshReplicant.Coverage do
          identity: %{version: version, system_identifier: system_identifier, database: database},
          tables: tables
        }}
+    end
+  end
+
+  # The floor verdict arrives as an %Error{} so the preflight/reconnect
+  # `with` chains treat it as the RULE verdict it is — a bare tuple would
+  # fall into the unreachable/deferred class the gate exists to replace.
+  defp release_floor_gate(version, decoder) do
+    case SourceSet.check_release_floor(version, decoder) do
+      :ok ->
+        :ok
+
+      {:error, :source_release_unsupported} ->
+        {:error, %Error{reason: :source_release_unsupported}}
     end
   end
 

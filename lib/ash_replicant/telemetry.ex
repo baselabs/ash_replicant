@@ -71,6 +71,8 @@ defmodule AshReplicant.Telemetry do
       [:ash_replicant, :census, :faulted] => :"ash_replicant.census.faulted",
       [:ash_replicant, :census, :halted] => :"ash_replicant.census.halted",
       [:ash_replicant, :retention, :at_risk] => :"ash_replicant.retention.at_risk",
+      [:ash_replicant, :status, :tombstone_write_attempted] =>
+        :"ash_replicant.status.tombstone_write_attempted",
       [:ash_replicant, :status, :tombstone_write_failed] => :"ash_replicant.status.tombstone_write_failed"
     }
 
@@ -147,6 +149,7 @@ defmodule AshReplicant.Telemetry do
       [:ash_replicant, :census, :faulted],
       [:ash_replicant, :census, :halted],
       [:ash_replicant, :retention, :at_risk],
+      [:ash_replicant, :status, :tombstone_write_attempted],
       [:ash_replicant, :status, :tombstone_write_failed]
     ]
   end

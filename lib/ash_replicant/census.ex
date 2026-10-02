@@ -286,7 +286,8 @@ defmodule AshReplicant.Census do
            ) do
         :equal -> :pass
         {:compatible, _kind} -> :pass
-        {:incompatible, _reason} -> {:drift, :publication_contract_incompatible}
+        {:incompatible, :decoder} -> {:drift, :decoder_contract_incompatible}
+        {:incompatible, _other} -> {:drift, :publication_contract_incompatible}
         :unbound -> {:fault, :checkpoint_unbound}
       end
     else

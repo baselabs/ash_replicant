@@ -277,4 +277,60 @@ defmodule AshReplicant.SnapshotTest do
              &(&1.is_current and is_nil(&1.valid_to_lsn) and &1.valid_from_lsn == 10)
            )
   end
+
+  describe "the session-identity guard's publication view (ADR-0026)" do
+    defmodule OrderViewSink do
+      @moduledoc false
+      use AshReplicant.Sink,
+        repo: AshReplicant.TestRepo,
+        domains: [AshReplicant.Test.Domain],
+        checkpoint_resource: AshReplicant.Test.Checkpoint,
+        slot_name: "order_view_slot"
+    end
+
+    setup do
+      on_exit(fn ->
+        :persistent_term.erase({AshReplicant, "order_view_slot"})
+        Impl.clear_snapshot_ordinals("order_view_slot")
+
+        AshReplicant.TestRepo.query!(
+          "DELETE FROM ash_replicant_checkpoints WHERE slot_name = $1",
+          ["order_view_slot"]
+        )
+      end)
+    end
+
+    test "the transport's REVERSED order of the same publication set binds; a different set does not" do
+      # The transport reports the publication list AS IT SEES IT; the
+      # admitted source set stores it as the host declared it; the contract
+      # manifest sorts its own canonical form. A multi-publication host can
+      # hand the two sides different orders of the SAME set — that is the
+      # same source, and the guard must compare order-insensitively.
+      pubs = ["pub_alpha", "pub_beta"]
+      generation = AdmittedGeneration.put!(OrderViewSink, publication: pubs)
+
+      identity = %Replicant.SessionIdentity{
+        system_identifier: generation.source_identity.system_identifier,
+        timeline_id: 1,
+        current_lsn: 0,
+        database: generation.source_identity.database
+      }
+
+      assert :ok =
+               OrderViewSink.handle_session_identity(identity, %{
+                 slot_name: "order_view_slot",
+                 publication: Enum.reverse(pubs)
+               })
+
+      # The same order-then-some shape with a GENUINELY different member is
+      # still the mismatch it always was — order-insensitivity is not
+      # set-blindness. (The guard's refusal is the bare tuple, its
+      # documented contract shape.)
+      assert {:error, :source_identity_mismatch} =
+               OrderViewSink.handle_session_identity(identity, %{
+                 slot_name: "order_view_slot",
+                 publication: ["pub_beta", "pub_gamma"]
+               })
+    end
+  end
 end

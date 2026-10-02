@@ -252,6 +252,50 @@ defmodule AshReplicant.CensusTest do
                Census.classify_checkpoint([row()], filter(), shrunk)
     end
 
+    test "a DECODER switch turns red with the decoder reason, not the publication one" do
+      # An operator who swapped :pgoutput for a plugin decoder must see a
+      # reason that names the decoder — :publication_contract_incompatible
+      # would send them hunting publications (ADR-0026's one table-set fact).
+      stored_set = %AshReplicant.SourceSet{decoder: :wal2json, tables: [{"public", "orders"}]}
+      {:ok, stored_contract} = Identity.build_contract(sink_config(), stored_set)
+
+      assert {:drift, :decoder_contract_incompatible} =
+               Census.classify_checkpoint(
+                 [
+                   row(%{
+                     publication_contract: stored_contract.encoded,
+                     publication_fingerprint: stored_contract.fingerprint
+                   })
+                 ],
+                 filter(),
+                 admitted_contract().manifest
+               )
+    end
+
+    test "a same-decoder table-set change also reports the decoder reason" do
+      stored_set = %AshReplicant.SourceSet{
+        decoder: :pglogical,
+        replication_sets: ["default", "extra"]
+      }
+
+      {:ok, stored_contract} = Identity.build_contract(sink_config(), stored_set)
+
+      current_set = %AshReplicant.SourceSet{decoder: :pglogical, replication_sets: ["default"]}
+      {:ok, current_contract} = Identity.build_contract(sink_config(), current_set)
+
+      assert {:drift, :decoder_contract_incompatible} =
+               Census.classify_checkpoint(
+                 [
+                   row(%{
+                     publication_contract: stored_contract.encoded,
+                     publication_fingerprint: stored_contract.fingerprint
+                   })
+                 ],
+                 filter(),
+                 current_contract.manifest
+               )
+    end
+
     test "a COMPATIBLE additive relation transition still passes" do
       manifest = admitted_contract().manifest
       relation = hd(manifest.relations)

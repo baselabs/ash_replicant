@@ -14,6 +14,14 @@ defmodule AshReplicant.SourceSet do
   outside the three the transport accepts fails with the transport's own
   `:config_invalid` grammar atom rather than a lookalike local error.
 
+  The decoder list, the per-decoder table-set key, and the per-decoder
+  release floor are ONE structure here: `@decoders` is derived from
+  `@table_set_keys` (a decoder without a key is unconstructible), and the
+  release floors are compile-time checked against the same key set. Every
+  consumer — the pipeline's required-key validation, the census's floor
+  enforcement, the doctor's release check — derives from this module; a
+  second hand-synced copy of any of these maps is a defect.
+
   Cross-decoder options (a table-set key belonging to another decoder, the
   wal2json-only knobs, `streaming:`/`failover:`/`messages:` capabilities) are
   NOT re-validated here — they pass through to `Replicant.start_link/1`, whose
@@ -21,7 +29,27 @@ defmodule AshReplicant.SourceSet do
   :decoder_capability_unsupported}`) surface unchanged.
   """
 
-  @decoders [:pgoutput, :pglogical, :wal2json]
+  # The ONE decoder-fact structure: key = the decoder atom, value = the
+  # start-option key that names its source table set.
+  @table_set_keys %{pgoutput: :publication, pglogical: :replication_sets, wal2json: :tables}
+
+  @decoders Map.keys(@table_set_keys)
+
+  # The source release floor per decoder, as `server_version_num` (ADR-0026):
+  # pgoutput needs publications (PostgreSQL 10+; the 12 floor is the oldest
+  # major this adapter claims and CI runs), the plugin decoders reach 9.6 —
+  # the majors the decoder-old-majors CI cells run. ENFORCED at activation
+  # (the census's release probe answers on every connectable release, so a
+  # below-floor source halts with `{:error, :source_release_unsupported}`
+  # before any 9.6-dependent probe can fault); the doctor mirrors the same
+  # map. Above the ceiling nothing is tested — that stays a doctor warning.
+  @release_floors %{pgoutput: 120_000, pglogical: 90_600, wal2json: 90_600}
+
+  unless MapSet.new(Map.keys(@release_floors)) == MapSet.new(@decoders) do
+    raise ArgumentError,
+          "AshReplicant.SourceSet decoder facts are out of sync: every admitted " <>
+            "decoder needs a release floor"
+  end
 
   defstruct decoder: :pgoutput,
             publication: nil,
@@ -102,4 +130,36 @@ defmodule AshReplicant.SourceSet do
 
   def census_member(%__MODULE__{decoder: :wal2json, tables: tables}),
     do: {:tables, tables}
+
+  # --- the derived decoder facts (their one home) ---
+
+  @doc false
+  @spec table_set_keys() :: %{optional(atom()) => atom()}
+  def table_set_keys, do: @table_set_keys
+
+  @doc false
+  @spec decoders() :: [atom()]
+  def decoders, do: @decoders
+
+  @doc """
+  The source release floor per decoder as `server_version_num` — the map the
+  census enforces at activation and the doctor's `:source_release` check
+  mirrors. One home, never a copy.
+  """
+  @spec release_floors() :: %{optional(atom()) => non_neg_integer()}
+  def release_floors, do: @release_floors
+
+  @doc """
+  Judge a probed `server_version_num` against the decoder's release floor:
+  `:ok`, or the named below-floor refusal (misconfiguration class — the
+  operator fixes it in configuration before any restart can succeed).
+  """
+  @spec check_release_floor(integer(), atom()) :: :ok | {:error, :source_release_unsupported}
+  def check_release_floor(version, decoder) when is_integer(version) and is_atom(decoder) do
+    if version >= Map.fetch!(@release_floors, decoder) do
+      :ok
+    else
+      {:error, :source_release_unsupported}
+    end
+  end
 end

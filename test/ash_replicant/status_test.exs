@@ -278,6 +278,8 @@ defmodule AshReplicant.StatusTest do
             :source_identity_rebound,
             :source_identity_mismatch,
             :publication_contract_incompatible,
+            :decoder_contract_incompatible,
+            :source_release_unsupported,
             :duplicate_source,
             :source_table_missing,
             :source_table_unmapped,
@@ -322,6 +324,12 @@ defmodule AshReplicant.StatusTest do
 
       assert {:misconfigured, :publication_contract_incompatible} =
                Status.decode_cause(Status.encode_cause(:publication_contract_incompatible))
+
+      assert {:misconfigured, :decoder_contract_incompatible} =
+               Status.decode_cause(Status.encode_cause(:decoder_contract_incompatible))
+
+      assert {:misconfigured, :source_release_unsupported} =
+               Status.decode_cause(Status.encode_cause(:source_release_unsupported))
     end
 
     test "the structural tuple reason round-trips over its closed tags" do

@@ -282,6 +282,15 @@ covers only format, Credo, and Dialyzer. Record changes under `[Unreleased]` in 
 (`test/integration/**`, `@moduletag :integration`) require a live logical-replication Postgres,
 gate on environment setup, and skip when unset. TDD: test first.
 
+**Commit messages state what the containing run proves, nothing more** (law, 2026-10-02 —
+bab4107 claimed "new CI cells run the lanes" while those lanes were red as merged, and
+9aba665's message carried a checksum from a tree the release then superseded). A commit
+message may say "CI runs X" / "the lanes are green" ONLY about a CI run whose tested head IS
+that commit's bytes: a red run, a cancelled run, a superseded run, or a run of a LATER commit
+receipts nothing, and an unpushed commit has no run at all. Artifact claims (package
+checksums, published bytes) name the exact tree they were built from — a checksum from a
+superseded tree is a stale record, not a release fact.
+
 ## Docs & lifecycle-artifact policy
 
 - **Tracked/published:** `AGENTS.md`, `CLAUDE.md`, `README.md`, `CHANGELOG.md`,

@@ -58,12 +58,15 @@ defmodule AshReplicant.Doctor do
   @replicant_requirement ">= 1.4.0 and < 2.0.0-0"
   @ash_requirement ">= 3.33.11 and < 4.0.0-0"
 
-  # The source release matrix as `server_version_num`, per decoder
-  # (ADR-0026): pgoutput needs publications (PostgreSQL 10+; the 12 floor is
-  # the oldest major this adapter claims and CI runs), the plugin decoders
-  # reach 9.6 — the majors the decoder-old-majors CI cells run. Above
-  # the ceiling nothing is tested; below the floor nothing works.
-  @source_release_floors %{pgoutput: 120_000, pglogical: 90_600, wal2json: 90_600}
+  # The source release floors live in `AshReplicant.SourceSet` — the ONE
+  # decoder-fact home — and are ENFORCED at activation (the census's release
+  # probe answers on every connectable release, so a below-floor source halts
+  # `{:error, :source_release_unsupported}` before any 9.6-dependent probe
+  # can fault; ADR-0026). This check MIRRORS that map for the operator's
+  # pull channel: below the floor fails, above the tested ceiling warns
+  # (a newer major is likely fine and refusing it would be a false
+  # negative — the ceiling stays advisory, the floor does not).
+  @source_release_floors SourceSet.release_floors()
   @source_release_ceiling 190_000
 
   @expected_plugin "pgoutput"
@@ -293,6 +296,21 @@ defmodule AshReplicant.Doctor do
     case Probe.gather(plan.connection, plan.source_set, plan.config.slot_name) do
       {:ok, probed} ->
         [check_source_reachable(:ok) | judged_source_checks(plan, contract, probed, durable)]
+
+      {:error, {:below_floor, release}} ->
+        # Mirrors the activation-enforced floor (ADR-0026): the release
+        # itself answers on every connectable release, so the doctor names
+        # the below-floor failure and skips the rest WITH that reason —
+        # never the pre-fix shape where the 9.6-dependent identity probe
+        # faulted the whole gather into :query_failed skips.
+        [
+          check_source_reachable(:ok),
+          check_source_release(release, plan.source_set.decoder)
+          | skipped(
+              @source_check_names -- [:source_release],
+              :source_release_unsupported
+            )
+        ]
 
       {:error, :unreachable} ->
         [
@@ -570,9 +588,11 @@ defmodule AshReplicant.Doctor do
     do: fail(:source_reachable, :source, :source_unreachable)
 
   @doc """
-  The source PostgreSQL version against the supported matrix. Below the floor is
-  a failure; above the tested ceiling is a warning, because a newer major is
-  likely fine and refusing it would be a false negative.
+  The source PostgreSQL version against the supported matrix — the MIRROR of
+  the floor activation enforces (`AshReplicant.SourceSet` owns the map).
+  Below the floor is a failure; above the tested ceiling is a warning,
+  because a newer major is likely fine and refusing it would be a false
+  negative.
   """
   @spec check_source_release(integer() | nil, :pgoutput | :pglogical | :wal2json) :: Check.t()
   def check_source_release(version, decoder) when is_integer(version) do

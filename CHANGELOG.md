@@ -5,6 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The durable tombstone leg is observable at attempt time and bounded**
+  (`AshReplicant.Status`). The write now emits
+  `[:ash_replicant, :status, :tombstone_write_attempted]` before any
+  destination work — distinguishing a lawful skip (no checkpoint row) from a
+  write that never ran — and its transaction carries its own pool and
+  transaction deadline (5s), so the write's terminal state settles within
+  that budget under any destination load instead of blocking the halting
+  process unboundedly. The lifecycle test's receive windows are derived from
+  these mechanisms (5s attempt / 10s outcome), replacing the third widened
+  blank window (5 → 20 → 60s).
+- **Decoder release floors are enforced at activation, not doctor-only**
+  (ADR-0026 amended). The census probes the release first on a statement
+  every connectable release can answer and refuses below-floor configs with
+  the named `{:error, :source_release_unsupported}` (pgoutput 12+, plugin
+  decoders 9.6+) — at activation and at the reconnect re-check. A 9.4/9.5
+  source no longer faults the identity probe into the unreachable/deferred
+  class: the floor refusal names itself. The doctor's `:source_release`
+  check mirrors the verdict (below-floor fails, siblings skip with that
+  reason). The floor map's one home is `AshReplicant.SourceSet` (the
+  doctor and the pipeline's required-key table derive from it; a
+  compile-time gate reds on desync).
+- **A decoder/table-set switch halts under its own name**: the census now
+  reports `{:misconfigured, :decoder_contract_incompatible}` for
+  `{:incompatible, :decoder}` contract drift instead of folding it into
+  `:publication_contract_incompatible` (which stays the publication-shape
+  reason).
+- **The session-identity guard compares the publication view
+  order-insensitively** (`AshReplicant.Sink.Impl`): a multi-publication
+  host whose transport reports a different list order than the declared one
+  no longer fails with `:source_identity_mismatch`.
+
+### Added
+
+- The decoder-fact home on `AshReplicant.SourceSet`: `table_set_keys/0`,
+  `decoders/0`, `release_floors/0`, and `check_release_floor/2` (`@decoders`
+  is derived from `@table_set_keys`; the release floors are compile-time
+  gated against the same key set), from which the pipeline's required-key
+  validation and the doctor's release check derive.
+- The one-statement release read every connectable PostgreSQL release can
+  answer (`sql_release_probe/0` on the census), joined to the doctor's
+  admitted statement set.
+
 ## [1.5.0] - 2026-10-01
 
 ### Added

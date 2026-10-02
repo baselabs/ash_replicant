@@ -235,19 +235,30 @@ defmodule AshReplicant.DecoderAdmissionTest do
       # The publication path on the old major (12 is the pgoutput floor).
       assert_plugin_lane(decoder)
     else
-      # Pre-10 has no publications at all, so the census probe itself cannot
-      # run: the doctor reports the probe-failure class (every source check
-      # skipped, never a guessed pass), the release floor's refusal for
-      # pgoutput below 12 is unit-proven in doctor_test, and the transport
-      # separately refuses the decoder at connect
-      # (`{:config, :decoder_unsupported_on_server}`).
+      # Pre-10 has no publications at all — and the release floor is
+      # ENFORCED, not advisory (ADR-0026): the release probe answers on this
+      # server, the floor gate refuses pgoutput below 12 BY NAME, and the
+      # doctor mirrors the same verdict (the check fails
+      # :source_release_unsupported; every other source check skips with
+      # that reason, never a guessed pass). The runtime enforces the same
+      # floor at ACTIVATION — synchronously, before the transport ever
+      # connects, instead of the transport's later connect halt.
       report = AshReplicant.preflight(lane_opts(decoder))
 
-      assert Enum.any?(
-               report.checks,
-               &(&1.name == :source_release and &1.status == :skipped and
-                   &1.reason == :source_probe_failed)
-             )
+      release = Enum.find(report.checks, &(&1.name == :source_release))
+
+      assert release.status == :fail
+      assert release.reason == :source_release_unsupported
+
+      for name <- [:source_plugin, :source_privileges, :source_identity, :source_coverage] do
+        check = Enum.find(report.checks, &(&1.name == name))
+
+        assert check.status == :skipped
+        assert check.reason == :source_release_unsupported
+      end
+
+      assert {:error, %AshReplicant.Error{reason: :source_release_unsupported}} =
+               AshReplicant.start_link(lane_opts(decoder))
     end
   end
 

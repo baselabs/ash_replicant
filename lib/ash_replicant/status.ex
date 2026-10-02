@@ -32,6 +32,16 @@ defmodule AshReplicant.Status do
   leg, so a stale cause cannot outlive a successor generation. Nothing in a
   tombstone renders a row value, message prefix, or progress token.
 
+  The durable leg is OBSERVABLE and BOUNDED: it emits
+  `[:ash_replicant, :status, :tombstone_write_attempted]` at attempt time —
+  in the halting process, before any destination work — and its transaction
+  carries its own pool and transaction deadline, so its terminal state (the
+  `:tombstone_write_failed` events on refusal or failure, a lawful skip on
+  an absent row) settles within that budget under any destination load. An
+  observer can therefore distinguish a lawful skip (attempt observed, no
+  failure, no row) from a write that never ran (no attempt event) — the
+  attempt is the proof of undertaking.
+
   Writers are the parties that know the cause: the sink's halt paths (the
   scrubbed reason), the owner's census halt, and `stop_supervised/1` (an
   operator stop). Replicant 1.x discards halt reasons at teardown, so an
@@ -79,6 +89,8 @@ defmodule AshReplicant.Status do
     :source_identity_rebound,
     :source_identity_mismatch,
     :publication_contract_incompatible,
+    :decoder_contract_incompatible,
+    :source_release_unsupported,
     :duplicate_source,
     :source_table_missing,
     :source_table_unmapped,
@@ -429,6 +441,16 @@ defmodule AshReplicant.Status do
   @spec record_durable(String.t(), module() | nil, map() | nil, Tombstone.t()) :: :ok
   def record_durable(slot_name, sink, identity, %Tombstone{} = tombstone)
       when is_binary(slot_name) do
+    # ATTEMPT-time observability: the event fires BEFORE any structural
+    # guard or destination work, in the halting process, one statement after
+    # the node-local leg — so a watcher can distinguish a LAWFUL SKIP (the
+    # write was undertaken and found no checkpoint row to carry it) from a
+    # write that never ran. The completion stays observable through the
+    # failure events; the skip is proven by attempt + no row + no failure.
+    Telemetry.event([:ash_replicant, :status, :tombstone_write_attempted], %{count: 1}, %{
+      slot_name: slot_name
+    })
+
     with {:ok, config} <- sink_config(sink),
          identity when is_map(identity) <- identity,
          {:ok, system_id} <- closed_binary(identity.system_identifier),
@@ -489,6 +511,17 @@ defmodule AshReplicant.Status do
   defp closed_binary(value) when is_binary(value) and value != "", do: {:ok, value}
   defp closed_binary(_other), do: :error
 
+  # The durable leg's own budget (ADR-0019 ¶5, mechanism-fixed): a one-row
+  # locked read plus an upsert keyed by (system, database, slot). The pool
+  # checkout AND the transaction carry this deadline, so the write — and
+  # therefore its failure telemetry — terminates within it under any
+  # destination load; the load-dependent latency that once outran test
+  # windows is bounded here instead of being waited out. A destination that
+  # cannot finish a one-row write inside 5s loses the durable leg (never the
+  # node-local leg, never the halt) and the loss stays observable through
+  # `:tombstone_write_failed`.
+  @durable_write_budget 5_000
+
   defp persist_tombstone(config, system_id, database, %Tombstone{} = tombstone) do
     # The ONE data-layer binding pair (Destination): the admitted dynamic
     # repo resolves per operation from context.data_layer.repo, and the
@@ -497,9 +530,13 @@ defmodule AshReplicant.Status do
 
     result =
       Destination.with_repo_binding(config, fn ->
-        config.repo.transaction(fn ->
-          tombstone_write(config, context, system_id, database, tombstone)
-        end)
+        config.repo.transaction(
+          fn ->
+            tombstone_write(config, context, system_id, database, tombstone)
+          end,
+          timeout: @durable_write_budget,
+          pool_timeout: @durable_write_budget
+        )
       end)
 
     case result do

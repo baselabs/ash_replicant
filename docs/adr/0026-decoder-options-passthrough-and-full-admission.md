@@ -89,7 +89,21 @@ publication list, and the doctor's catalog statements were publication-bound.
    The source release check is per-decoder: pgoutput floors at PostgreSQL 12
    (publications exist from 10; 12 is the oldest major CI runs), the plugin
    decoders floor at 9.6 — upstream's own tested plugin majors; the warn
-   ceiling (19) is unchanged. The slot statement is release-conditional
+   ceiling (19) is unchanged. **The floor is ENFORCED, not advisory**
+   (amended 2026-10-02 — at 1.5.0 it was doctor-only, so a wal2json config
+   against a pre-9.6 source died as the transport's connect halt instead of a
+   named refusal): the census probes the release FIRST on a statement every
+   connectable release can answer (`sql_release_probe/0` —
+   `server_version_num` alone, because `pg_control_system()` exists from 9.6
+   and would fault the whole probe on a 9.4/9.5 source into the unreachable
+   class), then refuses below-floor configs with the named
+   `{:error, :source_release_unsupported}` misconfiguration before any
+   9.6-dependent statement runs — at activation, at the reconnect re-check,
+   and mirrored by the doctor's `:source_release` check (below-floor fails;
+   its sibling source checks skip with that reason). The floor map's one home
+   is `AshReplicant.SourceSet.release_floors/0` (compile-time gated against
+   the admitted decoder set); the ceiling above 19 stays doctor-advisory.
+   The slot statement is release-conditional
    (`wal_status`/`safe_wal_size` exist from 13; a pre-13 release selects NULL
    and `Horizon.classify_slot_risk/1` reads the absent status as `:unknown`,
    never a guess). A new `:source_plugin` check reports pglogical's extension
@@ -98,6 +112,14 @@ publication list, and the doctor's catalog statements were publication-bound.
    `:plugin_presence_not_provable` (a decoding library has no extension row;
    the transport's connect-time probe is the authority). Per-table privileges
    gain a `VALUES`-joined variant for the plugin paths.
+   A decoder or table-set switch between a stored contract and the live one
+   halts under its own name, `:decoder_contract_incompatible` (amended
+   2026-10-02 — at 1.5.0 the census folded every `{:incompatible, _}` into
+   `:publication_contract_incompatible`, sending an operator hunting
+   publications after a decoder switch); publication-shape incompatibility
+   keeps the original atom. The session-identity guard compares the
+   transport's publication view order-insensitively (the transport reports
+   its own order; the manifest's canonical form is sorted).
 7. **The substrate and CI tell the truth about majors.**
    `test/support/pg_old.dockerfile` mirrors upstream's public recipe
    verbatim (pglogical 2.4.8 and wal2json commit-pinned onto digest-pinned

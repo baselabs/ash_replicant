@@ -172,22 +172,29 @@ defmodule AshReplicant.StatusLifecycleTest do
       end)
     end
 
-    @tag timeout: 120_000
+    # Window derivation (mechanism-named, not CI-failure-named): startup and
+    # the halt-status poll are covered by the 10s budget the adoption-window
+    # test above already proves sufficient; the attempt window is 5s for a
+    # signal emitted one function call after the already-observed node-local
+    # leg; the outcome window is 10s = 2x the durable write's own 5s
+    # pool+transaction deadline. 60s bounds the whole test with margin.
+    @tag timeout: 60_000
     test "when the durable leg cannot write, the value-free telemetry IS the record" do
       # The repo is not running in this suite — exactly the destination-down
       # halt condition. The node-local leg still answers, and the durable
       # leg's failure fires the closed typed event that makes the loss
-      # observable instead of silent. Under the combined live environment
-      # (sandbox auto, no checkpoint row for this never-connected slot) the
-      # durable leg benignly SKIPS: nothing failed, no record is owed, and
-      # the absence of the failure event is itself asserted.
+      # observable instead of silent. The ATTEMPT event fires first, at the
+      # top of the durable write, BEFORE any destination work: observing it
+      # is what distinguishes a lawful skip from a write that never ran —
+      # the third widening of a blank window (5 -> 20 -> 60) was a bet on CI
+      # load instead of closing exactly that hole.
       events = self()
 
       :telemetry.attach_many(
         {__MODULE__, :durable_failure},
         [
-          [:ash_replicant, :status, :tombstone_write_failed],
-          [:ash_replicant, :sink, :halted]
+          [:ash_replicant, :status, :tombstone_write_attempted],
+          [:ash_replicant, :status, :tombstone_write_failed]
         ],
         fn name, _measurements, metadata, _config ->
           send(events, {:telemetry, name, metadata})
@@ -209,23 +216,26 @@ defmodule AshReplicant.StatusLifecycleTest do
           match?({:halted, :pipeline_terminated}, AshReplicant.status(LifecycleSink))
         end)
 
-        # 60s budget: the status answer comes from the node-local leg,
-        # which precedes the durable attempt's telemetry — under a loaded
-        # full battery on CI's 4-core runners that transaction has now out-
-        # run BOTH the historical 5s and 20s windows (CI 2026-10-01, twice,
-        # two cells) with no behavior change; the event itself is
-        # deterministic in both environments. A lawful SKIP is the one
-        # outcome that emits nothing: the durable leg only writes when a
-        # checkpoint row under the entry's identity already exists — so a
-        # missing event must be PROVEN to be the skip (row absent with the
-        # repo up), never assumed.
+        # The attempt follows the node-local leg the halted-status poll just
+        # observed — same halting process, next statement, no destination
+        # work in between. Its absence here means the write was NEVER
+        # UNDERTAKEN (a defect), never that the destination was slow.
+        assert_receive {:telemetry, [:ash_replicant, :status, :tombstone_write_attempted],
+                        %{slot_name: @slot}},
+                       5_000
+
+        # The outcome is bounded by the write's own budget: the transaction
+        # carries a pool + transaction deadline, so the failure event fires
+        # within budget + margin under any load — the load-dependent latency
+        # that outran the historical blank windows lands INSIDE this one by
+        # construction, not by hope.
         received =
           receive do
             {:telemetry, [:ash_replicant, :status, :tombstone_write_failed],
              %{slot_name: @slot, reason: reason}} ->
               {:event, reason}
           after
-            60_000 ->
+            10_000 ->
               :no_event
           end
 
@@ -234,7 +244,7 @@ defmodule AshReplicant.StatusLifecycleTest do
             # DB-free (this suite): the repo is not running, so the guard
             # itself refuses (:destination_unavailable). Under the live
             # environment with the sandbox checked out to this test only,
-            # the write is attempted and the transaction fails
+            # the write is attempted and the bounded transaction fails
             # (:destination_write_failed). Both are the closed record firing.
             assert reason in [:destination_unavailable, :destination_write_failed]
 
@@ -250,7 +260,10 @@ defmodule AshReplicant.StatusLifecycleTest do
                   [@slot, "741852963", "postgres"]
                 ).rows
 
-              # The durable leg lawfully skipped: no row, no record owed.
+              # A PROVEN lawful skip: the attempt was observed above and the
+              # bounded write has terminated (no failure event inside the
+              # budget), and this leg cannot create the row it skips over —
+              # no row, no record owed. Never the un-attempted case.
               assert count == 0
             else
               flunk("durable tombstone record neither fired nor lawfully skipped")
