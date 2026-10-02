@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-10-02
+
 ### Fixed
 
 - **The durable tombstone leg is observable at attempt time and bounded**
@@ -50,6 +52,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The one-statement release read every connectable PostgreSQL release can
   answer (`sql_release_probe/0` on the census), joined to the doctor's
   admitted statement set.
+- `scripts/verify-release.sh NEW_VERSION TAG` — the post-publish public-state
+  gate: hex.pm serves the version with a checksum equal to a fresh build from
+  the released tree, the release reports `has_docs: true` and hexdocs answers
+  200, and the GitHub release's `target_commitish` equals the tag's commit
+  sha. Part of the shipping routine (a publish command proves nothing about
+  what the services then serve).
+
+### Changed
+
+- Replicant lock resolved 1.4.0 → **1.4.1** (tar sha256
+  `bea4af25…76adde6`; the `>= 1.4.0 and < 2.0.0-0` requirement is
+  unchanged). Every consumer-facing delta of that patch release verified
+  against its bytes with no impact on this adapter:
+  - REPLICA IDENTITY FULL column key flags are now uniform across decoders —
+    no code path here derives identity, upsert keys, or tenant attribution
+    from message column flags (the one `change.columns` reader maps names
+    only; keys come from the catalog census, tenancy from record values);
+  - wal2json JSON numbers now halt `:decode_failure` — unreachable here
+    (`numeric-data-types-as-string` is transport-mandatory at connect) and no
+    hand-built wal2json payload exists in the suite;
+  - the wal2json schema guard no longer stacks timers across reconnects — no
+    test here asserts guard tick timing (the option appears only in
+    forwarding assertions);
+  - NULL columns ride wal2json inserts as in-array nulls — no sink action.
+  The old-major lane substrate's wal2json pin is relabeled to what it always
+  built (the `wal2json_2_6` tag @ `75629c2` — the same commit upstream pins
+  for every pre-15 major); this repo's lane intentionally has no 15+ plugin
+  server (its 15–18 cells run in-core pgoutput), so upstream's 15+ master
+  pin and the PG15+ `output_plugin_libraries` GUC do not apply.
 
 ## [1.5.0] - 2026-10-01
 
@@ -1548,7 +1579,8 @@ sensitive-column verification.
   `usage-rules.md`, `CONTRIBUTING.md`, `LICENSE`, `NOTICE`; tracked charter at
   `docs/CHARTER.md`.
 
-[Unreleased]: https://github.com/baselabs/ash_replicant/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/baselabs/ash_replicant/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/baselabs/ash_replicant/tree/v1.6.0
 [1.5.0]: https://github.com/baselabs/ash_replicant/tree/v1.5.0
 [1.4.0]: https://github.com/baselabs/ash_replicant/tree/v1.4.0
 [1.3.0]: https://github.com/baselabs/ash_replicant/tree/v1.3.0

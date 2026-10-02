@@ -6,7 +6,7 @@ Thank you for your interest in contributing to AshReplicant!
 
 - **Elixir 1.20.3** and **Erlang/OTP 29** (run `asdf install` from the repository root)
 - Ash `>= 3.33.11 and < 4.0.0-0`; selector-free development uses this public range
-- Replicant `>= 1.4.0 and < 2.0.0-0` from Hex; the lock is 1.4.0.
+- Replicant `>= 1.4.0 and < 2.0.0-0` from Hex; the lock is 1.4.1.
   No sibling checkout is required to build or test. A local checkout at
   `../replicant` is only needed for cross-repo design work and is never release evidence.
 - AshCloak `>= 0.4.0 and < 1.0.0-0` from Hex; the current lock is 0.4.0 (the

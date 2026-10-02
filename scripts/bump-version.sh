@@ -74,4 +74,9 @@ replace_once CHANGELOG.md "[$current]: https://github.com/baselabs/ash_replicant
 [$current]: https://github.com/baselabs/ash_replicant/tree/v$current"
 
 echo "bump-version: $current -> $new_version"
-echo "bump-version: next — scripts/prepush.sh, commit, push, watch CI, then tag/release/publish from the green head"
+echo "bump-version: next — scripts/prepush.sh, commit, push, watch CI, then tag/release/publish"
+echo "bump-version: publish from the battery-green head only: tag v$new_version at that sha,"
+echo "bump-version:   GitHub release with target_commitish = the TAG's sha (not the branch),"
+echo "bump-version:   HEX_API_KEY from .env -> mix hex.publish (docs upload with the package),"
+echo "bump-version:   then scripts/verify-release.sh $new_version v$new_version — the"
+echo "bump-version:   public-state gate (served checksum, has_docs + hexdocs 200, GH target)."

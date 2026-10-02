@@ -3,7 +3,7 @@
 ```elixir
 Mix.install([
   # This notebook lives in `notebooks/`, so `..` is the repo root. Swap for
-  # `{:ash_replicant, "~> 1.5.0"}` to run it against the published Hex package.
+  # `{:ash_replicant, "~> 1.6.0"}` to run it against the published Hex package.
   {:ash_replicant, path: Path.join(__DIR__, "..")},
   {:kino, "~> 0.14"}
 ])
@@ -71,7 +71,7 @@ tangible and §11–§14 cover the later ones:
 
 ```elixir
 AshReplicant.version()
-# => "1.5.0"
+# => "1.6.0"
 ```
 
 ## 3 · The value-free boundary (rule 4)

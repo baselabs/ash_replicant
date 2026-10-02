@@ -14,7 +14,7 @@ not re-gated. It executes through the
 [`replicant`](https://github.com/baselabs/replicant) client (the transport — the
 "`postgrex` of CDC").
 
-> **Status: v1.5.0 — stable public API (ADR-0023).** Effect-once mirroring with fail-closed
+> **Status: v1.6.0 — stable public API (ADR-0023).** Effect-once mirroring with fail-closed
 > multitenancy (compile-time verified), SCD2 history mirroring, and AshCloak integration.
 > Working rules are in
 > [`AGENTS.md`](https://github.com/baselabs/ash_replicant/blob/main/AGENTS.md) — read it
@@ -46,7 +46,7 @@ Add `ash_replicant` to your dependencies in `mix.exs`:
 
 ```elixir
 # mix.exs
-{:ash_replicant, "~> 1.5.0"}
+{:ash_replicant, "~> 1.6.0"}
 ```
 
 It pulls in [`replicant`](https://github.com/baselabs/replicant) (the CDC transport)
@@ -54,11 +54,11 @@ as a transitive dependency.
 
 ### Supported foundation
 
-The current 1.5.0 release baseline is built and tested with:
+The current 1.6.0 release baseline is built and tested with:
 
 - Elixir 1.20.3 on Erlang/OTP 29;
 - Ash `>= 3.33.11 and < 4.0.0-0` and AshPostgres 2.13.x;
-- Replicant `>= 1.4.0 and < 2.0.0-0` (current lock 1.4.0); and
+- Replicant `>= 1.4.0 and < 2.0.0-0` (current lock 1.4.1); and
 - Replicant 1.4's decoder options (`decoder:`, `replication_sets:`, `tables:`,
   `allow_keyless_tables:`, `schema_check_interval:`) are forwarded to the
   transport unchanged and ADMITTED for all three decoders — the table-set

@@ -47,8 +47,13 @@ RUN set -eux; \
     make -j"$(nproc)" PG_CONFIG=/usr/lib/postgresql/$PG_MAJOR/bin/pg_config; \
     make install PG_CONFIG=/usr/lib/postgresql/$PG_MAJOR/bin/pg_config
 
-# wal2json master @ 75a4b494 (≥ 2.6: numeric-data-types-as-string) as `wal2json`, and
+# wal2json, the wal2json_2_6 tag @ 75629c2 (≥ 2.6: numeric-data-types-as-string;
+# the same commit replicant's own dockerfile pins for every pre-15 major), and
 # the wal2json_2_4 tag as `wal2json2_4` (the option-rejection halt's live lever).
+# Intentional difference from replicant's per-major pinning: this lane runs only
+# the pre-15 majors (9.6/12) — this repo's 15-18 cells run pgoutput, which ships
+# in-core and needs no plugin build — so replicant's master@75a4b494-on-15+ pin
+# and the PG15+ output_plugin_libraries GUC do not apply here.
 RUN set -eux; \
     git clone --quiet https://github.com/eulerto/wal2json.git /tmp/wal2json; \
     cd /tmp/wal2json; \

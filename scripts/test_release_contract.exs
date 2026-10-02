@@ -152,7 +152,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
      [
        "- Elixir 1.20.3 on Erlang/OTP 29;",
        "- Ash `>= 3.33.11 and < 4.0.0-0` and AshPostgres 2.13.x;",
-       "- Replicant `>= 1.4.0 and < 2.0.0-0` (current lock 1.4.0)",
+       "- Replicant `>= 1.4.0 and < 2.0.0-0` (current lock 1.4.1)",
        "- AshOnetime `>= 1.3.2 and < 2.0.0-0` (current lock 1.4.0)",
        "- AshCloak `>= 0.4.0 and < 1.0.0-0` (current lock 0.4.0"
      ]},
@@ -160,14 +160,14 @@ defmodule AshReplicant.ReleaseContractSelfTest do
      [
        "- **Elixir 1.20.3** and **Erlang/OTP 29**",
        "- Ash `>= 3.33.11 and < 4.0.0-0`; selector-free development uses this public range",
-       "- Replicant `>= 1.4.0 and < 2.0.0-0` from Hex; the lock is 1.4.0.",
+       "- Replicant `>= 1.4.0 and < 2.0.0-0` from Hex; the lock is 1.4.1.",
        "- AshCloak `>= 0.4.0 and < 1.0.0-0` from Hex; the current lock is 0.4.0 (the"
      ]},
     {"AGENTS.md", "## Development workflow",
      [
        "The supported release foundation is Elixir 1.20.3 on Erlang/OTP 29 with Ash\n" <>
          "`>= 3.33.11 and < 4.0.0-0` and Replicant\n" <>
-         "`>= 1.4.0 and < 2.0.0-0` (current lock 1.4.0), plus\n" <>
+         "`>= 1.4.0 and < 2.0.0-0` (current lock 1.4.1), plus\n" <>
          "AshOnetime `>= 1.3.2 and < 2.0.0-0` (current lock 1.4.0) and AshCloak\n" <>
          "`>= 0.4.0 and < 1.0.0-0` (current lock 0.4.0; releases below 0.4.0 carry\n" <>
          "CVE-2026-81319 and CVE-2026-81322 and are not admitted)."
@@ -368,10 +368,17 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
   defp replicant_selector_probes do
     # The exact-floor CI cell re-resolves the lock to the selector's version
-    # before the contract runs, so a floor-selector run is modeled with the
-    # fixture lock already at the floor (the lock IS 1.4.0); a stale in-window
-    # lock under that selector, and a below-floor lock, are both rejected.
+    # before the contract runs, so a floor-selector run is modeled by moving
+    # the fixture lock TO the floor first (the lock is 1.4.1 now — the floor
+    # cell's re-resolve is what puts 1.4.0 in it); any other lock under that
+    # selector — stale in-window or below-floor — is rejected.
     prepare_fixture()
+
+    replace_once!(
+      "mix.lock",
+      ~s("replicant": {:hex, :replicant, "1.4.1"),
+      ~s("replicant": {:hex, :replicant, "1.4.0")
+    )
 
     with_env("ASH_REPLICANT_REPLICANT_VERSION", "1.4.0", &assert_valid!/0)
 
@@ -379,7 +386,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       "mix.lock",
-      ~s("replicant": {:hex, :replicant, "1.4.0"),
+      ~s("replicant": {:hex, :replicant, "1.4.1"),
       ~s("replicant": {:hex, :replicant, "1.3.1")
     )
 
@@ -389,7 +396,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       "mix.lock",
-      ~s("replicant": {:hex, :replicant, "1.4.0"),
+      ~s("replicant": {:hex, :replicant, "1.4.1"),
       ~s("replicant": {:hex, :replicant, "1.2.4")
     )
 
@@ -1301,7 +1308,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       "mix.lock",
-      ~s("replicant": {:hex, :replicant, "1.4.0"),
+      ~s("replicant": {:hex, :replicant, "1.4.1"),
       ~s("replicant": {:hex, :replicant, "0.3.1")
     )
 
@@ -1311,7 +1318,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       "mix.lock",
-      ~s("replicant": {:hex, :replicant, "1.4.0"),
+      ~s("replicant": {:hex, :replicant, "1.4.1"),
       ~s("replicant": {:hex, :replicant, "1.1.0")
     )
 
