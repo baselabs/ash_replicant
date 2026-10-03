@@ -150,6 +150,23 @@ Four facts, all observed on 2026-09-28/29, move the floors:
   schema-guard timer no longer stacking across reconnects; NULL columns as
   in-array nulls). The earlier "release lock is 1.2.3" sentence above is the
   ADR-0005-era amendment, superseded by the 1.4.0 floor move and this note.
+- **Replicant lock moves to 1.4.2** (October 3, 2026; requirement unchanged
+  at `>= 1.4.0 and < 2.0.0-0`; tar checksum `aa150113…8d56e` verified
+  against the Hex release API before locking): a transport patch whose
+  single library change — verified against the `v1.4.1…v1.4.2` bytes,
+  `query_builder.ex` alone — admits PostgreSQL 9.6's two-part
+  exported-snapshot name (`"%08X-%d"`) in `set_transaction_snapshot/1`
+  alongside the 10+ three-part form, same character class, the
+  string-literal guard intact. No adapter code calls that function
+  (re-verified: zero references in `lib/`); the consumer-facing effect
+  lands on the supported 9.6 plugin-decoder matrix (ADR-0026), where
+  `snapshot: true` previously failed its back-fill (`:snapshot_failed` →
+  `:snapshot_incomplete`, fail-closed, delivering nothing) and now
+  completes. The floor deliberately stays 1.4.0: the broken slice is loud
+  and fail-closed — not the silent-casting or advisory class of the 1.3.0
+  and AshCloak floor moves above — and ADR-0026's same-day amendment
+  records the delegated 9.6 snapshot evidence (upstream's connected leg)
+  that now exists.
 
 ## Evidence
 

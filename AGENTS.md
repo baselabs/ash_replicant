@@ -262,7 +262,7 @@ channel.
 
 The supported release foundation is Elixir 1.20.3 on Erlang/OTP 29 with Ash
 `>= 3.33.11 and < 4.0.0-0` and Replicant
-`>= 1.4.0 and < 2.0.0-0` (current lock 1.4.1), plus
+`>= 1.4.0 and < 2.0.0-0` (current lock 1.4.2), plus
 AshOnetime `>= 1.3.2 and < 2.0.0-0` (current lock 1.4.0) and AshCloak
 `>= 0.4.0 and < 1.0.0-0` (current lock 0.4.0; releases below 0.4.0 carry
 CVE-2026-81319 and CVE-2026-81322 and are not admitted). Replicant 1.4's

@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Replicant lock resolved 1.4.1 → **1.4.2** (tar sha256
+  `aa150113…8d56e`, verified against the Hex release API; the
+  `>= 1.4.0 and < 2.0.0-0` requirement is unchanged, and the
+  exact-floors CI cell keeps proving the 1.4.0 floor). The release
+  carries exactly one library change — verified against the
+  `v1.4.1…v1.4.2` bytes, `query_builder.ex` alone:
+  `set_transaction_snapshot/1` now admits PostgreSQL 9.6's two-part
+  exported-snapshot name (`"%08X-%d"`) alongside the 10+ three-part
+  form, same character class, the string-literal guard intact. That
+  change is consumer-facing here, not a no-impact note: under
+  1.4.0/1.4.1 a `snapshot: true` pipeline on a 9.6 pglogical/wal2json
+  source — inside the supported matrix (ADR-0026) — failed its
+  back-fill (`:snapshot_failed`) and held `:snapshot_incomplete`,
+  fail-closed, delivering nothing; it now completes. No adapter code
+  changes: the snapshot machinery is decoder-invariant and no `lib/`
+  code references the snapshot name — the 9.6 snapshot evidence stays
+  delegated to upstream's connected leg, which 1.4.2 itself adds
+  (ADR-0026's 2026-10-03 amendment records the delegation's new
+  footing). The decoder lanes here (streaming, `snapshot: false`) ran
+  3/3 against 1.4.2 on a cluster-hosted PostgreSQL 9.6.24 before this
+  lock moved: pglogical, wal2json, and the pre-10 pgoutput refusal
+  lane.
+
 ## [1.6.1] - 2026-10-02
 
 ### Fixed

@@ -168,3 +168,27 @@ publication list, and the doctor's catalog statements were publication-bound.
   `test/integration/decoder_admission_test.exs` (the live lanes; locally the
   substrate runs in the BaseLabs cluster's ephemeral namespace via
   `ASH_REPLICANT_PGOLD_URL`).
+
+## Amendment (2026-10-03): the delegated snapshot evidence exists — the lock moved, the floor did not
+
+Decision §7's closing sentence delegates the snapshot path on the
+plugin-decoder majors to upstream's cross-decoder parity suite. That
+delegation had no teeth for two releases without anyone knowing: Replicant
+1.4.0 and 1.4.1 rejected PostgreSQL 9.6's two-part exported-snapshot name
+in `set_transaction_snapshot/1`, so `snapshot: true` on a 9.6
+pglogical/wal2json source — inside this package's supported matrix —
+failed its back-fill (`:snapshot_failed`) and held `:snapshot_incomplete`,
+fail-closed, delivering nothing. Upstream's suite did not carry a 9.6
+snapshot leg until the fix itself. Replicant 1.4.2 (October 3, 2026) fixes
+the transport (the middle hex group of the name allowlist becomes optional;
+character class and string-literal guard unchanged — verified against the
+`v1.4.1…v1.4.2` bytes, `query_builder.ex` alone) and adds the missing
+connected leg (`test/integration/plugin_snapshot_pg96_test.exs`: a 9.6
+back-fill under a continuously committing writer, every row exactly once
+across the snapshot/stream handoff), which is now what the delegation
+rests on. Nothing in this adapter changed: the snapshot machinery is
+decoder-invariant and no adapter code references the snapshot name
+(re-verified: zero references in `lib/`). The release lock moves to 1.4.2;
+the requirement floor stays `>= 1.4.0` (ADR-0002's same-day amendment
+records why: the broken slice is loud and fail-closed, not the class that
+moves floors).
