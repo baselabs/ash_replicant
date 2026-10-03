@@ -63,7 +63,11 @@ defmodule AshReplicant.StructuralFormatter do
 
     case Enum.find_value(List.wrap(failures), &project_frame/1) do
       {file, line} -> base <> " (#{file}:#{line})"
-      nil -> base
+      # The ABSENCE of a site is evidence, not silence: assert failures
+      # carry the test module's own frame, so no-repo-frame marks the
+      # timeout/kill class — naming it turns an unattributable battery red
+      # (the 1.6.0 latest-compatible cell) into a self-classifying one.
+      nil -> base <> " (no repo frame)"
     end
   end
 

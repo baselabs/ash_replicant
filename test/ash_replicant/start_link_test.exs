@@ -316,6 +316,18 @@ defmodule AshReplicant.StartLinkTest do
   # (run 35689545248, latest-compatible cell, starved stop path); the
   # ceiling bounds waiting only, never the outcome. 180s.
   @tag timeout: 180_000
+  # Mechanism-named ceiling (not a widened window): this test runs two
+  # activation+stop cycles against the unreachable-port fixture, and each
+  # cycle stacks bounded-but-real waits (the preflight connection's query
+  # refusal and pool shutdown, the resume probe's, the pipeline teardown).
+  # ExUnit's 60s DEFAULT ceiling sits AT the test's own internal budget —
+  # the Task.await below allows 60s alone — so compatibility-runner
+  # starvation accumulates past the ceiling with no behavior defect (CI
+  # 37076602983, latest-compatible cell; the same stacked-wait class as run
+  # 32698769957 the queue-bounds fix below already named). 180s is this
+  # file's own slow-test precedent (the override test below); a WEDGED stop
+  # is still caught by the 60s Task.await with its named message.
+  @tag timeout: 180_000
   test "the accepted path starts, the guard compares without returning values, and it stops" do
     log =
       capture_log(fn ->

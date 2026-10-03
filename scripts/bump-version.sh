@@ -50,7 +50,13 @@ EOF
 }
 
 replace_once mix.exs "@version \"$current\"" "@version \"$new_version\""
-replace_once CHANGELOG.md "## [Unreleased]" "## [$new_version] - $today"
+# Fold [Unreleased] into the dated version AND seed the next [Unreleased] on
+# top in the same move — a fold without the fresh section leaves the next
+# change recording nowhere (1.6.0 shipped with the section added by hand;
+# the routine now owns it).
+replace_once CHANGELOG.md "## [Unreleased]" "## [Unreleased]
+
+## [$new_version] - $today"
 replace_once README.md "> **Status: v$current — stable public API (ADR-0023).**" \
   "> **Status: v$new_version — stable public API (ADR-0023).**"
 replace_once README.md "{:ash_replicant, \"~> $current\"}" \

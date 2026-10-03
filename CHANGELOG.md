@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A value-free battery red now self-classifies** (the 1.6.0 follow-up):
+  the structural formatter's `FAILED:` line names the ABSENCE of a project
+  frame explicitly (`(no repo frame)`) instead of printing a bare line — an
+  assert failure carries the test module's frame, so the bare shape marks
+  the timeout/kill class. The one occurrence of the StartLinkTest
+  compatibility-runner flake (CI run 37076602983, latest-compatible cell)
+  printed a bare line and its rerun destroyed the state; the next
+  occurrence names its class. That test also carries a mechanism-named
+  `timeout: 180_000` (this file's own slow-test precedent): ExUnit's 60s
+  default ceiling sat exactly AT the test's internal 60s stop budget, so
+  runner starvation accumulated past the ceiling with no behavior defect
+  (the stacked-wait class run 32698769957 already named); a wedged stop is
+  still caught by the 60s `Task.await` with its own message.
+- `scripts/bump-version.sh` now seeds a fresh `[Unreleased]` section when
+  it folds the old one into the dated version (1.6.0 shipped with the
+  section added by hand; the routine owns it now — proven in a scratch
+  harness, red under the fold-without-seed mutation).
+
 ## [1.6.0] - 2026-10-02
 
 ### Fixed

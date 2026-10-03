@@ -35,7 +35,12 @@ defmodule AshReplicant.StructuralFormatterTest do
                  "(test/integration/snapshot_pipeline_test.exs:175)"
     end
 
-    test "a stacktrace with no project frame still names the test, with no site" do
+    test "a stacktrace with no project frame NAMES the absence — a timeout-shaped failure self-classifies" do
+      # A bare FAILED line (no site) is itself evidence: assert failures
+      # carry the test module's frame, so its absence marks the timeout /
+      # kill class. The 1.6.0 latest-compatible cell lost exactly this
+      # diagnosis — the bare line said nothing and the rerun destroyed the
+      # state. The fixed suffix turns absence into a signal, value-free.
       failure = %{
         reason: :assertion,
         trace: [
@@ -50,7 +55,8 @@ defmodule AshReplicant.StructuralFormatterTest do
       }
 
       assert StructuralFormatter.failed_line(event) ==
-               "FAILED: Elixir.AshReplicant.StartLinkTest :: test no project frames"
+               "FAILED: Elixir.AshReplicant.StartLinkTest :: test no project frames " <>
+                 "(no repo frame)"
     end
 
     test "skips earlier project frames from dependencies, keeps the first repo frame" do
