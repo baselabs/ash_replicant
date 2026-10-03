@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.2] - 2026-10-03
+
 ### Changed
 
 - Replicant lock resolved 1.4.1 → **1.4.2** (tar sha256
@@ -1670,7 +1672,8 @@ sensitive-column verification.
   `usage-rules.md`, `CONTRIBUTING.md`, `LICENSE`, `NOTICE`; tracked charter at
   `docs/CHARTER.md`.
 
-[Unreleased]: https://github.com/baselabs/ash_replicant/compare/v1.6.1...HEAD
+[Unreleased]: https://github.com/baselabs/ash_replicant/compare/v1.6.2...HEAD
+[1.6.2]: https://github.com/baselabs/ash_replicant/tree/v1.6.2
 [1.6.1]: https://github.com/baselabs/ash_replicant/tree/v1.6.1
 [1.6.0]: https://github.com/baselabs/ash_replicant/tree/v1.6.0
 [1.5.0]: https://github.com/baselabs/ash_replicant/tree/v1.5.0

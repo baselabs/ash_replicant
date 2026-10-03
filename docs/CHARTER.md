@@ -1,6 +1,6 @@
 # AshReplicant — Project Charter
 
-**Status:** current — realized, latest published package 1.6.1 · **Kind:** charter (what & why; the binding *how* is `AGENTS.md`) · **Updated:** 2026-10-02 · **Governed by:** `AGENTS.md` critical rules + `docs/adr/` decisions · **Review when:** a release ships, a Critical Rule changes, or an ADR is added
+**Status:** current — realized, latest published package 1.6.2 · **Kind:** charter (what & why; the binding *how* is `AGENTS.md`) · **Updated:** 2026-10-03 · **Governed by:** `AGENTS.md` critical rules + `docs/adr/` decisions · **Review when:** a release ships, a Critical Rule changes, or an ADR is added
 The original state-mirror and SCD2 capabilities are shipped. The canonical
 production-readiness scope and dependency order live in `docs/ROADMAP.md`.
 Product-shaping decisions are tracked in `docs/adr/`; historical lifecycle
