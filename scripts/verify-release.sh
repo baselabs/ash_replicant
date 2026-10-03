@@ -49,18 +49,23 @@ api="$(curl -fsSL "https://hex.pm/api/packages/ash_replicant")" \
   || fail "hex.pm API unreachable for ash_replicant"
 
 release_json="$(
-  printf '%s' "$api" | python3 - "$version" <<'EOF'
+  printf '%s' "$api" | python3 -c '
 import json, sys
-version = sys.argv[1]
+wanted = sys.argv[1]
 for release in json.load(sys.stdin)["releases"]:
-    if release["version"] == version:
+    if release["version"] == wanted:
         print(json.dumps(release))
         break
-EOF
+' "$version"
 )"
 [[ -n "$release_json" ]] || fail "hex.pm does not serve version $version"
 
-served_checksum="$(printf '%s' "$release_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["checksum"])')"
+# The list entry carries only version/has_docs; the checksum lives on the
+# release detail resource it names.
+detail_url="$(printf '%s' "$release_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["url"])')"
+detail="$(curl -fsSL "$detail_url")" || fail "hex.pm release detail unreachable for $version"
+
+served_checksum="$(printf '%s' "$detail" | python3 -c 'import json,sys; print(json.load(sys.stdin)["checksum"])')"
 has_docs="$(printf '%s' "$release_json" | python3 -c 'import json,sys; print(str(json.load(sys.stdin)["has_docs"]).lower())')"
 
 [[ "$served_checksum" == "$local_checksum" ]] \
