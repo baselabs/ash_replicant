@@ -395,14 +395,18 @@ defmodule AshReplicant.StartLinkTest do
 
         # A stop that never completes is a WEDGED transport — name it
         # structurally instead of letting it eat the test's ceiling. The
-        # await is RECEIVE-based deliberately: Task.await's timeout EXITS
-        # the test (an exit carries no stacktrace, so the battery's
-        # formatter receipt shows only the class), while a flunk is an
-        # assert-failure whose frame the formatter can site — the next
-        # occurrence names the wedged stop by file:line instead of by
-        # class alone (the third occurrence, CI 37095540407/pg18, still
-        # cannot say which).
+        # task is UNLINKED (the monitor stays): Task.async's LINK would
+        # kill the test on any abnormal stop exit — an exit carries no
+        # stacktrace, so the battery receipt could only ever say
+        # "(no repo frame)" (four CI occurrences, runs 37076602983 and
+        # 37099288841 among them, none able to name the cause). Unlinked,
+        # the receive below FLUNKS on the stop's actual exit reason (the
+        # reason reaches the preserved local output; the formatter sites
+        # the flunk by file:line on CI), on an unexpected return value, or
+        # on the 60s wedge — each an assert-failure the formatter can
+        # attribute.
         stopper = Task.async(fn -> AshReplicant.stop_supervised("valid_slot") end)
+        Process.unlink(stopper.pid)
         ref = stopper.ref
 
         receive do

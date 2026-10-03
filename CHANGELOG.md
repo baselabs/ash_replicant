@@ -28,13 +28,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it folds the old one into the dated version (1.6.0 shipped with the
   section added by hand; the routine owns it now — proven in a scratch
   harness, red under the fold-without-seed mutation).
-- The StartLinkTest accepted-path test's stop await is receive-based: a
-  wedged `stop_supervised` now FLUNKS with its named message (an
-  assert-failure the battery formatter can site by file:line) instead of
-  exiting the test through `Task.await`'s timeout — the third
-  compatibility-runner occurrence (CI run 37095540407, pg18 cell; the
-  formatter's `(no repo frame)` receipt named the class) still cannot say
-  WHICH phase wedged; the next one will.
+- The StartLinkTest accepted-path test's stop await is unlink-receive-based:
+  the stop task is unlinked (monitor kept) so an abnormal stop exit can no
+  longer kill the test framelessly — four CI occurrences of the class
+  (runs 37076602983 and 37099288841 among them) all printed the
+  formatter's `(no repo frame)` receipt because `Task.async`'s LINK
+  converts a stop crash into a link-exit with no stacktrace, and the
+  180s ceiling fix could not address it. A wedged stop, an unexpected
+  return, or a dying stop task now each FLUNK with their named,
+  value-free message — an assert-failure the battery formatter sites by
+  file:line, and whose branch line identifies the failure mode; the exit
+  reason reaches the preserved local output.
 - The DataCase binds a no-sandbox test's connection-ownership window to
   the test's own timeout (a `sandbox: false` checkout): the
   consumer-upgrade test's locked migration transaction holds one
