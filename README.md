@@ -14,7 +14,7 @@ not re-gated. It executes through the
 [`replicant`](https://github.com/baselabs/replicant) client (the transport — the
 "`postgrex` of CDC").
 
-> **Status: v1.6.0 — stable public API (ADR-0023).** Effect-once mirroring with fail-closed
+> **Status: v1.6.1 — stable public API (ADR-0023).** Effect-once mirroring with fail-closed
 > multitenancy (compile-time verified), SCD2 history mirroring, and AshCloak integration.
 > Working rules are in
 > [`AGENTS.md`](https://github.com/baselabs/ash_replicant/blob/main/AGENTS.md) — read it
@@ -46,7 +46,7 @@ Add `ash_replicant` to your dependencies in `mix.exs`:
 
 ```elixir
 # mix.exs
-{:ash_replicant, "~> 1.6.0"}
+{:ash_replicant, "~> 1.6.1"}
 ```
 
 It pulls in [`replicant`](https://github.com/baselabs/replicant) (the CDC transport)
@@ -54,7 +54,7 @@ as a transitive dependency.
 
 ### Supported foundation
 
-The current 1.6.0 release baseline is built and tested with:
+The current 1.6.1 release baseline is built and tested with:
 
 - Elixir 1.20.3 on Erlang/OTP 29;
 - Ash `>= 3.33.11 and < 4.0.0-0` and AshPostgres 2.13.x;
@@ -715,7 +715,14 @@ only the node-local leg (after a node restart the slot reports
 event is the durable record — the destination was down at the only moment
 the fact existed), and a host-tree shutdown writes no tombstone at all (no
 database writes during app teardown; a `:stopped` tombstone would map to the
-same public `:not_started` anyway). The halt window itself is closed: a
+same public `:not_started` anyway). The durable leg is observable and
+bounded: `:status, :tombstone_write_attempted` fires at attempt time —
+before any destination work, proving the write was undertaken, which is what
+distinguishes a lawful skip (no checkpoint row to carry the record) from a
+write that never ran — and its transaction carries its own pool and
+transaction deadline, so the write's terminal state (the failure event, or
+the silent lawful skip) settles within that budget under any destination
+load. The halt window itself is closed: a
 status call made after any halt decision answers that halt's cause, never
 `:healthy` — activation clears the node-local leg before the generation
 entry exists, so a node-local tombstone under a live entry can only be that

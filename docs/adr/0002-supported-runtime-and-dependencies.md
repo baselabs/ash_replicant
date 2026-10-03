@@ -140,6 +140,16 @@ Four facts, all observed on 2026-09-28/29, move the floors:
   external-effect message routes; no ash_replicant code depends on new API.
 - **Mint lock moves to 1.11.0** (optional requirement unchanged):
   EEF-CVE-2026-91043 (HIGH), EEF-CVE-2026-92103, EEF-CVE-2026-94194.
+- **Replicant lock moves to 1.4.1** (October 2, 2026; requirement unchanged
+  at `>= 1.4.0 and < 2.0.0-0`): a transport patch — no public API additions,
+  removals, or signature changes — whose four consumer-facing deltas were
+  verified against its bytes with no impact here (RI-FULL column key flags
+  uniform across decoders, consumed nowhere in this adapter; wal2json JSON
+  numbers halting `:decode_failure`, unreachable under the
+  transport-mandatory `numeric-data-types-as-string`; the wal2json
+  schema-guard timer no longer stacking across reconnects; NULL columns as
+  in-array nulls). The earlier "release lock is 1.2.3" sentence above is the
+  ADR-0005-era amendment, superseded by the 1.4.0 floor move and this note.
 
 ## Evidence
 

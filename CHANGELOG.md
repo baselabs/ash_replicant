@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-10-02
+
 ### Fixed
 
 - **A value-free battery red now self-classifies** (the 1.6.0 follow-up):
@@ -26,6 +28,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it folds the old one into the dated version (1.6.0 shipped with the
   section added by hand; the routine owns it now — proven in a scratch
   harness, red under the fold-without-seed mutation).
+
+### Documentation
+
+- **The full docs surface reviewed against the shipped code, file by file.**
+  Updates: `docs/RECOVERY.md` gains the two rows the 1.6.0 enforcement
+  introduced — a decoder/table-set contract switch
+  (`{:misconfigured, :decoder_contract_incompatible}`, an explicit operator
+  decision like any incompatible contract) and the below-floor source
+  refusal (`{:error, :source_release_unsupported}`, synchronous at start,
+  mirrored by the doctor); the README's tombstone section and the tour
+  notebook's tombstone section state the attempt-observable, budgeted
+  durable leg; the notebook's runnable
+  `AshReplicant.Telemetry.emitted_event_names()` example carries
+  `:tombstone_write_attempted` and its decoder section states the enforced
+  release floors; `AGENTS.md` rule 12 carries the attempt/budget contract;
+  `docs/CHARTER.md` records the 1.6.0/1.6.1 history;
+  `docs/ROADMAP.md`'s F1 row records the 1.6.0 hardening;
+  `docs/adr/0002` carries the Replicant 1.4.1 lock amendment (requirement
+  unchanged) and marks the older 1.2.3 lock sentence as superseded;
+  `CONTRIBUTING.md` gains the complete seven-step **Shipping a release**
+  routine (bump → prepush → CI-green head → tag → GitHub release with the
+  target PATCHed to the tag's sha → hex.publish with docs →
+  `scripts/verify-release.sh`) and corrects its current-lock parenthetical.
+  Reviewed with no change needed: `usage-rules.md` (current as of 1.6.0),
+  ADR-0019 (delegates tombstone mechanics to the implementation), the
+  performance baselines, and the historical handoffs.
 
 ## [1.6.0] - 2026-10-02
 
@@ -1599,7 +1627,8 @@ sensitive-column verification.
   `usage-rules.md`, `CONTRIBUTING.md`, `LICENSE`, `NOTICE`; tracked charter at
   `docs/CHARTER.md`.
 
-[Unreleased]: https://github.com/baselabs/ash_replicant/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/baselabs/ash_replicant/compare/v1.6.1...HEAD
+[1.6.1]: https://github.com/baselabs/ash_replicant/tree/v1.6.1
 [1.6.0]: https://github.com/baselabs/ash_replicant/tree/v1.6.0
 [1.5.0]: https://github.com/baselabs/ash_replicant/tree/v1.5.0
 [1.4.0]: https://github.com/baselabs/ash_replicant/tree/v1.4.0

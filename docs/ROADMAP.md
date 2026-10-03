@@ -91,4 +91,4 @@ named ADR; status derives from commits and `CHANGELOG.md` as everywhere else.
 
 | ID | What | Governing decision |
 |---|---|---|
-| F1 | **Admit the Replicant 1.4 plugin decoders** — DELIVERED in 1.5.0: decoder-scoped census/contract/doctor (`AshReplicant.SourceSet`), pre-13-safe slot probes, `decoder-old-majors` CI cells on 9.6/12, and the live decoder lanes (`test/integration/decoder_admission_test.exs`) | [ADR-0026](adr/0026-decoder-options-passthrough-and-full-admission.md) |
+| F1 | **Admit the Replicant 1.4 plugin decoders** — DELIVERED in 1.5.0: decoder-scoped census/contract/doctor (`AshReplicant.SourceSet`), pre-13-safe slot probes, `decoder-old-majors` CI cells on 9.6/12, and the live decoder lanes (`test/integration/decoder_admission_test.exs`); HARDENED in 1.6.0 under the same ADR as amended — release floors enforced at activation with the doctor mirroring, the decoder/table-set contract switch under its own halt reason, the decoder-fact maps derived from one compile-gated home, and the session-identity publication view compared order-insensitively | [ADR-0026](adr/0026-decoder-options-passthrough-and-full-admission.md) |

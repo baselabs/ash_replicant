@@ -177,8 +177,11 @@ defmodule AshReplicant.StatusLifecycleTest do
     # test above already proves sufficient; the attempt window is 5s for a
     # signal emitted one function call after the already-observed node-local
     # leg; the outcome window is 10s = 2x the durable write's own 5s
-    # pool+transaction deadline. 60s bounds the whole test with margin.
-    @tag timeout: 60_000
+    # pool+transaction deadline. Nominal worst case ~45s; 120s bounds the
+    # whole test with margin under runner starvation — the 60s first cut was
+    # observed exceeded under a loaded battery, and the formatter's
+    # no-repo-frame receipt named the timeout class.
+    @tag timeout: 120_000
     test "when the durable leg cannot write, the value-free telemetry IS the record" do
       # The repo is not running in this suite — exactly the destination-down
       # halt condition. The node-local leg still answers, and the durable

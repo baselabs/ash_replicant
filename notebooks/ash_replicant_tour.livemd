@@ -3,7 +3,7 @@
 ```elixir
 Mix.install([
   # This notebook lives in `notebooks/`, so `..` is the repo root. Swap for
-  # `{:ash_replicant, "~> 1.6.0"}` to run it against the published Hex package.
+  # `{:ash_replicant, "~> 1.6.1"}` to run it against the published Hex package.
   {:ash_replicant, path: Path.join(__DIR__, "..")},
   {:kino, "~> 0.14"}
 ])
@@ -71,7 +71,7 @@ tangible and §11–§14 cover the later ones:
 
 ```elixir
 AshReplicant.version()
-# => "1.6.0"
+# => "1.6.1"
 ```
 
 ## 3 · The value-free boundary (rule 4)
@@ -611,7 +611,13 @@ unchanged and admitted for all three decoders. The table-set key names the
 source for this adapter's own census — `publication:` for pgoutput (the
 default), `replication_sets:` for pglogical, `tables:` for wal2json — so the
 coverage, contract, and doctor checks judge a plugin decoder's table set
-exactly as they judge a publication (ADR-0026). The rest of the decoder
+exactly as they judge a publication (ADR-0026). The source release floor is
+ENFORCED at activation, not just diagnosed: pgoutput requires PostgreSQL 12+,
+the plugin decoders 9.6+, and a below-floor source refuses to start with the
+named `{:error, :source_release_unsupported}` before the transport ever
+connects (`{:misconfigured, :source_release_unsupported}` on the status
+surface). A source ABOVE the tested matrix is a doctor warning, never a
+refusal. The rest of the decoder
 grammar is Replicant's own validation: a table-set key belonging to another
 decoder, or a wal2json-only knob under pgoutput, comes back as Replicant's
 `{:error, :config_invalid}`.
@@ -815,9 +821,13 @@ It has two legs: a node-local one (always writable) and a durable one on
 the checkpoint row (`terminal_cause`/`terminal_class`/`terminal_at`),
 written only when the row already exists and **cleared by every admitted
 checkpoint write** — a stale cause can never outlive the generation that
-superseded it. The derivation precedence (live owner facts → generation
-entry → tombstones → `:not_started`) and the two documented edges
-(destination-unreachable halt persists node-local only; a host-tree
+superseded it. The durable leg is attempt-observable and budgeted: the
+`:status, :tombstone_write_attempted` event fires before any destination
+work (proof the write was undertaken — what separates a lawful skip from a
+write that never ran), and its transaction carries its own deadline, so the
+write settles under load. The derivation precedence (live owner facts →
+generation entry → tombstones → `:not_started`) and the two documented
+edges (destination-unreachable halt persists node-local only; a host-tree
 shutdown writes nothing) are specified in the README's
 *Runtime status and lifecycle tombstones* section (ADR-0019).
 
@@ -846,6 +856,7 @@ AshReplicant.Telemetry.emitted_event_names()
 #   [:ash_replicant, :census, :faulted],
 #   [:ash_replicant, :census, :halted],
 #   [:ash_replicant, :retention, :at_risk],
+#   [:ash_replicant, :status, :tombstone_write_attempted],
 #   [:ash_replicant, :status, :tombstone_write_failed]
 # ]
 ```

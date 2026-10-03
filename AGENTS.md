@@ -232,7 +232,12 @@ only when the row exists, cleared by EVERY admitted checkpoint write (bind AND a
 including the otherwise-verify-only steady-state `:equal` reconnect), and written only by the
 party that knows the cause — the callbacks' one boundary funnel
 (`Status.record_callback_error/2`), the owner's census halt (node-local at the decision,
-durable after `safe_stop`), and `stop_supervised` before it stops. A tree shutdown writes
+durable after `safe_stop`), and `stop_supervised` before it stops. The durable write is
+ATTEMPT-OBSERVABLE and BUDGETED: it emits `[:ash_replicant, :status, :tombstone_write_attempted]`
+at attempt time (before any destination work — attempt + no row + no failure is the PROVEN
+lawful skip, never an assumed one) and its transaction carries its own pool and transaction
+deadline (5s), so its terminal state settles under load instead of outrunning observers.
+A tree shutdown writes
 nothing; an unexplained pipeline death records `:pipeline_terminated` only when no tombstone
 is already present. One writer home: `AshReplicant.Status` — never re-derive the walk in the
 doctor, the owner, or a host health endpoint.

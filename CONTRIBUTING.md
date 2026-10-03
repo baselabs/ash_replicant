@@ -165,7 +165,7 @@ affected tests in the same change, and record the Ash version contract delta in 
   pre-PR release battery, in addition to the checks in step 3.
 
   CI also resolves the exact Replicant 1.4.0 floor independently of the current
-  lock (1.4.0). To reproduce that selector in an isolated instrument worktree:
+  lock (1.4.1). To reproduce that selector in an isolated instrument worktree:
 
   ```bash
   ASH_REPLICANT_REPLICANT_VERSION=1.4.0 \
@@ -179,6 +179,33 @@ affected tests in the same change, and record the Ash version contract delta in 
 
   The full release battery is intentionally not represented by `mix quality`;
   that alias covers format, Credo, and Dialyzer only.
+
+## Shipping a release
+
+The routine is one command per step, in this order:
+
+1. `scripts/bump-version.sh NEW_VERSION` — bumps the six version-bearing
+   anchors (mix.exs, CHANGELOG fold + fresh `[Unreleased]`, README, notebook,
+   CHARTER stamp) and prints the steps below.
+2. `scripts/prepush.sh` — the declared gate, on the bumped tree.
+3. Commit, push, and watch the CI battery to green **on the release head** —
+   that all-green run is the battery of record; the tag, release, and publish
+   bind to it.
+4. `git tag vNEW_VERSION <sha> && git push origin vNEW_VERSION`.
+5. `gh release create vNEW_VERSION` — then check the release's
+   `target_commitish`: GitHub records the BRANCH even when creating from a
+   pushed tag, and the contract requires the TAG's sha; PATCH it
+   (`gh api -X PATCH repos/baselabs/ash_replicant/releases/<id> -f
+   target_commitish=<sha>`).
+6. Publish from the exact released tree with `HEX_API_KEY` from the repo-root
+   `.env` (never echoed): `set -a; . ./.env; set +a; env MIX_ENV=dev
+   scripts/with-release-runtime.sh mix hex.publish --yes` — the package and
+   its docs upload together from the same tree.
+7. `scripts/verify-release.sh NEW_VERSION vNEW_VERSION` — the post-publish
+   public-state gate: hex.pm serves the version with a checksum equal to a
+   fresh build from this tree, the release reports `has_docs: true` and
+   hexdocs answers 200, and the GitHub release targets the tag's sha. The
+   release is not shipped until this passes.
 
 ## Critical rules (binding)
 

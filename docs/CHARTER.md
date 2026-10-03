@@ -1,6 +1,6 @@
 # AshReplicant — Project Charter
 
-**Status:** current — realized, latest published package 1.6.0 · **Kind:** charter (what & why; the binding *how* is `AGENTS.md`) · **Updated:** 2026-10-02 · **Governed by:** `AGENTS.md` critical rules + `docs/adr/` decisions · **Review when:** a release ships, a Critical Rule changes, or an ADR is added
+**Status:** current — realized, latest published package 1.6.1 · **Kind:** charter (what & why; the binding *how* is `AGENTS.md`) · **Updated:** 2026-10-02 · **Governed by:** `AGENTS.md` critical rules + `docs/adr/` decisions · **Review when:** a release ships, a Critical Rule changes, or an ADR is added
 The original state-mirror and SCD2 capabilities are shipped. The canonical
 production-readiness scope and dependency order live in `docs/ROADMAP.md`.
 Product-shaping decisions are tracked in `docs/adr/`; historical lifecycle
@@ -155,7 +155,13 @@ dependency audits and non-vacuous release gates. The 1.x line — 1.0.0
 (2026-08-24), 1.1.0 and 1.2.0 (2026-08-25), 1.3.0 (2026-09-22) — shipped the
 roadmap program; 1.4.0 (2026-09-29) moved the sibling-economy dependency
 floors; 1.5.0 (2026-10-01) folded in Replicant 1.4's decoder-option surface with
-full pglogical/wal2json admission on PostgreSQL 9.6 and 12 (ADR-0026); per-release entries live in
+full pglogical/wal2json admission on PostgreSQL 9.6 and 12 (ADR-0026); 1.6.0
+(2026-10-02) resolved Replicant 1.4.1 and made the durable tombstone leg
+attempt-observable and budgeted while moving decoder release-floor enforcement
+from the doctor into activation (ADR-0026 as amended); 1.6.1 (2026-10-03)
+carried the docs-sweep and CI-diagnosability follow-ups (the formatter's
+self-classifying battery red, the bump routine's fresh `[Unreleased]` seed);
+per-release entries live in
 `CHANGELOG.md` and the decisions in `docs/adr/`.
 
 Release history has one forensic caveat: Hex package 0.3.3 is real and its
