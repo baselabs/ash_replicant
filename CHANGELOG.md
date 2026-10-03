@@ -28,6 +28,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it folds the old one into the dated version (1.6.0 shipped with the
   section added by hand; the routine owns it now — proven in a scratch
   harness, red under the fold-without-seed mutation).
+- The StartLinkTest accepted-path test's stop await is receive-based: a
+  wedged `stop_supervised` now FLUNKS with its named message (an
+  assert-failure the battery formatter can site by file:line) instead of
+  exiting the test through `Task.await`'s timeout — the third
+  compatibility-runner occurrence (CI run 37095540407, pg18 cell; the
+  formatter's `(no repo frame)` receipt named the class) still cannot say
+  WHICH phase wedged; the next one will.
+- The DataCase binds a no-sandbox test's connection-ownership window to
+  the test's own timeout (a `sandbox: false` checkout): the
+  consumer-upgrade test's locked migration transaction holds one
+  auto-mode checkout whose 120s default sanity clock sat below the test's
+  600s ceiling — its expiry killed the connection and fired the `[error]`
+  line the value-free battery gate counts (observed in a normal battery
+  run; the observed red is this fix's red).
 
 ### Documentation
 

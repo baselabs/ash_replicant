@@ -326,7 +326,7 @@ defmodule AshReplicant.StartLinkTest do
   # 37076602983, latest-compatible cell; the same stacked-wait class as run
   # 32698769957 the queue-bounds fix below already named). 180s is this
   # file's own slow-test precedent (the override test below); a WEDGED stop
-  # is still caught by the 60s Task.await with its named message.
+  # is still caught by the 60s stop await below with its named flunk.
   @tag timeout: 180_000
   test "the accepted path starts, the guard compares without returning values, and it stops" do
     log =
@@ -394,11 +394,24 @@ defmodule AshReplicant.StartLinkTest do
         end
 
         # A stop that never completes is a WEDGED transport — name it
-        # structurally instead of letting it eat the test's ceiling.
+        # structurally instead of letting it eat the test's ceiling. The
+        # await is RECEIVE-based deliberately: Task.await's timeout EXITS
+        # the test (an exit carries no stacktrace, so the battery's
+        # formatter receipt shows only the class), while a flunk is an
+        # assert-failure whose frame the formatter can site — the next
+        # occurrence names the wedged stop by file:line instead of by
+        # class alone (the third occurrence, CI 37095540407/pg18, still
+        # cannot say which).
         stopper = Task.async(fn -> AshReplicant.stop_supervised("valid_slot") end)
+        ref = stopper.ref
 
-        assert Task.await(stopper, 60_000) == :ok,
-               "stop_supervised never returned against the unreachable transport"
+        receive do
+          {^ref, :ok} -> :ok
+          {^ref, other} -> flunk("stop_supervised returned #{inspect(other)}")
+          {:DOWN, ^ref, :process, _pid, reason} -> flunk("stop task died: #{inspect(reason)}")
+        after
+          60_000 -> flunk("stop_supervised never returned against the unreachable transport")
+        end
 
         assert :none == :persistent_term.get({AshReplicant, "valid_slot"}, :none)
       end)
