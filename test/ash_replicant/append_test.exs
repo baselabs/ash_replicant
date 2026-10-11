@@ -520,7 +520,7 @@ defmodule AshReplicant.AppendTest do
       attribute :operation, :string, allow_nil?: false, public?: true
       attribute :snapshot_attempt, :binary, public?: true
       attribute :id, :string, public?: true
-      attribute :note, :string, public?: true
+      attribute :note, :string, allow_nil?: false, public?: true
     end
 
     identities do

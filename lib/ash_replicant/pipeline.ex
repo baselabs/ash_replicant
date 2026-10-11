@@ -14,7 +14,7 @@ defmodule AshReplicant.Pipeline do
       ]
 
   `mix ash_replicant.install` generates exactly the three lines above; the
-  behaviour lives here so a host never hand-rolls (and never drifts from) the
+  behavior lives here so a host never hand-rolls (and never drifts from) the
   lifecycle contract in
   [ADR-0014](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0014-internal-trust-and-lifecycle-ownership.md).
 

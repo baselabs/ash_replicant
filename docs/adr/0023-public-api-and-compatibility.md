@@ -24,7 +24,7 @@ of a host app that nothing guards.
    DSL entry points (`use AshReplicant.Sink`, `use AshReplicant.Resource`)
    plus `AshReplicant.Resource.Info`, `AshReplicant.PipelineOwner` (the
    host-supervised child), `AshReplicant.Status` (derive/classify),
-   `AshReplicant.DestinationParticipant` (the host behaviour +
+   `AshReplicant.DestinationParticipant` (the host behavior +
    `operation_key/2`), `AshReplicant.Notifier` (the wrapper contract),
    `use AshReplicant.Checkpoint` / `AshReplicant.Pipeline` (generated
    internal resources' base modules), the Doctor surface and Report/Check

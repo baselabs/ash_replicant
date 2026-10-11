@@ -1,9 +1,9 @@
 defmodule AshReplicant.MixProject do
   use Mix.Project
 
-  @version "1.6.2"
+  @version "1.6.3"
   @source_url "https://github.com/baselabs/ash_replicant"
-  @ash_requirement ">= 3.33.11 and < 4.0.0-0"
+  @ash_requirement ">= 3.34.6 and < 4.0.0-0"
   @replicant_requirement ">= 1.4.0 and < 2.0.0-0"
   @onetime_requirement ">= 1.3.2 and < 2.0.0-0"
 
@@ -47,6 +47,8 @@ defmodule AshReplicant.MixProject do
   defp deps do
     [
       {:ash, ash_requirement()},
+      # Lock holds the main downstream consumer's resolved set;
+      # latest-compatible proves the newest within each public requirement.
       {:ash_postgres, "~> 2.13"},
       {:ash_onetime, onetime_requirement()},
       # Security floor: EEF-CVE-2026-81319 and EEF-CVE-2026-81322 affect

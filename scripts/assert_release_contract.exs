@@ -5,7 +5,7 @@ end
 defmodule AshReplicant.ReleaseContract do
   @immutable_action ~r/\A[^@\s]+@[0-9a-f]{40}\z/
   @pg16_image "postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b"
-  @ash_requirement ">= 3.33.11 and < 4.0.0-0"
+  @ash_requirement ">= 3.34.6 and < 4.0.0-0"
   @replicant_requirement ">= 1.4.0 and < 2.0.0-0"
   @onetime_requirement ">= 1.3.2 and < 2.0.0-0"
   @cloak_requirement ">= 0.4.0 and < 1.0.0-0"
@@ -32,14 +32,18 @@ defmodule AshReplicant.ReleaseContract do
   """
 
   @resolve_dependencies """
-  if [[ '${{ matrix.ash_unlock }}' == 'true' ]]; then
-    mix deps.unlock ash
-  fi
-  if [[ '${{ matrix.replicant_unlock }}' == 'true' ]]; then
-    mix deps.unlock replicant
-  fi
-  if [[ '${{ matrix.onetime_unlock }}' == 'true' ]]; then
-    mix deps.unlock ash_onetime
+  if [[ '${{ matrix.label }}' == 'latest-compatible' ]]; then
+    mix deps.unlock --all
+  else
+    if [[ '${{ matrix.ash_unlock }}' == 'true' ]]; then
+      mix deps.unlock ash
+    fi
+    if [[ '${{ matrix.replicant_unlock }}' == 'true' ]]; then
+      mix deps.unlock replicant
+    fi
+    if [[ '${{ matrix.onetime_unlock }}' == 'true' ]]; then
+      mix deps.unlock ash_onetime
+    fi
   fi
   mix deps.get
   mix deps ash
@@ -48,6 +52,13 @@ defmodule AshReplicant.ReleaseContract do
   scripts/assert-dependency-version.sh ash '${{ matrix.ash_requirement }}'
   scripts/assert-dependency-version.sh replicant '${{ matrix.replicant_requirement }}'
   scripts/assert-dependency-version.sh ash_onetime '${{ matrix.onetime_requirement }}'
+  if [[ '${{ matrix.label }}' == 'latest-compatible' ]]; then
+    scripts/assert-dependency-version.sh --newest ash '${{ matrix.ash_requirement }}'
+    scripts/assert-dependency-version.sh --newest replicant '${{ matrix.replicant_requirement }}'
+    scripts/assert-dependency-version.sh --newest ash_onetime '${{ matrix.onetime_requirement }}'
+    scripts/assert-dependency-version.sh --newest ash_postgres '~> 2.13'
+    scripts/assert-dependency-version.sh --newest spark '~> 2.7.0'
+  fi
   """
 
   @create_database """
@@ -75,7 +86,7 @@ defmodule AshReplicant.ReleaseContract do
   deps = Mix.Project.config() |> Keyword.fetch!(:deps)
 
   expected = %{
-    ash: ">= 3.33.11 and < 4.0.0-0",
+    ash: ">= 3.34.6 and < 4.0.0-0",
     replicant: ">= 1.4.0 and < 2.0.0-0",
     ash_onetime: ">= 1.3.2 and < 2.0.0-0",
     ash_cloak: ">= 0.4.0 and < 1.0.0-0"
@@ -116,6 +127,11 @@ defmodule AshReplicant.ReleaseContract do
     echo "::error::Package contains a credential-shaped file"
     exit 1
   fi
+
+  if ! diff -u scripts/release-package-files.txt <(cd "$package_dir" && find . \\( -type f -o -type l \\) | sed 's|^./||' | LC_ALL=C sort); then
+    echo "::error::Package files differ from the release allowlist"
+    exit 1
+  fi
   """
 
   @job_env %{
@@ -153,9 +169,9 @@ defmodule AshReplicant.ReleaseContract do
   @matrix [
     %{
       "label" => "exact-floors",
-      "ash_selector" => "3.33.11",
+      "ash_selector" => "3.34.6",
       "ash_unlock" => true,
-      "ash_requirement" => "== 3.33.11",
+      "ash_requirement" => "== 3.34.6",
       "replicant_selector" => "1.4.0",
       "replicant_unlock" => true,
       "replicant_requirement" => "== 1.4.0",
@@ -328,9 +344,11 @@ defmodule AshReplicant.ReleaseContract do
     {"README.md", "### Supported foundation",
      [
        "- Elixir 1.20.3 on Erlang/OTP 29;",
-       "- Ash `#{@ash_requirement}` and AshPostgres 2.13.x;",
+       "- Ash `#{@ash_requirement}` (current lock 3.34.6);",
+       "- AshPostgres `~> 2.13` (current lock 2.13.1 with AshSql 0.7.6; the latest-compatible cell tests the newest 2.x);",
+       "- Spark `~> 2.7.0` (effective floor 2.7.6 through Ash; current lock 2.7.6);",
        "- Replicant `#{@replicant_requirement}` (current lock 1.4.2)",
-       "- AshOnetime `#{@onetime_requirement}` (current lock 1.4.0)",
+       "- AshOnetime `#{@onetime_requirement}` (current lock 1.5.0)",
        "- AshCloak `#{@cloak_requirement}` (current lock 0.4.0"
      ]},
     {"CONTRIBUTING.md", "## Prerequisites",
@@ -343,9 +361,9 @@ defmodule AshReplicant.ReleaseContract do
     {"AGENTS.md", "## Development workflow",
      [
        "The supported release foundation is Elixir 1.20.3 on Erlang/OTP 29 with Ash\n" <>
-         "`#{@ash_requirement}` and Replicant\n" <>
+         "`#{@ash_requirement}` (current lock 3.34.6) and Replicant\n" <>
          "`#{@replicant_requirement}` (current lock 1.4.2), plus\n" <>
-         "AshOnetime `#{@onetime_requirement}` (current lock 1.4.0) and AshCloak\n" <>
+         "AshOnetime `#{@onetime_requirement}` (current lock 1.5.0) and AshCloak\n" <>
          "`#{@cloak_requirement}` (current lock 0.4.0; releases below 0.4.0 carry\n" <>
          "CVE-2026-81319 and CVE-2026-81322 and are not admitted)."
      ]}

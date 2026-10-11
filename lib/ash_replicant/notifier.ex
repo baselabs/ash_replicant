@@ -50,7 +50,7 @@ defmodule AshReplicant.Notifier do
       end
 
   `use Ash.Notifier` must come first — the generated `load/2` is annotated
-  against the `Ash.Notifier` behaviour.
+  against the `Ash.Notifier` behavior.
 
   ## What is required, and when
 

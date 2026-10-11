@@ -14,7 +14,7 @@ not re-gated. It executes through the
 [`replicant`](https://github.com/baselabs/replicant) client (the transport — the
 "`postgrex` of CDC").
 
-> **Status: v1.6.2 — stable public API (ADR-0023).** Effect-once mirroring with fail-closed
+> **Status: v1.6.3 — stable public API (ADR-0023).** Effect-once mirroring with fail-closed
 > multitenancy (compile-time verified), SCD2 history mirroring, and AshCloak integration.
 > Working rules are in
 > [`AGENTS.md`](https://github.com/baselabs/ash_replicant/blob/main/AGENTS.md) — read it
@@ -38,7 +38,7 @@ Postgres        logical decoding output (pgoutput, pglogical, or wal2json)
 
 Multitenancy lives **here**, not in `replicant` — exactly as `ash_postgres` (not
 `postgrex`) owns schema-based tenancy. This split is verified by the separate
-`Replicant.Sink` behaviour and the dual library structure.
+`Replicant.Sink` behavior and the dual library structure.
 
 ## Installation
 
@@ -46,7 +46,7 @@ Add `ash_replicant` to your dependencies in `mix.exs`:
 
 ```elixir
 # mix.exs
-{:ash_replicant, "~> 1.6.2"}
+{:ash_replicant, "~> 1.6.3"}
 ```
 
 It pulls in [`replicant`](https://github.com/baselabs/replicant) (the CDC transport)
@@ -54,11 +54,13 @@ as a transitive dependency.
 
 ### Supported foundation
 
-The current 1.6.2 release baseline is built and tested with:
+The current 1.6.3 release baseline is built and tested with:
 
 - Elixir 1.20.3 on Erlang/OTP 29;
-- Ash `>= 3.33.11 and < 4.0.0-0` and AshPostgres 2.13.x;
-- Replicant `>= 1.4.0 and < 2.0.0-0` (current lock 1.4.2); and
+- Ash `>= 3.34.6 and < 4.0.0-0` (current lock 3.34.6);
+- AshPostgres `~> 2.13` (current lock 2.13.1 with AshSql 0.7.6; the latest-compatible cell tests the newest 2.x);
+- Spark `~> 2.7.0` (effective floor 2.7.6 through Ash; current lock 2.7.6);
+- Replicant `>= 1.4.0 and < 2.0.0-0` (current lock 1.4.2);
 - Replicant 1.4's decoder options (`decoder:`, `replication_sets:`, `tables:`,
   `allow_keyless_tables:`, `schema_check_interval:`) are forwarded to the
   transport unchanged and ADMITTED for all three decoders — the table-set
@@ -66,8 +68,8 @@ The current 1.6.2 release baseline is built and tested with:
   own coverage census, contract manifest, and doctor checks
   ([ADR-0026](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0026-decoder-options-passthrough-and-full-admission.md)); the supported SOURCE matrix is pgoutput on
   PostgreSQL 12 and 15–18, pglogical 2.x and wal2json ≥ 2.6 on 9.6 and 12
-  (the `decoder-old-majors` CI cells run exactly that); and
-- AshOnetime `>= 1.3.2 and < 2.0.0-0` (current lock 1.4.0); and
+  (the `decoder-old-majors` CI cells run exactly that);
+- AshOnetime `>= 1.3.2 and < 2.0.0-0` (current lock 1.5.0);
 - AshCloak `>= 0.4.0 and < 1.0.0-0` (current lock 0.4.0; every release below
   0.4.0 carries CVE-2026-81319 and CVE-2026-81322 and is not admitted); and
 - PostgreSQL with `wal_level=logical` for the live integration gate: CI runs
@@ -77,8 +79,10 @@ The current 1.6.2 release baseline is built and tested with:
   matrix is pgoutput on PostgreSQL 12 and 15–18, pglogical 2.x and
   wal2json ≥ 2.6 on 9.6 and 12 — exactly what CI runs.
 
-The Ash lower bound excludes known-vulnerable patches, and the upper bound
-excludes Ash 4 prereleases. The AshCloak lower bound is a security floor:
+The Ash floor excludes `EEF-CVE-2026-94201` (atom-table exhaustion, fixed
+in 3.34.3) and `EEF-CVE-2026-101028` (related-resource read-policy bypass
+in counts, existence checks, and aggregates, fixed in 3.34.6). The upper
+bound excludes Ash 4 prereleases. The AshCloak lower bound is a security floor:
 every release below 0.4.0 carries CVE-2026-81319 (unsafe deserialization of
 decrypted terms) and CVE-2026-81322 (plaintext leak through a non-sensitive
 action argument), and the requirement refuses to resolve to a vulnerable
@@ -258,7 +262,7 @@ Four steps remain, and each needs a fact only the operator has:
 
 The concepts behind what the installer generates, plus the parts only you can write.
 Steps 1, 2, and 4's supervision are what `mix ash_replicant.install` produces; step 3
-is the modelling decision it deliberately leaves to you.
+is the modeling decision it deliberately leaves to you.
 
 ### 1. Define the checkpoint resource
 

@@ -261,7 +261,7 @@ defmodule AshReplicant.Snapshot.Rows do
     # A mark that stamped no row is the silent failure this contract exists to
     # prevent: completion would retire the row the attempt had just seen.
     #
-    # Defensive depth, honestly labelled: the target query is the SAME one that
+    # Defensive depth, honestly labeled: the target query is the SAME one that
     # just resolved the row (or that the host action just wrote through), so no
     # test drives this red and none is claimed to. It is here because the cost
     # of the shape it catches is silent data loss, and the check is one length.

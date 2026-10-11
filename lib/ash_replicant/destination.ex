@@ -816,7 +816,7 @@ defmodule AshReplicant.Destination do
   # :notifier kind — the same trust model as tenant_mfa. The probe
   # (`AshReplicant.Destination.NotifierLoads.probe/3`) replicates ASH'S OWN
   # gate exactly: the optional-callback check first (a notifier implementing
-  # the behaviour WITHOUT load/2 imposes nothing), then Ash.Notifier.load/2
+  # the behavior WITHOUT load/2 imposes nothing), then Ash.Notifier.load/2
   # with non-empty = List.wrap(statement) != [].
   # `declared_by` is the module whose DestinationParticipant declaration
   # admitted THIS action into the walk: when that same module is a
@@ -882,14 +882,14 @@ defmodule AshReplicant.Destination do
       statement == [] ->
         {:cont, {:ok, refs, all_refs, loads}}
 
-      # A load-carrying notifier MUST implement the participant behaviour —
+      # A load-carrying notifier MUST implement the participant behavior —
       # its declaration carries the trust (same model as tenant_mfa). Checked
       # BEFORE the wrapper so an undeclared notifier keeps naming the missing
       # declaration, which is the more useful diagnostic of the two.
       not participant?(notifier) ->
         {:halt, {:error, {:destination_notifier_required, resource, action.name, notifier}}}
 
-      # A behaviour attribute is not enough: a host can make the generated
+      # A behavior attribute is not enough: a host can make the generated
       # callback overridable and replace it. The probe records whether BOTH
       # live `load/2` calls actually entered `verified_load/3`.
       not routed? ->

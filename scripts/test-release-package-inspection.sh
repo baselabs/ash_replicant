@@ -46,43 +46,38 @@ run_inspection() {
   ASH_REPLICANT_PACKAGE_FIXTURE="$1" bash -c "$(rebind_staging)"
 }
 
-mkdir -p "$fixture_root/clean/lib"
+# Inspect the real selector-free package, then mutate its actual unpacked files.
+env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION \
+  -u ASH_REPLICANT_ONETIME_VERSION mix hex.build --unpack --output "$fixture_root/baseline" >/dev/null
 
-for required in .formatter.exs mix.exs README.md LICENSE NOTICE CHANGELOG.md usage-rules.md \
-  lib/ash_replicant/upgrade.ex lib/ash_replicant/upgrade/checkpoint.ex \
-  lib/mix/tasks/ash_replicant.upgrade.ex; do
-  mkdir -p "$(dirname "$fixture_root/clean/$required")"
-  touch "$fixture_root/clean/$required"
+for defect in private unexpected missing symlink; do
+  cp -R "$fixture_root/baseline" "$fixture_root/$defect"
+  case "$defect" in
+    private)
+      mkdir -p "$fixture_root/$defect/priv/repo/migrations"
+      touch "$fixture_root/$defect/priv/repo/migrations/leak.exs"
+      reason='Package contains private migrations'
+      ;;
+    unexpected)
+      touch "$fixture_root/$defect/README-unapproved.md"
+      reason='Package files differ from the release allowlist'
+      ;;
+    missing)
+      rm "$fixture_root/$defect/lib/ash_replicant/append.ex"
+      reason='Package files differ from the release allowlist'
+      ;;
+    symlink)
+      ln -s README.md "$fixture_root/$defect/README-unapproved.md"
+      reason='Package files differ from the release allowlist'
+      ;;
+  esac
+  if output="$(run_inspection "$fixture_root/$defect" 2>&1)"; then
+    echo "package inspection accepted $defect" >&2
+    exit 1
+  fi
+  [[ "$output" == *"$reason"* ]] || { echo "$output" >&2; exit 1; }
+  echo "package inspection: RED — $reason"
 done
-
-# A leaked private migration must be rejected by the shipped predicate bytes.
-mkdir -p "$fixture_root/leaked/priv/repo/migrations" "$fixture_root/leaked/lib"
-cp -R "$fixture_root/clean/." "$fixture_root/leaked/"
-printf 'defmodule Leak do\nend\n' > "$fixture_root/leaked/priv/repo/migrations/20260814000000_leak.exs"
-
-set +e
-leaked_output="$(run_inspection "$fixture_root/leaked" 2>&1)"
-leaked_exit=$?
-set -e
-
-if [[ "$leaked_exit" -eq 0 ]]; then
-  echo "package inspection accepted a leaked private migration" >&2
-  exit 1
-fi
-
-if [[ "$leaked_output" != *"Package contains private migrations"* ]]; then
-  echo "package inspection rejected the leak through an unexpected branch" >&2
-  exit 1
-fi
-
-set +e
-clean_output="$(run_inspection "$fixture_root/clean" 2>&1)"
-clean_exit=$?
-set -e
-
-if [[ "$clean_exit" -ne 0 ]]; then
-  echo "package inspection rejected a clean fixture: $clean_output" >&2
-  exit 1
-fi
-
-echo "package inspection self-test: PASS"
+cp -R "$fixture_root/baseline" "$fixture_root/clean"
+run_inspection "$fixture_root/clean"
+echo "package inspection self-test: PASS (real package matches allowlist)"

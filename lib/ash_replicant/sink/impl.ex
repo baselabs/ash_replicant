@@ -177,7 +177,7 @@ defmodule AshReplicant.Sink.Impl do
       not reused? ->
         rollback_conflict!(config, :append_origin_gap)
 
-      # Replicant never performs a filtered-WAL idle acknowledgement for an
+      # Replicant never performs a filtered-WAL idle acknowledgment for an
       # append sink. A reused origin ahead of the durable frontier is therefore
       # unambiguous: PostgreSQL was advanced by another consumer or operator.
       origin > frontier ->
@@ -826,7 +826,7 @@ defmodule AshReplicant.Sink.Impl do
   Accept or decline a schema change. An `:additive` change auto-applies; a
   `:destructive` change on a resource whose `on_schema_change` is
   `:halt_destructive` (default) halts fail-closed. The context map is not
-  value-inspected. Unmapped tables use the behaviour default.
+  value-inspected. Unmapped tables use the behavior default.
   """
   @spec handle_schema_change(map(), Replicant.SchemaChange.t(), map()) :: :ok | {:error, term()}
   def handle_schema_change(

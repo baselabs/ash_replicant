@@ -261,9 +261,9 @@ channel.
 ## Development workflow
 
 The supported release foundation is Elixir 1.20.3 on Erlang/OTP 29 with Ash
-`>= 3.33.11 and < 4.0.0-0` and Replicant
+`>= 3.34.6 and < 4.0.0-0` (current lock 3.34.6) and Replicant
 `>= 1.4.0 and < 2.0.0-0` (current lock 1.4.2), plus
-AshOnetime `>= 1.3.2 and < 2.0.0-0` (current lock 1.4.0) and AshCloak
+AshOnetime `>= 1.3.2 and < 2.0.0-0` (current lock 1.5.0) and AshCloak
 `>= 0.4.0 and < 1.0.0-0` (current lock 0.4.0; releases below 0.4.0 carry
 CVE-2026-81319 and CVE-2026-81322 and are not admitted). Replicant 1.4's
 decoder options pass through with FULL decoder admission —
@@ -291,7 +291,7 @@ gate on environment setup, and skip when unset. TDD: test first.
 bab4107 claimed "new CI cells run the lanes" while those lanes were red as merged, and
 9aba665's message carried a checksum from a tree the release then superseded). A commit
 message may say "CI runs X" / "the lanes are green" ONLY about a CI run whose tested head IS
-that commit's bytes: a red run, a cancelled run, a superseded run, or a run of a LATER commit
+that commit's bytes: a red run, a canceled run, a superseded run, or a run of a LATER commit
 receipts nothing, and an unpushed commit has no run at all. Artifact claims (package
 checksums, published bytes) name the exact tree they were built from — a checksum from a
 superseded tree is a stale record, not a release fact.

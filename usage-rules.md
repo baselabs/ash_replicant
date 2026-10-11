@@ -506,7 +506,7 @@ exact statement to Ash; drift halts before the dependency query runs. On the
 host's own writes it is an ordinary Ash notifier. Admission verifies the live
 callback entered that wrapper on both stability probes; do not make the
 generated `load/2` overridable, because a replacement is rejected even if the
-module still carries the wrapper behaviour marker.
+module still carries the wrapper behavior marker.
 
 Admission rejects the ways this can be wrong, naming resource, action, and
 notifier: `:destination_notifier_required` (no declaration),
@@ -1273,7 +1273,7 @@ halts — do not TOAST your tenant column).
 
 `replicant` is the CDC transport layer — tenant-blind, Ash-agnostic. It owns the
 Postgres logical replication slot, the `pgoutput` protocol, transaction assembly,
-WAL ordering, and acknowledgement after sink success. AshReplicant owns its durable
+WAL ordering, and acknowledgment after sink success. AshReplicant owns its durable
 commit-LSN checkpoint and persists it with the Ash effects.
 
 AshReplicant consumes a `Replicant.Sink` interface and layers Ash semantics on top:

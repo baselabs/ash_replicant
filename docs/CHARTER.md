@@ -1,6 +1,6 @@
 # AshReplicant — Project Charter
 
-**Status:** current — realized, latest published package 1.6.2 · **Kind:** charter (what & why; the binding *how* is `AGENTS.md`) · **Updated:** 2026-10-03 · **Governed by:** `AGENTS.md` critical rules + `docs/adr/` decisions · **Review when:** a release ships, a Critical Rule changes, or an ADR is added
+**Status:** current — realized, latest published package 1.6.3 · **Kind:** charter (what & why; the binding *how* is `AGENTS.md`) · **Updated:** 2026-10-11 · **Governed by:** `AGENTS.md` critical rules + `docs/adr/` decisions · **Review when:** a release ships, a Critical Rule changes, or an ADR is added
 The original state-mirror and SCD2 capabilities are shipped. The canonical
 production-readiness scope and dependency order live in `docs/ROADMAP.md`.
 Product-shaping decisions are tracked in `docs/adr/`; historical lifecycle
@@ -17,7 +17,7 @@ consumer) to Ash resources, with effect-once semantics and fail-closed multitena
 **AshReplicant** is the Ash `Replicant.Sink` adapter. It owns multitenancy
 resolution, sensitive-data verification, resource mapping, host action execution,
 and the atomic destination checkpoint. It delegates WAL transport, decoding,
-transaction assembly, and acknowledgement ordering to `replicant`. Host validations,
+transaction assembly, and acknowledgment ordering to `replicant`. Host validations,
 changes, AshCloak hooks, and multitenancy run; policies are not re-gated because the
 trusted sink executes with `authorize?: false`.
 
@@ -38,7 +38,7 @@ This is "the `ash_postgres` of `replicant`" — just as `ash_postgres` is not
 |-------|-----------------|
 | **Ash core** | multitenancy DSL, policies, the tenant concept |
 | **AshReplicant** ← HERE | resource resolution, tenant routing, sensitive-column verification, mirror actions |
-| **replicant** | PostgreSQL logical replication (pgoutput, pglogical, wal2json), transaction assembly, WAL ordering and acknowledgement |
+| **replicant** | PostgreSQL logical replication (pgoutput, pglogical, wal2json), transaction assembly, WAL ordering and acknowledgment |
 | **Postgres** | logical decoding output |
 
 ## Scope
@@ -48,7 +48,7 @@ This is "the `ash_postgres` of `replicant`" — just as `ash_postgres` is not
 - Ash resource extension (`replicant do … end` DSL section)
 - Checkpoint-tracking resource macro (`use AshReplicant.Checkpoint`)
 - Sink-config wrapper macro (`use AshReplicant.Sink`)
-- `Replicant.Sink` behaviour implementation
+- `Replicant.Sink` behavior implementation
 - Multitenancy fail-closed validation (nil/`false`/blank tenant → error)
 - Sensitive-column verification (AshCloak-encrypted or binary or skip)
 - Resource resolver index (`{schema,table}` → resource mapping)

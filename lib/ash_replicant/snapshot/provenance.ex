@@ -47,7 +47,7 @@ defmodule AshReplicant.Snapshot.Provenance do
     * no type tag — integer `1` and binary `"1"` encode identically;
     * no container count — `[["a"], ["b"]]` and `[["a", "b"]]` flatten together.
 
-  An unrecognised term (pid, reference, function, or a struct not named below)
+  An unrecognized term (pid, reference, function, or a struct not named below)
   is `{:error, :unencodable}` rather than a guessed encoding.
 
   Fingerprints, like attempt ids and tenants, are **data-plane values**: they
@@ -304,7 +304,7 @@ defmodule AshReplicant.Snapshot.Provenance do
   defp encode(value) when is_tuple(value), do: encode_tuple(value)
   defp encode(value) when is_map(value) and not is_struct(value), do: encode_map(value)
 
-  # A pid, reference, function, or unrecognised struct has no deterministic
+  # A pid, reference, function, or unrecognized struct has no deterministic
   # encoding. Fail closed rather than guess one.
   defp encode(_other), do: {:error, :unencodable}
 

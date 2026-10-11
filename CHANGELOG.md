@@ -7,8 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Reject retired releases and invalid Hex responses in the newest dependency checker; replay recorded inputs in its self-tests.
+- Keep the Hex credential out of publish arguments and inspect the built package against the release file allowlist before uploading.
+- Require a live database for fresh consumers from Hex and reclaim abandoned consumer databases and replication slots while preserving live runs.
+- Strengthen the SCD2 notification, terminal tombstone, and decoded Decimal key witnesses; check every newest-dependency and package-allowlist requirement in the release contract.
+
+## [1.6.3] - 2026-10-11
+
+### Security
+
+- Require Ash `>= 3.34.6 and < 4.0.0-0`. This excludes
+  `EEF-CVE-2026-94201` (atom-table exhaustion when filtering an atom
+  attribute with `unsafe_to_atom?`, fixed in Ash 3.34.3) and
+  `EEF-CVE-2026-101028` (related-resource read-policy bypass in
+  `Ash.count`, `Ash.exists`, and `Ash.aggregate`, fixed in Ash 3.34.6).
+- Lock Decimal 3.2.0 (from 3.1.1), clearing `EEF-CVE-2026-97853`
+  (unbounded allocation in `Decimal.round/3`).
+
+### Breaking dependency change
+
+- Consumers locked below Ash 3.34.6 must update Ash and Spark. Ash requires
+  Spark 2.7.6 or later; the public Spark requirement remains `~> 2.7.0`.
+
 ### Changed
 
+- Lock Ash 3.33.11 → 3.34.6, Spark 2.7.3 → 2.7.6, and
+  AshOnetime 1.4.0 → 1.5.0. Retain AshPostgres 2.13.1 and AshSql 0.7.6.
+  Other resolver moves: ex_ast 0.13.1 → 0.16.0, Finch 0.23.0 → 0.24.0,
+  Req 0.7.4 → 0.7.5, and Sourceror 1.12.3 → 1.12.4.
+- The latest-compatible CI cell unlocks the entire dependency graph and
+  checks Ash, Replicant, AshOnetime, AshPostgres, and Spark against the
+  newest non-retired stable Hex release within each requirement.
+- Guard publish and verification with a clean tree and HEAD equal to the
+  version tag. Publish clears all dependency selectors and loads
+  `HEX_API_KEY` from the repo-root `.env`. Inspect package files against a
+  checked-in allowlist; run the fresh-consumer check in `prepush.sh` and
+  support `--from-hex VERSION` after publication.
 - Exclude Cloak's AES-CTR advisory `EEF-CVE-2026-95105` from Hex audits while
   `test/cloak_cipher_guard_test.exs` enforces AES-GCM across `lib`, `config`,
   and `test/support`. Remove the exception and upgrade when a fixed release ships.
@@ -1678,7 +1714,8 @@ sensitive-column verification.
   `usage-rules.md`, `CONTRIBUTING.md`, `LICENSE`, `NOTICE`; tracked charter at
   `docs/CHARTER.md`.
 
-[Unreleased]: https://github.com/baselabs/ash_replicant/compare/v1.6.2...HEAD
+[Unreleased]: https://github.com/baselabs/ash_replicant/compare/v1.6.3...HEAD
+[1.6.3]: https://github.com/baselabs/ash_replicant/tree/v1.6.3
 [1.6.2]: https://github.com/baselabs/ash_replicant/tree/v1.6.2
 [1.6.1]: https://github.com/baselabs/ash_replicant/tree/v1.6.1
 [1.6.0]: https://github.com/baselabs/ash_replicant/tree/v1.6.0

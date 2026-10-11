@@ -28,6 +28,13 @@ tag="${2:?usage: verify-release.sh NEW_VERSION TAG (e.g. 1.6.0 v1.6.0)}"
 
 cd "$(dirname "$0")/.."
 
+[[ "$#" -eq 2 || ( "$#" -eq 3 && "$3" == --check ) ]] || exit 2
+tag_sha="$(scripts/assert-release-tree.sh "$version" "$tag")"
+if [[ "${3:-}" == --check ]]; then
+  echo "verify-release: preconditions PASS (no public-state check requested)"
+  exit 0
+fi
+
 fail() {
   echo "verify-release: $1" >&2
   exit 1
@@ -40,7 +47,8 @@ command -v gh >/dev/null || fail "gh is required (the GitHub release target chec
 # A fresh build from THIS checkout; the publish itself must have run from the
 # same tree, so the served checksum must equal this one.
 local_checksum="$(
-  env MIX_ENV=dev scripts/with-release-runtime.sh mix hex.build 2>/dev/null |
+  env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION \
+    -u ASH_REPLICANT_ONETIME_VERSION MIX_ENV=dev scripts/with-release-runtime.sh mix hex.build 2>/dev/null |
     sed -n 's/^Package checksum: //p'
 )"
 [[ -n "$local_checksum" ]] || fail "could not build a package to compare (mix hex.build)"
@@ -80,7 +88,6 @@ docs_code="$(curl -s -o /dev/null -w '%{http_code}' "https://ash-replicant.hexdo
 echo "verify-release: hexdocs $version answers 200"
 
 # --- 3. the GitHub release targets the TAG's commit ------------------------
-tag_sha="$(git rev-parse "$tag^{commit}")" || fail "cannot resolve $tag locally"
 target="$(gh api "repos/baselabs/ash_replicant/releases/tags/$tag" --jq .target_commitish)" \
   || fail "no GitHub release found for $tag"
 [[ "$target" == "$tag_sha" ]] \

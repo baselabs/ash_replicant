@@ -76,7 +76,7 @@ represented by the transport callback.
 
 ## Implementation notes
 
-Two clauses were sharpened against the transport's actual behaviour while
+Two clauses were sharpened against the transport's actual behavior while
 implementing this; both are recorded here because the ADR's wording alone would
 have produced a wrong gate.
 

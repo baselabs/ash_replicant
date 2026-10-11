@@ -17,7 +17,10 @@
 # CI battery, then tag + release + publish from the battery-green head.
 set -euo pipefail
 
-new_version="${1:?usage: bump-version.sh NEW_VERSION (e.g. 1.2.0)}"
+new_version="${1:?usage: bump-version.sh NEW_VERSION [--check] (e.g. 1.2.0)}"
+[[ "$#" -eq 1 || ( "$#" -eq 2 && "$2" == --check ) ]] || exit 2
+check=false
+[[ "${2:-}" != --check ]] || check=true
 
 [[ "$new_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
   echo "bump-version: '$new_version' is not X.Y.Z" >&2
@@ -40,12 +43,13 @@ replace_once() {
     echo "bump-version: anchor in $file is not unique (found $count): $old" >&2
     exit 1
   }
-  python3 - "$file" "$old" "$3" <<'EOF'
+  python3 - "$file" "$old" "$3" "$check" <<'EOF'
 import sys
-path, old, new = sys.argv[1], sys.argv[2], sys.argv[3]
+path, old, new, check = sys.argv[1:]
 source = open(path).read()
 assert source.count(old) == 1
-open(path, "w").write(source.replace(old, new))
+if check != "true":
+    open(path, "w").write(source.replace(old, new))
 EOF
 }
 
@@ -80,9 +84,13 @@ replace_once CHANGELOG.md "[$current]: https://github.com/baselabs/ash_replicant
 [$current]: https://github.com/baselabs/ash_replicant/tree/v$current"
 
 echo "bump-version: $current -> $new_version"
+if [[ "$check" == true ]]; then
+  echo 'bump-version: anchors PASS (no files changed)'
+  exit 0
+fi
 echo "bump-version: next — scripts/prepush.sh, commit, push, watch CI, then tag/release/publish"
 echo "bump-version: publish from the battery-green head only: tag v$new_version at that sha,"
 echo "bump-version:   GitHub release with target_commitish = the TAG's sha (not the branch),"
-echo "bump-version:   HEX_API_KEY from .env -> mix hex.publish (docs upload with the package),"
+echo "bump-version:   scripts/publish-release.sh $new_version (docs upload with the package),"
 echo "bump-version:   then scripts/verify-release.sh $new_version v$new_version — the"
 echo "bump-version:   public-state gate (served checksum, has_docs + hexdocs 200, GH target)."

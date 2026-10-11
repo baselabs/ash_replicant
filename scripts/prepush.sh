@@ -9,10 +9,9 @@
 # Live lane: when ASH_REPLICANT_TEST_URL points at a logical-replication
 # Postgres (see README "Supported foundation"), also runs ecto
 # create/migrate, the migration drift gate, and the FULL live suite —
-# exactly the compatibility job's steps. Point it at your own
-# machine-local instance, e.g.
-# ASH_REPLICANT_TEST_URL=postgres://postgres@localhost:5599/postgres
-# (host/port are machine-local; the test database name is forced anyway).
+# exactly the compatibility job's steps — followed by a fresh consumer.
+# Load ASH_REPLICANT_TEST_URL from this repo's gitignored .env. For this
+# BaseLabs project, the database runs in the BaseLabs cluster.
 #
 # The dependency selectors (ASH_REPLICANT_ASH_VERSION,
 # ASH_REPLICANT_REPLICANT_VERSION, ASH_REPLICANT_ONETIME_VERSION) pass
@@ -57,6 +56,7 @@ if [[ -n "${ASH_REPLICANT_TEST_URL:-}" ]]; then
     scripts/with-release-runtime.sh scripts/test-migration-drift-gate.sh
   step "full live suite" \
     scripts/with-release-runtime.sh scripts/run-structural-tests.sh --include integration
+  step "fresh consumer" scripts/with-release-runtime.sh scripts/test-fresh-consumer.sh
 else
   echo "prepush: ASH_REPLICANT_TEST_URL unset — skipping the live lane" >&2
 fi

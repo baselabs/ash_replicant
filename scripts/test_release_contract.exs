@@ -54,7 +54,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   deps = Mix.Project.config() |> Keyword.fetch!(:deps)
 
   expected = %{
-    ash: ">= 3.33.11 and < 4.0.0-0",
+    ash: ">= 3.34.6 and < 4.0.0-0",
     replicant: ">= 1.4.0 and < 2.0.0-0",
     ash_onetime: ">= 1.3.2 and < 2.0.0-0",
     ash_cloak: ">= 0.4.0 and < 1.0.0-0"
@@ -93,6 +93,11 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
   if find "$package_dir" -type f \\( -name '.env*' -o -name '*.pem' -o -name '*.key' \\) -print -quit | grep -q .; then
     echo "::error::Package contains a credential-shaped file"
+    exit 1
+  fi
+
+  if ! diff -u scripts/release-package-files.txt <(cd "$package_dir" && find . \\( -type f -o -type l \\) | sed 's|^./||' | LC_ALL=C sort); then
+    echo "::error::Package files differ from the release allowlist"
     exit 1
   fi
   """
@@ -151,24 +156,26 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     {"README.md", "### Supported foundation",
      [
        "- Elixir 1.20.3 on Erlang/OTP 29;",
-       "- Ash `>= 3.33.11 and < 4.0.0-0` and AshPostgres 2.13.x;",
+       "- Ash `>= 3.34.6 and < 4.0.0-0` (current lock 3.34.6);",
+       "- AshPostgres `~> 2.13` (current lock 2.13.1 with AshSql 0.7.6; the latest-compatible cell tests the newest 2.x);",
+       "- Spark `~> 2.7.0` (effective floor 2.7.6 through Ash; current lock 2.7.6);",
        "- Replicant `>= 1.4.0 and < 2.0.0-0` (current lock 1.4.2)",
-       "- AshOnetime `>= 1.3.2 and < 2.0.0-0` (current lock 1.4.0)",
+       "- AshOnetime `>= 1.3.2 and < 2.0.0-0` (current lock 1.5.0)",
        "- AshCloak `>= 0.4.0 and < 1.0.0-0` (current lock 0.4.0"
      ]},
     {"CONTRIBUTING.md", "## Prerequisites",
      [
        "- **Elixir 1.20.3** and **Erlang/OTP 29**",
-       "- Ash `>= 3.33.11 and < 4.0.0-0`; selector-free development uses this public range",
+       "- Ash `>= 3.34.6 and < 4.0.0-0`; selector-free development uses this public range",
        "- Replicant `>= 1.4.0 and < 2.0.0-0` from Hex; the lock is 1.4.2.",
        "- AshCloak `>= 0.4.0 and < 1.0.0-0` from Hex; the current lock is 0.4.0 (the"
      ]},
     {"AGENTS.md", "## Development workflow",
      [
        "The supported release foundation is Elixir 1.20.3 on Erlang/OTP 29 with Ash\n" <>
-         "`>= 3.33.11 and < 4.0.0-0` and Replicant\n" <>
+         "`>= 3.34.6 and < 4.0.0-0` (current lock 3.34.6) and Replicant\n" <>
          "`>= 1.4.0 and < 2.0.0-0` (current lock 1.4.2), plus\n" <>
-         "AshOnetime `>= 1.3.2 and < 2.0.0-0` (current lock 1.4.0) and AshCloak\n" <>
+         "AshOnetime `>= 1.3.2 and < 2.0.0-0` (current lock 1.5.0) and AshCloak\n" <>
          "`>= 0.4.0 and < 1.0.0-0` (current lock 0.4.0; releases below 0.4.0 carry\n" <>
          "CVE-2026-81319 and CVE-2026-81322 and are not admitted)."
      ]}
@@ -305,13 +312,15 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     puncsp rlm shy Tab ThickSpace thinsp ThinSpace VeryThinSpace ZeroWidthSpace zwj zwnj
   )
   @mix_contracts [
-    ~s(@ash_requirement ">= 3.33.11 and < 4.0.0-0"),
+    ~s(@ash_requirement ">= 3.34.6 and < 4.0.0-0"),
     ~s(@replicant_requirement ">= 1.4.0 and < 2.0.0-0"),
     ~s(@onetime_requirement ">= 1.3.2 and < 2.0.0-0"),
     ~s(elixir: "~> 1.20.3")
   ]
 
   def run do
+    Process.put({__MODULE__, :checks}, 0)
+
     with_env("ASH_REPLICANT_REPLICANT_VERSION", nil, fn ->
       valid_fixture_probes()
       action_probes()
@@ -329,7 +338,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       upgrade_contract_probes()
     end)
 
-    IO.puts("release contract self-tests: PASS")
+    IO.puts("release contract self-tests: PASS (#{Process.get({__MODULE__, :checks})} checks)")
   after
     File.rm_rf!(@fixture_root)
   end
@@ -687,7 +696,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     mutate_job!(
       "compatibility",
-      "          if [[ '${{ matrix.ash_unlock }}' == 'true' ]]; then\n            mix deps.unlock ash\n          fi\n",
+      "            if [[ '${{ matrix.ash_unlock }}' == 'true' ]]; then\n              mix deps.unlock ash\n            fi\n",
       "          mix deps.unlock ash\n          if [[ '${{ matrix.ash_unlock }}' == 'true' ]]; then\n            :\n          fi\n"
     )
 
@@ -697,7 +706,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     mutate_job!(
       "compatibility",
-      "          if [[ '${{ matrix.replicant_unlock }}' == 'true' ]]; then\n            mix deps.unlock replicant\n          fi\n",
+      "            if [[ '${{ matrix.replicant_unlock }}' == 'true' ]]; then\n              mix deps.unlock replicant\n            fi\n",
       "          mix deps.unlock replicant\n          if [[ '${{ matrix.replicant_unlock }}' == 'true' ]]; then\n            :\n          fi\n"
     )
 
@@ -721,6 +730,22 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       "          :\n"
     )
 
+    assert_invalid!()
+
+    for command <- [
+          "scripts/assert-dependency-version.sh --newest ash '${{ matrix.ash_requirement }}'",
+          "scripts/assert-dependency-version.sh --newest replicant '${{ matrix.replicant_requirement }}'",
+          "scripts/assert-dependency-version.sh --newest ash_onetime '${{ matrix.onetime_requirement }}'",
+          "scripts/assert-dependency-version.sh --newest ash_postgres '~> 2.13'",
+          "scripts/assert-dependency-version.sh --newest spark '~> 2.7.0'"
+        ] do
+      prepare_fixture()
+      mutate_job!("compatibility", "            #{command}\n", "            :\n")
+      assert_invalid!()
+    end
+
+    prepare_fixture()
+    mutate_job!("compatibility", "            mix deps.unlock --all\n", "            :\n")
     assert_invalid!()
 
     prepare_fixture()
@@ -777,8 +802,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     mutate_job!(
       "compatibility",
-      "            ash_requirement: \"== 3.33.11\"\n",
-      "            ash_requirement: \">= 3.33.11\"\n"
+      "            ash_requirement: \"== 3.34.6\"\n",
+      "            ash_requirement: \">= 3.34.6\"\n"
     )
 
     assert_invalid!()
@@ -879,6 +904,21 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       "release-artifact",
       "          env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix hex.build --unpack --output \"$package_dir\"\n",
       "          env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION mix hex.build --unpack --output \"$package_dir\"\n"
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
+    mutate_job!(
+      "release-artifact",
+      """
+                if ! diff -u scripts/release-package-files.txt <(cd "$package_dir" && find . \\( -type f -o -type l \\) | sed 's|^./||' | LC_ALL=C sort); then
+                  echo "::error::Package files differ from the release allowlist"
+                  exit 1
+                fi
+      """,
+      "          :\n"
     )
 
     assert_invalid!()
@@ -1217,8 +1257,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       "mix.exs",
-      ~s(@ash_requirement ">= 3.33.11 and < 4.0.0-0"),
-      ~s(@ash_requirement ">= 3.33.11 and < 4.0.0-0"\n  @ash_requirement ">= 3.0.0 and < 4.0.0-0")
+      ~s(@ash_requirement ">= 3.34.6 and < 4.0.0-0"),
+      ~s(@ash_requirement ">= 3.34.6 and < 4.0.0-0"\n  @ash_requirement ">= 3.0.0 and < 4.0.0-0")
     )
 
     assert_invalid!()
@@ -1249,7 +1289,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     replace_once!(
       "mix.exs",
       "{:ash, ash_requirement()}",
-      "{:ash, String.replace(ash_requirement(), \">= 3.33.11\", \">= 3.0.0\")}"
+      "{:ash, String.replace(ash_requirement(), \">= 3.34.6\", \">= 3.0.0\")}"
     )
 
     assert_invalid!()
@@ -1662,10 +1702,12 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   end
 
   defp assert_valid! do
+    Process.put({__MODULE__, :checks}, Process.get({__MODULE__, :checks}, 0) + 1)
     AshReplicant.ReleaseContract.run(@fixture_root)
   end
 
   defp assert_invalid! do
+    Process.put({__MODULE__, :checks}, Process.get({__MODULE__, :checks}, 0) + 1)
     YamlElixir.read_from_file!(fixture_path(@workflow))
     AshReplicant.ReleaseContract.run(@fixture_root)
     raise "release contract checker accepted a negative fixture"

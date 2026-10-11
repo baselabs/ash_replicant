@@ -132,7 +132,7 @@ unwrapped preload notifier
 (`{:destination_notifier_unwrapped, resource, action, notifier}`).
 That decision is behavioral, not a module-marker check: both stability probes
 must observe the live `load/2` enter the wrapper. A module that retains the
-wrapper behaviour attribute but overrides the generated callback is unwrapped.
+wrapper behavior attribute but overrides the generated callback is unwrapped.
 
 Ash calls the verified live callback, so the wrapper is IN the derivation path: it obtains the
 runtime statement, compares it and the closure with the admitted digests, and

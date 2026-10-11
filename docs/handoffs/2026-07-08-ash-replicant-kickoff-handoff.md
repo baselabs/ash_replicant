@@ -60,7 +60,7 @@ Nothing here has started. In rough order:
 
 1. **`git init`** the repo (it is not under version control yet).
 2. **Settle the design (brainstorm output → a charter + spec).** Open decisions:
-   - **Resource resolution:** how `schema.table` → an Ash resource (config map? a DSL extension registering resources? a behaviour the host app implements?). This is the "Stage-0" decision.
+   - **Resource resolution:** how `schema.table` → an Ash resource (config map? a DSL extension registering resources? a behavior the host app implements?). This is the "Stage-0" decision.
    - **Change → Ash action mapping:** `:insert`/`:update` → create/update (PK upsert); `:delete` → destroy; `:truncate` → ?; honor `unchanged` (don't overwrite TOASTed cols); map `record` string-keys → resource attributes.
    - **Multitenancy (owned HERE, Ash-native — never in `replicant`):** derive the tenant from the row (a tenant column?) or config; **fail-closed** if unresolvable; enforce via Ash `set_tenant`/policies. Reference `ash_arcadic`/`ash_age` `multitenancy.ex` + `validate_multitenancy_attr.ex`.
    - **Data classification / `sensitive`:** how sensitive attributes are handled (encrypted-at-rest, à la `ash_arcadic`'s sensitive=encrypted-binary?); keep `replicant`'s value-free telemetry/error discipline end-to-end.

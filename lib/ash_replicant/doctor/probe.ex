@@ -598,7 +598,7 @@ defmodule AshReplicant.Doctor.Probe do
   The probe connection options: the operator's own connection facts, with the
   session forced read-only at the substrate and the pool bound to one
   connection. A caller-supplied `default_transaction_read_only` can only be
-  overridden TOWARDS read-only — the diagnosis surface has no legitimate reason
+  overridden TOWARD read-only — the diagnosis surface has no legitimate reason
   to write, so there is no opt-out.
   """
   @spec connection_options(keyword()) :: keyword()

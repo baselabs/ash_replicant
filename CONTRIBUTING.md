@@ -5,7 +5,7 @@ Thank you for your interest in contributing to AshReplicant!
 ## Prerequisites
 
 - **Elixir 1.20.3** and **Erlang/OTP 29** (run `asdf install` from the repository root)
-- Ash `>= 3.33.11 and < 4.0.0-0`; selector-free development uses this public range
+- Ash `>= 3.34.6 and < 4.0.0-0`; selector-free development uses this public range
 - Replicant `>= 1.4.0 and < 2.0.0-0` from Hex; the lock is 1.4.2.
   No sibling checkout is required to build or test. A local checkout at
   `../replicant` is only needed for cross-repo design work and is never release evidence.
@@ -97,7 +97,7 @@ SIGINT/SIGTERM by stopping the active child process group before scratch cleanup
 
 The frozen host action contract is pinned by `test/ash_replicant/action_contract_freeze_test.exs`
 (the D8 table, asserted against live reflection) and the suppression/admission suites. Ash is a
-floor-pinned dependency (`>= 3.33.11 and < 4.0.0-0`); when bumping the lock, run the old-contract
+floor-pinned dependency (`>= 3.34.6 and < 4.0.0-0`); when bumping the lock, run the old-contract
 grep BEFORE trusting green
 tests — a behavior change inside Ash can silently invalidate a pinned fact while the pin still
 passes against the NEW behavior:
@@ -115,7 +115,7 @@ grep -n "need_notifications?" deps/ash/lib/ash/actions/create/bulk.ex | head
 
 # 3. The bulk_create ordinal context (materialize_bulk_ordinal reads
 #    changeset.context[:bulk_create][:index]): confirm the key shape survived.
-grep -rn "bulk_create" deps/ash/lib/ash/changeset/changeset.ex | grep -i index | head
+grep -n "bulk_create" deps/ash/lib/ash/actions/create/bulk.ex | grep -i index | head
 
 # 4. AshOnetime replay semantics (the discriminator's whole premise):
 #    a replayed claim must skip the body and replay the stored response.
@@ -129,7 +129,7 @@ affected tests in the same change, and record the Ash version contract delta in 
 ## Ash conventions
 
 - This is an Ash **sink adapter** — a `Spark.Dsl.Extension` implementing the
-  `Replicant.Sink` behaviour. Learn from the sibling `ash_postgres` and the
+  `Replicant.Sink` behavior. Learn from the sibling `ash_postgres` and the
   broader Ash extension ecosystem.
 - Read `AGENTS.md` before touching multitenancy, sensitive-data, or action-execution
   code — its Critical Rules are binding.
@@ -197,15 +197,27 @@ The routine is one command per step, in this order:
    pushed tag, and the contract requires the TAG's sha; PATCH it
    (`gh api -X PATCH repos/baselabs/ash_replicant/releases/<id> -f
    target_commitish=<sha>`).
-6. Publish from the exact released tree with `HEX_API_KEY` from the repo-root
-   `.env` (never echoed): `set -a; . ./.env; set +a; env MIX_ENV=dev
-   scripts/with-release-runtime.sh mix hex.publish --yes` — the package and
-   its docs upload together from the same tree.
-7. `scripts/verify-release.sh NEW_VERSION vNEW_VERSION` — the post-publish
-   public-state gate: hex.pm serves the version with a checksum equal to a
-   fresh build from this tree, the release reports `has_docs: true` and
-   hexdocs answers 200, and the GitHub release targets the tag's sha. The
-   release is not shipped until this passes.
+6. `scripts/publish-release.sh NEW_VERSION` — refuses a dirty tree or
+   HEAD different from `vNEW_VERSION`, clears all three dependency selectors,
+   and loads `HEX_API_KEY` from the repo-root `.env` without printing it.
+   The package and docs upload from the same tagged tree.
+7. `scripts/verify-release.sh NEW_VERSION vNEW_VERSION` — requires a clean
+   tree and HEAD equal to the tag. Checks the served Hex checksum against a
+   fresh selector-free build, `has_docs: true`, HexDocs HTTP 200, and the
+   GitHub release's `target_commitish` against the tag's commit.
+8. `scripts/test-fresh-consumer.sh --from-hex NEW_VERSION` — resolves the
+   published package, compiles, generates and runs migrations, builds docs,
+   and drives the default CDC path against `ASH_REPLICANT_TEST_URL`.
+   Before publication, `prepush.sh`'s live lane runs this check from the local
+   tarball when `ASH_REPLICANT_TEST_URL` is set.
+
+`publish-release.sh VERSION --check` and
+`verify-release.sh VERSION TAG --check` check local preconditions only.
+The publish check builds and inspects its package before any upload.
+They neither publish nor verify public release state. Package inspection
+compares the unpacked files with `scripts/release-package-files.txt`;
+review an allowlist change whenever the package gains or drops a file.
+`bump-version.sh VERSION --check` validates the next bump's anchors without writing files.
 
 ## Critical rules (binding)
 

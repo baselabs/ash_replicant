@@ -44,7 +44,7 @@ defmodule Mix.Tasks.AshReplicant.Install.Docs do
     absent one. The generated pipeline therefore supervises NOTHING until you
     configure it — a fresh install compiles and boots as a no-op. It also does not
     run migrations, start a pipeline, or mark your source resources with
-    `AshReplicant.Resource`; the last is a modelling decision only you can make.
+    `AshReplicant.Resource`; the last is a modeling decision only you can make.
 
     ## Options
 

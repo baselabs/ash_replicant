@@ -56,7 +56,7 @@ defmodule AshReplicant.Doctor do
   # `AshReplicant.DoctorTest` asserts the literals are equal, so changing one
   # without the other goes red.
   @replicant_requirement ">= 1.4.0 and < 2.0.0-0"
-  @ash_requirement ">= 3.33.11 and < 4.0.0-0"
+  @ash_requirement ">= 3.34.6 and < 4.0.0-0"
 
   # The source release floors live in `AshReplicant.SourceSet` — the ONE
   # decoder-fact home — and are ENFORCED at activation (the census's release
@@ -73,7 +73,7 @@ defmodule AshReplicant.Doctor do
 
   # The ONLY reasons whose `%Error{}.shape` may reach operator output: every
   # one is a catalog identifier (qualified table, column, PostgreSQL type name,
-  # `relreplident` flag). Fail-closed — an unrecognised reason yields no detail.
+  # `relreplident` flag). Fail-closed — an unrecognized reason yields no detail.
   # `:source_identity_mismatch` is deliberately ABSENT: its shape embeds the
   # source database name.
   @detail_reasons [

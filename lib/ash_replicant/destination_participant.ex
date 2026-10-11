@@ -5,7 +5,7 @@ defmodule AshReplicant.DestinationParticipant do
   AshReplicant can inspect framework-owned action metadata, but it cannot infer the
   body of an arbitrary custom change, validation, preparation, manual action, query/error
   callback, input type, or tenant resolver.
-  Implement this behaviour on such a module to declare either that it performs no
+  Implement this behavior on such a module to declare either that it performs no
   database work or the exact Ash actions it can invoke. Declarations are admission
   metadata; they do not authorize raw SQL, another Repo, asynchronous work, or an
   external effect.

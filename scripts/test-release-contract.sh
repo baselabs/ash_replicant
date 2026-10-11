@@ -20,5 +20,5 @@ normalized_result="$(
     sed '/^Waiting for lock on the build directory /d'
 )"
 
-[[ "$normalized_result" == "release contract self-tests: PASS" ]]
+[[ "$normalized_result" =~ ^release\ contract\ self-tests:\ PASS\ \([1-9][0-9]*\ checks\)$ ]]
 printf '%s\n' "$normalized_result"
