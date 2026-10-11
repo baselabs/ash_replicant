@@ -188,15 +188,24 @@ stays `~> 2.7.0`; Ash makes its effective floor 2.7.6.
 
 OBSERVED: `mix deps.update ash spark ash_onetime`, with exact Ash 3.34.6
 and AshOnetime 1.5.0 selectors, resolved those versions and Spark 2.7.6.
-It also moved AshPostgres/AshSql; restoring their original lock entries
-and running selector-free `mix deps.get` retained the admitted consumer
-set, AshPostgres 2.13.1 and AshSql 0.7.6. The final lock diff is:
+AshPostgres and AshSql then moved to their newest compatible releases,
+2.14.5 and 0.8.1 (`mix deps.update ash_postgres ash_sql`). The public
+AshPostgres requirement stays `~> 2.13`. OBSERVED in CI run
+38144078614: once the latest-compatible cell floated AshPostgres to
+2.14.5, its generator demanded the ash-functions version 7 migration,
+and AshPostgres 2.13.1 cannot read a version 7 extension snapshot
+(`FunctionClauseError` in `AshFunctions.install/2`). One committed
+snapshot cannot satisfy both generators, so the lock follows the newest
+release and the test repository carries that migration. The final lock
+diff is:
 
 | Package | Before | After |
 | --- | --- | --- |
 | ash | 3.33.11 | 3.34.6 |
 | spark | 2.7.3 | 2.7.6 |
 | ash_onetime | 1.4.0 | 1.5.0 |
+| ash_postgres | 2.13.1 | 2.14.5 |
+| ash_sql | 0.7.6 | 0.8.1 |
 | ex_ast | 0.13.1 | 0.16.0 |
 | finch | 0.23.0 | 0.24.0 |
 | req | 0.7.4 | 0.7.5 |

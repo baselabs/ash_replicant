@@ -31,10 +31,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Consumers locked below Ash 3.34.6 must update Ash and Spark. Ash requires
   Spark 2.7.6 or later; the public Spark requirement remains `~> 2.7.0`.
 
+### Fixed
+
+- `mix ash_replicant.upgrade` renders the checkpoint resource snapshot in the
+  host's AshPostgres shape, so its hash matches the host's generator:
+  AshPostgres 2.14 adds the `temporal` key, 2.13 has none.
+
 ### Changed
 
 - Lock Ash 3.33.11 → 3.34.6, Spark 2.7.3 → 2.7.6, and
-  AshOnetime 1.4.0 → 1.5.0. Retain AshPostgres 2.13.1 and AshSql 0.7.6.
+  AshOnetime 1.4.0 → 1.5.0, AshPostgres 2.13.1 → 2.14.5 and AshSql
+  0.7.6 → 0.8.1. The public AshPostgres requirement stays `~> 2.13`. The
+  test repository adds AshPostgres 2.14's ash-functions version 7
+  migration (`ash_required/2` redefined in place).
   Other resolver moves: ex_ast 0.13.1 → 0.16.0, Finch 0.23.0 → 0.24.0,
   Req 0.7.4 → 0.7.5, and Sourceror 1.12.3 → 1.12.4.
 - The latest-compatible CI cell unlocks the entire dependency graph and

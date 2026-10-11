@@ -259,8 +259,22 @@ defmodule AshReplicant.Upgrade do
       has_create_action: true
     }
 
+    snapshot = put_snapshot_shape(snapshot, installed_ash_postgres_version())
     hash = snapshot |> inspect() |> then(&:crypto.hash(:sha256, &1)) |> Base.encode16()
     Map.put(snapshot, :hash, hash)
+  end
+
+  # The snapshot, and so its hash, must be the one the host's own AshPostgres
+  # generator writes. AshPostgres 2.14 added the `temporal` key; 2.13 has none.
+  @doc false
+  def put_snapshot_shape(snapshot, ash_postgres_version) do
+    if Version.match?(ash_postgres_version, ">= 2.14.0"),
+      do: Map.put(snapshot, :temporal, nil),
+      else: snapshot
+  end
+
+  defp installed_ash_postgres_version do
+    :ash_postgres |> Application.spec(:vsn) |> to_string()
   end
 
   defp checkpoint_attributes do

@@ -112,6 +112,14 @@ defmodule AshReplicant.UpgradeTest do
     assert Upgrade.next_migration_number(paths) == "20260101000005"
   end
 
+  test "the rendered snapshot follows the host's AshPostgres snapshot shape" do
+    base = %{table: "ash_replicant_checkpoints"}
+
+    refute Map.has_key?(Upgrade.put_snapshot_shape(base, "2.13.1"), :temporal)
+    assert %{temporal: nil} = Upgrade.put_snapshot_shape(base, "2.14.0")
+    assert %{temporal: nil} = Upgrade.put_snapshot_shape(base, "2.14.5")
+  end
+
   test "renders the current checkpoint snapshot from the locked AshPostgres contract" do
     generated =
       AshPostgres.MigrationGenerator.get_snapshots(

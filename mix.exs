@@ -47,8 +47,9 @@ defmodule AshReplicant.MixProject do
   defp deps do
     [
       {:ash, ash_requirement()},
-      # Lock holds the main downstream consumer's resolved set;
-      # latest-compatible proves the newest within each public requirement.
+      # The lock holds the newest compatible release, so the committed test
+      # migrations are that generator's output; latest-compatible proves the
+      # newest within each public requirement.
       {:ash_postgres, "~> 2.13"},
       {:ash_onetime, onetime_requirement()},
       # Security floor: EEF-CVE-2026-81319 and EEF-CVE-2026-81322 affect

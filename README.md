@@ -58,7 +58,7 @@ The current 1.6.3 release baseline is built and tested with:
 
 - Elixir 1.20.3 on Erlang/OTP 29;
 - Ash `>= 3.34.6 and < 4.0.0-0` (current lock 3.34.6);
-- AshPostgres `~> 2.13` (current lock 2.13.1 with AshSql 0.7.6; the latest-compatible cell tests the newest 2.x);
+- AshPostgres `~> 2.13` (current lock 2.14.5 with AshSql 0.8.1; the latest-compatible cell tests the newest 2.x);
 - Spark `~> 2.7.0` (effective floor 2.7.6 through Ash; current lock 2.7.6);
 - Replicant `>= 1.4.0 and < 2.0.0-0` (current lock 1.4.2);
 - Replicant 1.4's decoder options (`decoder:`, `replication_sets:`, `tables:`,
