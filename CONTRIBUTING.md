@@ -42,7 +42,8 @@ env -u ASH_REPLICANT_TEST_URL \
 1. Create a feature branch from `main`.
 2. Make your changes with clear, descriptive commit messages.
 3. Run the database-free and static checks before opening a PR —
-   `scripts/prepush.sh` runs this whole list fail-fast in one command,
+   `scripts/prepush.sh` compiles first, then runs the remaining independent
+   checks and prints a pass/fail table. It exits non-zero if any check fails
    and adds the live-database lane when `ASH_REPLICANT_TEST_URL` is set:
 
 ```bash
@@ -62,6 +63,12 @@ scripts/with-release-runtime.sh mix docs --warnings-as-errors
 scripts/with-release-runtime.sh mix hex.build
 scripts/with-release-runtime.sh scripts/run-mutation-gates.py
 ```
+
+Database migration and its dependent live checks run only after successful
+database creation and migration. The other checks continue after a failure.
+For a fresh consumer's throwaway database in the cluster's `ephemeral`
+namespace, set `ASH_REPLICANT_CONSUMER_TEST_URL` to that run's endpoint; the
+main test database still uses `ASH_REPLICANT_TEST_URL` from `.env`.
 
 The last command is the data-boundary guard-mutation gate (ADR-0003): it
 removes one production guard or reorders one notifier guard after its first

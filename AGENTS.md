@@ -275,7 +275,7 @@ asdf install
 scripts/with-release-runtime.sh scripts/assert-runtime-version.sh
 scripts/with-release-runtime.sh mix deps.get
 set -a; . ./.env; set +a    # loads ASH_REPLICANT_TEST_URL from the gitignored .env (live lane)
-scripts/prepush.sh          # the local fail-fast chain: every CI gate except the mutation
+scripts/prepush.sh          # compile, then collect results: every CI gate except the mutation
                             # gates, integration discovery, and the performance lane (see CONTRIBUTING)
 ```
 
