@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Exclude Cloak's AES-CTR advisory `EEF-CVE-2026-95105` from Hex audits while
+  `test/cloak_cipher_guard_test.exs` enforces AES-GCM across `lib`, `config`,
+  and `test/support`. Remove the exception and upgrade when a fixed release ships.
+
 ## [1.6.2] - 2026-10-03
 
 ### Changed

@@ -18,6 +18,10 @@ defmodule AshReplicant.MixProject do
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
       deps: deps(),
+      # EEF-CVE-2026-95105 affects only Cloak's AES-CTR cipher; ash_replicant configures
+      # AES-GCM only, enforced by test/cloak_cipher_guard_test.exs.
+      # Cloak has no fixed release yet; remove this entry and upgrade when it ships.
+      hex: [ignore_advisories: ["EEF-CVE-2026-95105"]],
       # `:cloak` is a `runtime: false` dep, so it is absent from the default PLT
       # application tree. Without it in the PLT, dialyzer has no type info for the
       # `Cloak.Vault` module and emits `unknown_function` warnings against cloak's
