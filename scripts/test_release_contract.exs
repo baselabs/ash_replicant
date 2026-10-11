@@ -327,6 +327,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       action_probes()
       action_input_probes()
       landing_and_fail_late_probes()
+      decoder_job_probes()
       command_probes()
       compatibility_probes()
       packaging_selector_probes()
@@ -697,6 +698,46 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
       assert_invalid!()
     end
+  end
+
+  defp decoder_job_probes do
+    for control <- [
+          "if: false",
+          "shell: echo {0}",
+          "env:\n          BASH_ENV: /tmp/release-bypass"
+        ] do
+      prepare_fixture()
+
+      mutate_run_step!("decoder-old-majors", "mix deps.compile", fn step ->
+        String.trim_trailing(step) <> "\n        #{control}\n"
+      end)
+
+      assert_invalid!()
+      prepare_fixture()
+      assert_valid!()
+    end
+
+    prepare_fixture()
+
+    mutate_job!(
+      "decoder-old-majors",
+      "      MIX_ENV: test\n",
+      "      MIX_ENV: test\n      BASH_ENV: /tmp/release-bypass\n"
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
+    mutate_job!(
+      "decoder-old-majors",
+      "    runs-on: ubuntu-24.04\n",
+      "    runs-on: ubuntu-24.04\n    defaults:\n      run:\n        shell: echo {0}\n"
+    )
+
+    assert_invalid!()
+    prepare_fixture()
+    assert_valid!()
   end
 
   defp command_probes do

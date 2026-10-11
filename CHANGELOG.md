@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Pin the decoder-old-majors job's exact release steps, job keys, and environment; reject skipped steps, shell overrides, and BASH_ENV injection in contract self-tests.
 - Collect independent prepush check results after compilation, print a pass/fail table, and exit non-zero on any failure; skip live checks whose database setup failed and allow the fresh consumer to use a separate cluster database.
 - Run CI on `kci/**` and `t/**` landing branches and finish independent checks after successful setup in the no-database and compatibility jobs; keep release artifacts sequential and enforce the exact step controls in the release contract.
 - Reject retired releases and invalid Hex responses in the newest dependency checker; replay recorded inputs in its self-tests.

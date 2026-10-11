@@ -149,6 +149,13 @@ defmodule AshReplicant.ReleaseContract do
       "MIX_ENV" => "test",
       "ASH_REPLICANT_TEST_URL" => "postgres://postgres@localhost:5432/postgres",
       "ASH_REPLICANT_PERFORMANCE" => "1"
+    },
+    "decoder-old-majors" => %{
+      "MIX_ENV" => "test",
+      "ELIXIR_VERSION" => "1.20.3",
+      "OTP_VERSION" => "29",
+      "ASH_REPLICANT_TEST_URL" => "postgres://postgres@localhost:5432/postgres",
+      "ASH_REPLICANT_PGOLD_URL" => "postgres://postgres@localhost:5433/postgres"
     }
   }
 
@@ -162,6 +169,26 @@ defmodule AshReplicant.ReleaseContract do
     #{@pg16_image} \\
     -c wal_level=logical -c max_replication_slots=20 -c max_wal_senders=20
   scripts/wait-for-postgres.sh pg
+  """
+
+  @decoder_postgres_run """
+  # The old images' entrypoint never appends a `host replication`
+  # pg_hba line (unlike 12+), so the walsender needs this file.
+  printf 'local all all trust\\nhost all all all trust\\nhost replication all all trust\\n' > /tmp/pgold-hba.conf
+  docker run -d --name pg \\
+    -e POSTGRES_HOST_AUTH_METHOD=trust \\
+    -p 5432:5432 \\
+    #{@pg16_image} \\
+    -c wal_level=logical -c max_replication_slots=20 -c max_wal_senders=20
+  docker run -d --name pgold \\
+    -e POSTGRES_HOST_AUTH_METHOD=trust \\
+    -p 5433:5432 \\
+    -v /tmp/pgold-hba.conf:/hba.conf:ro \\
+    pgold-plugins:ci \\
+    -c wal_level=logical -c max_wal_senders=20 -c max_replication_slots=20 \\
+    -c shared_preload_libraries=pglogical -c hba_file=/hba.conf
+  scripts/wait-for-postgres.sh pg
+  scripts/wait-for-postgres.sh pgold
   """
 
   @pg17_image "postgres:17@sha256:e38411452a464af89e5adadb8d223bf53b898d47d6ef918b2d58c08707350449"
@@ -244,7 +271,8 @@ defmodule AshReplicant.ReleaseContract do
     "no-database" => ~w(env name runs-on steps),
     "compatibility" => ~w(env name runs-on steps strategy),
     "release-artifact" => ~w(env name runs-on steps),
-    "performance" => ~w(env name runs-on steps)
+    "performance" => ~w(env name runs-on steps),
+    "decoder-old-majors" => ~w(env name runs-on steps strategy)
   }
 
   @job_steps %{
@@ -313,6 +341,25 @@ defmodule AshReplicant.ReleaseContract do
       {:run, String.trim(@create_database)},
       {:run,
        "scripts/run-structural-tests.sh test/integration/performance_bounds_test.exs --include integration"}
+    ],
+    "decoder-old-majors" => [
+      {:uses, @checkout, :absent},
+      {:uses, @setup_beam, @setup_beam_inputs},
+      {:uses, @cache,
+       %{
+         "path" => "deps\n_build\n",
+         "key" =>
+           "${{ runner.os }}-decoder-${{ matrix.pg_major }}-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}"
+       }},
+      {:run,
+       "docker build -f test/support/pg_old.dockerfile --build-arg BASE=${{ matrix.base }} -t pgold-plugins:ci ."},
+      {:run, String.trim(@decoder_postgres_run)},
+      {:run, "mix deps.get"},
+      {:run, "mix deps.compile"},
+      {:run, "mix compile --warnings-as-errors"},
+      {:run, String.trim(@create_database)},
+      {:run,
+       "scripts/run-structural-tests.sh test/integration/decoder_admission_test.exs --include pgold"}
     ],
     "release-artifact" => [
       {:uses, @checkout, :absent},
