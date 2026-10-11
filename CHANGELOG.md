@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Run CI on `kci/**` and `t/**` landing branches and finish independent checks after successful setup in the no-database and compatibility jobs; keep release artifacts sequential and enforce the exact step controls in the release contract.
 - Reject retired releases and invalid Hex responses in the newest dependency checker; replay recorded inputs in its self-tests.
 - Keep the Hex credential out of publish arguments and inspect the built package against the release file allowlist before uploading.
 - Require a live database for fresh consumers from Hex and reclaim abandoned consumer databases and replication slots while preserving live runs.

@@ -3,6 +3,7 @@ defmodule AshReplicant.ReleaseContractError do
 end
 
 defmodule AshReplicant.ReleaseContract do
+  @fail_late "${{ !cancelled() && steps.compile.outcome == 'success' }}"
   @immutable_action ~r/\A[^@\s]+@[0-9a-f]{40}\z/
   @pg16_image "postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b"
   @ash_requirement ">= 3.34.6 and < 4.0.0-0"
@@ -258,17 +259,18 @@ defmodule AshReplicant.ReleaseContract do
        }},
       {:run, "mix deps.get"},
       {:run, "mix deps.compile"},
-      {:run, "mix format --check-formatted"},
-      {:run, "mix compile --warnings-as-errors"},
-      {:run, "elixir --version"},
-      {:run, "scripts/assert-runtime-version.sh"},
-      {:run, "scripts/test-release-checkers.sh"},
-      {:run, "scripts/test-release-contract.sh"},
-      {:run, "mix credo --strict"},
-      {:run, "mix deps.audit"},
+      {:run, "mix compile --warnings-as-errors", %{"id" => "compile"}},
+      {:run, "mix format --check-formatted", %{"if" => @fail_late}},
+      {:run, "elixir --version", %{"if" => @fail_late}},
+      {:run, "scripts/assert-runtime-version.sh", %{"if" => @fail_late}},
+      {:run, "scripts/test-release-checkers.sh", %{"if" => @fail_late}},
+      {:run, "scripts/test-release-contract.sh", %{"if" => @fail_late}},
+      {:run, "mix credo --strict", %{"if" => @fail_late}},
+      {:run, "mix deps.audit", %{"if" => @fail_late}},
       {:run,
-       "env -u ASH_REPLICANT_TEST_URL scripts/run-structural-tests.sh --allow-excluded --exclude integration"},
-      {:run, String.trim(@mutation_gates_run)}
+       "env -u ASH_REPLICANT_TEST_URL scripts/run-structural-tests.sh --allow-excluded --exclude integration",
+       %{"if" => @fail_late}},
+      {:run, String.trim(@mutation_gates_run), %{"if" => @fail_late}}
     ],
     "compatibility" => [
       {:uses, @checkout, :absent},
@@ -282,17 +284,18 @@ defmodule AshReplicant.ReleaseContract do
        }},
       {:run, String.trim(@resolve_dependencies)},
       {:run, "mix deps.compile"},
-      {:run, "mix compile --warnings-as-errors"},
-      {:run, "elixir --version"},
-      {:run, "scripts/assert-runtime-version.sh"},
-      {:run, "scripts/test-release-checkers.sh"},
-      {:run, "scripts/assert-release-contract.sh"},
-      {:run, "mix deps.audit"},
       {:run, String.trim(@create_database)},
-      {:run, "scripts/test-migration-drift-gate.sh"},
-      {:run, "scripts/run-structural-tests.sh --include integration"},
-      {:run, "scripts/run-structural-tests.sh test/integration --include integration"},
-      {:run, "mix dialyzer"}
+      {:run, "mix compile --warnings-as-errors", %{"id" => "compile"}},
+      {:run, "elixir --version", %{"if" => @fail_late}},
+      {:run, "scripts/assert-runtime-version.sh", %{"if" => @fail_late}},
+      {:run, "scripts/test-release-checkers.sh", %{"if" => @fail_late}},
+      {:run, "scripts/assert-release-contract.sh", %{"if" => @fail_late}},
+      {:run, "mix deps.audit", %{"if" => @fail_late}},
+      {:run, "scripts/test-migration-drift-gate.sh", %{"if" => @fail_late}},
+      {:run, "scripts/run-structural-tests.sh --include integration", %{"if" => @fail_late}},
+      {:run, "scripts/run-structural-tests.sh test/integration --include integration",
+       %{"if" => @fail_late}},
+      {:run, "mix dialyzer", %{"if" => @fail_late}}
     ],
     "performance" => [
       {:uses, @checkout, :absent},
@@ -673,6 +676,19 @@ defmodule AshReplicant.ReleaseContract do
 
   defp assert_workflow_controls(workflow) do
     assert(not Map.has_key?(workflow, "defaults"), "CI workflow can override release shells")
+
+    assert(
+      Enum.all?(Map.get(workflow, "jobs", %{}), fn {_name, job} ->
+        not Map.has_key?(job, "continue-on-error") and
+          Enum.all?(Map.get(job, "steps", []), &(not Map.has_key?(&1, "continue-on-error")))
+      end),
+      "CI cannot continue on error"
+    )
+
+    assert(
+      get_in(workflow, ["on", "push", "branches"]) == ["main", "kci/**", "t/**"],
+      "CI landing branch contract is incomplete"
+    )
   end
 
   defp assert_jobs(workflow) do
@@ -697,8 +713,17 @@ defmodule AshReplicant.ReleaseContract do
   end
 
   defp step_signature(%{"run" => run} = step) when is_binary(run) do
-    assert(Map.keys(step) -- ["name", "run"] == [], "CI release run step control is invalid")
-    {:run, String.trim(run)}
+    assert(
+      Map.keys(step) -- ["name", "run", "id", "if"] == [],
+      "CI release run step control is invalid"
+    )
+
+    # Controls participate in the exact per-job signature. Only the two
+    # compile steps admit an id, and only their listed checks admit an if.
+    case Map.take(step, ["id", "if"]) do
+      controls when map_size(controls) == 0 -> {:run, String.trim(run)}
+      controls -> {:run, String.trim(run), controls}
+    end
   end
 
   defp step_signature(%{"uses" => action} = step) when is_binary(action) do

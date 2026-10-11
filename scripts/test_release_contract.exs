@@ -11,6 +11,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
                   "ash-replicant-release-contract-#{System.pid()}-#{System.unique_integer([:positive])}"
                 )
   @workflow ".github/workflows/ci.yml"
+  @fail_late "${{ !cancelled() && steps.compile.outcome == 'success' }}"
 
   @postgres_run """
   docker run -d --name pg \\
@@ -106,8 +107,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     "no-database" => [
       "mix deps.get",
       "mix deps.compile",
-      "mix format --check-formatted",
       "mix compile --warnings-as-errors",
+      "mix format --check-formatted",
       "elixir --version",
       "scripts/assert-runtime-version.sh",
       "scripts/test-release-checkers.sh",
@@ -325,6 +326,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       valid_fixture_probes()
       action_probes()
       action_input_probes()
+      landing_and_fail_late_probes()
       command_probes()
       compatibility_probes()
       packaging_selector_probes()
@@ -582,6 +584,121 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     end
   end
 
+  defp landing_and_fail_late_probes do
+    prepare_fixture()
+
+    jobs =
+      fixture_path(@workflow) |> YamlElixir.read_from_file!() |> Map.fetch!("jobs") |> Map.keys()
+
+    for job <- jobs, value <- ["true", "false", "${{ true }}"] do
+      prepare_fixture()
+
+      mutate_job!(
+        job,
+        "    runs-on: ubuntu-24.04\n",
+        "    runs-on: ubuntu-24.04\n    continue-on-error: #{value}\n"
+      )
+
+      assert_invalid!()
+      prepare_fixture()
+
+      mutate_run_step!(job, "mix deps.compile", fn step ->
+        String.trim_trailing(step) <> "\n        continue-on-error: #{value}\n"
+      end)
+
+      assert_invalid!()
+    end
+
+    for branches <- ["main", "main, 't/**'", "main, 'kci/**'", "main, 'kci/*', 't/**'"] do
+      prepare_fixture()
+      replace_once!(@workflow, "branches: [main, 'kci/**', 't/**']", "branches: [#{branches}]")
+      assert_invalid!()
+    end
+
+    for job <- ["no-database", "compatibility"] do
+      for replacement <- ["", "        id: other_compile\n", "        id: false\n"] do
+        prepare_fixture()
+
+        mutate_run_step!(job, "mix compile --warnings-as-errors", fn step ->
+          replace_once(step, "        id: compile\n", replacement)
+        end)
+
+        assert_invalid!()
+      end
+
+      checks =
+        @job_commands[job]
+        |> Enum.drop_while(&(&1 != "mix compile --warnings-as-errors"))
+        |> Enum.drop(1)
+        |> Enum.reject(&(&1 == String.trim(@create_database)))
+
+      for command <- checks do
+        for replacement <- [
+              "",
+              "        if: false\n",
+              "        if: ${{ always() }}\n",
+              "        if: ${{ !cancelled() && steps.other_compile.outcome == 'success' }}\n"
+            ] do
+          prepare_fixture()
+
+          mutate_run_step!(job, command, fn step ->
+            replace_once(step, "        if: #{@fail_late}\n", replacement)
+          end)
+
+          assert_invalid!()
+        end
+
+        prepare_fixture()
+        mutate_run_step!(job, command, &(String.trim_trailing(&1) <> "\n        id: check\n"))
+        assert_invalid!()
+      end
+
+      for command <- ["mix deps.compile", "mix compile --warnings-as-errors"] do
+        prepare_fixture()
+
+        mutate_run_step!(job, command, fn step ->
+          String.trim_trailing(step) <> "\n        if: #{@fail_late}\n"
+        end)
+
+        assert_invalid!()
+      end
+
+      prepare_fixture()
+
+      mutate_run_step!(
+        job,
+        "mix deps.compile",
+        &(String.trim_trailing(&1) <> "\n        id: compile\n")
+      )
+
+      assert_invalid!()
+    end
+
+    for command <- @job_commands["release-artifact"] do
+      for control <- ["if: #{@fail_late}", "id: compile"] do
+        prepare_fixture()
+
+        mutate_run_step!("release-artifact", command, fn step ->
+          String.trim_trailing(step) <> "\n        #{control}\n"
+        end)
+
+        assert_invalid!()
+      end
+    end
+
+    for job <- ["no-database", "compatibility", "release-artifact"],
+        command <- @job_commands[job],
+        value <- ["true", "false", "${{ true }}"] do
+      prepare_fixture()
+
+      mutate_run_step!(job, command, fn step ->
+        String.trim_trailing(step) <> "\n        continue-on-error: #{value}\n"
+      end)
+
+      assert_invalid!()
+    end
+  end
+
   defp command_probes do
     Enum.each(@job_commands, fn {job, commands} ->
       Enum.each(commands, fn command ->
@@ -602,7 +719,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           "      - run: #{command}\n        continue-on-error: true\n"
         ] do
       prepare_fixture()
-      mutate_job!("no-database", "      - run: #{command}\n", replacement)
+      mutate_run_step!("no-database", command, fn _step -> replacement end)
       assert_invalid!()
     end
 
@@ -1000,7 +1117,11 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           "      - run: scripts/test-release-contract.sh\n        env:\n          ASH_REPLICANT_ASH_VERSION: latest\n"
         ] do
       prepare_fixture()
-      mutate_job!("no-database", "      - run: scripts/test-release-contract.sh\n", replacement)
+
+      mutate_run_step!("no-database", "scripts/test-release-contract.sh", fn _step ->
+        replacement
+      end)
+
       assert_invalid!()
     end
 
@@ -1629,6 +1750,10 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   end
 
   defp remove_run_command!(job, command) do
+    mutate_run_step!(job, command, fn _step -> "" end)
+  end
+
+  defp mutate_run_step!(job, command, mutation) do
     path = fixture_path(@workflow)
     content = File.read!(path)
     direct = "      - run: #{command}\n"
@@ -1655,7 +1780,9 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           String.contains?(step, multiline)
       end)
 
-    if step, do: mutate_job!(job, step, ""), else: raise("run fixture anchor missing: #{command}")
+    if step,
+      do: mutate_job!(job, step, mutation.(step)),
+      else: raise("run fixture anchor missing: #{command}")
   end
 
   defp swap_run_commands!(job, first, second) do
