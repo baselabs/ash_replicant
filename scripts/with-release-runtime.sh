@@ -6,8 +6,15 @@ if [[ "$#" -eq 0 ]]; then
   exit 2
 fi
 
-erlang_root="$(asdf where erlang 29.0.3)"
-elixir_root="$(asdf where elixir 1.20.3-otp-29)"
+# With asdf, select the pinned release runtime explicitly. Without it (CI's
+# setup-beam, or a Linux host using another installer), the runtime already on
+# PATH must prove it is the pinned one before the command runs.
+if command -v asdf >/dev/null 2>&1; then
+  erlang_root="$(asdf where erlang 29.0.3)"
+  elixir_root="$(asdf where elixir 1.20.3-otp-29)"
+  export PATH="$erlang_root/bin:$elixir_root/bin:$PATH"
+else
+  "$(cd "$(dirname "$0")" && pwd)/assert-runtime-version.sh"
+fi
 
-export PATH="$erlang_root/bin:$elixir_root/bin:$PATH"
 exec "$@"

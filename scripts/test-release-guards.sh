@@ -6,6 +6,7 @@ trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/scripts"
 cp "$root/scripts/publish-release.sh" "$root/scripts/verify-release.sh" \
   "$root/scripts/assert-release-tree.sh" "$root/scripts/with-release-runtime.sh" \
+  "$root/scripts/assert-runtime-version.sh" \
   "$root/scripts/inspect-release-package.sh" "$root/scripts/release-package-files.txt" "$work/scripts/"
 cd "$work"
 git init -q
