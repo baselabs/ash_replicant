@@ -56,7 +56,7 @@ defmodule AshReplicant.Doctor do
   # `AshReplicant.DoctorTest` asserts the literals are equal, so changing one
   # without the other goes red.
   @replicant_requirement ">= 1.4.0 and < 2.0.0-0"
-  @ash_requirement ">= 3.34.6 and < 4.0.0-0"
+  @ash_requirement ">= 3.37.2 and < 4.0.0-0"
 
   # The source release floors live in `AshReplicant.SourceSet` — the ONE
   # decoder-fact home — and are ENFORCED at activation (the census's release

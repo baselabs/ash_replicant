@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Require Ash `>= 3.37.2 and < 4.0.0-0`. This excludes
+  `EEF-CVE-2026-96581` (a primary-key upsert ignores attribute
+  multitenancy, fixed in Ash 3.37.2) and `EEF-CVE-2026-114214` (a through
+  relationship loaded with a limit of 1 ignores the through path, fixed in
+  Ash 3.37.1). Consumers locked below Ash 3.37.2 must update Ash.
+- Lock Ash 3.34.6 → 3.37.2, AshPostgres 2.14.5 → 2.15.2 (2.14.5 is retired;
+  2.15.2 fixes `EEF-CVE-2026-115627` and `EEF-CVE-2026-115635`) and AshSql
+  0.8.1 → 0.8.4. The public AshPostgres requirement stays `~> 2.13`; hosts
+  should lock AshPostgres 2.15.2 or later.
+
 ### Fixed
 
 - Pin the decoder-old-majors job's exact release steps, job keys, and environment; reject skipped steps, shell overrides, and BASH_ENV injection in contract self-tests.
