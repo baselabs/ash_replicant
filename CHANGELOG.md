@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- StatusLifecycleTest's four halt tests no longer let an abnormal pipeline
+  owner exit kill the test through its start_link link. The durable-leg test
+  died that way on one PostgreSQL leg in each of CI runs 40681408838 and the
+  run before it, printing only the formatter's `(no repo frame)` receipt. The
+  tests now unlink the owner, keep a monitor, and assert it stops `:normal`
+  within 15s, so the same exit fails at a named assertion with its reason in
+  the local output (proven red with the owner stopping `:boom`).
+
 ### Security
 
 - Require Ash `>= 3.37.2 and < 4.0.0-0`. This excludes

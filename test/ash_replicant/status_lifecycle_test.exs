@@ -64,6 +64,24 @@ defmodule AshReplicant.StatusLifecycleTest do
 
   defp tombstone, do: :persistent_term.get(@tombstone_key, nil)
 
+  # start_link links the owner to this test. An abnormal owner exit would kill
+  # the test with a link exit, which carries no stacktrace, so the battery could
+  # only print "(no repo frame)" (CI run 40681408838 and the PG17 run before it,
+  # neither able to name the cause). Unlinked with the monitor kept, the same
+  # exit FLUNKS at the assertion below with its reason in the local output.
+  defp start_owner!(opts) do
+    assert {:ok, owner} = AshReplicant.start_link(opts)
+    Process.unlink(owner)
+    {owner, Process.monitor(owner)}
+  end
+
+  # A halted owner stops :normal after its node-local and durable legs; the
+  # durable leg's own budget is 5s, so 15s bounds the stop with margin.
+  defp assert_owner_stopped_normally({owner, ref}) do
+    assert_receive {:DOWN, ^ref, :process, ^owner, reason}, 15_000
+    assert reason == :normal, "pipeline owner exited abnormally: #{inspect(reason)}"
+  end
+
   setup do
     AshReplicant.stop_supervised(@slot)
     :persistent_term.erase(@entry)
@@ -120,16 +138,16 @@ defmodule AshReplicant.StatusLifecycleTest do
   describe "degraded → halted (the census fault budget)" do
     test "census faults degrade, and the budget halt persists a value-free tombstone" do
       capture_log(fn ->
-        assert {:ok, _owner} =
-                 AshReplicant.start_link(
-                   start_opts(
-                     census: [
-                       interval_ms: 50,
-                       timeout_ms: 100,
-                       max_consecutive_faults: 2
-                     ]
-                   )
-                 )
+        owner =
+          start_owner!(
+            start_opts(
+              census: [
+                interval_ms: 50,
+                timeout_ms: 100,
+                max_consecutive_faults: 2
+              ]
+            )
+          )
 
         # Below the budget the pipeline is live and degraded (public
         # catching_up — never healthy: census is the health authority).
@@ -149,6 +167,7 @@ defmodule AshReplicant.StatusLifecycleTest do
         # then the erase) — poll the erase, never assert it immediately
         # (the O02-era flake class this file fights).
         eventually(fn -> :none == :persistent_term.get(@entry, :none) end)
+        assert_owner_stopped_normally(owner)
       end)
     end
   end
@@ -156,8 +175,7 @@ defmodule AshReplicant.StatusLifecycleTest do
   describe "halted — an unexplained pipeline death" do
     test "a pipeline halt without a recorded cause writes the generic tombstone" do
       capture_log(fn ->
-        assert {:ok, _owner} =
-                 AshReplicant.start_link(start_opts(census: [enabled?: false]))
+        owner = start_owner!(start_opts(census: [enabled?: false]))
 
         eventually(fn -> match?(%Generation{}, :persistent_term.get(@entry, :none)) end)
 
@@ -169,6 +187,8 @@ defmodule AshReplicant.StatusLifecycleTest do
 
         assert %AshReplicant.Status.Tombstone{cause: :pipeline_terminated, class: :halt} =
                  tombstone()
+
+        assert_owner_stopped_normally(owner)
       end)
     end
 
@@ -208,8 +228,7 @@ defmodule AshReplicant.StatusLifecycleTest do
       on_exit(fn -> :telemetry.detach({__MODULE__, :durable_failure}) end)
 
       capture_log(fn ->
-        assert {:ok, _owner} =
-                 AshReplicant.start_link(start_opts(census: [enabled?: false]))
+        owner = start_owner!(start_opts(census: [enabled?: false]))
 
         eventually(fn -> match?(%Generation{}, :persistent_term.get(@entry, :none)) end)
 
@@ -272,13 +291,14 @@ defmodule AshReplicant.StatusLifecycleTest do
               flunk("durable tombstone record neither fired nor lawfully skipped")
             end
         end
+
+        assert_owner_stopped_normally(owner)
       end)
     end
 
     test "a precise recorded cause is not stomped by the generic writer" do
       capture_log(fn ->
-        assert {:ok, _owner} =
-                 AshReplicant.start_link(start_opts(census: [enabled?: false]))
+        owner = start_owner!(start_opts(census: [enabled?: false]))
 
         eventually(fn -> match?(%Generation{}, :persistent_term.get(@entry, :none)) end)
 
@@ -295,6 +315,7 @@ defmodule AshReplicant.StatusLifecycleTest do
         eventually(fn -> :none == :persistent_term.get(@entry, :none) end)
 
         assert %AshReplicant.Status.Tombstone{cause: :schema_change_destructive} = tombstone()
+        assert_owner_stopped_normally(owner)
       end)
     end
   end
