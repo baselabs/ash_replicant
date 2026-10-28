@@ -5,7 +5,7 @@ Thank you for your interest in contributing to AshReplicant!
 ## Prerequisites
 
 - **Elixir 1.20.3** and **Erlang/OTP 29** (run `asdf install` from the repository root)
-- Ash `>= 3.34.6 and < 4.0.0-0`; selector-free development uses this public range
+- Ash `>= 3.37.2 and < 4.0.0-0`; selector-free development uses this public range
 - Replicant `>= 1.4.0 and < 2.0.0-0` from Hex; the lock is 1.4.2.
   No sibling checkout is required to build or test. A local checkout at
   `../replicant` is only needed for cross-repo design work and is never release evidence.
@@ -104,7 +104,7 @@ SIGINT/SIGTERM by stopping the active child process group before scratch cleanup
 
 The frozen host action contract is pinned by `test/ash_replicant/action_contract_freeze_test.exs`
 (the D8 table, asserted against live reflection) and the suppression/admission suites. Ash is a
-floor-pinned dependency (`>= 3.34.6 and < 4.0.0-0`); when bumping the lock, run the old-contract
+floor-pinned dependency (`>= 3.37.2 and < 4.0.0-0`); when bumping the lock, run the old-contract
 grep BEFORE trusting green
 tests — a behavior change inside Ash can silently invalidate a pinned fact while the pin still
 passes against the NEW behavior:

@@ -138,7 +138,7 @@ classification body.
 ## Development workflow
 
 The supported release foundation is Elixir 1.20.3 on Erlang/OTP 29 with Ash
-`>= 3.34.6 and < 4.0.0-0` (current lock 3.34.6) and Replicant
+`>= 3.37.2 and < 4.0.0-0` (current lock 3.37.2) and Replicant
 `>= 1.4.0 and < 2.0.0-0` (current lock 1.4.2), plus
 AshOnetime `>= 1.3.2 and < 2.0.0-0` (current lock 1.5.0) and AshCloak
 `>= 0.4.0 and < 1.0.0-0` (current lock 0.4.0; releases below 0.4.0 carry

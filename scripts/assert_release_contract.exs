@@ -6,7 +6,7 @@ defmodule AshReplicant.ReleaseContract do
   @fail_late "${{ !cancelled() && steps.compile.outcome == 'success' }}"
   @immutable_action ~r/\A[^@\s]+@[0-9a-f]{40}\z/
   @pg16_image "postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b"
-  @ash_requirement ">= 3.34.6 and < 4.0.0-0"
+  @ash_requirement ">= 3.37.2 and < 4.0.0-0"
   @replicant_requirement ">= 1.4.0 and < 2.0.0-0"
   @onetime_requirement ">= 1.3.2 and < 2.0.0-0"
   @cloak_requirement ">= 0.4.0 and < 1.0.0-0"
@@ -87,7 +87,7 @@ defmodule AshReplicant.ReleaseContract do
   deps = Mix.Project.config() |> Keyword.fetch!(:deps)
 
   expected = %{
-    ash: ">= 3.34.6 and < 4.0.0-0",
+    ash: ">= 3.37.2 and < 4.0.0-0",
     replicant: ">= 1.4.0 and < 2.0.0-0",
     ash_onetime: ">= 1.3.2 and < 2.0.0-0",
     ash_cloak: ">= 0.4.0 and < 1.0.0-0"
@@ -197,9 +197,9 @@ defmodule AshReplicant.ReleaseContract do
   @matrix [
     %{
       "label" => "exact-floors",
-      "ash_selector" => "3.34.6",
+      "ash_selector" => "3.37.2",
       "ash_unlock" => true,
-      "ash_requirement" => "== 3.34.6",
+      "ash_requirement" => "== 3.37.2",
       "replicant_selector" => "1.4.0",
       "replicant_unlock" => true,
       "replicant_requirement" => "== 1.4.0",
@@ -394,8 +394,8 @@ defmodule AshReplicant.ReleaseContract do
     {"README.md", "### Supported foundation",
      [
        "- Elixir 1.20.3 on Erlang/OTP 29;",
-       "- Ash `#{@ash_requirement}` (current lock 3.34.6);",
-       "- AshPostgres `~> 2.13` (current lock 2.14.5 with AshSql 0.8.1; the latest-compatible cell tests the newest 2.x);",
+       "- Ash `#{@ash_requirement}` (current lock 3.37.2);",
+       "- AshPostgres `~> 2.13` (current lock 2.15.2 with AshSql 0.8.4; the latest-compatible cell tests the newest 2.x);",
        "- Spark `~> 2.7.0` (effective floor 2.7.6 through Ash; current lock 2.7.6);",
        "- Replicant `#{@replicant_requirement}` (current lock 1.4.2)",
        "- AshOnetime `#{@onetime_requirement}` (current lock 1.5.0)",
@@ -411,7 +411,7 @@ defmodule AshReplicant.ReleaseContract do
     {"AGENTS.md", "## Development workflow",
      [
        "The supported release foundation is Elixir 1.20.3 on Erlang/OTP 29 with Ash\n" <>
-         "`#{@ash_requirement}` (current lock 3.34.6) and Replicant\n" <>
+         "`#{@ash_requirement}` (current lock 3.37.2) and Replicant\n" <>
          "`#{@replicant_requirement}` (current lock 1.4.2), plus\n" <>
          "AshOnetime `#{@onetime_requirement}` (current lock 1.5.0) and AshCloak\n" <>
          "`#{@cloak_requirement}` (current lock 0.4.0; releases below 0.4.0 carry\n" <>
