@@ -150,38 +150,26 @@ asdf install
 scripts/with-release-runtime.sh scripts/assert-runtime-version.sh
 scripts/with-release-runtime.sh mix deps.get
 set -a; . ./.env; set +a    # loads ASH_REPLICANT_TEST_URL from the gitignored .env (live lane)
-scripts/prepush.sh          # the declared local gate: every CI gate except mutation gates,
+scripts/prepush.sh          # runs CI's checks locally, except mutation gates,
                             # integration discovery and the performance lane
 ```
 
 The complete release battery is itemized in `CONTRIBUTING.md`; `mix quality` covers only
 format, Credo, and Dialyzer. Unit tests run without a server; integration tests
 (`test/integration/**`, `@moduletag :integration`) need a live logical-replication Postgres and
-skip when unset. **Commit messages state what the containing run proves** (law, 2026-10-02):
+skip when unset. **Commit messages state what the containing run proves:**
 "CI runs X" / "the lanes are green" only about a run whose tested head is that commit, and
 artifact checksums name the exact tree they were built from.
 
-## Workflow (owner ruling, October 28, 2026)
+## Workflow
 
-Process is sized to the risk of the specific change, never the repository. Each check, gate,
-record or review names the failure it prevents.
+Make the change, run the tests that cover it, commit with named paths, and push to `main`.
+CI runs once on `main`; if it goes red, fix forward.
 
-- **Heavy** when the diff touches delivery and the watermark (`sink*`, `apply*`, `checkpoint*`,
-  `append.ex`, `pipeline_owner.ex`), destination admission (`destination*`, `notifier.ex`,
-  `messages.ex`), tenancy and sensitive verification (`resolver.ex`, `resource/verifiers/`),
-  the scrub, telemetry allowlist or quoting home (`error.ex`, `telemetry.ex`, `sql.ex`),
-  status and horizons (`status.ex`, `horizon*`), the doctor probe (`doctor/probe.ex`), the
-  upgrade migration (`upgrade*`), or a dependency floor above. Write the failing test first, get
-  one independent review and do one fix round, and run the declared local gate once before
-  pushing. Heavy pushes need the owner's approval.
-- **Light** for everything else: focused checks on the changed behavior, then push; hosted CI
-  is the gate. No outcome record, gauge or review; the commit message is the record. A light
-  change the owner asked for lands without a separate push approval.
 - Publishing, deploying and pushes to mirrors always need the owner's approval for that action.
 - A test that fails on every run is a defect: fix it, or quarantine it with a reason, in the
   change that finds it.
 - Update the CHANGELOG when behavior, a dependency or a contract changes; other docs only when
   a contract changes.
-- `main` is protected by a ruleset (pull request plus required checks); land through a PR.
 - Tracked docs: root docs, `docs/` (charter, roadmap, ADRs, historical handoffs, instruction
   history) and the tour notebook. Local-only: `.kimosabe/`, `graphify-out/`.

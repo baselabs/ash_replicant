@@ -733,8 +733,8 @@ defmodule AshReplicant.ReleaseContract do
     )
 
     assert(
-      get_in(workflow, ["on", "push", "branches"]) == ["main", "kci/**", "t/**"],
-      "CI landing branch contract is incomplete"
+      get_in(workflow, ["on", "push", "branches"]) == ["main"],
+      "CI push branch contract is invalid"
     )
   end
 
