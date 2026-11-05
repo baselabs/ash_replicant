@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Require Ash `>= 3.37.3 and < 4.0.0-0`. AshSql 0.8.6 and later need it, and
+  every AshSql below 0.8.6 is retired for an Ecto query cache issue. Lock Ash
+  3.37.2 → 3.37.3, AshSql 0.8.4 → 0.8.8 and Ecto 3.14.2 → 3.14.3
+  (`EEF-CVE-2026-118391`, unbounded query cache growth); Spark 2.7.6 → 2.7.9,
+  Igniter 0.8.4 → 0.8.5 and their tooling moved with them. Consumers locked
+  below Ash 3.37.3 must update Ash.
 - Require Ash `>= 3.37.2 and < 4.0.0-0`. This excludes
   `EEF-CVE-2026-96581` (a primary-key upsert ignores attribute
   multitenancy, fixed in Ash 3.37.2) and `EEF-CVE-2026-114214` (a through

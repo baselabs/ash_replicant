@@ -488,7 +488,7 @@ defmodule AshReplicant.DoctorTest do
 
   describe "version mismatches are distinguished on both axes" do
     test "a dependency outside this package's requirement fails" do
-      check = Doctor.check_dependency_requirements(%{replicant: "1.0.0", ash: "3.37.2"})
+      check = Doctor.check_dependency_requirements(%{replicant: "1.0.0", ash: "3.37.3"})
 
       assert check.status == :fail
       assert check.reason == :dependency_version_mismatch
@@ -496,8 +496,9 @@ defmodule AshReplicant.DoctorTest do
     end
 
     test "an Ash release one patch below the security floor fails" do
-      # 3.37.2 fixes EEF-CVE-2026-96581; 3.37.1 is the newest vulnerable release.
-      check = Doctor.check_dependency_requirements(%{replicant: "1.4.0", ash: "3.37.1"})
+      # 3.37.3 is the first Ash that AshSql 0.8.6+ accepts (AshSql 0.8.5 and earlier are
+      # retired); 3.37.2 is one patch below the floor.
+      check = Doctor.check_dependency_requirements(%{replicant: "1.4.0", ash: "3.37.2"})
 
       assert check.status == :fail
       assert check.reason == :dependency_version_mismatch
@@ -505,14 +506,14 @@ defmodule AshReplicant.DoctorTest do
     end
 
     test "an unloaded dependency fails with its own reason" do
-      check = Doctor.check_dependency_requirements(%{replicant: nil, ash: "3.37.2"})
+      check = Doctor.check_dependency_requirements(%{replicant: nil, ash: "3.37.3"})
 
       assert check.status == :fail
       assert check.reason == :dependency_missing
     end
 
     test "loaded versions inside the requirements pass" do
-      check = Doctor.check_dependency_requirements(%{replicant: "1.4.0", ash: "3.37.2"})
+      check = Doctor.check_dependency_requirements(%{replicant: "1.4.0", ash: "3.37.3"})
 
       assert check.status == :pass
     end
@@ -560,7 +561,7 @@ defmodule AshReplicant.DoctorTest do
     end
 
     test "the two version axes never share a reason" do
-      dependency = Doctor.check_dependency_requirements(%{replicant: "1.0.0", ash: "3.37.2"})
+      dependency = Doctor.check_dependency_requirements(%{replicant: "1.0.0", ash: "3.37.3"})
       source = Doctor.check_source_release(140_000, :pgoutput)
 
       assert dependency.reason != source.reason

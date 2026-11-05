@@ -57,9 +57,9 @@ as a transitive dependency.
 The current 1.6.3 release baseline is built and tested with:
 
 - Elixir 1.20.3 on Erlang/OTP 29;
-- Ash `>= 3.37.2 and < 4.0.0-0` (current lock 3.37.2);
-- AshPostgres `~> 2.13` (current lock 2.15.2 with AshSql 0.8.4; the latest-compatible cell tests the newest 2.x);
-- Spark `~> 2.7.0` (effective floor 2.7.6 through Ash; current lock 2.7.6);
+- Ash `>= 3.37.3 and < 4.0.0-0` (current lock 3.37.3);
+- AshPostgres `~> 2.13` (current lock 2.15.2 with AshSql 0.8.8; the latest-compatible cell tests the newest 2.x);
+- Spark `~> 2.7.0` (effective floor 2.7.6 through Ash; current lock 2.7.9);
 - Replicant `>= 1.4.0 and < 2.0.0-0` (current lock 1.4.2);
 - Replicant 1.4's decoder options (`decoder:`, `replication_sets:`, `tables:`,
   `allow_keyless_tables:`, `schema_check_interval:`) are forwarded to the
@@ -84,7 +84,9 @@ in 3.34.3), `EEF-CVE-2026-101028` (related-resource read-policy bypass
 in counts, existence checks, and aggregates, fixed in 3.34.6),
 `EEF-CVE-2026-114214` (a through relationship loaded with a limit of 1
 ignores the through path, fixed in 3.37.1), and `EEF-CVE-2026-96581` (a
-primary-key upsert ignores attribute multitenancy, fixed in 3.37.2). The upper
+primary-key upsert ignores attribute multitenancy, fixed in 3.37.2). It is
+3.37.3 because AshSql 0.8.6 and later (AshSql 0.8.5 and earlier are
+retired for an Ecto query cache issue) require it. The upper
 bound excludes Ash 4 prereleases. The AshCloak lower bound is a security floor:
 every release below 0.4.0 carries CVE-2026-81319 (unsafe deserialization of
 decrypted terms) and CVE-2026-81322 (plaintext leak through a non-sensitive

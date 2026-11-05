@@ -5,7 +5,7 @@ Date: 2026-08-13
 ## Status
 
 Accepted for the 1.0.0 release line. Amended September 29, October 11, and
-October 28, 2026 (the Ash security floor is now `>= 3.37.2 and < 4.0.0-0`).
+October 28, 2026 and November 5, 2026 (the Ash security floor is now `>= 3.37.3 and < 4.0.0-0`).
 
 ## Context
 
@@ -319,3 +319,19 @@ and `need_notifications?` still preserves it in `actions/create/bulk.ex`
 at line 894, with consumers reading `changeset.context.bulk_create.index`.
 AshOnetime is unchanged. ADR-0010's pinned facts hold; no ADR-0010
 amendment is required.
+
+## Amendment (November 5, 2026): Ash floor 3.37.3 for the fixed AshSql
+
+Ash is now `>= 3.37.3 and < 4.0.0-0`. Hex retired every AshSql below 0.8.6
+for an Ecto query cache issue, and AshSql 0.8.8 requires Ash `>= 3.37.3`, so
+the old floor could only resolve with a retired AshSql. The exact-floors CI
+cell, the doctor's runtime requirement and the release contract move to
+3.37.3 together, as in the October 28 amendment.
+
+OBSERVED: `mix deps.unlock ecto ash_sql` then `mix deps.get` moved ash
+3.37.2 → 3.37.3, ash_sql 0.8.4 → 0.8.8, ecto 3.14.2 → 3.14.3
+(`EEF-CVE-2026-118391`), spark 2.7.6 → 2.7.9, igniter 0.8.4 → 0.8.5 and their
+tooling (crux, nimble_options, sourceror, spitfire, splode). Ash 3.37.3 still
+requires Spark `~> 2.7 and >= 2.7.6`, so the Spark requirement stays `~> 2.7.0`.
+`mix hex.audit` at the new lock reports only the ignored Cloak advisory.
+
