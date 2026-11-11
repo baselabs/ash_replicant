@@ -23,6 +23,33 @@ not re-gated. It executes through the
 > [`docs/CHARTER.md`](https://github.com/baselabs/ash_replicant/blob/main/docs/CHARTER.md).
 > Repo-local tool state lives under `.kimosabe/` and `graphify-out/` (gitignored).
 
+## Install and run preflight
+
+Start in an AshPostgres app with Igniter and check the
+[supported runtime and dependency versions](#supported-foundation).
+
+1. Install AshReplicant. The installer generates the host modules and checkpoint
+   migration. The pipeline stays idle until you configure it.
+
+   ```bash
+   mix igniter.install ash_replicant
+   ```
+
+2. [Configure the source and map its tables](#after-either-path). For the
+   default `pgoutput` decoder, supply the connection, publication, and source
+   identity. Map or explicitly ignore every published table and set replica
+   identity where required.
+3. From your app, run preflight against the generated pipeline module:
+
+   ```bash
+   mix ash_replicant.preflight --pipeline MyApp.Replicant.Pipeline
+   ```
+
+   A passing report ends with `status=pass exit_code=0`. Review any skipped
+   checks before activation. Preflight performs no writes, starts no pipeline,
+   and reads no checkpoint. See the [exit codes](#exit-codes) for other
+   outcomes. Review and apply the checkpoint migration before starting delivery.
+
 ## Layering
 
 ```
@@ -111,11 +138,8 @@ records the Replicant 1.x compatibility and release-order contract.
 
 ### Install with Igniter
 
-```bash
-mix igniter.install ash_replicant
-```
-
-That adds the dependency and runs `mix ash_replicant.install`, which generates the
+The [Igniter command above](#install-and-run-preflight) adds the dependency and
+runs `mix ash_replicant.install`, which generates the
 domain, checkpoint, sink, and pipeline supervisor; registers the domain; supervises
 the pipeline; imports AshReplicant's formatter metadata; and queues
 `mix ash.codegen install_ash_replicant` for the checkpoint migration. In an app
