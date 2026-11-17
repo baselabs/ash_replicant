@@ -1,6 +1,8 @@
 defmodule AshReplicant.Test.PG do
   @moduledoc "Live-PG16 gating, the committing-sandbox switch, and a condition poller for the integration marquee."
 
+  alias Ecto.Adapters.SQL.Sandbox
+
   @doc "True iff the live substrate URL is set (gates `:integration` tests)."
   @spec enabled?() :: boolean()
   def enabled?, do: System.get_env("ASH_REPLICANT_TEST_URL") not in [nil, ""]
@@ -24,10 +26,10 @@ defmodule AshReplicant.Test.PG do
   """
   @spec auto_sandbox!() :: :ok
   def auto_sandbox! do
-    :ok = Ecto.Adapters.SQL.Sandbox.mode(AshReplicant.TestRepo, :auto)
+    :ok = Sandbox.mode(AshReplicant.TestRepo, :auto)
 
     ExUnit.Callbacks.on_exit(fn ->
-      Ecto.Adapters.SQL.Sandbox.mode(AshReplicant.TestRepo, :manual)
+      Sandbox.mode(AshReplicant.TestRepo, :manual)
     end)
 
     :ok
