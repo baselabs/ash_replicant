@@ -164,13 +164,58 @@ defmodule AshReplicant.Upgrade do
   @doc "Render the current host checkpoint resource snapshot without running codegen."
   @spec render_checkpoint_snapshot(module()) :: String.t()
   def render_checkpoint_snapshot(repo) when is_atom(repo) do
-    repo
-    |> checkpoint_snapshot()
-    |> Map.update!(:custom_indexes, &snapshot_indexes/1)
-    |> Map.update!(:identities, &snapshot_identities/1)
-    |> Jason.encode!(pretty: true)
+    render_checkpoint_snapshot(repo, installed_ash_postgres_version())
+  end
+
+  # The file is the one the host's own `mix ash.codegen` writes for this table:
+  # the resource snapshot after AshPostgres merges every resource on the table,
+  # which gives each attribute `precision` and `scale`, encoded with sorted keys.
+  # Its hash follows the host's AshPostgres: 2.16 and later hash that encoded
+  # file without its hash; earlier versions hash the inspected resource snapshot
+  # from before the merge.
+  @doc false
+  def render_checkpoint_snapshot(repo, ash_postgres_version)
+      when is_atom(repo) and is_binary(ash_postgres_version) do
+    resource_snapshot = checkpoint_snapshot(repo, ash_postgres_version)
+    written_snapshot = merged_snapshot(resource_snapshot)
+
+    hash_input =
+      if Version.match?(ash_postgres_version, ">= 2.16.0"),
+        do: encode_snapshot(written_snapshot),
+        else: inspect(resource_snapshot)
+
+    hash = :sha256 |> :crypto.hash(hash_input) |> Base.encode16()
+
+    written_snapshot
+    |> Map.put(:hash, hash)
+    |> encode_snapshot()
     |> Kernel.<>("\n")
   end
+
+  defp merged_snapshot(snapshot) do
+    Map.update!(snapshot, :attributes, fn attributes ->
+      Enum.map(attributes, &Map.merge(&1, %{precision: nil, scale: nil}))
+    end)
+  end
+
+  defp encode_snapshot(snapshot) do
+    snapshot
+    |> Map.update!(:custom_indexes, &snapshot_indexes/1)
+    |> Map.update!(:identities, &snapshot_identities/1)
+    |> ordered_object()
+    |> Jason.encode!(pretty: true)
+  end
+
+  defp ordered_object(value) when is_map(value) do
+    value
+    |> Map.to_list()
+    |> List.keysort(0)
+    |> Enum.map(fn {key, value} -> {key, ordered_object(value)} end)
+    |> Jason.OrderedObject.new()
+  end
+
+  defp ordered_object(value) when is_list(value), do: Enum.map(value, &ordered_object/1)
+  defp ordered_object(value), do: value
 
   defp snapshot_indexes(indexes) do
     Enum.map(indexes, fn index ->
@@ -189,34 +234,56 @@ defmodule AshReplicant.Upgrade do
 
   defp snapshot_identity_keys(keys), do: Enum.map(keys, &%{type: "atom", value: &1})
 
+  # A snapshot is current when AshPostgres would load it as the rendered one. The
+  # hash is write-time metadata AshPostgres never reads, and its algorithm
+  # changed in 2.16, so a file written before a host's AshPostgres upgrade stays
+  # current. Keys AshPostgres fills in on load equal their load defaults.
   @doc false
   def current_checkpoint_snapshot?(content, repo) when is_binary(content) and is_atom(repo) do
-    with {:ok, actual} <- Jason.decode(content),
+    with {:ok, %{} = actual} <- Jason.decode(content),
+         true <- snapshot_hash?(actual["hash"]),
          {:ok, expected} <- render_checkpoint_snapshot(repo) |> Jason.decode() do
-      actual == expected
+      loaded_snapshot(actual) == loaded_snapshot(expected)
     else
       _error -> false
     end
   end
 
+  defp loaded_snapshot(snapshot) do
+    snapshot
+    |> Map.delete("hash")
+    |> Map.put_new("temporal", nil)
+    |> Map.update("attributes", nil, fn
+      attributes when is_list(attributes) -> Enum.map(attributes, &loaded_attribute/1)
+      attributes -> attributes
+    end)
+  end
+
+  defp loaded_attribute(%{} = attribute),
+    do: Map.merge(%{"size" => nil, "precision" => nil, "scale" => nil}, attribute)
+
+  defp loaded_attribute(attribute), do: attribute
+
+  defp snapshot_hash?(hash) when is_binary(hash), do: Regex.match?(~r/\A[0-9A-F]{64}\z/, hash)
+  defp snapshot_hash?(_hash), do: false
+
   @doc false
   def legacy_checkpoint_snapshot?(content, repo) when is_binary(content) and is_atom(repo) do
-    with {:ok, snapshot} <- Jason.decode(content),
+    with {:ok, %{} = snapshot} <- Jason.decode(content),
          true <- snapshot["repo"] == Atom.to_string(repo),
          true <- snapshot["table"] == "ash_replicant_checkpoints",
          true <- is_nil(snapshot["schema"]),
          true <- legacy_attributes?(snapshot["attributes"]),
          true <- legacy_identities?(snapshot["identities"]),
          true <- snapshot["custom_indexes"] == [],
-         hash when is_binary(hash) <- snapshot["hash"],
-         true <- Regex.match?(~r/\A[0-9A-F]{64}\z/, hash) do
+         true <- snapshot_hash?(snapshot["hash"]) do
       true
     else
       _error -> false
     end
   end
 
-  defp checkpoint_snapshot(repo) do
+  defp checkpoint_snapshot(repo, ash_postgres_version) do
     snapshot = %{
       attributes: checkpoint_attributes(),
       table: "ash_replicant_checkpoints",
@@ -259,13 +326,12 @@ defmodule AshReplicant.Upgrade do
       has_create_action: true
     }
 
-    snapshot = put_snapshot_shape(snapshot, installed_ash_postgres_version())
-    hash = snapshot |> inspect() |> then(&:crypto.hash(:sha256, &1)) |> Base.encode16()
-    Map.put(snapshot, :hash, hash)
+    put_snapshot_shape(snapshot, ash_postgres_version)
   end
 
-  # The snapshot, and so its hash, must be the one the host's own AshPostgres
-  # generator writes. AshPostgres 2.14 added the `temporal` key; 2.13 has none.
+  # The resource snapshot, and so its hash, must be the one the host's own
+  # AshPostgres generator takes. AshPostgres 2.14 added the `temporal` key; 2.13
+  # has none.
   @doc false
   def put_snapshot_shape(snapshot, ash_postgres_version) do
     if Version.match?(ash_postgres_version, ">= 2.14.0"),

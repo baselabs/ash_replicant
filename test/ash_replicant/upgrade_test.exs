@@ -120,18 +120,43 @@ defmodule AshReplicant.UpgradeTest do
     assert %{temporal: nil} = Upgrade.put_snapshot_shape(base, "2.14.5")
   end
 
-  test "renders the current checkpoint snapshot from the locked AshPostgres contract" do
-    generated =
-      AshPostgres.MigrationGenerator.get_snapshots(
-        AshReplicant.Test.Checkpoint,
-        [AshReplicant.Test.Checkpoint]
+  test "renders the checkpoint snapshot file the installed AshPostgres generator writes" do
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "ash_replicant_upgrade_snapshot_#{System.unique_integer([:positive])}"
       )
-      |> List.first()
 
+    shell = Mix.shell()
+    Mix.shell(Mix.Shell.Process)
+
+    on_exit(fn ->
+      Mix.shell(shell)
+      File.rm_rf!(root)
+    end)
+
+    AshPostgres.MigrationGenerator.generate([AshReplicant.Test.Domain],
+      snapshot_path: Path.join(root, "snapshots"),
+      migration_path: Path.join(root, "migrations"),
+      tenant_migration_path: Path.join(root, "tenant_migrations"),
+      snapshots_only: true,
+      auto_name: true,
+      format: false,
+      quiet: true,
+      no_shell?: true
+    )
+
+    assert [path] =
+             root
+             |> Path.join("snapshots/*/ash_replicant_checkpoints/*.json")
+             |> Path.wildcard()
+
+    written = File.read!(path)
     snapshot = Upgrade.render_checkpoint_snapshot(AshReplicant.TestRepo)
     decoded = Jason.decode!(snapshot)
 
-    assert decoded["hash"] == generated.hash
+    assert decoded == Jason.decode!(written)
+    assert Upgrade.current_checkpoint_snapshot?(written, AshReplicant.TestRepo)
     assert decoded["repo"] == "Elixir.AshReplicant.TestRepo"
 
     assert Enum.map(decoded["attributes"], & &1["source"]) ==
@@ -141,5 +166,56 @@ defmodule AshReplicant.UpgradeTest do
 
     assert Enum.map(keys, & &1["value"]) ==
              ~w(source_system_id source_database slot_name)
+  end
+
+  test "a current checkpoint snapshot stays current across AshPostgres's 2.16 hash change" do
+    before_2_16 = Upgrade.render_checkpoint_snapshot(AshReplicant.TestRepo, "2.15.2")
+    since_2_16 = Upgrade.render_checkpoint_snapshot(AshReplicant.TestRepo, "2.16.0")
+
+    refute Jason.decode!(before_2_16)["hash"] == Jason.decode!(since_2_16)["hash"]
+
+    assert Map.delete(Jason.decode!(before_2_16), "hash") ==
+             Map.delete(Jason.decode!(since_2_16), "hash")
+
+    assert Upgrade.current_checkpoint_snapshot?(before_2_16, AshReplicant.TestRepo)
+    assert Upgrade.current_checkpoint_snapshot?(since_2_16, AshReplicant.TestRepo)
+  end
+
+  test "a checkpoint snapshot missing keys AshPostgres defaults on load is current" do
+    snapshot =
+      AshReplicant.TestRepo
+      |> Upgrade.render_checkpoint_snapshot()
+      |> Jason.decode!()
+      |> Map.delete("temporal")
+      |> Map.update!("attributes", fn attributes ->
+        Enum.map(attributes, &Map.drop(&1, ["precision", "scale"]))
+      end)
+
+    assert Upgrade.current_checkpoint_snapshot?(Jason.encode!(snapshot), AshReplicant.TestRepo)
+  end
+
+  test "a checkpoint snapshot with other content, or without a snapshot hash, is not current" do
+    rendered = AshReplicant.TestRepo |> Upgrade.render_checkpoint_snapshot() |> Jason.decode!()
+
+    nullable_slot =
+      Map.update!(rendered, "attributes", fn attributes ->
+        Enum.map(attributes, fn
+          %{"source" => "slot_name"} = attribute -> %{attribute | "allow_nil?" => true}
+          attribute -> attribute
+        end)
+      end)
+
+    for snapshot <- [
+          nullable_slot,
+          Map.put(rendered, "repo", "Elixir.MyApp.OtherRepo"),
+          Map.put(rendered, "hash", String.downcase(rendered["hash"])),
+          Map.delete(rendered, "hash"),
+          [rendered]
+        ] do
+      content = Jason.encode!(snapshot)
+
+      refute Upgrade.current_checkpoint_snapshot?(content, AshReplicant.TestRepo)
+      refute Upgrade.legacy_checkpoint_snapshot?(content, AshReplicant.TestRepo)
+    end
   end
 end

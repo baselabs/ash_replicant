@@ -15,6 +15,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each. Both contract scripts print the failing assertion before reporting the
   failure, instead of only "failed".
 
+- `mix ash_replicant.upgrade` writes the checkpoint resource snapshot that the
+  host's own `mix ash.codegen` writes. Each attribute now carries `precision`
+  and `scale`, and the keys are sorted. The hash follows the host's
+  AshPostgres: 2.16 and later hash the encoded snapshot, and earlier versions
+  hash the inspected resource snapshot. Before this change, the task wrote the
+  pre-2.16 hash under AshPostgres 2.16. A snapshot is current when AshPostgres
+  would load it as that file: the hash, which AshPostgres never reads, may come
+  from either algorithm, and keys AshPostgres fills in on load may be absent.
+  Before this change, a rerun refused a current snapshot that `mix ash.codegen`
+  wrote, or that was written before the host upgraded AshPostgres. The task's
+  test now compares against a real generator run.
+
 - StatusLifecycleTest's four halt tests no longer let an abnormal pipeline
   owner exit kill the test through its start_link link. The durable-leg test
   died that way on one PostgreSQL leg in each of CI runs 40681408838 and the
@@ -31,7 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the publication's column list and select only the rows its row filters admit,
   so snapshot records match stream records. 1.5.1 restores
   `QueryBuilder.table_columns/0` and the six-column `table_columns_for/1` rows
-  that `AshReplicant.Coverage` calls. The requirement stays
+  that ash_replicant's coverage census calls. The requirement stays
   `>= 1.4.0 and < 2.0.0-0`; hosts should lock 1.5.1. The newest-dependency
   gate held `main` red until this lock moved.
 - Require Ash `>= 3.37.3 and < 4.0.0-0`. AshSql 0.8.6 and later need it, and
