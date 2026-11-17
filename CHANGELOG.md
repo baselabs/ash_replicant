@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   under separate review check names, and every job uses GitHub-hosted
   `ubuntu-24.04` runners. Pushes to `main`, tags, and releases start no CI run.
 
+- Stop caching CI dependencies and builds. Each `kci/<sha>` run has a new
+  scope, so candidates cannot reuse one another's caches. A cache written on
+  `main` would be restorable by candidates.
+
 - Print the failing release contract or self-test assertion before reporting
   failure.
 

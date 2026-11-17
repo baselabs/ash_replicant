@@ -311,7 +311,6 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
   @checkout "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
   @setup_beam "erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236"
-  @cache "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
   @named_separator_entities ~w(
     af ApplyFunction emsp13 emsp14 emsp ensp hairsp ic InvisibleComma
     InvisibleTimes it lrm MediumSpace nbsp NegativeMediumSpace NegativeThickSpace
@@ -510,14 +509,20 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     replace_once!(@workflow, @checkout, "actions/checkout@not-a-sha")
     assert_invalid!()
 
-    for action <- [@setup_beam, @cache] do
-      prepare_fixture()
-      replace_once!(@workflow, action, action <> "0")
-      assert_invalid!()
-    end
+    prepare_fixture()
+    replace_once!(@workflow, @setup_beam, @setup_beam <> "0")
+    assert_invalid!()
 
     prepare_fixture()
     insert_after_first_checkout!("      - uses: #{@checkout} # unexpected duplicate\n")
+    assert_invalid!()
+
+    prepare_fixture()
+
+    insert_after_first_checkout!(
+      "      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9\n"
+    )
+
     assert_invalid!()
   end
 
@@ -562,40 +567,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       )
 
       assert_invalid!()
-
-      prepare_fixture()
-
-      mutate_job!(
-        job,
-        "          key: ",
-        "          restore-keys: stale-gate-bytes\n          key: "
-      )
-
-      assert_invalid!()
     end)
-
-    for {job, path, key} <- [
-          {"no-database", "deps\n            _build",
-           "${{ runner.os }}-no-db-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}"},
-          {"compatibility", "deps\n            _build\n            priv/plts",
-           "${{ runner.os }}-ash-${{ matrix.label }}-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}"},
-          {"release-artifact", "deps\n            _build",
-           "${{ runner.os }}-release-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}"}
-        ] do
-      prepare_fixture()
-
-      mutate_job!(
-        job,
-        "          path: |\n            #{path}\n",
-        "          path: |\n            #{path}\n            scripts\n            .github/workflows\n"
-      )
-
-      assert_invalid!()
-
-      prepare_fixture()
-      mutate_job!(job, "          key: #{key}\n", "          key: #{key}-stale\n")
-      assert_invalid!()
-    end
   end
 
   defp landing_and_fail_late_probes do

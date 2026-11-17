@@ -25,14 +25,6 @@ jobs:
           elixir-version: ${{ env.ELIXIR_VERSION }}
           otp-version: ${{ env.OTP_VERSION }}
 
-      - name: Cache dependencies and build
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            deps
-            _build
-          key: ${{ runner.os }}-no-db-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}
-
       - run: mix deps.get
       - run: mix deps.compile
       - run: mix compile --warnings-as-errors
@@ -161,15 +153,6 @@ jobs:
           elixir-version: ${{ env.ELIXIR_VERSION }}
           otp-version: ${{ env.OTP_VERSION }}
 
-      - name: Cache dependencies, build, and Dialyzer PLT
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            deps
-            _build
-            priv/plts
-          key: ${{ runner.os }}-ash-${{ matrix.label }}-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}
-
       - name: Resolve and assert dependency versions
         run: |
           if [[ '${{ matrix.label }}' == 'latest-compatible' ]]; then
@@ -263,13 +246,6 @@ jobs:
           elixir-version: ${{ env.ELIXIR_VERSION }}
           otp-version: ${{ env.OTP_VERSION }}
 
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            deps
-            _build
-          key: ${{ runner.os }}-perf-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}
-
       - run: mix deps.get
       - run: mix deps.compile
       - run: mix compile --warnings-as-errors
@@ -314,13 +290,6 @@ jobs:
         with:
           elixir-version: ${{ env.ELIXIR_VERSION }}
           otp-version: ${{ env.OTP_VERSION }}
-
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            deps
-            _build
-          key: ${{ runner.os }}-decoder-${{ matrix.pg_major }}-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}
 
       - name: Build the old-major plugin substrate image
         run: docker build -f test/support/pg_old.dockerfile --build-arg BASE=${{ matrix.base }} -t pgold-plugins:ci .
@@ -369,14 +338,6 @@ jobs:
         with:
           elixir-version: ${{ env.ELIXIR_VERSION }}
           otp-version: ${{ env.OTP_VERSION }}
-
-      - name: Cache dependencies and build
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            deps
-            _build
-          key: ${{ runner.os }}-release-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}
 
       - run: env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix deps.get
       - run: mix deps.compile

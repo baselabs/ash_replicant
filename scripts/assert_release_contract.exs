@@ -16,7 +16,6 @@ defmodule AshReplicant.ReleaseContract do
   @cloak_requirement ">= 0.4.0 and < 1.0.0-0"
   @checkout "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
   @setup_beam "erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236"
-  @cache "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
   @participant_example_start "<!-- ash-replicant-destination-participant-example:start -->"
   @participant_example_end "<!-- ash-replicant-destination-participant-example:end -->"
 
@@ -279,12 +278,6 @@ defmodule AshReplicant.ReleaseContract do
     "no-database" => [
       {:uses, @checkout, :absent},
       {:uses, @setup_beam, @setup_beam_inputs},
-      {:uses, @cache,
-       %{
-         "path" => "deps\n_build\n",
-         "key" =>
-           "${{ runner.os }}-no-db-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}"
-       }},
       {:run, "mix deps.get"},
       {:run, "mix deps.compile"},
       {:run, "mix compile --warnings-as-errors", %{"id" => "compile"}},
@@ -306,12 +299,6 @@ defmodule AshReplicant.ReleaseContract do
       {:uses, @checkout, :absent},
       {:run, String.trim(@postgres_run)},
       {:uses, @setup_beam, @setup_beam_inputs},
-      {:uses, @cache,
-       %{
-         "path" => "deps\n_build\npriv/plts\n",
-         "key" =>
-           "${{ runner.os }}-ash-${{ matrix.label }}-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}"
-       }},
       {:run, String.trim(@resolve_dependencies)},
       {:run, "mix deps.compile"},
       {:run, String.trim(@create_database)},
@@ -331,12 +318,6 @@ defmodule AshReplicant.ReleaseContract do
       {:uses, @checkout, :absent},
       {:run, String.trim(@performance_postgres_run)},
       {:uses, @setup_beam, @setup_beam_inputs},
-      {:uses, @cache,
-       %{
-         "path" => "deps\n_build\n",
-         "key" =>
-           "${{ runner.os }}-perf-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}"
-       }},
       {:run, "mix deps.get"},
       {:run, "mix deps.compile"},
       {:run, "mix compile --warnings-as-errors"},
@@ -347,12 +328,6 @@ defmodule AshReplicant.ReleaseContract do
     "decoder-old-majors" => [
       {:uses, @checkout, :absent},
       {:uses, @setup_beam, @setup_beam_inputs},
-      {:uses, @cache,
-       %{
-         "path" => "deps\n_build\n",
-         "key" =>
-           "${{ runner.os }}-decoder-${{ matrix.pg_major }}-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}"
-       }},
       {:run,
        "docker build -f test/support/pg_old.dockerfile --build-arg BASE=${{ matrix.base }} -t pgold-plugins:ci ."},
       {:run, String.trim(@decoder_postgres_run)},
@@ -366,12 +341,6 @@ defmodule AshReplicant.ReleaseContract do
     "release-artifact" => [
       {:uses, @checkout, :absent},
       {:uses, @setup_beam, @setup_beam_inputs},
-      {:uses, @cache,
-       %{
-         "path" => "deps\n_build\n",
-         "key" =>
-           "${{ runner.os }}-release-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}"
-       }},
       {:run,
        "env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix deps.get"},
       {:run, "mix deps.compile"},
@@ -565,7 +534,6 @@ defmodule AshReplicant.ReleaseContract do
     assert_runtime(workflow)
     assert_jobs(workflow)
     assert_compatibility(workflow)
-    assert_cache_partition(workflow)
     assert_mix_contract(root)
     assert_replicant_contract(root)
     assert_checker_wiring(root)
@@ -852,6 +820,11 @@ defmodule AshReplicant.ReleaseContract do
     assert(actions != [], "CI Action contract is incomplete")
 
     assert(
+      Enum.all?(actions, &(not String.starts_with?(String.downcase(&1), "actions/cache"))),
+      "CI workflows must not use actions/cache"
+    )
+
+    assert(
       Enum.all?(actions, fn action ->
         is_binary(action) and
           (String.starts_with?(action, "./") or Regex.match?(@immutable_action, action))
@@ -939,18 +912,6 @@ defmodule AshReplicant.ReleaseContract do
     assert(
       job["strategy"] == %{"fail-fast" => false, "matrix" => %{"include" => @matrix}},
       "CI Ash compatibility matrix is invalid"
-    )
-  end
-
-  defp assert_cache_partition(workflow) do
-    steps = get_in(workflow, ["jobs", "compatibility", "steps"]) || []
-
-    assert(
-      Enum.any?(steps, fn step ->
-        step["uses"] == @cache and
-          String.contains?(get_in(step, ["with", "key"]) || "", "${{ matrix.label }}")
-      end),
-      "CI compatibility cache contract is incomplete"
     )
   end
 
