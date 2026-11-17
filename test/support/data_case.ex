@@ -2,6 +2,7 @@ defmodule AshReplicant.DataCase do
   @moduledoc "ExUnit case for tests that touch AshReplicant.TestRepo."
   use ExUnit.CaseTemplate
 
+  alias AshReplicant.Test.PG
   alias Ecto.Adapters.SQL.Sandbox
 
   using do
@@ -13,7 +14,7 @@ defmodule AshReplicant.DataCase do
 
   setup tags do
     if tags[:no_sandbox] do
-      :ok = Sandbox.mode(AshReplicant.TestRepo, :auto)
+      :ok = PG.auto_sandbox!()
 
       # A no-sandbox test may hold ONE long auto-mode checkout — the
       # consumer-upgrade test drives a locked migration transaction that
@@ -33,7 +34,6 @@ defmodule AshReplicant.DataCase do
 
       on_exit(fn ->
         :ok = Sandbox.checkin(AshReplicant.TestRepo)
-        Sandbox.mode(AshReplicant.TestRepo, :manual)
       end)
     else
       pid = Sandbox.start_owner!(AshReplicant.TestRepo, shared: not tags[:async])

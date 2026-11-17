@@ -15,7 +15,6 @@ defmodule AshReplicant.EffectOnceScd2Test do
 
   alias AshReplicant.Test.{DestinationObserver, Marquee}
   alias AshReplicant.Test.PG
-  alias Ecto.Adapters.SQL.Sandbox
 
   @slot "marquee_scd2_slot"
 
@@ -25,8 +24,7 @@ defmodule AshReplicant.EffectOnceScd2Test do
     # works under the suite's :manual Sandbox. Run against real committing pooled
     # connections (:auto); restore :manual afterward. Registered FIRST so it runs LAST (LIFO)
     # — the cleanup below still runs while mode is :auto.
-    Sandbox.mode(AshReplicant.TestRepo, :auto)
-    on_exit(fn -> Sandbox.mode(AshReplicant.TestRepo, :manual) end)
+    PG.auto_sandbox!()
 
     Marquee.setup_scd2_schema!()
     run_id = "scd2-#{System.unique_integer([:positive])}"

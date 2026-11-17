@@ -14,6 +14,7 @@ defmodule AshReplicant.StartLinkTest do
   alias AshReplicant.Destination.Generation
   alias AshReplicant.Sink.Impl
   alias AshReplicant.Test.DestinationFixtures
+  alias AshReplicant.Test.PG
 
   defmodule DupSink do
     use AshReplicant.Sink,
@@ -661,7 +662,7 @@ defmodule AshReplicant.StartLinkTest do
   # node-local leg stays right; the durable evidence died with the restart).
   @tag :integration
   test "an advance committing during a stop cannot erase the durable stop tombstone" do
-    SQL.Sandbox.mode(AshReplicant.TestRepo, :auto)
+    PG.auto_sandbox!()
     checkpoint = AshReplicant.Test.Checkpoint
     observer = self()
 
@@ -673,7 +674,6 @@ defmodule AshReplicant.StartLinkTest do
       )
 
       :persistent_term.erase({AshReplicant.Status, "lease_slot"})
-      SQL.Sandbox.mode(AshReplicant.TestRepo, :manual)
     end
 
     on_exit(cleanup)

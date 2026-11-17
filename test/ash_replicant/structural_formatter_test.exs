@@ -1,10 +1,15 @@
 defmodule AshReplicant.StructuralFormatterTest do
   @moduledoc """
-  The value-free battery receipt: a FAILED line must NAME the failing test and
-  locate the failing ASSERTION by the first project frame of its stacktrace —
-  module+name alone cannot say which assert of a multi-assert marquee tripped,
-  which is exactly the diagnostic the intermittent-red investigations needed.
-  The line stays structural: authored names plus a file:line, never row data.
+  The value-free battery receipt: a FAILED line must NAME the failing test,
+  locate the failing assertion by the first project frame of its stacktrace,
+  and say what kind of failure it was. Module and name alone cannot say which
+  assert of a multi-assert marquee tripped. The line stays structural:
+  authored names, a file:line and a failure class, never row data.
+
+  The failures here are the `{kind, reason, stacktrace}` tuples ExUnit
+  reports, captured from real raises and exits rather than written by hand.
+  The formatter once read a map shape ExUnit never produces, and every real
+  failure printed "(no repo frame)" while hand-written fixtures passed.
   """
 
   use ExUnit.Case, async: true
@@ -12,73 +17,90 @@ defmodule AshReplicant.StructuralFormatterTest do
   alias AshReplicant.StructuralFormatter
 
   describe "failed_line/1" do
-    test "names module and test and appends the first project frame" do
-      failure = %{
-        reason: :assertion,
-        trace: [
-          {ExUnit.Assertions, :assert, 2,
-           [file: ~c"lib/ex_unit/lib/ex_unit/assertions.ex", line: 71]},
-          {AshReplicant.SnapshotPipelineTest, :"-test an incomplete.../1-fun-0-", 1,
-           [file: ~c"test/integration/snapshot_pipeline_test.exs", line: 175]}
-        ]
-      }
+    test "names module and test, appends the first project frame and the class" do
+      {failure, line} = capture_raise()
 
-      event = %ExUnit.Test{
-        module: AshReplicant.SnapshotPipelineTest,
-        name: :"test an incomplete v1 snapshot halts until operator reset",
-        state: {:failed, [failure]}
-      }
-
-      assert StructuralFormatter.failed_line(event) ==
-               "FAILED: Elixir.AshReplicant.SnapshotPipelineTest :: " <>
-                 "test an incomplete v1 snapshot halts until operator reset " <>
-                 "(test/integration/snapshot_pipeline_test.exs:175)"
+      assert StructuralFormatter.failed_line(failed(failure)) ==
+               "FAILED: Elixir.AshReplicant.StructuralFormatterTest :: test captured " <>
+                 "(test/ash_replicant/structural_formatter_test.exs:#{line}; " <>
+                 "error ExUnit.AssertionError)"
     end
 
-    test "a stacktrace with no project frame NAMES the absence — a timeout-shaped failure self-classifies" do
-      # A bare FAILED line (no site) is itself evidence: assert failures
-      # carry the test module's frame, so its absence marks the timeout /
-      # kill class. The 1.6.0 latest-compatible cell lost exactly this
-      # diagnosis — the bare line said nothing and the rerun destroyed the
-      # state. The fixed suffix turns absence into a signal, value-free.
-      failure = %{
-        reason: :assertion,
-        trace: [
-          {ExUnit.Assertions, :assert, 2, [file: ~c"lib/ex_unit/assertions.ex", line: 71]}
-        ]
-      }
+    test "an exception's values never reach the line" do
+      secret = "postgres://operator:do-not-print@example.invalid/source"
 
-      event = %ExUnit.Test{
-        module: AshReplicant.StartLinkTest,
-        name: :"test no project frames",
-        state: {:failed, [failure]}
-      }
+      failure =
+        try do
+          raise ArgumentError, secret
+        rescue
+          error -> {:error, error, __STACKTRACE__}
+        end
 
-      assert StructuralFormatter.failed_line(event) ==
-               "FAILED: Elixir.AshReplicant.StartLinkTest :: test no project frames " <>
-                 "(no repo frame)"
+      line = StructuralFormatter.failed_line(failed(failure))
+
+      refute line =~ secret
+      assert line =~ "; error ArgumentError)"
     end
 
-    test "skips earlier project frames from dependencies, keeps the first repo frame" do
-      failure = %{
-        reason: :assertion,
-        trace: [
-          {:erl_eval, :do_apply, 6, [file: ~c"erl_eval.erl", line: 1]},
-          {AshReplicant.Impl, :handle_snapshot, 2,
-           [file: ~c"lib/ash_replicant/sink/impl.ex", line: 465]},
-          {SomeDep.Helper, :run, 1, [file: ~c"deps/some_dep/lib/helper.ex", line: 9]}
-        ]
-      }
+    test "a linked exit with no project frame names its absence and its class" do
+      # ExUnit reports a test killed by a linked process as {{:EXIT, pid},
+      # reason, []}. The exit reason is a runtime value and stays out.
+      failure = {{:EXIT, self()}, {:shutdown, "do-not-print"}, []}
 
-      event = %ExUnit.Test{
-        module: AshReplicant.SinkTest,
-        name: :"test dep frames are skipped",
-        state: {:failed, [failure]}
-      }
+      line = StructuralFormatter.failed_line(failed(failure))
 
-      assert StructuralFormatter.failed_line(event) ==
-               "FAILED: Elixir.AshReplicant.SinkTest :: test dep frames are skipped " <>
-                 "(lib/ash_replicant/sink/impl.ex:465)"
+      assert line ==
+               "FAILED: Elixir.AshReplicant.StructuralFormatterTest :: test captured " <>
+                 "(no repo frame; linked exit)"
+    end
+
+    test "a timeout names ExUnit's timeout error" do
+      failure = {:error, %ExUnit.TimeoutError{timeout: 60_000, type: "test"}, []}
+
+      assert StructuralFormatter.failed_line(failed(failure)) =~
+               "(no repo frame; error ExUnit.TimeoutError)"
+    end
+
+    test "skips dependency and OTP frames, keeps the first repo frame" do
+      failure =
+        {:error, %RuntimeError{message: "x"},
+         [
+           {:erl_eval, :do_apply, 6, [file: ~c"erl_eval.erl", line: 1]},
+           {AshReplicant.Impl, :handle_snapshot, 2,
+            [file: ~c"lib/ash_replicant/sink/impl.ex", line: 465]},
+           {SomeDep.Helper, :run, 1, [file: ~c"deps/some_dep/lib/helper.ex", line: 9]}
+         ]}
+
+      assert StructuralFormatter.failed_line(failed(failure)) ==
+               "FAILED: Elixir.AshReplicant.StructuralFormatterTest :: test captured " <>
+                 "(lib/ash_replicant/sink/impl.ex:465; error RuntimeError)"
+    end
+
+    test "the site and class come from the first failure that has a repo frame" do
+      {located, line} = capture_raise()
+      thrown = {:throw, :value, [{:erl_eval, :do_apply, 6, [file: ~c"erl_eval.erl", line: 1]}]}
+
+      assert StructuralFormatter.failed_line(failed([thrown, located])) =~
+               "(test/ash_replicant/structural_formatter_test.exs:#{line}; " <>
+                 "error ExUnit.AssertionError)"
+    end
+  end
+
+  defp failed(failures) do
+    %ExUnit.Test{
+      module: __MODULE__,
+      name: :"test captured",
+      state: {:failed, List.wrap(failures)}
+    }
+  end
+
+  defp capture_raise do
+    line = __ENV__.line + 3
+
+    try do
+      assert 1 + 1 == 3
+    rescue
+      error -> {{:error, error, __STACKTRACE__}, line}
     end
   end
 end

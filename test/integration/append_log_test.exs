@@ -16,7 +16,6 @@ defmodule AshReplicant.AppendLogTest do
   @moduletag timeout: 180_000
 
   alias AshReplicant.Test.{AppendMarquee, PG}
-  alias Ecto.Adapters.SQL.Sandbox
 
   @stream_slot AppendMarquee.stream_slot()
   @snapshot_slot AppendMarquee.snapshot_slot()
@@ -26,8 +25,7 @@ defmodule AshReplicant.AppendLogTest do
     # The pipeline's own processes do real committing writes, and logical
     # replication only sees COMMITTED source rows — neither works under the
     # suite's :manual sandbox.
-    Sandbox.mode(AshReplicant.TestRepo, :auto)
-    on_exit(fn -> Sandbox.mode(AshReplicant.TestRepo, :manual) end)
+    PG.auto_sandbox!()
 
     AppendMarquee.setup_schema!()
     reset_slot!(@stream_slot)

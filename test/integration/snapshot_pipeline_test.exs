@@ -26,7 +26,6 @@ defmodule AshReplicant.SnapshotPipelineTest do
   import ExUnit.CaptureLog
 
   alias AshReplicant.Test.{DestinationObserver, Marquee, PG}
-  alias Ecto.Adapters.SQL.Sandbox
 
   @snapshot_slot "snapshot_pipeline_slot"
   @retry_slot "snapshot_retry_slot"
@@ -62,8 +61,7 @@ defmodule AshReplicant.SnapshotPipelineTest do
   end
 
   setup do
-    Sandbox.mode(AshReplicant.TestRepo, :auto)
-    on_exit(fn -> Sandbox.mode(AshReplicant.TestRepo, :manual) end)
+    PG.auto_sandbox!()
 
     Marquee.setup_schema!()
     run_id = "snapshot-#{System.unique_integer([:positive])}"

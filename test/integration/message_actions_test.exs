@@ -314,13 +314,11 @@ defmodule AshReplicant.MessagePipelineTest do
   alias AshOnetime.Store.Postgres, as: OnetimeStore
   alias AshReplicant.Test.{AdmittedGeneration, DestinationObserver, Marquee, Messages, PG}
   alias Ecto.Adapters.SQL
-  alias Ecto.Adapters.SQL.Sandbox
 
   @slot "message_marquee_slot"
 
   setup do
-    Sandbox.mode(AshReplicant.TestRepo, :auto)
-    on_exit(fn -> Sandbox.mode(AshReplicant.TestRepo, :manual) end)
+    PG.auto_sandbox!()
 
     Marquee.setup_schema!()
     Messages.setup_schema!()

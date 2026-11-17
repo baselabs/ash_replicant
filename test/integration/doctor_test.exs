@@ -21,7 +21,7 @@ defmodule AshReplicant.Integration.DoctorTest do
   alias AshReplicant.Doctor
   alias AshReplicant.Doctor.Probe
   alias AshReplicant.Test.Marquee
-  alias Ecto.Adapters.SQL.Sandbox
+  alias AshReplicant.Test.PG
 
   @publication "repl_doctor_diag_pub"
   @source_table "doctor_diag_orders"
@@ -36,7 +36,7 @@ defmodule AshReplicant.Integration.DoctorTest do
   end
 
   setup do
-    Sandbox.mode(AshReplicant.TestRepo, :auto)
+    PG.auto_sandbox!()
 
     Marquee.setup_schema!()
     Marquee.q!("DROP PUBLICATION IF EXISTS #{@publication}")
@@ -51,7 +51,6 @@ defmodule AshReplicant.Integration.DoctorTest do
       stop_quietly(conn)
       Marquee.q!("DROP PUBLICATION IF EXISTS #{@publication}")
       Marquee.q!("DROP TABLE IF EXISTS #{@source_table}")
-      Sandbox.mode(AshReplicant.TestRepo, :manual)
     end)
 
     %{conn: conn}

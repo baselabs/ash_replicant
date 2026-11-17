@@ -85,7 +85,6 @@ defmodule AshReplicant.PerformanceBoundsTest do
   @moduletag capture_log: true
 
   alias AshReplicant.Test.{AppendMarquee, Marquee, PG}
-  alias Ecto.Adapters.SQL.Sandbox
 
   @slot "perf_bounds_slot"
   @publication "repl_perf_bounds_pub"
@@ -119,8 +118,7 @@ defmodule AshReplicant.PerformanceBoundsTest do
   @memory_ceiling_mb 1_024
 
   setup do
-    Sandbox.mode(AshReplicant.TestRepo, :auto)
-    on_exit(fn -> Sandbox.mode(AshReplicant.TestRepo, :manual) end)
+    PG.auto_sandbox!()
 
     Marquee.drop_slot!(@slot)
     Marquee.q!("DELETE FROM ash_replicant_checkpoints WHERE slot_name = $1", [@slot])

@@ -168,15 +168,13 @@ defmodule AshReplicant.EffectOnceDiscriminatorTest do
 
   alias AshReplicant.Test.{DestinationObserver, Marquee}
   alias AshReplicant.Test.PG
-  alias Ecto.Adapters.SQL.Sandbox
 
   @slot "d1_discriminator_slot"
   @publication "repl_d1_pub"
   @src "d1_src"
 
   setup do
-    on_exit(fn -> Sandbox.mode(AshReplicant.TestRepo, :manual) end)
-    Sandbox.mode(AshReplicant.TestRepo, :auto)
+    PG.auto_sandbox!()
 
     Marquee.setup_schema!()
     Marquee.drop_slot!(@slot)

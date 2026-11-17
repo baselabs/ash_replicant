@@ -9,7 +9,6 @@ defmodule AshReplicant.SessionIdentityTest do
   @moduletag :integration
 
   alias AshReplicant.Test.{Marquee, PG}
-  alias Ecto.Adapters.SQL.Sandbox
 
   @slot "identity_order_slot"
 
@@ -23,8 +22,7 @@ defmodule AshReplicant.SessionIdentityTest do
   end
 
   setup do
-    Sandbox.mode(AshReplicant.TestRepo, :auto)
-    on_exit(fn -> Sandbox.mode(AshReplicant.TestRepo, :manual) end)
+    PG.auto_sandbox!()
 
     Marquee.setup_schema!()
     Marquee.drop_slot!(@slot)

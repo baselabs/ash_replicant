@@ -69,7 +69,6 @@ defmodule AshReplicant.IncrementalSnapshotPipelineTest do
 
   alias AshReplicant.Snapshot.State
   alias AshReplicant.Test.{Marquee, PG}
-  alias Ecto.Adapters.SQL.Sandbox
 
   @slot "incremental_snapshot_pipeline_slot"
   @publication "repl_incremental_snapshot_pub"
@@ -77,8 +76,7 @@ defmodule AshReplicant.IncrementalSnapshotPipelineTest do
   @target "repl_incremental_mirror_orders"
 
   setup do
-    Sandbox.mode(AshReplicant.TestRepo, :auto)
-    on_exit(fn -> Sandbox.mode(AshReplicant.TestRepo, :manual) end)
+    PG.auto_sandbox!()
 
     Marquee.drop_slot!(@slot)
     q!("DROP PUBLICATION IF EXISTS #{@publication}")

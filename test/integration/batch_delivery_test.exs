@@ -551,13 +551,11 @@ defmodule AshReplicant.BatchPipelineTest do
 
   alias AshReplicant.BatchMarqueeSink
   alias AshReplicant.Test.{DestinationObserver, Marquee, Messages, PG}
-  alias Ecto.Adapters.SQL.Sandbox
 
   @slot "batch_marquee_slot"
 
   setup do
-    Sandbox.mode(AshReplicant.TestRepo, :auto)
-    on_exit(fn -> Sandbox.mode(AshReplicant.TestRepo, :manual) end)
+    PG.auto_sandbox!()
 
     Marquee.setup_schema!()
     Messages.setup_schema!()

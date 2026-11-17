@@ -3,9 +3,12 @@ defmodule AshReplicant.StatusLifecycleTest do
   O02 (issue #12): the six lifecycle states as LIVE transitions of the real
   `AshReplicant.PipelineOwner` — the tombstone writers, the adoption-window
   safety of the `:status` call, and the concurrent start/stop/crash matrix.
-  Database-free (the `PipelineOwnerTest` port-1 precedent): the source
-  connection deliberately fails, the census faults on the substrate-touching
-  checks, and the durable tombstone leg is covered by the integration suite.
+  Source-free (the `PipelineOwnerTest` port-1 precedent): the source
+  connection deliberately fails and the census faults on the
+  substrate-touching checks. The destination never takes a write here: its
+  repo is down in the DB-free suite, and the live suite's `:manual` sandbox
+  gives the owner no connection. The durable tombstone leg's successful
+  write is covered by the integration suite.
   """
 
   use ExUnit.Case, async: false
@@ -16,7 +19,6 @@ defmodule AshReplicant.StatusLifecycleTest do
 
   alias AshReplicant.Destination.Generation
   alias AshReplicant.PipelineOwner
-  alias Ecto.Adapters.SQL.Sandbox
 
   defmodule LifecycleSink do
     @moduledoc false
@@ -64,11 +66,9 @@ defmodule AshReplicant.StatusLifecycleTest do
 
   defp tombstone, do: :persistent_term.get(@tombstone_key, nil)
 
-  # start_link links the owner to this test. An abnormal owner exit would kill
-  # the test with a link exit, which carries no stacktrace, so the battery could
-  # only print "(no repo frame)" (CI run 40681408838 and the PG17 run before it,
-  # neither able to name the cause). Unlinked with the monitor kept, the same
-  # exit FLUNKS at the assertion below with its reason in the local output.
+  # start_link links the owner to this test, so an abnormal owner exit would
+  # kill the test with a link exit that names no assertion. Unlinked with the
+  # monitor kept, the same exit fails at the assertion below with its reason.
   defp start_owner!(opts) do
     assert {:ok, owner} = AshReplicant.start_link(opts)
     Process.unlink(owner)
@@ -192,25 +192,21 @@ defmodule AshReplicant.StatusLifecycleTest do
       end)
     end
 
-    # Window derivation (mechanism-named, not CI-failure-named): startup and
-    # the halt-status poll are covered by the 10s budget the adoption-window
-    # test above already proves sufficient; the attempt window is 5s for a
-    # signal emitted one function call after the already-observed node-local
-    # leg; the outcome window is 10s = 2x the durable write's own 5s
-    # pool+transaction deadline. Nominal worst case ~45s; 120s bounds the
-    # whole test with margin under runner starvation — the 60s first cut was
-    # observed exceeded under a loaded battery, and the formatter's
-    # no-repo-frame receipt named the timeout class.
+    # Window derivation, from the mechanisms: the two polls are 20s each, the
+    # attempt window is 5s for a signal emitted one function call after the
+    # already-observed node-local leg, the outcome window is 10s = 2x the
+    # durable write's own 5s pool + transaction deadline, and the owner's stop
+    # is 15s. Those bounds sum to 70s, past ExUnit's 60s default, so the test
+    # carries its own ceiling.
     @tag timeout: 120_000
     test "when the durable leg cannot write, the value-free telemetry IS the record" do
-      # The repo is not running in this suite — exactly the destination-down
-      # halt condition. The node-local leg still answers, and the durable
-      # leg's failure fires the closed typed event that makes the loss
-      # observable instead of silent. The ATTEMPT event fires first, at the
-      # top of the durable write, BEFORE any destination work: observing it
-      # is what distinguishes a lawful skip from a write that never ran —
-      # the third widening of a blank window (5 -> 20 -> 60) was a bet on CI
-      # load instead of closing exactly that hole.
+      # The halting owner cannot write the destination: the repo is down
+      # (DB-free) or gives it no connection (live, :manual sandbox). The
+      # node-local leg still answers, and the durable leg's failure fires the
+      # closed typed event that makes the loss observable instead of silent.
+      # The ATTEMPT event fires first, at the top of the durable write,
+      # BEFORE any destination work, so a missing attempt names a write that
+      # never ran.
       events = self()
 
       :telemetry.attach_many(
@@ -248,49 +244,18 @@ defmodule AshReplicant.StatusLifecycleTest do
 
         # The outcome is bounded by the write's own budget: the transaction
         # carries a pool + transaction deadline, so the failure event fires
-        # within budget + margin under any load — the load-dependent latency
-        # that outran the historical blank windows lands INSIDE this one by
-        # construction, not by hope.
-        received =
-          receive do
-            {:telemetry, [:ash_replicant, :status, :tombstone_write_failed],
-             %{slot_name: @slot, reason: reason}} ->
-              {:event, reason}
-          after
-            10_000 ->
-              :no_event
-          end
+        # within budget + margin under any load. The write cannot succeed in
+        # either environment: DB-free, the repo is not running and the guard
+        # refuses (:destination_unavailable); live, the suite's :manual
+        # sandbox gives the halting owner no connection, so the bounded
+        # transaction fails (:destination_write_failed). A skip would mean
+        # the write ran on a real connection, which only a sandbox mode
+        # leaked by another module allows (AshReplicant.SandboxModeTest).
+        assert_receive {:telemetry, [:ash_replicant, :status, :tombstone_write_failed],
+                        %{slot_name: @slot, reason: reason}},
+                       10_000
 
-        case received do
-          {:event, reason} ->
-            # DB-free (this suite): the repo is not running, so the guard
-            # itself refuses (:destination_unavailable). Under the live
-            # environment with the sandbox checked out to this test only,
-            # the write is attempted and the bounded transaction fails
-            # (:destination_write_failed). Both are the closed record firing.
-            assert reason in [:destination_unavailable, :destination_write_failed]
-
-          :no_event ->
-            repo = AshReplicant.TestRepo
-
-            if is_pid(Process.whereis(repo)) do
-              {:ok, _} = Sandbox.checkout(repo)
-
-              [[count]] =
-                repo.query!(
-                  "SELECT count(*) FROM ash_replicant_checkpoints WHERE slot_name = $1 AND source_system_id = $2 AND source_database = $3",
-                  [@slot, "741852963", "postgres"]
-                ).rows
-
-              # A PROVEN lawful skip: the attempt was observed above and the
-              # bounded write has terminated (no failure event inside the
-              # budget), and this leg cannot create the row it skips over —
-              # no row, no record owed. Never the un-attempted case.
-              assert count == 0
-            else
-              flunk("durable tombstone record neither fired nor lawfully skipped")
-            end
-        end
+        assert reason in [:destination_unavailable, :destination_write_failed]
 
         assert_owner_stopped_normally(owner)
       end)

@@ -68,7 +68,6 @@ defmodule AshReplicant.IdentifierQuotingTest do
   @moduletag :integration
 
   alias AshReplicant.Test.{Marquee, PG}
-  alias Ecto.Adapters.SQL.Sandbox
 
   @slot "b5_quote_slot"
   @publication "repl_b5_quote_pub"
@@ -77,8 +76,7 @@ defmodule AshReplicant.IdentifierQuotingTest do
   setup do
     # LIFO: the drop-teardown registered below runs FIRST (still under :auto);
     # this mode reset runs LAST, after every query.
-    on_exit(fn -> Sandbox.mode(AshReplicant.TestRepo, :manual) end)
-    Sandbox.mode(AshReplicant.TestRepo, :auto)
+    PG.auto_sandbox!()
     Marquee.setup_schema!()
     Marquee.drop_slot!(@slot)
     Marquee.q!("DELETE FROM ash_replicant_checkpoints WHERE slot_name = $1", [@slot])

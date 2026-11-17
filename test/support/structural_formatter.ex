@@ -46,36 +46,65 @@ defmodule AshReplicant.StructuralFormatter do
   def handle_cast(_event, counts), do: {:noreply, counts}
 
   @doc """
-  The value-free FAILED receipt: authored module + test name, plus the first
-  stack frame from THIS repo's own code. Module + name alone cannot say WHICH
-  assert of a multi-assert marquee tripped — the diagnostic gap that left
-  intermittent battery reds unattributable past the test name. A file:line is
-  authored structure, never a row value; dependency and OTP frames are
-  skipped. Repo frames are identified by the app's module namespace, not by
-  path prefixes — dependency sources also live under `lib/`-shaped paths
-  (e.g. ExUnit's own assertions frame).
+  The value-free FAILED receipt: authored module + test name, the first
+  stack frame from THIS repo's own code, and the failure's class. Module +
+  name alone cannot say WHICH assert of a multi-assert marquee tripped. A
+  file:line is authored structure, never a row value; dependency and OTP
+  frames are skipped. Repo frames are identified by the app's module
+  namespace, not by path prefixes: dependency sources also live under
+  `lib/`-shaped paths (e.g. ExUnit's own assertions frame).
+
+  The class is the failure kind (`error`, `exit`, `throw`, or `linked exit`
+  when a linked process took the test down) plus the exception module when
+  the reason is an exception. Both are authored structure; the reason's own
+  values are never printed.
+
+  ExUnit reports each failure as a `{kind, reason, stacktrace}` tuple. The
+  site and class come from the first failure that carries a repo frame, else
+  from the first failure.
   """
   @app_namespace "AshReplicant"
 
   @spec failed_line(ExUnit.Test.t()) :: String.t()
   def failed_line(%ExUnit.Test{module: module, name: name, state: {:failed, failures}}) do
     base = "FAILED: #{module} :: #{name}"
+    failures = List.wrap(failures)
 
-    case Enum.find_value(List.wrap(failures), &project_frame/1) do
-      {file, line} -> base <> " (#{file}:#{line})"
-      # The ABSENCE of a site is evidence, not silence: assert failures
-      # carry the test module's own frame, so no-repo-frame marks the
-      # timeout/kill class — naming it turns an unattributable battery red
-      # (the 1.6.0 latest-compatible cell) into a self-classifying one.
-      nil -> base <> " (no repo frame)"
+    located =
+      Enum.find_value(failures, fn failure ->
+        with {file, line} <- project_frame(failure), do: {"#{file}:#{line}", failure}
+      end)
+
+    {site, failure} = located || {"no repo frame", List.first(failures)}
+
+    case failure_class(failure) do
+      nil -> base <> " (#{site})"
+      class -> base <> " (#{site}; #{class})"
     end
   end
 
-  defp project_frame(%{trace: trace}) when is_list(trace) do
+  defp project_frame({_kind, _reason, trace}) when is_list(trace) do
     Enum.find_value(trace, &repo_frame/1)
   end
 
   defp project_frame(_other), do: nil
+
+  defp failure_class({kind, reason, _trace}) do
+    case {kind_name(kind), exception_name(reason)} do
+      {nil, _exception} -> nil
+      {kind, nil} -> kind
+      {kind, exception} -> "#{kind} #{exception}"
+    end
+  end
+
+  defp failure_class(_other), do: nil
+
+  defp kind_name(kind) when kind in [:error, :exit, :throw], do: Atom.to_string(kind)
+  defp kind_name({:EXIT, _pid}), do: "linked exit"
+  defp kind_name(_other), do: nil
+
+  defp exception_name(%{__exception__: true, __struct__: module}), do: inspect(module)
+  defp exception_name(_reason), do: nil
 
   defp repo_frame({module, _fun, _arity, file_info})
        when is_atom(module) and is_list(file_info) do

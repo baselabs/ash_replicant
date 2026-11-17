@@ -87,14 +87,13 @@ defmodule AshReplicant.SourceCoverageTest do
 
   alias AshReplicant.Test.CheckpointBinding.{CovIgnoringSink, CovSink}
   alias AshReplicant.Test.{Marquee, PG}
-  alias Ecto.Adapters.SQL.Sandbox
 
   @slot "b3_cov_slot"
   @publication "repl_b3_cov_pub"
   @src "b3_cov_orders"
 
   setup do
-    Sandbox.mode(AshReplicant.TestRepo, :auto)
+    PG.auto_sandbox!()
 
     Marquee.setup_schema!()
     Marquee.drop_slot!(@slot)

@@ -95,7 +95,6 @@ defmodule AshReplicant.CheckpointBindingTest do
   alias AshReplicant.Checkpoint.Identity
   alias AshReplicant.Sink.Impl
   alias AshReplicant.Test.{AdmittedGeneration, Marquee, PG}
-  alias Ecto.Adapters.SQL.Sandbox
 
   @slot "bind_slot"
   @fresh_slot "bind_fresh_slot"
@@ -130,8 +129,7 @@ defmodule AshReplicant.CheckpointBindingTest do
   end
 
   setup do
-    Sandbox.mode(AshReplicant.TestRepo, :auto)
-    on_exit(fn -> Sandbox.mode(AshReplicant.TestRepo, :manual) end)
+    PG.auto_sandbox!()
 
     Marquee.setup_schema!()
 

@@ -70,7 +70,6 @@ defmodule AshReplicant.CensusDriftTest do
 
   alias AshReplicant.Test.CensusDrift.Sink
   alias AshReplicant.Test.{Marquee, PG}
-  alias Ecto.Adapters.SQL.Sandbox
 
   @slot "c01_census_slot"
   @publication "repl_c01_census_pub"
@@ -81,8 +80,7 @@ defmodule AshReplicant.CensusDriftTest do
   @census [interval_ms: 300, jitter_ratio: 0.0, timeout_ms: 250, max_consecutive_faults: 100]
 
   setup do
-    on_exit(fn -> Sandbox.mode(AshReplicant.TestRepo, :manual) end)
-    Sandbox.mode(AshReplicant.TestRepo, :auto)
+    PG.auto_sandbox!()
 
     Marquee.setup_schema!()
     Marquee.drop_slot!(@slot)

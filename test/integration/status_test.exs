@@ -61,8 +61,8 @@ defmodule AshReplicant.StatusIntegrationTest do
   @moduletag :integration
 
   alias AshReplicant.Test.Marquee
+  alias AshReplicant.Test.PG
   alias AshReplicant.Test.Status.Sink
-  alias Ecto.Adapters.SQL.Sandbox
 
   @slot "o02_status_slot"
   @publication "repl_o02_status_pub"
@@ -71,8 +71,7 @@ defmodule AshReplicant.StatusIntegrationTest do
   @census [interval_ms: 200, jitter_ratio: 0.0, timeout_ms: 1_000, max_consecutive_faults: 100]
 
   setup do
-    on_exit(fn -> Sandbox.mode(AshReplicant.TestRepo, :manual) end)
-    Sandbox.mode(AshReplicant.TestRepo, :auto)
+    PG.auto_sandbox!()
 
     Marquee.setup_schema!()
     Marquee.drop_slot!(@slot)

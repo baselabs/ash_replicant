@@ -63,15 +63,13 @@ defmodule AshReplicant.TelemetryConformanceTest do
 
   alias AshReplicant.Telemetry
   alias AshReplicant.Test.{Marquee, PG}
-  alias Ecto.Adapters.SQL.Sandbox
 
   @slot "conf_telemetry_slot"
   @publication "repl_conf_telemetry_pub"
   @src "conf_src_orders"
 
   setup do
-    on_exit(fn -> Sandbox.mode(AshReplicant.TestRepo, :manual) end)
-    Sandbox.mode(AshReplicant.TestRepo, :auto)
+    PG.auto_sandbox!()
     Marquee.setup_schema!()
     Marquee.drop_slot!(@slot)
     Marquee.q!("DELETE FROM ash_replicant_checkpoints WHERE slot_name = $1", [@slot])

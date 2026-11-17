@@ -27,13 +27,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wrote, or that was written before the host upgraded AshPostgres. The task's
   test now compares against a real generator run.
 
-- StatusLifecycleTest's four halt tests no longer let an abnormal pipeline
-  owner exit kill the test through its start_link link. The durable-leg test
-  died that way on one PostgreSQL leg in each of CI runs 40681408838 and the
-  run before it, printing only the formatter's `(no repo frame)` receipt. The
-  tests now unlink the owner, keep a monitor, and assert it stops `:normal`
-  within 15s, so the same exit fails at a named assertion with its reason in
-  the local output (proven red with the owner stopping `:boom`).
+- Tests no longer leak the TestRepo sandbox mode between modules. The mode
+  belongs to the whole pool, and two integration modules switched it to
+  `:auto` without switching it back. ExUnit orders modules by seed, so on some
+  seeds StatusLifecycleTest ran after them: the halting owner's durable
+  tombstone write then found no checkpoint row and skipped, and the test took
+  a branch whose own sandbox checkout could never match, failing on one
+  PostgreSQL leg at a time. Every switch now goes through
+  `AshReplicant.Test.PG.auto_sandbox!/0`, which registers the restore with the
+  switch, and a test refuses any other `Sandbox.mode` call under `test/`.
+  StatusLifecycleTest now requires the durable write's failure event, which is
+  the only outcome its environment allows; its halt tests also unlink the
+  pipeline owner and assert it stops `:normal`, so an abnormal exit fails at a
+  named assertion.
+
+- The test formatter's FAILED line reads ExUnit's real `{kind, reason,
+  stacktrace}` failures. It read a map shape ExUnit never produces, so every
+  failure printed `(no repo frame)` and the line could not tell an assertion
+  from a timeout. It now prints the first repo frame and the failure class:
+  the kind, plus the exception module when there is one, never the reason's
+  values.
 
 ### Security
 

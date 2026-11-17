@@ -86,7 +86,6 @@ defmodule AshReplicant.FaultRecoveryTest do
 
   alias AshReplicant.Test.{DestinationObserver, Marquee, PG}
   alias AshReplicant.Test.FaultRecovery.Sink
-  alias Ecto.Adapters.SQL.Sandbox
 
   @slot "fault_recovery_slot"
   @publication "repl_fault_recovery_pub"
@@ -109,8 +108,7 @@ defmodule AshReplicant.FaultRecoveryTest do
     # repo (the suite's :manual Sandbox has no owner for them) — :auto for
     # the module, restored after. Registered FIRST so it runs LAST (LIFO):
     # the cleanup queries below still execute while mode is :auto.
-    Sandbox.mode(AshReplicant.TestRepo, :auto)
-    on_exit(fn -> Sandbox.mode(AshReplicant.TestRepo, :manual) end)
+    PG.auto_sandbox!()
 
     run_id = "fault-recovery-#{System.unique_integer([:positive])}"
 

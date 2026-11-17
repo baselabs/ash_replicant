@@ -24,7 +24,6 @@ defmodule AshReplicant.DecoderAdmissionTest do
   @moduletag :pgold
 
   alias AshReplicant.Test.{PG, PgOld}
-  alias Ecto.Adapters.SQL.Sandbox
 
   # One resource, one source table: the plugin table set carries exactly this
   # table, and the adapter's strict-coverage rules require the sink's mapped
@@ -95,8 +94,7 @@ defmodule AshReplicant.DecoderAdmissionTest do
 
     # The pipeline's processes write to the destination for real: auto mode
     # (the effect_once_test precedent), restoring :manual afterward.
-    Sandbox.mode(AshReplicant.TestRepo, :auto)
-    on_exit(fn -> Sandbox.mode(AshReplicant.TestRepo, :manual) end)
+    PG.auto_sandbox!()
 
     lane_setup(decoder)
     {:ok, decoder: decoder}

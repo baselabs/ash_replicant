@@ -4,7 +4,6 @@ defmodule AshReplicant.EffectOnceTest do
 
   alias AshReplicant.Test.{DestinationObserver, Marquee}
   alias AshReplicant.Test.PG
-  alias Ecto.Adapters.SQL.Sandbox
 
   @slot "marquee_slot"
 
@@ -16,8 +15,7 @@ defmodule AshReplicant.EffectOnceTest do
     # committing pooled connections (:auto), restoring :manual afterward. This
     # on_exit is registered FIRST so it runs LAST (LIFO): the cleanup queries below
     # still execute while mode is :auto.
-    Sandbox.mode(AshReplicant.TestRepo, :auto)
-    on_exit(fn -> Sandbox.mode(AshReplicant.TestRepo, :manual) end)
+    PG.auto_sandbox!()
 
     Marquee.setup_schema!()
     run_id = "scd1-#{System.unique_integer([:positive])}"

@@ -71,14 +71,13 @@ defmodule AshReplicant.TenantReassignmentTest do
   @moduletag :integration
 
   alias AshReplicant.Test.{Marquee, PG}
-  alias Ecto.Adapters.SQL.Sandbox
 
   @slot "b4_tenant_slot"
   @publication "repl_b4_tenant_pub"
   @src "b4_tenant_orders"
 
   setup do
-    Sandbox.mode(AshReplicant.TestRepo, :auto)
+    PG.auto_sandbox!()
 
     Marquee.setup_schema!()
     Marquee.drop_slot!(@slot)
