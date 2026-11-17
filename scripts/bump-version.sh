@@ -88,9 +88,11 @@ if [[ "$check" == true ]]; then
   echo 'bump-version: anchors PASS (no files changed)'
   exit 0
 fi
-echo "bump-version: next — scripts/prepush.sh, commit, push, watch CI, then tag/release/publish"
-echo "bump-version: publish from the battery-green head only: tag v$new_version at that sha,"
-echo "bump-version:   GitHub release with target_commitish = the TAG's sha (not the branch),"
+echo 'bump-version: next: scripts/prepush.sh, then land the bump commit through kci/<commit>'
+echo "bump-version: qualification; main moves only on that commit's qualified check."
+echo "bump-version: the maintainers' release operator tags and publishes from that qualified commit:"
+echo "bump-version:   tag v$new_version at that sha, then create the GitHub release with"
+echo "bump-version:   target_commitish = the TAG's sha (not the branch),"
 echo "bump-version:   scripts/publish-release.sh $new_version (docs upload with the package),"
-echo "bump-version:   then scripts/verify-release.sh $new_version v$new_version — the"
+echo "bump-version:   then scripts/verify-release.sh $new_version v$new_version for the"
 echo "bump-version:   public-state gate (served checksum, has_docs + hexdocs 200, GH target)."

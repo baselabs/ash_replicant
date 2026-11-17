@@ -9,11 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- CI's push trigger has no `paths-ignore`, so every `kci/**` landing candidate
-  gets a run. The release contract now requires the push trigger to be exactly
-  `main` and `kci/**`, with no path or tag filter, and its self-tests refuse
-  each. Both contract scripts print the failing assertion before reporting the
-  failure, instead of only "failed".
+- Run qualification only for `kci/**` candidate pushes, with a strict `qualified`
+  verdict that requires all ten proof checks. Pull requests run the same proofs
+  under separate review check names, and every job uses GitHub-hosted
+  `ubuntu-24.04` runners. Pushes to `main`, tags, and releases start no CI run.
+
+- Print the failing release contract or self-test assertion before reporting
+  failure.
 
 - `mix ash_replicant.upgrade` writes the checkpoint resource snapshot that the
   host's own `mix ash.codegen` writes. Each attribute now carries `precision`
@@ -79,7 +81,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Pin the decoder-old-majors job's exact release steps, job keys, and environment; reject skipped steps, shell overrides, and BASH_ENV injection in contract self-tests.
 - Collect independent prepush check results after compilation, print a pass/fail table, and exit non-zero on any failure; skip live checks whose database setup failed and allow the fresh consumer to use a separate cluster database.
-- Run CI on `kci/**` and `t/**` landing branches and finish independent checks after successful setup in the no-database and compatibility jobs; keep release artifacts sequential and enforce the exact step controls in the release contract.
+- Finish independent checks after successful setup in the no-database and compatibility jobs; keep release artifacts sequential and enforce the exact step controls in the release contract.
 - Reject retired releases and invalid Hex responses in the newest dependency checker; replay recorded inputs in its self-tests.
 - Keep the Hex credential out of publish arguments and inspect the built package against the release file allowlist before uploading.
 - Require a live database for fresh consumers from Hex and reclaim abandoned consumer databases and replication slots while preserving live runs.

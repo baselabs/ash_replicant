@@ -163,10 +163,15 @@ artifact checksums name the exact tree they were built from.
 
 ## Workflow
 
-Make the change, run the tests that cover it, commit with named paths, and push to `main`.
-CI runs once on `main`; if it goes red, fix forward.
+Make the change, run the tests that cover it, commit with named paths, and land it through
+`kci/<commit>`; `main` moves only on that commit's `qualified` check. If it goes red, fix
+forward in the next commit.
 
-- Publishing, deploying and pushes to mirrors always need the owner's approval for that action.
+An agent working in this repository never releases, deploys or publishes: no `mix hex.publish`,
+no `scripts/publish-release.sh`, no version tag, no GitHub release, no release workflow
+dispatch, and no handling of publish credentials. Its work ends with the commit on `main`;
+the maintainers' release operator ships it and runs `scripts/verify-release.sh`.
+
 - A test that fails on every run is a defect: fix it, or quarantine it with a reason, in the
   change that finds it.
 - Update the CHANGELOG when behavior, a dependency or a contract changes; other docs only when

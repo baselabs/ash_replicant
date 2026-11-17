@@ -5,12 +5,18 @@ implementation =
 Code.require_file(implementation)
 
 defmodule AshReplicant.ReleaseContractSelfTest do
+  alias AshReplicant.ReleaseContract
+  alias AshReplicant.ReleaseContractError
+
   @source_root System.get_env("ASH_REPLICANT_RELEASE_CONTRACT_SOURCE_ROOT") || File.cwd!()
   @fixture_root Path.join(
                   System.tmp_dir!(),
                   "ash-replicant-release-contract-#{System.pid()}-#{System.unique_integer([:positive])}"
                 )
-  @workflow ".github/workflows/ci.yml"
+  @workflow ".github/workflows/qualification.yml"
+  @landing ".github/workflows/ci.yml"
+  @pull_request ".github/workflows/pull-request.yml"
+  @inventory "scripts/qualification-jobs.json"
   @fail_late "${{ !cancelled() && steps.compile.outcome == 'success' }}"
 
   @postgres_run """
@@ -38,13 +44,12 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   scripts/wait-for-postgres.sh pg
   """
 
-  # Mirrors assert_release_contract.exs's @mutation_gates_run byte-for-byte
-  # (the three-file pin set: ci.yml + both contract scripts move TOGETHER).
+  # Mirrors assert_release_contract.exs's @mutation_gates_run byte-for-byte;
+  # qualification.yml and both contract scripts move together.
   @mutation_gates_run """
-  BASE="${{ github.event.before }}"
-  if [ -n "$BASE" ] && [ "$BASE" != "0000000000000000000000000000000000000000" ] \\
-     && git fetch --no-tags --quiet origin "$BASE"; then
-    scripts/run-mutation-gates.py --diff-base "$BASE"
+  BASE="${{ github.event.pull_request.base.sha || 'main' }}"
+  if git fetch --no-tags --quiet origin "$BASE"; then
+    scripts/run-mutation-gates.py --diff-base FETCH_HEAD
   else
     scripts/run-mutation-gates.py
   fi
@@ -113,6 +118,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       "scripts/assert-runtime-version.sh",
       "scripts/test-release-checkers.sh",
       "scripts/test-release-contract.sh",
+      "python3 -B -m unittest discover -s scripts -p 'test_qualify.py'",
       "mix credo --strict",
       "mix deps.audit",
       "env -u ASH_REPLICANT_TEST_URL scripts/run-structural-tests.sh --allow-excluded --exclude integration",
@@ -327,6 +333,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       action_probes()
       action_input_probes()
       landing_and_fail_late_probes()
+      qualification_probes()
       decoder_job_probes()
       command_probes()
       compatibility_probes()
@@ -424,7 +431,13 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     assert_valid!()
 
     prepare_fixture()
-    replace_once!(@workflow, "name: CI", "name: CI\n# Example text: uses: actions/setup-node@v4")
+
+    replace_once!(
+      @workflow,
+      "name: Qualification",
+      "name: Qualification\n# Example text: uses: actions/setup-node@v4"
+    )
+
     assert_valid!()
 
     # A ninth, non-allowlisted apply_ledger occurrence anywhere in lib/ fails
@@ -453,7 +466,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       |> String.trim_trailing()
     )
 
-    assert_valid!()
+    assert_invalid!()
 
     prepare_fixture()
 
@@ -610,9 +623,18 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       assert_invalid!()
     end
 
-    for branches <- ["", "master", "main", "'kci/**'", "main, 'kci/*'", "main, 'kci/**', 't/**'"] do
+    for branches <- [
+          "",
+          "master",
+          "main",
+          "main, 'kci/**'",
+          "main, 'kci/*'",
+          "main, 'kci/**', 't/**'",
+          "'kci/*'",
+          "'kci/**', 't/**'"
+        ] do
       prepare_fixture()
-      replace_once!(@workflow, "branches: [main, 'kci/**']", "branches: [#{branches}]")
+      replace_once!(@landing, "branches: ['kci/**']", "branches: [#{branches}]")
       assert_invalid!()
     end
 
@@ -622,9 +644,9 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       prepare_fixture()
 
       replace_once!(
-        @workflow,
-        "    branches: [main, 'kci/**']\n",
-        "    branches: [main, 'kci/**']\n    #{filter}\n"
+        @landing,
+        "    branches: ['kci/**']\n",
+        "    branches: ['kci/**']\n    #{filter}\n"
       )
 
       assert_invalid!()
@@ -712,6 +734,96 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
       assert_invalid!()
     end
+  end
+
+  defp qualification_probes do
+    prepare_fixture()
+    replace_once!(@landing, "on:\n  push:", "on:\n  pull_request:\n  push:")
+    assert_invalid!()
+
+    prepare_fixture()
+    path = fixture_path(@landing)
+    [caller, _verdict] = String.split(File.read!(path), "\n  qualified:", parts: 2)
+    File.write!(path, caller <> "\n")
+    assert_invalid!()
+
+    for {old, replacement} <- [
+          {"    if: always()\n", ""},
+          {"    needs: [qualification]\n", "    needs: []\n"},
+          {"    needs: [qualification]\n", ""},
+          {"    timeout-minutes: 5\n", "    timeout-minutes: 10\n"},
+          {"      actions: read\n", ""},
+          {"          persist-credentials: false\n", "          persist-credentials: true\n"},
+          {"      - run: python3 scripts/qualify.py\n", "      - run: true\n"},
+          {"          GH_TOKEN: ${{ github.token }}\n", ""},
+          {"          QUALIFICATION_RESULT: ${{ needs.qualification.result }}\n", ""},
+          {"    uses: ./.github/workflows/qualification.yml\n",
+           "    uses: ./.github/workflows/other.yml\n"}
+        ] do
+      prepare_fixture()
+      replace_once!(@landing, old, replacement)
+      assert_invalid!()
+    end
+
+    for declaration <- ["name: qualified", "name: review", "uses: ./other.yml"] do
+      prepare_fixture()
+      path = fixture_path(@pull_request)
+      extra = "\n  qualified:\n    #{declaration}\n    runs-on: ubuntu-24.04\n"
+      File.write!(path, File.read!(path) <> extra)
+      assert_invalid!()
+    end
+
+    prepare_fixture()
+
+    replace_once!(
+      @pull_request,
+      "  checks:\n",
+      "  checks:\n    name: qualified\n"
+    )
+
+    assert_invalid!()
+
+    for workflow <- [@landing, @workflow, @pull_request],
+        runner <- ["self-hosted", "${{ vars.BASELABS_RUNNER || 'ubuntu-24.04' }}"] do
+      prepare_fixture()
+
+      if workflow == @pull_request do
+        replace_once!(
+          workflow,
+          "  checks:\n",
+          "  checks:\n    runs-on: #{runner}\n"
+        )
+      else
+        replace_once!(workflow, "runs-on: ubuntu-24.04", "runs-on: #{runner}")
+      end
+
+      assert_invalid!()
+    end
+
+    # Also reject either runner on an executable PR job, rather than only a caller.
+    for runner <- ["self-hosted", "${{ vars.BASELABS_RUNNER || 'ubuntu-24.04' }}"] do
+      prepare_fixture()
+      path = fixture_path(@pull_request)
+      extra = "\n  extra:\n    runs-on: #{runner}\n    steps:\n      - run: true\n"
+      File.write!(path, File.read!(path) <> extra)
+      assert_invalid!()
+    end
+
+    for mutation <- [&tl/1, &(&1 ++ ["qualification / Extra proof"])] do
+      prepare_fixture()
+      path = fixture_path(@inventory)
+      inventory = path |> File.read!() |> Jason.decode!()
+      File.write!(path, Jason.encode!(mutation.(inventory)))
+      assert_invalid!()
+    end
+
+    prepare_fixture()
+    replace_once!(@workflow, "  workflow_call:\n", "  push:\n")
+    assert_invalid!()
+
+    prepare_fixture()
+    replace_once!(@pull_request, "  pull_request:\n", "  push:\n")
+    assert_invalid!()
   end
 
   defp decoder_job_probes do
@@ -1735,7 +1847,9 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     File.rm_rf!(@fixture_root)
     File.mkdir_p!(Path.join(@fixture_root, ".github/workflows"))
 
-    File.cp!(Path.join(@source_root, @workflow), fixture_path(@workflow))
+    for path <- [@workflow, @landing, @pull_request] do
+      File.cp!(Path.join(@source_root, path), fixture_path(path))
+    end
 
     for path <- [
           "README.md",
@@ -1748,6 +1862,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           "mix.exs",
           "mix.lock",
           "scripts/test-release-checkers.sh",
+          @inventory,
+          "scripts/qualify.py",
           "lib/ash_replicant.ex",
           "lib/ash_replicant/sink.ex",
           "lib/ash_replicant/census.ex",
@@ -1885,16 +2001,20 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
   defp assert_valid! do
     Process.put({__MODULE__, :checks}, Process.get({__MODULE__, :checks}, 0) + 1)
-    AshReplicant.ReleaseContract.run(@fixture_root)
+    ReleaseContract.run(@fixture_root)
   end
 
   defp assert_invalid! do
     Process.put({__MODULE__, :checks}, Process.get({__MODULE__, :checks}, 0) + 1)
-    YamlElixir.read_from_file!(fixture_path(@workflow))
-    AshReplicant.ReleaseContract.run(@fixture_root)
+
+    for path <- [@workflow, @landing, @pull_request] do
+      YamlElixir.read_from_file!(fixture_path(path))
+    end
+
+    ReleaseContract.run(@fixture_root)
     raise "release contract checker accepted a negative fixture"
   rescue
-    AshReplicant.ReleaseContractError -> :ok
+    ReleaseContractError -> :ok
   end
 
   defp with_env(key, value, function) do

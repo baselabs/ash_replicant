@@ -49,7 +49,7 @@ Release evidence is separated by what it proves:
    `scripts/with-release-runtime.sh` gives local commands the same coherent
    Elixir/OTP path. Third-party Actions and the PostgreSQL integration image are
    pinned to immutable digests.
-6. `scripts/assert-release-contract.sh` loads the workflow through the same
+6. `scripts/assert-release-contract.sh` loads the workflows through the same
    YAML decoding model GitHub Actions consumes. It traverses every semantic
    `uses` key, requires immutable third-party Action revisions, requires each
    release command as an independently executable step, and binds the exact
@@ -90,8 +90,20 @@ Release evidence is separated by what it proves:
    and fails if an injected value-shaped
    sentinel from child output ever reaches the runner's own output. The
    matrix runs once in the no-database job and is pinned by the release
-   contract; the compatibility matrices keep running the focused tests on
-   their own dependency builds without repeating the mutations.
+   contract. It fetches the PR base SHA or `main` and scopes the candidate diff
+   with `--diff-base FETCH_HEAD`; an unavailable base or an evidence-machinery
+   change runs the full matrix. The compatibility matrices keep running the
+   focused tests on their own dependency builds without repeating the mutations.
+
+The proof jobs live in `.github/workflows/qualification.yml`, callable only
+through `workflow_call`. `.github/workflows/ci.yml` calls them only for
+`kci/**` pushes, without path or tag filters. Its final `qualified` job reads
+every job of the run and requires the exact ten-check inventory, one completed
+successful execution per check, plus a successful reusable-workflow result.
+`main` moves only on that commit's `qualified` check. Pushes to `main`, tags,
+and releases start nothing. `.github/workflows/pull-request.yml` calls the
+same proofs under review check names, without secrets or a `qualified` check.
+All executable jobs use GitHub-hosted `ubuntu-24.04` runners.
 
 Every new gate needs a red-capable probe against the exact checked-in command or
 script used by CI. A separately implemented “test of the idea” is not evidence
@@ -112,7 +124,9 @@ for the production gate.
 
 - Test split: `test/ash_replicant/checkpoint_policy_test.exs` and
   `test/integration/checkpoint_policy_test.exs`.
-- Gate implementations: `.github/workflows/ci.yml`,
+- Gate implementations: `.github/workflows/qualification.yml`,
+  `.github/workflows/ci.yml`, `.github/workflows/pull-request.yml`,
+  `scripts/qualify.py`, `scripts/qualification-jobs.json`,
   `scripts/run-structural-tests.sh`, `scripts/assert-exunit-output.sh`,
   `scripts/assert-dependency-version.sh`, and
   `scripts/assert-release-contract.sh` with its decoded-YAML validator and

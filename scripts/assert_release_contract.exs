@@ -3,6 +3,10 @@ defmodule AshReplicant.ReleaseContractError do
 end
 
 defmodule AshReplicant.ReleaseContract do
+  alias AshReplicant.ReleaseContractError
+  alias Jason.DecodeError
+  alias YamlElixir.ParsingError
+
   @fail_late "${{ !cancelled() && steps.compile.outcome == 'success' }}"
   @immutable_action ~r/\A[^@\s]+@[0-9a-f]{40}\z/
   @pg16_image "postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b"
@@ -67,16 +71,12 @@ defmodule AshReplicant.ReleaseContract do
   mix ecto.migrate
   """
 
-  # Path-scoped per-push guard-mutation evidence (ADR-0003 discipline kept,
-  # cost scoped): BEFORE names the prior head from the push payload (the
-  # runner template-expands the expression; non-push events yield the empty
-  # string); absent/unfetchable (first push, force push) or an
-  # evidence-machinery diff falls back to the FULL matrix inside the runner.
+  # New candidate refs have no prior push head. Fetch the PR base or main;
+  # an unavailable base or an evidence-machinery diff runs the full matrix.
   @mutation_gates_run """
-  BASE="${{ github.event.before }}"
-  if [ -n "$BASE" ] && [ "$BASE" != "0000000000000000000000000000000000000000" ] \\
-     && git fetch --no-tags --quiet origin "$BASE"; then
-    scripts/run-mutation-gates.py --diff-base "$BASE"
+  BASE="${{ github.event.pull_request.base.sha || 'main' }}"
+  if git fetch --no-tags --quiet origin "$BASE"; then
+    scripts/run-mutation-gates.py --diff-base FETCH_HEAD
   else
     scripts/run-mutation-gates.py
   fi
@@ -293,6 +293,8 @@ defmodule AshReplicant.ReleaseContract do
       {:run, "scripts/assert-runtime-version.sh", %{"if" => @fail_late}},
       {:run, "scripts/test-release-checkers.sh", %{"if" => @fail_late}},
       {:run, "scripts/test-release-contract.sh", %{"if" => @fail_late}},
+      {:run, "python3 -B -m unittest discover -s scripts -p 'test_qualify.py'",
+       %{"if" => @fail_late}},
       {:run, "mix credo --strict", %{"if" => @fail_late}},
       {:run, "mix deps.audit", %{"if" => @fail_late}},
       {:run,
@@ -549,11 +551,18 @@ defmodule AshReplicant.ReleaseContract do
   def package_inspection, do: @package_inspection
 
   def run(root) do
-    workflow = YamlElixir.read_from_file!(Path.join(root, ".github/workflows/ci.yml"))
+    workflow = YamlElixir.read_from_file!(Path.join(root, ".github/workflows/qualification.yml"))
+    landing = YamlElixir.read_from_file!(Path.join(root, ".github/workflows/ci.yml"))
 
+    pull_request =
+      YamlElixir.read_from_file!(Path.join(root, ".github/workflows/pull-request.yml"))
+
+    assert_landing(landing)
+    assert_pull_request(pull_request)
+    assert_qualification(workflow)
+    assert_workflow_runners(root)
+    assert_qualification_inventory(root, workflow)
     assert_runtime(workflow)
-    assert_actions(workflow)
-    assert_workflow_controls(workflow)
     assert_jobs(workflow)
     assert_compatibility(workflow)
     assert_cache_partition(workflow)
@@ -568,7 +577,7 @@ defmodule AshReplicant.ReleaseContract do
     assert_upgrade_contract(root)
     assert_b5_absence_scans(root)
   rescue
-    _error in [YamlElixir.ParsingError, File.Error] -> fail("release contract input is invalid")
+    _error in [ParsingError, File.Error, DecodeError] -> fail("release contract input is invalid")
   end
 
   # U3/B5 (D6): the durable effect ledger stays ABSENT from lib/. The only
@@ -683,9 +692,149 @@ defmodule AshReplicant.ReleaseContract do
   def run_cli(root) do
     run(root)
   rescue
-    error in AshReplicant.ReleaseContractError ->
+    error in ReleaseContractError ->
       IO.puts(:stderr, error.message)
       System.halt(1)
+  end
+
+  defp assert_landing(workflow) do
+    assert(
+      Enum.sort(Map.keys(workflow)) == ~w(concurrency jobs name on permissions) and
+        workflow["name"] == "CI" and workflow["permissions"] == %{"contents" => "read"} and
+        workflow["concurrency"] ==
+          %{"group" => "ci-${{ github.ref }}", "cancel-in-progress" => true},
+      "CI landing workflow control is invalid"
+    )
+
+    assert(
+      workflow["on"] == %{"push" => %{"branches" => ["kci/**"]}},
+      "CI trigger must qualify only candidate branch pushes"
+    )
+
+    jobs = Map.get(workflow, "jobs", %{})
+
+    assert(
+      Enum.sort(Map.keys(jobs)) == ~w(qualification qualified),
+      "CI landing jobs are invalid"
+    )
+
+    assert(
+      jobs["qualification"] == %{"uses" => "./.github/workflows/qualification.yml"},
+      "CI qualification caller is invalid"
+    )
+
+    assert(
+      jobs["qualified"] == %{
+        "name" => "qualified",
+        "if" => "always()",
+        "needs" => ["qualification"],
+        "runs-on" => "ubuntu-24.04",
+        "timeout-minutes" => 5,
+        "permissions" => %{"actions" => "read", "contents" => "read"},
+        "steps" => [
+          %{"uses" => @checkout, "with" => %{"persist-credentials" => false}},
+          %{
+            "run" => "python3 scripts/qualify.py",
+            "env" => %{
+              "GH_TOKEN" => "${{ github.token }}",
+              "QUALIFICATION_RESULT" => "${{ needs.qualification.result }}"
+            }
+          }
+        ]
+      },
+      "CI qualified verdict job contract is invalid"
+    )
+  end
+
+  defp assert_pull_request(workflow) do
+    assert(
+      Enum.sort(Map.keys(workflow)) == ~w(concurrency jobs name on permissions) and
+        workflow["name"] == "Pull request" and
+        workflow["permissions"] == %{"contents" => "read"} and
+        workflow["concurrency"] ==
+          %{
+            "group" => "pr-${{ github.event.pull_request.number }}",
+            "cancel-in-progress" => true
+          },
+      "pull request workflow control is invalid"
+    )
+
+    assert(workflow["on"] == %{"pull_request" => nil}, "pull request trigger is invalid")
+
+    assert(
+      workflow["jobs"] ==
+        %{"checks" => %{"uses" => "./.github/workflows/qualification.yml"}},
+      "pull request jobs must call proofs without a qualified verdict"
+    )
+  end
+
+  defp assert_qualification(workflow) do
+    assert(
+      Enum.sort(Map.keys(workflow)) == ~w(env jobs name on permissions) and
+        workflow["name"] == "Qualification" and
+        workflow["permissions"] == %{"contents" => "read"},
+      "qualification workflow control is invalid"
+    )
+
+    assert(
+      workflow["on"] == %{"workflow_call" => nil},
+      "qualification trigger must be workflow_call only"
+    )
+  end
+
+  defp assert_workflow_runners(root) do
+    root
+    |> Path.join(".github/workflows/*.{yml,yaml}")
+    |> Path.wildcard()
+    |> Enum.flat_map(fn path ->
+      workflow = YamlElixir.read_from_file!(path)
+      assert_actions(workflow)
+      assert_workflow_controls(workflow)
+      Map.values(Map.get(workflow, "jobs", %{}))
+    end)
+    |> Enum.each(fn job ->
+      if Map.has_key?(job, "uses") do
+        assert(not Map.has_key?(job, "runs-on"), "workflow caller cannot select a runner")
+      else
+        assert(job["runs-on"] == "ubuntu-24.04", "workflow job runner must be ubuntu-24.04")
+      end
+    end)
+  end
+
+  defp assert_qualification_inventory(root, workflow) do
+    expected =
+      workflow
+      |> Map.fetch!("jobs")
+      |> Enum.flat_map(fn {_id, job} ->
+        rows = get_in(job, ["strategy", "matrix", "include"]) || [%{}]
+        Enum.map(rows, &qualification_check_name(job["name"], &1))
+      end)
+      |> Enum.sort()
+
+    inventory =
+      root
+      |> Path.join("scripts/qualification-jobs.json")
+      |> File.read!()
+      |> Jason.decode!()
+
+    assert(inventory == expected, "qualification check inventory differs from proof jobs")
+  end
+
+  defp qualification_check_name(name, row) do
+    assert(is_binary(name), "qualification proof job name is missing")
+
+    expanded =
+      Regex.replace(~r/\$\{\{\s*matrix\.([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/, name, fn _match, key ->
+        value = Map.get(row, key) || fail("qualification job matrix name is incomplete")
+        to_string(value)
+      end)
+
+    assert(
+      not String.contains?(expanded, "${{"),
+      "qualification proof job name expression is invalid"
+    )
+
+    "qualification / " <> expanded
   end
 
   defp assert_runtime(workflow) do
@@ -731,22 +880,15 @@ defmodule AshReplicant.ReleaseContract do
       end),
       "CI cannot continue on error"
     )
-
-    assert(
-      get_in(workflow, ["on", "push", "branches"]) == ["main", "kci/**"],
-      "CI push branch contract is invalid"
-    )
-
-    push = get_in(workflow, ["on", "push"])
-
-    assert(
-      is_map(push) and Map.keys(push) == ["branches"],
-      "CI push trigger may filter only by branch"
-    )
   end
 
   defp assert_jobs(workflow) do
     jobs = Map.get(workflow, "jobs", %{})
+
+    assert(
+      Enum.sort(Map.keys(jobs)) == Enum.sort(Map.keys(@job_steps)),
+      "qualification proof job inventory is invalid"
+    )
 
     Enum.each(@job_steps, fn {name, expected_steps} ->
       job = jobs[name] || fail("CI release jobs are incomplete")
@@ -1326,6 +1468,6 @@ defmodule AshReplicant.ReleaseContract do
   defp assert(false, message), do: fail(message)
 
   defp fail(message) do
-    raise AshReplicant.ReleaseContractError, message: message
+    raise ReleaseContractError, message: message
   end
 end

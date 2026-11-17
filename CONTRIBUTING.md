@@ -82,15 +82,14 @@ the live `_build` as their warm cache, so a concurrent `mix compile`,
 `mix format`, or open editor save in the same checkout fails the run with
 `live_tree_mutated` or `baseline` classes that say more about the
 concurrency than about the guards.
-CI's no-database job runs it PATH-SCOPED per push (`--diff-base` = the push
-payload's prior head): only the cells whose guard file or named test changed
-run, so docs/test-only pushes pay minutes instead of hours. The scoping
-fails safe to the FULL matrix — a diff touching the evidence machinery
+CI's no-database job scopes it to the candidate diff: it fetches the pull
+request's base SHA or `main`, then passes `--diff-base FETCH_HEAD`. Only the
+cells whose guard file or named test changed run. The scoping fails safe to
+the FULL matrix — a diff touching the evidence machinery
 (the runner's `FULL_MATRIX_PREFIXES`/`FULL_MATRIX_FILES` set: `scripts/`,
 `config/`, `test/support/`, `priv/`, `.github/`, `mix.exs`, `mix.lock`,
-`.tool-versions`, the test helper) or an unusable base (first push, force
-push) runs everything, and every `--diff-base` path still runs the runner's
-own self-test battery first. Its `--self-test` mode runs only the runner's
+`.tool-versions`, the test helper) or an unavailable base runs everything.
+Every `--diff-base` path still runs the runner's own self-test battery first. Its `--self-test` mode runs only the runner's
 fixture/sentinel battery (including the path-scoping scenarios), and
 `--cells <prefix>` runs a subset while iterating on one guard family.
 The runner deletes inherited Mix build/dependency path overrides and handles
@@ -98,6 +97,16 @@ SIGINT/SIGTERM by stopping the active child process group before scratch cleanup
 
 4. Update `CHANGELOG.md` under `[Unreleased]`.
 5. Open a Pull Request against `main`.
+
+The proof jobs live in `.github/workflows/qualification.yml`, called by
+`.github/workflows/pull-request.yml` for review and `.github/workflows/ci.yml`
+for landing. Every executable job runs on GitHub-hosted `ubuntu-24.04`.
+Qualification runs once per `kci/<commit>` push, with no path or tag filters.
+The final `qualified` check reads the run's complete job inventory and requires
+all ten expected proofs to finish successfully. `main` moves only on that
+commit's `qualified` check; a push to `main`, a tag, or a release starts no run.
+Pull request checks inform review under separate names and receive no secrets.
+If qualification fails, fix forward in the next commit.
 
 
 ### Ash-bump grep procedure (B6 old-contract clause)
@@ -189,15 +198,19 @@ affected tests in the same change, and record the Ash version contract delta in 
 
 ## Shipping a release
 
-The routine is one command per step, in this order:
+The maintainers' release operator performs these steps. An agent's work ends
+with the qualified commit on `main`; agents never tag, release, publish, or
+handle publish credentials.
+
+The operator's routine is one command per step, in this order:
 
 1. `scripts/bump-version.sh NEW_VERSION` — bumps the six version-bearing
    anchors (mix.exs, CHANGELOG fold + fresh `[Unreleased]`, README, notebook,
    CHARTER stamp) and prints the steps below.
 2. `scripts/prepush.sh` — the declared gate, on the bumped tree.
-3. Commit, push, and watch the CI battery to green **on the release head** —
-   that all-green run is the battery of record; the tag, release, and publish
-   bind to it.
+3. Land the bump commit through `kci/<commit>` qualification. `main` moves
+   only on that commit's `qualified` check. The qualified release head is the
+   battery of record; the operator's tag, release, and publish bind to it.
 4. `git tag vNEW_VERSION <sha> && git push origin vNEW_VERSION`.
 5. `gh release create vNEW_VERSION` — then check the release's
    `target_commitish`: GitHub records the BRANCH even when creating from a

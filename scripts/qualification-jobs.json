@@ -1,0 +1,12 @@
+[
+  "qualification / Dependencies current-lock / PostgreSQL 16",
+  "qualification / Dependencies current-lock-pg17 / PostgreSQL 17",
+  "qualification / Dependencies current-lock-pg18 / PostgreSQL 18",
+  "qualification / Dependencies exact-floors / PostgreSQL 16",
+  "qualification / Dependencies latest-compatible / PostgreSQL 16",
+  "qualification / Measured performance bounds",
+  "qualification / No-database tests",
+  "qualification / Plugin decoders / PostgreSQL 12",
+  "qualification / Plugin decoders / PostgreSQL 9.6",
+  "qualification / Selector-free docs and package"
+]
