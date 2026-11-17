@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scope, so candidates cannot reuse one another's caches. A cache written on
   `main` would be restorable by candidates.
 
+- Publish only through the owner-dispatched `Publish to Hex` workflow on a
+  GitHub-hosted runner, with the key only in the protected `publish`
+  environment and passed only to the publish step. Remove
+  `scripts/publish-release.sh`.
+
 - Print the failing release contract or self-test assertion before reporting
   failure.
 

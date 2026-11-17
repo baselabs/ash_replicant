@@ -1,0 +1,53 @@
+name: Publish to Hex
+
+# An owner dispatches this once the version commit has landed on main and its qualified run
+# is green; the v<version> tag goes on that same commit after the Hex read-back.
+# ash_replicant is a public package on hex.pm, so there is no organization step.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  ELIXIR_VERSION: "1.20.3"
+  OTP_VERSION: "29"
+
+jobs:
+  publish:
+    name: Publish
+    # The Hex key belongs only to the protected publish environment. Its deployment branch
+    # policy must admit only main; only an owner's dispatch or re-run may use it.
+    if: contains(fromJSON('["corepay","palermo-git"]'), github.actor) && contains(fromJSON('["corepay","palermo-git"]'), github.triggering_actor)
+    environment: publish
+    # A public repository never uses the build box or its runners.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      MIX_ENV: dev
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236 # v1
+        with:
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+          otp-version: ${{ env.OTP_VERSION }}
+          version-type: strict
+      - run: mix local.hex --force
+      - run: mix local.rebar --force
+      - name: Fetch dependencies
+        run: mix deps.get --check-locked
+      - run: mix docs --warnings-as-errors
+      - name: Build and inspect Hex package
+        run: |
+          env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION scripts/with-release-runtime.sh mix hex.build --output "$RUNNER_TEMP/package.tar"
+          scripts/inspect-release-package.sh "$RUNNER_TEMP/package.tar"
+      # These selectors pin dependencies for the compatibility matrix; if set here, they
+      # would freeze the published requirements to those versions, so they are cleared.
+      - name: Publish to hex.pm
+        env:
+          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
+        run: env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION scripts/with-release-runtime.sh mix hex.publish --yes

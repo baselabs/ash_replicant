@@ -11,7 +11,7 @@ tar -xzf "$work/outer/contents.tar.gz" -C "$work/package"
 cp "$work/outer/metadata.config" "$work/package/hex_metadata.config"
 if ! diff -u "$root/scripts/release-package-files.txt" \
   <(cd "$work/package" && find . \( -type f -o -type l \) | sed 's|^./||' | LC_ALL=C sort); then
-  echo 'publish-release: package files differ from the release allowlist' >&2
+  echo 'inspect-release-package: package files differ from the release allowlist' >&2
   exit 1
 fi
-echo 'publish-release: built package matches the release allowlist'
+echo 'inspect-release-package: built package matches the release allowlist'

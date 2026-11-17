@@ -24,6 +24,12 @@ defmodule AshReplicant.ReleaseContract do
     "otp-version" => "${{ env.OTP_VERSION }}"
   }
 
+  @publish_owner_condition "contains(fromJSON('[\"corepay\",\"palermo-git\"]'), github.actor) && contains(fromJSON('[\"corepay\",\"palermo-git\"]'), github.triggering_actor)"
+  @publish_package_inspection """
+  env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION scripts/with-release-runtime.sh mix hex.build --output "$RUNNER_TEMP/package.tar"
+  scripts/inspect-release-package.sh "$RUNNER_TEMP/package.tar"
+  """
+
   # The image ref rides the matrix (pg_image: the pinned digest ref per
   # cell); the digest pinning is enforced through the exact @matrix match.
   @postgres_run """
@@ -526,8 +532,11 @@ defmodule AshReplicant.ReleaseContract do
     pull_request =
       YamlElixir.read_from_file!(Path.join(root, ".github/workflows/pull-request.yml"))
 
+    publish = YamlElixir.read_from_file!(Path.join(root, ".github/workflows/publish.yml"))
+
     assert_landing(landing)
     assert_pull_request(pull_request)
+    assert_publish(publish)
     assert_qualification(workflow)
     assert_workflow_runners(root)
     assert_qualification_inventory(root, workflow)
@@ -747,6 +756,60 @@ defmodule AshReplicant.ReleaseContract do
     assert(
       workflow["on"] == %{"workflow_call" => nil},
       "qualification trigger must be workflow_call only"
+    )
+  end
+
+  defp assert_publish(workflow) do
+    assert(
+      Enum.sort(Map.keys(workflow)) == ~w(env jobs name on permissions) and
+        workflow["name"] == "Publish to Hex" and
+        workflow["permissions"] == %{"contents" => "read"},
+      "publish workflow control is invalid"
+    )
+
+    assert(
+      workflow["on"] == %{"workflow_dispatch" => nil},
+      "publish trigger must be workflow_dispatch only"
+    )
+
+    assert_runtime(workflow)
+
+    # Exact workflow, job, and step maps keep HEX_API_KEY and secrets references
+    # exclusively in the final publish step's environment.
+    assert(
+      workflow["jobs"] == %{
+        "publish" => %{
+          "name" => "Publish",
+          "if" => @publish_owner_condition,
+          "environment" => "publish",
+          "runs-on" => "ubuntu-24.04",
+          "timeout-minutes" => 15,
+          "permissions" => %{"contents" => "read"},
+          "env" => %{"MIX_ENV" => "dev"},
+          "steps" => [
+            %{"uses" => @checkout, "with" => %{"persist-credentials" => false}},
+            %{
+              "uses" => @setup_beam,
+              "with" => Map.put(@setup_beam_inputs, "version-type", "strict")
+            },
+            %{"run" => "mix local.hex --force"},
+            %{"run" => "mix local.rebar --force"},
+            %{"name" => "Fetch dependencies", "run" => "mix deps.get --check-locked"},
+            %{"run" => "mix docs --warnings-as-errors"},
+            %{
+              "name" => "Build and inspect Hex package",
+              "run" => @publish_package_inspection
+            },
+            %{
+              "name" => "Publish to hex.pm",
+              "env" => %{"HEX_API_KEY" => "${{ secrets.HEX_API_KEY }}"},
+              "run" =>
+                "env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION scripts/with-release-runtime.sh mix hex.publish --yes"
+            }
+          ]
+        }
+      },
+      "publish job contract is invalid"
     )
   end
 

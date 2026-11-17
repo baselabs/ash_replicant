@@ -14,8 +14,10 @@
 # Dependency-foundation lines (Ash / Replicant / AshOnetime ranges and locks)
 # are NEVER touched: the anchors below are exact strings, not a version sed.
 # Next steps after this script: commit the bump with named paths and land it
-# through kci/<commit> qualification. The maintainers' release operator then
-# tags, releases and publishes from that qualified commit.
+# through kci/<commit> qualification. An owner dispatches Publish to Hex on
+# main after that commit's qualified run is green. After the Hex read-back,
+# the release operator tags that commit, creates the GitHub release, verifies
+# the public state, and runs the fresh consumer from Hex.
 set -euo pipefail
 
 new_version="${1:?usage: bump-version.sh NEW_VERSION [--check] (e.g. 1.2.0)}"
@@ -91,9 +93,9 @@ if [[ "$check" == true ]]; then
 fi
 echo 'bump-version: next: commit the bump with named paths and land it through kci/<commit>'
 echo "bump-version: qualification; main moves only on that commit's qualified check."
-echo "bump-version: the maintainers' release operator tags and publishes from that qualified commit:"
-echo "bump-version:   tag v$new_version at that sha, then create the GitHub release with"
-echo "bump-version:   target_commitish = the TAG's sha (not the branch),"
-echo "bump-version:   scripts/publish-release.sh $new_version (docs upload with the package),"
-echo "bump-version:   then scripts/verify-release.sh $new_version v$new_version for the"
-echo "bump-version:   public-state gate (served checksum, has_docs + hexdocs 200, GH target)."
+echo "bump-version: an owner dispatches Publish to Hex on main after that qualified run is green."
+echo "bump-version: after the Hex read-back, the release operator tags v$new_version at that commit,"
+echo "bump-version:   then creates the GitHub release with target_commitish = the tag's sha."
+echo "bump-version:   scripts/verify-release.sh $new_version v$new_version checks the public state"
+echo "bump-version:   (served checksum, has_docs + hexdocs 200, GH target), then run"
+echo "bump-version:   scripts/test-fresh-consumer.sh --from-hex $new_version."

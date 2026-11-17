@@ -203,7 +203,7 @@ like every other commit. Steps 4 to 8 belong to the maintainers' release
 operator alone. An agent's work ends with the qualified commit on `main`;
 agents never tag, release, publish, or handle publish credentials.
 
-One command per step, in this order:
+Follow these steps in order:
 
 1. `scripts/bump-version.sh NEW_VERSION` — bumps the six version-bearing
    anchors (mix.exs, CHANGELOG fold + fresh `[Unreleased]`, README, notebook,
@@ -213,16 +213,21 @@ One command per step, in this order:
 3. Land the bump commit through `kci/<commit>` qualification. `main` moves
    only on that commit's `qualified` check. The qualified release head is the
    battery of record; the operator's tag, release, and publish bind to it.
-4. `git tag vNEW_VERSION <sha> && git push origin vNEW_VERSION`.
-5. `gh release create vNEW_VERSION` — then check the release's
-   `target_commitish`: GitHub records the BRANCH even when creating from a
-   pushed tag, and the contract requires the TAG's sha; PATCH it
+4. An owner dispatches `Publish to Hex` on `main` after the version
+   commit's `qualified` run is green. Publishing runs only through this
+   workflow on a GitHub-hosted runner, never from a workstation. The
+   `HEX_API_KEY` secret belongs only to the protected `publish` environment,
+   whose deployment branch policy must admit only `main`; only the publish
+   step receives it. The workflow fetches locked dependencies, builds docs,
+   and builds and inspects the package with all three dependency selectors
+   cleared before uploading the package and docs.
+5. After the Hex read-back, tag that same qualified version commit:
+   `git tag vNEW_VERSION <sha> && git push origin vNEW_VERSION`.
+6. `gh release create vNEW_VERSION --verify-tag --target <sha>` with the
+   tag's commit SHA as `<sha>`. Check that the release's `target_commitish`
+   equals that SHA. If it names a branch, PATCH it
    (`gh api -X PATCH repos/baselabs/ash_replicant/releases/<id> -f
    target_commitish=<sha>`).
-6. `scripts/publish-release.sh NEW_VERSION` — refuses a dirty tree or
-   HEAD different from `vNEW_VERSION`, clears all three dependency selectors,
-   and loads `HEX_API_KEY` from the repo-root `.env` without printing it.
-   The package and docs upload from the same tagged tree.
 7. `scripts/verify-release.sh NEW_VERSION vNEW_VERSION` — requires a clean
    tree and HEAD equal to the tag. Checks the served Hex checksum against a
    fresh selector-free build, `has_docs: true`, HexDocs HTTP 200, and the
@@ -233,11 +238,9 @@ One command per step, in this order:
    Before publication, `prepush.sh`'s live lane runs this check from the local
    tarball when `ASH_REPLICANT_TEST_URL` is set.
 
-`publish-release.sh VERSION --check` and
-`verify-release.sh VERSION TAG --check` check local preconditions only.
-The publish check builds and inspects its package before any upload.
-They neither publish nor verify public release state. Package inspection
-compares the unpacked files with `scripts/release-package-files.txt`;
+`verify-release.sh VERSION TAG --check` checks local preconditions only;
+it does not verify public release state. The publish workflow's package
+inspection compares the unpacked files with `scripts/release-package-files.txt`;
 review an allowlist change whenever the package gains or drops a file.
 `bump-version.sh VERSION --check` validates the next bump's anchors without writing files.
 

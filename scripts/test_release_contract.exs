@@ -16,8 +16,10 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   @workflow ".github/workflows/qualification.yml"
   @landing ".github/workflows/ci.yml"
   @pull_request ".github/workflows/pull-request.yml"
+  @publish ".github/workflows/publish.yml"
   @inventory "scripts/qualification-jobs.json"
   @fail_late "${{ !cancelled() && steps.compile.outcome == 'success' }}"
+  @publish_owner_condition "contains(fromJSON('[\"corepay\",\"palermo-git\"]'), github.actor) && contains(fromJSON('[\"corepay\",\"palermo-git\"]'), github.triggering_actor)"
 
   @postgres_run """
   docker run -d --name pg \\
@@ -333,6 +335,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       action_input_probes()
       landing_and_fail_late_probes()
       qualification_probes()
+      publish_probes()
       decoder_job_probes()
       command_probes()
       compatibility_probes()
@@ -755,7 +758,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     assert_invalid!()
 
-    for workflow <- [@landing, @workflow, @pull_request],
+    for workflow <- [@landing, @workflow, @pull_request, @publish],
         runner <- ["self-hosted", "${{ vars.BASELABS_RUNNER || 'ubuntu-24.04' }}"] do
       prepare_fixture()
 
@@ -796,6 +799,115 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     prepare_fixture()
     replace_once!(@pull_request, "  pull_request:\n", "  push:\n")
     assert_invalid!()
+  end
+
+  defp publish_probes do
+    for trigger <- ["push", "pull_request"] do
+      prepare_fixture()
+
+      replace_once!(
+        @publish,
+        "  workflow_dispatch:\n",
+        "  workflow_dispatch:\n  #{trigger}:\n"
+      )
+
+      assert_invalid!()
+    end
+
+    for {old, replacement} <- [
+          {"    environment: publish\n", ""},
+          {"    environment: publish\n", "    environment: other\n"},
+          {"mix deps.get --check-locked", "mix deps.get"},
+          {"          persist-credentials: false\n", "          persist-credentials: true\n"},
+          {"          version-type: strict\n", ""},
+          {"    timeout-minutes: 15\n", "    timeout-minutes: 30\n"},
+          {"          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}\n",
+           "          HEX_API_KEY: ${{ secrets.OTHER_KEY }}\n"}
+        ] do
+      prepare_fixture()
+      replace_once!(@publish, old, replacement)
+      assert_invalid!()
+    end
+
+    for condition <- [
+          "",
+          "    if: true\n",
+          "    if: contains(fromJSON('[\"corepay\",\"palermo-git\"]'), github.actor)\n",
+          "    if: #{String.replace(@publish_owner_condition, "palermo-git", "other-actor")}\n"
+        ] do
+      prepare_fixture()
+      replace_once!(@publish, "    if: #{@publish_owner_condition}\n", condition)
+      assert_invalid!()
+    end
+
+    for scope <- [:job, :workflow] do
+      prepare_fixture()
+
+      replace_once!(
+        @publish,
+        "        env:\n          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}\n",
+        ""
+      )
+
+      case scope do
+        :job ->
+          replace_once!(
+            @publish,
+            "      MIX_ENV: dev\n",
+            "      MIX_ENV: dev\n      HEX_API_KEY: ${{ secrets.HEX_API_KEY }}\n"
+          )
+
+        :workflow ->
+          replace_once!(
+            @publish,
+            "  OTP_VERSION: \"29\"\n",
+            "  OTP_VERSION: \"29\"\n  HEX_API_KEY: ${{ secrets.HEX_API_KEY }}\n"
+          )
+      end
+
+      assert_invalid!()
+    end
+
+    prepare_fixture()
+
+    replace_once!(
+      @publish,
+      "      - run: mix docs --warnings-as-errors\n",
+      "      - run: mix docs --warnings-as-errors\n" <>
+        "        env:\n          OTHER_KEY: ${{ secrets.OTHER_KEY }}\n"
+    )
+
+    assert_invalid!()
+    prepare_fixture()
+
+    replace_once!(
+      @publish,
+      "      - name: Build and inspect Hex package\n" <>
+        "        run: |\n" <>
+        "          env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION scripts/with-release-runtime.sh mix hex.build --output \"$RUNNER_TEMP/package.tar\"\n" <>
+        "          scripts/inspect-release-package.sh \"$RUNNER_TEMP/package.tar\"\n",
+      ""
+    )
+
+    assert_invalid!()
+
+    for selector <- [
+          "ASH_REPLICANT_ASH_VERSION",
+          "ASH_REPLICANT_REPLICANT_VERSION",
+          "ASH_REPLICANT_ONETIME_VERSION"
+        ],
+        command <- [
+          "mix hex.build --output \"$RUNNER_TEMP/package.tar\"",
+          "mix hex.publish --yes"
+        ] do
+      prepare_fixture()
+
+      original =
+        "env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION scripts/with-release-runtime.sh #{command}"
+
+      replace_once!(@publish, original, String.replace(original, "-u #{selector} ", ""))
+      assert_invalid!()
+    end
   end
 
   defp decoder_job_probes do
@@ -1819,7 +1931,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     File.rm_rf!(@fixture_root)
     File.mkdir_p!(Path.join(@fixture_root, ".github/workflows"))
 
-    for path <- [@workflow, @landing, @pull_request] do
+    for path <- [@workflow, @landing, @pull_request, @publish] do
       File.cp!(Path.join(@source_root, path), fixture_path(path))
     end
 
@@ -1979,7 +2091,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   defp assert_invalid! do
     Process.put({__MODULE__, :checks}, Process.get({__MODULE__, :checks}, 0) + 1)
 
-    for path <- [@workflow, @landing, @pull_request] do
+    for path <- [@workflow, @landing, @pull_request, @publish] do
       YamlElixir.read_from_file!(fixture_path(path))
     end
 

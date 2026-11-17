@@ -168,9 +168,9 @@ on that commit's `qualified` check. If it goes red, fix forward in the next comm
 bump (`scripts/bump-version.sh`) is an ordinary commit and lands the same way.
 
 An agent working in this repository never releases, deploys or publishes: no `mix hex.publish`,
-no `scripts/publish-release.sh`, no version tag, no GitHub release, no release workflow
-dispatch, and no handling of publish credentials. Its work ends with the commit on `main`;
-the maintainers' release operator ships it and runs `scripts/verify-release.sh`.
+no `Publish to Hex` workflow dispatch, no version tag, no GitHub release, and no handling of
+publish credentials. Its work ends with the commit on `main`; the maintainers' release
+operator ships it and runs `scripts/verify-release.sh`.
 
 - A test that fails on every run is a defect: fix it, or quarantine it with a reason, in the
   change that finds it.
