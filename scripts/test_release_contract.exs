@@ -610,9 +610,9 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       assert_invalid!()
     end
 
-    for branches <- ["", "master", "main, 't/**'", "main, 'kci/**'"] do
+    for branches <- ["", "master", "main", "'kci/**'", "main, 'kci/*'", "main, 'kci/**', 't/**'"] do
       prepare_fixture()
-      replace_once!(@workflow, "branches: [main]", "branches: [#{branches}]")
+      replace_once!(@workflow, "branches: [main, 'kci/**']", "branches: [#{branches}]")
       assert_invalid!()
     end
 
