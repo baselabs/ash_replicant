@@ -21,7 +21,8 @@ defmodule AshReplicant.ReleaseContract do
 
   @setup_beam_inputs %{
     "elixir-version" => "${{ env.ELIXIR_VERSION }}",
-    "otp-version" => "${{ env.OTP_VERSION }}"
+    "otp-version" => "${{ env.OTP_VERSION }}",
+    "version-type" => "strict"
   }
 
   @publish_owner_condition "contains(fromJSON('[\"corepay\",\"palermo-git\"]'), github.actor) && contains(fromJSON('[\"corepay\",\"palermo-git\"]'), github.triggering_actor)"
@@ -157,8 +158,6 @@ defmodule AshReplicant.ReleaseContract do
     },
     "decoder-old-majors" => %{
       "MIX_ENV" => "test",
-      "ELIXIR_VERSION" => "1.20.3",
-      "OTP_VERSION" => "29",
       "ASH_REPLICANT_TEST_URL" => "postgres://postgres@localhost:5432/postgres",
       "ASH_REPLICANT_PGOLD_URL" => "postgres://postgres@localhost:5433/postgres"
     }
@@ -536,11 +535,11 @@ defmodule AshReplicant.ReleaseContract do
 
     assert_landing(landing)
     assert_pull_request(pull_request)
-    assert_publish(publish)
+    assert_publish(publish, root)
     assert_qualification(workflow)
     assert_workflow_runners(root)
     assert_qualification_inventory(root, workflow)
-    assert_runtime(workflow)
+    assert_runtime(workflow, root)
     assert_jobs(workflow)
     assert_compatibility(workflow)
     assert_mix_contract(root)
@@ -759,7 +758,7 @@ defmodule AshReplicant.ReleaseContract do
     )
   end
 
-  defp assert_publish(workflow) do
+  defp assert_publish(workflow, root) do
     assert(
       Enum.sort(Map.keys(workflow)) == ~w(env jobs name on permissions) and
         workflow["name"] == "Publish to Hex" and
@@ -772,7 +771,7 @@ defmodule AshReplicant.ReleaseContract do
       "publish trigger must be workflow_dispatch only"
     )
 
-    assert_runtime(workflow)
+    assert_runtime(workflow, root)
 
     # Exact workflow, job, and step maps keep HEX_API_KEY and secrets references
     # exclusively in the final publish step's environment.
@@ -790,7 +789,7 @@ defmodule AshReplicant.ReleaseContract do
             %{"uses" => @checkout, "with" => %{"persist-credentials" => false}},
             %{
               "uses" => @setup_beam,
-              "with" => Map.put(@setup_beam_inputs, "version-type", "strict")
+              "with" => @setup_beam_inputs
             },
             %{"run" => "mix local.hex --force"},
             %{"run" => "mix local.rebar --force"},
@@ -868,13 +867,45 @@ defmodule AshReplicant.ReleaseContract do
     "qualification / " <> expanded
   end
 
-  defp assert_runtime(workflow) do
+  # setup-beam resolves `version-type: strict` versions exactly, so each workflow
+  # names the exact releases `.tool-versions` pins, the runtime the release
+  # wrapper asserts before it builds or publishes.
+  defp assert_runtime(workflow, root) do
     env = Map.get(workflow, "env", %{})
+    {elixir, otp} = pinned_runtime(root)
 
     assert(
-      env == %{"ELIXIR_VERSION" => "1.20.3", "OTP_VERSION" => "29"},
-      "CI runtime contract is incomplete"
+      env == %{"ELIXIR_VERSION" => elixir, "OTP_VERSION" => otp},
+      "CI runtime differs from .tool-versions"
     )
+  end
+
+  defp pinned_runtime(root) do
+    pins =
+      root
+      |> Path.join(".tool-versions")
+      |> File.read!()
+      |> String.split("\n", trim: true)
+      |> Enum.map(&String.split/1)
+
+    case pins do
+      [["elixir", elixir], ["erlang", otp]] ->
+        case Regex.run(~r/\A(\d+\.\d+\.\d+)-otp-(\d+)\z/, elixir) do
+          [_elixir, version, major] ->
+            assert(
+              Regex.match?(~r/\A#{major}(\.\d+)+\z/, otp),
+              ".tool-versions Elixir and Erlang majors differ"
+            )
+
+            {version, otp}
+
+          nil ->
+            fail(".tool-versions Elixir pin is invalid")
+        end
+
+      _pins ->
+        fail(".tool-versions must pin exactly elixir then erlang")
+    end
   end
 
   defp assert_actions(workflow) do

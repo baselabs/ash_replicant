@@ -9,7 +9,7 @@ permissions:
 
 env:
   ELIXIR_VERSION: "1.20.3"
-  OTP_VERSION: "29"
+  OTP_VERSION: "29.0.3"
 
 jobs:
   no-database:
@@ -24,6 +24,7 @@ jobs:
         with:
           elixir-version: ${{ env.ELIXIR_VERSION }}
           otp-version: ${{ env.OTP_VERSION }}
+          version-type: strict
 
       - run: mix deps.get
       - run: mix deps.compile
@@ -152,6 +153,7 @@ jobs:
         with:
           elixir-version: ${{ env.ELIXIR_VERSION }}
           otp-version: ${{ env.OTP_VERSION }}
+          version-type: strict
 
       - name: Resolve and assert dependency versions
         run: |
@@ -245,6 +247,7 @@ jobs:
         with:
           elixir-version: ${{ env.ELIXIR_VERSION }}
           otp-version: ${{ env.OTP_VERSION }}
+          version-type: strict
 
       - run: mix deps.get
       - run: mix deps.compile
@@ -277,8 +280,6 @@ jobs:
             base: postgres:9.6@sha256:caddd35b05cdd56c614ab1f674e63be778e0abdf54e71a7507ff3e28d4902698
     env:
       MIX_ENV: test
-      ELIXIR_VERSION: 1.20.3
-      OTP_VERSION: "29"
       # Job-level so ecto.create/migrate see the destination too.
       ASH_REPLICANT_TEST_URL: postgres://postgres@localhost:5432/postgres
       ASH_REPLICANT_PGOLD_URL: postgres://postgres@localhost:5433/postgres
@@ -290,6 +291,7 @@ jobs:
         with:
           elixir-version: ${{ env.ELIXIR_VERSION }}
           otp-version: ${{ env.OTP_VERSION }}
+          version-type: strict
 
       - name: Build the old-major plugin substrate image
         run: docker build -f test/support/pg_old.dockerfile --build-arg BASE=${{ matrix.base }} -t pgold-plugins:ci .
@@ -338,6 +340,7 @@ jobs:
         with:
           elixir-version: ${{ env.ELIXIR_VERSION }}
           otp-version: ${{ env.OTP_VERSION }}
+          version-type: strict
 
       - run: env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix deps.get
       - run: mix deps.compile

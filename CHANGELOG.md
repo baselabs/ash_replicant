@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   under separate review check names, and every job uses GitHub-hosted
   `ubuntu-24.04` runners. Pushes to `main`, tags, and releases start no CI run.
 
+- Install the exact Elixir and Erlang/OTP releases `.tool-versions` pins in
+  qualification and publishing, with strict version resolution. The release
+  contract refuses a workflow whose runtime differs from `.tool-versions`, and
+  the release wrapper checks the full OTP release, not only its major.
+
 - Stop caching CI dependencies and builds. Each `kci/<sha>` run has a new
   scope, so candidates cannot reuse one another's caches. A cache written on
   `main` would be restorable by candidates.

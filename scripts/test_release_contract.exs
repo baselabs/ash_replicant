@@ -563,11 +563,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     Enum.each(jobs, fn job ->
       prepare_fixture()
 
-      mutate_job!(
-        job,
-        "          otp-version: ${{ env.OTP_VERSION }}\n",
-        "          otp-version: ${{ env.OTP_VERSION }}\n          version-type: strict\n"
-      )
+      mutate_job!(job, "          version-type: strict\n", "")
 
       assert_invalid!()
     end)
@@ -860,8 +856,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
         :workflow ->
           replace_once!(
             @publish,
-            "  OTP_VERSION: \"29\"\n",
-            "  OTP_VERSION: \"29\"\n  HEX_API_KEY: ${{ secrets.HEX_API_KEY }}\n"
+            "  OTP_VERSION: \"29.0.3\"\n",
+            "  OTP_VERSION: \"29.0.3\"\n  HEX_API_KEY: ${{ secrets.HEX_API_KEY }}\n"
           )
       end
 
@@ -1410,7 +1406,23 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     assert_invalid!()
 
     prepare_fixture()
-    replace_once!(@workflow, "  OTP_VERSION: \"29\"", "  OTP_VERSION: \"28\"")
+    replace_once!(@workflow, "\n  OTP_VERSION: \"29.0.3\"\n", "\n  OTP_VERSION: \"29\"\n")
+    assert_invalid!()
+
+    prepare_fixture()
+    replace_once!(@publish, "\n  OTP_VERSION: \"29.0.3\"\n", "\n  OTP_VERSION: \"29\"\n")
+    assert_invalid!()
+
+    prepare_fixture()
+    replace_once!(@publish, "\n  ELIXIR_VERSION: \"1.20.3\"\n", "\n  ELIXIR_VERSION: \"1.20.2\"\n")
+    assert_invalid!()
+
+    prepare_fixture()
+    replace_once!(".tool-versions", "erlang 29.0.3", "erlang 29.0.4")
+    assert_invalid!()
+
+    prepare_fixture()
+    replace_once!(".tool-versions", "elixir 1.20.3-otp-29", "elixir 1.20.3-otp-28")
     assert_invalid!()
 
     prepare_fixture()
@@ -1943,6 +1955,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           "usage-rules.md",
           "docs/CHARTER.md",
           "docs/adr/0007-source-bound-checkpoint-effect-once.md",
+          ".tool-versions",
           "mix.exs",
           "mix.lock",
           "scripts/test-release-checkers.sh",

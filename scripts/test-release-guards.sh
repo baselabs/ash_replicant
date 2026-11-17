@@ -27,7 +27,8 @@ p = Path("mix.exs")
 p.write_text(re.sub(r'  @version "[^"]+"', '  @version "1.6.3"', p.read_text(), count=1))
 PY
 cp "$root/mix.lock" mix.lock
-git add .gitignore mix.exs mix.lock lib .formatter.exs README.md LICENSE NOTICE CHANGELOG.md usage-rules.md scripts
+cp "$root/.tool-versions" .tool-versions
+git add .gitignore .tool-versions mix.exs mix.lock lib .formatter.exs README.md LICENSE NOTICE CHANGELOG.md usage-rules.md scripts
 git commit -qm 'Record release checker input'
 git tag v1.6.3
 
