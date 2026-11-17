@@ -18,6 +18,35 @@ preserve_failure() {
   # ExUnit.TimeoutError, Postgrex.Error); the banner's message text, which
   # can carry values, is never emitted.
   grep -oE '\*\* \([A-Za-z0-9_.]+\)' "$raw_output" | sort | uniq -c >&2 || true
+  # Emit only source locations that resolve to checked-out source files. Error
+  # messages and stack-frame arguments remain in the private capture.
+  python3 -B - "$raw_output" <<'PYTHON'
+from pathlib import Path
+import re
+import sys
+
+root = Path.cwd()
+frame = re.compile(
+    r"^\s+(?:\(([a-z][a-z0-9_]*) [0-9][^ )]*\) )?"
+    r"((?:lib|test|src)/[A-Za-z0-9_./-]+\.(?:ex|exs|erl)):(\d+):"
+)
+seen = set()
+with open(sys.argv[1], encoding="utf-8", errors="replace") as capture:
+    for line in capture:
+        match = frame.match(line)
+        if not match:
+            continue
+        package, file, number = match.groups()
+        if ".." in Path(file).parts:
+            continue
+        relative = Path(file) if package in (None, "ash_replicant") else Path("deps", package, file)
+        if not (root / relative).is_file():
+            continue
+        site = f"{relative}:{number}"
+        if site not in seen:
+            print(f"ERROR-SITE: {site}", file=sys.stderr)
+            seen.add(site)
+PYTHON
   mv "$raw_output" "$preserved"
   echo "raw output preserved at: $preserved" >&2
 }

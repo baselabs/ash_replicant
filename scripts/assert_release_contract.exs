@@ -135,7 +135,7 @@ defmodule AshReplicant.ReleaseContract do
   fi
   """
 
-  @checker_fixture_project ~S"""
+  @checker_fixture_project """
   defmodule ReleaseChecker.MixProject do
     use Mix.Project
 
@@ -144,7 +144,39 @@ defmodule AshReplicant.ReleaseContract do
         app: :release_checker,
         version: "0.1.0",
         # The lock is recorded audit input; this checker executes no dependencies.
-        deps: []
+        deps: [],
+        # This historical lock is data, never executed (deps is empty and guarded).
+        # These Ash findings therefore have no runtime exposure in this fixture.
+        hex: [ignore_advisories: ["EEF-CVE-2026-96581", "EEF-CVE-2026-114214"]]
+      ]
+    end
+  end
+  """
+
+  @upgrade_fixture_project """
+  defmodule UpgradeFixture.MixProject do
+    use Mix.Project
+
+    def project do
+      [
+        app: :upgrade_fixture,
+        version: "0.4.0",
+        elixir: "~> 1.20",
+        deps: deps(),
+        # The inherited root lock has the same GCM-only policy. The source guard
+        # covers this fixture too; it neither references nor configures AES-CTR.
+        hex: [ignore_advisories: ["EEF-CVE-2026-95105"]]
+      ]
+    end
+
+    def application do
+      [extra_applications: [:logger], mod: {UpgradeFixture.Application, []}]
+    end
+
+    defp deps do
+      [
+        {:ash_replicant, path: System.fetch_env!("ASH_REPLICANT_PATH")},
+        {:igniter, ">= 0.8.3 and < 1.0.0-0", runtime: false}
       ]
     end
   end
@@ -1016,7 +1048,8 @@ defmodule AshReplicant.ReleaseContract do
     for {path, expected} <- [
           {"scripts/audit-fixtures.sh", @fixture_audit_script},
           {"scripts/assert-release-tree.sh", @release_tree_script},
-          {"test/fixtures/release_checker/mix.exs", @checker_fixture_project}
+          {"test/fixtures/release_checker/mix.exs", @checker_fixture_project},
+          {"test/fixtures/upgrade_0_4_app/mix.exs", @upgrade_fixture_project}
         ] do
       assert(
         File.read!(Path.join(root, path)) == expected,
@@ -1039,7 +1072,7 @@ defmodule AshReplicant.ReleaseContract do
       required =
         if String.ends_with?(path, ".py"),
           do: ~s|if not os.environ.get("GH_TOKEN"):|,
-          else: ~s|[[ -n "${GH_TOKEN:-}" ]] || fail "GitHub token is required"|
+          else: ~s([[ -n "${GH_TOKEN:-}" ]] || fail "GitHub token is required")
 
       assert(String.contains?(source, required), "GitHub lookup must require its environment token")
     end

@@ -14,7 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   run their real-service self-tests once per qualification, and mutation-test
   token placement and refusal controls.
 - Audit the release checker's recorded lock without loading unfetched fixture
-  dependencies, and correct release-contract test formatting.
+  dependencies, scope its historical Ash advisory acknowledgments to the inert
+  fixture, and carry the root's guarded Cloak cipher policy into the upgrade
+  consumer. Correct release-contract test formatting and its shell-string sigil.
+- Report checked-out source locations for uncontrolled test-process errors
+  without exposing messages or stack-frame arguments.
 - Bound every CI job by its measured green duration, disable persisted checkout
   credentials, and fetch only committed dependency locks. Exact-floor and
   latest-compatible cells carry separate reviewed locks; new upstream releases

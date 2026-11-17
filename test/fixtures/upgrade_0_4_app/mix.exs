@@ -6,7 +6,10 @@ defmodule UpgradeFixture.MixProject do
       app: :upgrade_fixture,
       version: "0.4.0",
       elixir: "~> 1.20",
-      deps: deps()
+      deps: deps(),
+      # The inherited root lock has the same GCM-only policy. The source guard
+      # covers this fixture too; it neither references nor configures AES-CTR.
+      hex: [ignore_advisories: ["EEF-CVE-2026-95105"]]
     ]
   end
 

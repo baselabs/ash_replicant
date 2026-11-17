@@ -266,7 +266,8 @@ rm -f "$fixture_test"
 if [[ "$structural_exit" -eq 0 ]] ||
   [[ "$structural_output" == *"ASH_REPLICANT_BACKGROUND_SENTINEL"* ]] ||
   [[ "$structural_output" != *"uncontrolled structural errors: logger="* ]] ||
-  [[ "$structural_output" != *" exception="* ]]; then
+  [[ "$structural_output" != *" exception="* ]] ||
+  [[ "$structural_output" != *"ERROR-SITE: $fixture_test:4"* ]]; then
   echo "uncontrolled process crash was not rejected structurally" >&2
   exit 1
 fi

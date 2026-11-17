@@ -169,7 +169,10 @@ only `contents: read`. Only an HTTP 404 proves absence; a missing token,
 transport failure or any other unexpected response refuses. The workflow
 contract mutation-tests token placement, transport and refusal controls.
 Fixture hygiene audits the release checker's recorded lock in place without
-fetching dependencies (its project declares none), and audits a temporary
+fetching dependencies (its project declares none). Only that inert fixture
+acknowledges its historical Ash advisories; the release contract guards its
+empty dependency list. The upgrade fixture shares the root's GCM-only Cloak
+policy and cipher source guard. Fixture hygiene also audits a temporary
 upgrade consumer that inherits the root lock exactly as the live upgrade test
 does. No audit rewrites a committed lock.
 

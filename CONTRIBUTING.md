@@ -64,6 +64,11 @@ scripts/with-release-runtime.sh mix hex.build
 scripts/with-release-runtime.sh scripts/run-mutation-gates.py
 ```
 
+An uncontrolled background error fails the structural runner even when all
+assertions pass. Failure output includes only source file locations from the
+checked-out project or dependencies, exception classes, and authored test names;
+raw messages remain in the runner's private capture.
+
 Database migration and its dependent live checks run only after successful
 database creation and migration. The other checks continue after a failure.
 For a fresh consumer's throwaway database in the cluster's `ephemeral`
@@ -202,9 +207,12 @@ affected tests in the same change, and record the Ash version contract delta in 
   Fixture hygiene audits the release checker's recorded lock in place with
   root `mix deps.audit --path test/fixtures/release_checker` and the fixture's
   own `mix hex.audit`. Its project declares no executable dependencies, so
-  auditing never fetches or rewrites the recorded lock. The upgrade fixture
+  auditing never fetches or rewrites the recorded lock. Its two historical Ash
+  advisories are acknowledged only in this non-executing fixture, whose empty
+  dependency declarations are guarded by the release contract. The upgrade fixture
   is copied to a temporary directory, inherits `mix.lock` exactly as the live
   upgrade test does, and runs a locked fetch and both audits before cleanup.
+  It shares the root's Cloak AES-CTR exception and GCM-only source guard.
 
   The full release battery is intentionally not represented by `mix quality`;
   that alias covers format, Credo, and Dialyzer only.

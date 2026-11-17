@@ -1059,7 +1059,9 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           {"scripts/verify-release.sh", "gh api --hostname github.com", "curl"},
           {"scripts/verify-release.sh", ~s|[[ -n "${GH_TOKEN:-}" ]]|, "true"},
           {"scripts/test-release-guards.sh", "without_github_token", "without_token_bypass"},
-          {"test/fixtures/release_checker/mix.exs", "deps: []", ~s|deps: [{:ash, ">= 0.0.0"}]|}
+          {"test/fixtures/release_checker/mix.exs", "deps: []", ~s|deps: [{:ash, ">= 0.0.0"}]|},
+          {"test/fixtures/release_checker/mix.exs", "EEF-CVE-2026-96581", "unreviewed-advisory"},
+          {"test/fixtures/upgrade_0_4_app/mix.exs", "EEF-CVE-2026-95105", "unreviewed-advisory"}
         ] do
       prepare_fixture()
       replace_once!(path, old, replacement)
@@ -2129,6 +2131,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           "scripts/test-release-guards.sh",
           "scripts/verify-release.sh",
           "test/fixtures/release_checker/mix.exs",
+          "test/fixtures/upgrade_0_4_app/mix.exs",
           "test/integration/upgrade_checkpoint_test.exs",
           "locks/exact-floors.lock",
           "locks/latest-compatible.lock",

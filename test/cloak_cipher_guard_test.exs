@@ -1,7 +1,7 @@
 defmodule AshReplicant.CloakCipherGuardTest do
   use ExUnit.Case, async: true
 
-  @source_directories ~w(lib config test/support)
+  @source_directories ~w(lib config test/support test/fixtures/upgrade_0_4_app)
   @allowed_cipher "Cloak.Ciphers.AES.GCM"
   @cipher_namespaces ~w(Cloak.Ciphers Cloak.Ciphers.AES Cloak.Ciphers.Deprecated Cloak.Ciphers.Deprecated.AES)
 
