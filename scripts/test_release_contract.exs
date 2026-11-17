@@ -616,6 +616,20 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       assert_invalid!()
     end
 
+    # A path filter on push lets a candidate whose files are all filtered get no
+    # run, and kimosabe-land cannot land a commit CI never ran on.
+    for filter <- ["paths-ignore: ['**/*.md']", "paths: ['lib/**']", "tags: ['v*']"] do
+      prepare_fixture()
+
+      replace_once!(
+        @workflow,
+        "    branches: [main, 'kci/**']\n",
+        "    branches: [main, 'kci/**']\n    #{filter}\n"
+      )
+
+      assert_invalid!()
+    end
+
     for job <- ["no-database", "compatibility"] do
       for replacement <- ["", "        id: other_compile\n", "        id: false\n"] do
         prepare_fixture()

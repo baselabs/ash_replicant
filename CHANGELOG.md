@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- CI's push trigger has no `paths-ignore`, so every `kci/**` landing candidate
+  gets a run. The release contract now requires the push trigger to be exactly
+  `main` and `kci/**`, with no path or tag filter, and its self-tests refuse
+  each. Both contract scripts print the failing assertion before reporting the
+  failure, instead of only "failed".
+
 - StatusLifecycleTest's four halt tests no longer let an abnormal pipeline
   owner exit kill the test through its start_link link. The durable-leg test
   died that way on one PostgreSQL leg in each of CI runs 40681408838 and the

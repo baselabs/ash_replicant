@@ -10,6 +10,7 @@ if ! result="$(
     Code.require_file("scripts/test_release_contract.exs")
   ' 2>&1
 )"; then
+  printf '%s\n' "$result" >&2
   echo "release contract self-tests failed" >&2
   exit 1
 fi

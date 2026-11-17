@@ -736,6 +736,13 @@ defmodule AshReplicant.ReleaseContract do
       get_in(workflow, ["on", "push", "branches"]) == ["main", "kci/**"],
       "CI push branch contract is invalid"
     )
+
+    push = get_in(workflow, ["on", "push"])
+
+    assert(
+      is_map(push) and Map.keys(push) == ["branches"],
+      "CI push trigger may filter only by branch"
+    )
   end
 
   defp assert_jobs(workflow) do

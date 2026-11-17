@@ -18,6 +18,7 @@ if ! validator_output="$(
       System.halt(if result == :ok, do: 0, else: 1)
     ' -- "$contract_root" 2>&1
 )"; then
+  printf '%s\n' "$validator_output" >&2
   echo "release contract validation failed" >&2
   exit 1
 fi
