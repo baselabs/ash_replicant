@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.4] - 2026-11-17
+
 ### Fixed
 
 - Run qualification only for `kci/**` candidate pushes, with a strict `qualified`
@@ -1796,7 +1798,8 @@ sensitive-column verification.
   `usage-rules.md`, `CONTRIBUTING.md`, `LICENSE`, `NOTICE`; tracked charter at
   `docs/CHARTER.md`.
 
-[Unreleased]: https://github.com/baselabs/ash_replicant/compare/v1.6.3...HEAD
+[Unreleased]: https://github.com/baselabs/ash_replicant/compare/v1.6.4...HEAD
+[1.6.4]: https://github.com/baselabs/ash_replicant/tree/v1.6.4
 [1.6.3]: https://github.com/baselabs/ash_replicant/tree/v1.6.3
 [1.6.2]: https://github.com/baselabs/ash_replicant/tree/v1.6.2
 [1.6.1]: https://github.com/baselabs/ash_replicant/tree/v1.6.1

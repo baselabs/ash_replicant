@@ -14,7 +14,7 @@ not re-gated. It executes through the
 [`replicant`](https://github.com/baselabs/replicant) client (the transport — the
 "`postgrex` of CDC").
 
-> **Status: v1.6.3 — stable public API (ADR-0023).** Effect-once mirroring with fail-closed
+> **Status: v1.6.4 — stable public API (ADR-0023).** Effect-once mirroring with fail-closed
 > multitenancy (compile-time verified), SCD2 history mirroring, and AshCloak integration.
 > Working rules are in
 > [`AGENTS.md`](https://github.com/baselabs/ash_replicant/blob/main/AGENTS.md) — read it
@@ -73,7 +73,7 @@ Add `ash_replicant` to your dependencies in `mix.exs`:
 
 ```elixir
 # mix.exs
-{:ash_replicant, "~> 1.6.3"}
+{:ash_replicant, "~> 1.6.4"}
 ```
 
 It pulls in [`replicant`](https://github.com/baselabs/replicant) (the CDC transport)
@@ -81,7 +81,7 @@ as a transitive dependency.
 
 ### Supported foundation
 
-The current 1.6.3 release baseline is built and tested with:
+The current 1.6.4 release baseline is built and tested with:
 
 - Elixir 1.20.3 on Erlang/OTP 29;
 - Ash `>= 3.37.3 and < 4.0.0-0` (current lock 3.37.3);
