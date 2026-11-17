@@ -312,7 +312,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   ]
 
   @checkout "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
-  @setup_beam "erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236"
+  @setup_beam "erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124"
   @named_separator_entities ~w(
     af ApplyFunction emsp13 emsp14 emsp ensp hairsp ic InvisibleComma
     InvisibleTimes it lrm MediumSpace nbsp NegativeMediumSpace NegativeThickSpace

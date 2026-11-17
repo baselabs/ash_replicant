@@ -20,7 +20,7 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236 # v1
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
         with:
           elixir-version: ${{ env.ELIXIR_VERSION }}
           otp-version: ${{ env.OTP_VERSION }}
@@ -149,7 +149,7 @@ jobs:
             -c wal_level=logical -c max_replication_slots=20 -c max_wal_senders=20
           scripts/wait-for-postgres.sh pg
 
-      - uses: erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236 # v1
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
         with:
           elixir-version: ${{ env.ELIXIR_VERSION }}
           otp-version: ${{ env.OTP_VERSION }}
@@ -243,7 +243,7 @@ jobs:
             -c wal_level=logical -c max_replication_slots=20 -c max_wal_senders=20
           scripts/wait-for-postgres.sh pg
 
-      - uses: erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236 # v1
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
         with:
           elixir-version: ${{ env.ELIXIR_VERSION }}
           otp-version: ${{ env.OTP_VERSION }}
@@ -287,7 +287,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236 # v1
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
         with:
           elixir-version: ${{ env.ELIXIR_VERSION }}
           otp-version: ${{ env.OTP_VERSION }}
@@ -336,7 +336,7 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236 # v1
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
         with:
           elixir-version: ${{ env.ELIXIR_VERSION }}
           otp-version: ${{ env.OTP_VERSION }}

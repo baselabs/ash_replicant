@@ -15,7 +15,7 @@ defmodule AshReplicant.ReleaseContract do
   @onetime_requirement ">= 1.3.2 and < 2.0.0-0"
   @cloak_requirement ">= 0.4.0 and < 1.0.0-0"
   @checkout "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
-  @setup_beam "erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236"
+  @setup_beam "erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124"
   @participant_example_start "<!-- ash-replicant-destination-participant-example:start -->"
   @participant_example_end "<!-- ash-replicant-destination-participant-example:end -->"
 
