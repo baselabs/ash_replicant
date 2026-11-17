@@ -1414,7 +1414,13 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     assert_invalid!()
 
     prepare_fixture()
-    replace_once!(@publish, "\n  ELIXIR_VERSION: \"1.20.3\"\n", "\n  ELIXIR_VERSION: \"1.20.2\"\n")
+
+    replace_once!(
+      @publish,
+      "\n  ELIXIR_VERSION: \"1.20.3\"\n",
+      "\n  ELIXIR_VERSION: \"1.20.2\"\n"
+    )
+
     assert_invalid!()
 
     prepare_fixture()
