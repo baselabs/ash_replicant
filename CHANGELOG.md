@@ -19,6 +19,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Lock Replicant 1.4.2 → 1.5.1 (tar sha256 `a09c0a7b…bc869`, matched against
+  the Hex release API; not retired) and Telemetry 1.4.2 → 1.4.3 with it. Since
+  1.5.0, Replicant's initial and incremental snapshots read only the columns in
+  the publication's column list and select only the rows its row filters admit,
+  so snapshot records match stream records. 1.5.1 restores
+  `QueryBuilder.table_columns/0` and the six-column `table_columns_for/1` rows
+  that `AshReplicant.Coverage` calls. The requirement stays
+  `>= 1.4.0 and < 2.0.0-0`; hosts should lock 1.5.1. The newest-dependency
+  gate held `main` red until this lock moved.
 - Require Ash `>= 3.37.3 and < 4.0.0-0`. AshSql 0.8.6 and later need it, and
   every AshSql below 0.8.6 is retired for an Ecto query cache issue. Lock Ash
   3.37.2 → 3.37.3, AshSql 0.8.4 → 0.8.8 and Ecto 3.14.2 → 3.14.3

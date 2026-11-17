@@ -168,6 +168,22 @@ Four facts, all observed on 2026-09-28/29, move the floors:
   and AshCloak floor moves above — and ADR-0026's same-day amendment
   records the delegated 9.6 snapshot evidence (upstream's connected leg)
   that now exists.
+- **Replicant lock moves to 1.5.1** (November 17, 2026; requirement
+  unchanged at `>= 1.4.0 and < 2.0.0-0`; tar checksum `a09c0a7b…bc869`
+  matched against the Hex release API before locking; Telemetry 1.4.2 →
+  1.4.3 moved with it). The newest-dependency gate requires the lock to be
+  the newest compatible, non-retired release. 1.5.0 makes snapshots respect
+  publication column lists and server row filters, so a snapshot delivers
+  the same columns and rows the stream does; the adapter passes snapshot
+  records through unchanged, so a host whose publication narrows columns or
+  rows now gets that narrowing in its back-fill too. 1.5.0 also removed
+  `QueryBuilder.table_columns/0` and widened `table_columns_for/1` rows to
+  seven elements, which `AshReplicant.Coverage` calls; 1.5.1 restores both
+  byte for byte, and 1.5.0 is retired on Hex for that reason. The floor
+  stays 1.4.0 and 1.5.0 is not excluded, on the same ground as the 1.4.2
+  note above: a host locked at 1.5.0 fails loudly and closed
+  (`UndefinedFunctionError` at slot activation, nothing delivered), and Hex
+  warns on the retired release.
 
 ## Evidence
 
