@@ -15,6 +15,9 @@ deps/
 # Dialyzer PLTs
 priv/plts/
 
+# Python bytecode from the qualification verdict and its tests
+__pycache__/
+
 # Environment
 .env
 .env.local
