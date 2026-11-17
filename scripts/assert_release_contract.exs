@@ -31,6 +31,95 @@ defmodule AshReplicant.ReleaseContract do
   scripts/inspect-release-package.sh "$RUNNER_TEMP/package.tar"
   """
 
+  @publish_unreleased_check ~S"""
+  version="$(sed -n 's/^  @version "\(.*\)"$/\1/p' mix.exs)"
+  scripts/assert-release-tree.sh "$version" "v$version" --unreleased
+  """
+
+  @fixture_audit_script ~S"""
+  #!/usr/bin/env bash
+  set -euo pipefail
+
+  root="$(cd "$(dirname "$0")/.." && pwd)"
+  cd "$root"
+
+  # This fixture is recorded checker input, never a dependency-fetch target.
+  mix deps.audit --path test/fixtures/release_checker
+  (cd test/fixtures/release_checker && mix hex.audit)
+
+  # Match upgrade_checkpoint_test.exs: the real consumer inherits the root lock.
+  fixture="$(mktemp -d "${RUNNER_TEMP:?}/ash-replicant-upgrade-audit.XXXXXX")"
+  trap 'rm -rf "$fixture"' EXIT
+  cp -R test/fixtures/upgrade_0_4_app/. "$fixture/"
+  cp mix.lock "$fixture/mix.lock"
+  export ASH_REPLICANT_PATH="$root"
+  (cd "$fixture" && mix deps.get --check-locked && mix hex.audit)
+  mix deps.audit --path "$fixture"
+  """
+
+  @release_tree_script ~S"""
+  #!/usr/bin/env bash
+  set -euo pipefail
+
+  release_tree_fail() { echo "release tree: $1" >&2; exit 1; }
+
+  # Only an HTTP 404 proves absence. A transport error, redirect, or any other
+  # response refuses publication; neither endpoint needs the publish credential.
+  assert_release_absent() {
+    local label="$1" url="$2" code
+    code="$(curl --silent --show-error --max-time 30 --output /dev/null \
+      --write-out '%{http_code}' "$url")" || release_tree_fail "$label lookup failed"
+    case "$code" in
+      404) ;;
+      200) release_tree_fail "$label already exists" ;;
+      *) release_tree_fail "$label lookup failed" ;;
+    esac
+  }
+
+  release_tree_main() {
+    local version="${1:?usage: assert-release-tree.sh VERSION TAG [--unreleased]}"
+    local tag="${2:?usage: assert-release-tree.sh VERSION TAG [--unreleased]}"
+    local mode="${3:-}" tag_sha result
+    [[ "$#" -eq 2 || ( "$#" -eq 3 && "$mode" == --unreleased ) ]] || exit 2
+    [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || release_tree_fail 'invalid release version'
+    [[ "$tag" == "v$version" ]] || release_tree_fail 'tag must match version'
+    [[ -z "$(git status --porcelain --untracked-files=all)" ]] || release_tree_fail 'dirty tree'
+
+    if [[ "$mode" == --unreleased ]]; then
+      [[ "$(sed -n 's/^  @version "\(.*\)"$/\1/p' mix.exs)" == "$version" ]] \
+        || release_tree_fail 'project version differs from release version'
+      result=0
+      git show-ref --verify --quiet "refs/tags/$tag" || result=$?
+      case "$result" in
+        0) release_tree_fail 'local tag already exists' ;;
+        1) ;;
+        *) release_tree_fail 'local tag lookup failed' ;;
+      esac
+      result=0
+      GIT_TERMINAL_PROMPT=0 git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null || result=$?
+      case "$result" in
+        0) release_tree_fail 'remote tag already exists' ;;
+        2) ;;
+        *) release_tree_fail 'remote tag lookup failed' ;;
+      esac
+      assert_release_absent 'GitHub release' "https://api.github.com/repos/baselabs/ash_replicant/releases/tags/$tag"
+      assert_release_absent 'Hex release' "https://hex.pm/api/packages/ash_replicant/releases/$version"
+      echo 'release tree: version is unpublished and untagged'
+      return
+    fi
+
+    tag_sha="$(git rev-parse --verify "refs/tags/$tag^{commit}")" || release_tree_fail 'tag cannot be resolved'
+    [[ "$(git rev-parse HEAD)" == "$tag_sha" ]] || release_tree_fail 'HEAD differs from tag'
+    [[ "$(sed -n 's/^  @version "\(.*\)"$/\1/p' mix.exs)" == "$version" ]] \
+      || release_tree_fail 'project version differs from release version'
+    echo "$tag_sha"
+  }
+
+  if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    release_tree_main "$@"
+  fi
+  """
+
   # The image ref rides the matrix (pg_image: the pinned digest ref per
   # cell); the digest pinning is enforced through the exact @matrix match.
   @postgres_run """
@@ -43,20 +132,10 @@ defmodule AshReplicant.ReleaseContract do
   """
 
   @resolve_dependencies """
-  if [[ '${{ matrix.label }}' == 'latest-compatible' ]]; then
-    mix deps.unlock --all
-  else
-    if [[ '${{ matrix.ash_unlock }}' == 'true' ]]; then
-      mix deps.unlock ash
-    fi
-    if [[ '${{ matrix.replicant_unlock }}' == 'true' ]]; then
-      mix deps.unlock replicant
-    fi
-    if [[ '${{ matrix.onetime_unlock }}' == 'true' ]]; then
-      mix deps.unlock ash_onetime
-    fi
+  if [[ '${{ matrix.lockfile }}' != 'mix.lock' ]]; then
+    cp '${{ matrix.lockfile }}' mix.lock
   fi
-  mix deps.get
+  mix deps.get --check-locked
   mix deps ash
   mix deps replicant
   mix deps ash_onetime
@@ -201,70 +280,60 @@ defmodule AshReplicant.ReleaseContract do
   @matrix [
     %{
       "label" => "exact-floors",
+      "lockfile" => "locks/exact-floors.lock",
       "ash_selector" => "3.37.3",
-      "ash_unlock" => true,
       "ash_requirement" => "== 3.37.3",
       "replicant_selector" => "1.4.0",
-      "replicant_unlock" => true,
       "replicant_requirement" => "== 1.4.0",
       "onetime_selector" => "1.3.2",
-      "onetime_unlock" => true,
       "onetime_requirement" => "== 1.3.2",
       "pg_major" => "16",
       "pg_image" => @pg16_image
     },
     %{
       "label" => "current-lock",
+      "lockfile" => "mix.lock",
       "ash_selector" => "",
-      "ash_unlock" => false,
       "ash_requirement" => @ash_requirement,
       "replicant_selector" => "",
-      "replicant_unlock" => false,
       "replicant_requirement" => @replicant_requirement,
       "onetime_selector" => "",
-      "onetime_unlock" => false,
       "onetime_requirement" => @onetime_requirement,
       "pg_major" => "16",
       "pg_image" => @pg16_image
     },
     %{
       "label" => "latest-compatible",
+      "lockfile" => "locks/latest-compatible.lock",
       "ash_selector" => "latest",
-      "ash_unlock" => true,
       "ash_requirement" => @ash_requirement,
       "replicant_selector" => "latest",
-      "replicant_unlock" => true,
       "replicant_requirement" => @replicant_requirement,
       "onetime_selector" => "latest",
-      "onetime_unlock" => true,
       "onetime_requirement" => @onetime_requirement,
       "pg_major" => "16",
       "pg_image" => @pg16_image
     },
     %{
       "label" => "current-lock-pg17",
+      "lockfile" => "mix.lock",
       "ash_selector" => "",
-      "ash_unlock" => false,
       "ash_requirement" => @ash_requirement,
       "replicant_selector" => "",
-      "replicant_unlock" => false,
       "replicant_requirement" => @replicant_requirement,
       "onetime_selector" => "",
-      "onetime_unlock" => false,
       "onetime_requirement" => @onetime_requirement,
       "pg_major" => "17",
       "pg_image" => @pg17_image
     },
     %{
       "label" => "current-lock-pg18",
+      "lockfile" => "mix.lock",
       "ash_selector" => "",
-      "ash_unlock" => false,
       "ash_requirement" => @ash_requirement,
       "replicant_selector" => "",
-      "replicant_unlock" => false,
       "replicant_requirement" => @replicant_requirement,
       "onetime_selector" => "",
-      "onetime_unlock" => false,
       "onetime_requirement" => @onetime_requirement,
       "pg_major" => "18",
       "pg_image" => @pg18_image
@@ -272,18 +341,18 @@ defmodule AshReplicant.ReleaseContract do
   ]
 
   @job_keys %{
-    "no-database" => ~w(env name runs-on steps),
-    "compatibility" => ~w(env name runs-on steps strategy),
-    "release-artifact" => ~w(env name runs-on steps),
-    "performance" => ~w(env name runs-on steps),
-    "decoder-old-majors" => ~w(env name runs-on steps strategy)
+    "no-database" => ~w(env name runs-on steps timeout-minutes),
+    "compatibility" => ~w(env name runs-on steps strategy timeout-minutes),
+    "release-artifact" => ~w(env name runs-on steps timeout-minutes),
+    "performance" => ~w(env name runs-on steps timeout-minutes),
+    "decoder-old-majors" => ~w(env name runs-on steps strategy timeout-minutes)
   }
 
   @job_steps %{
     "no-database" => [
-      {:uses, @checkout, :absent},
+      {:uses, @checkout, %{"persist-credentials" => false}},
       {:uses, @setup_beam, @setup_beam_inputs},
-      {:run, "mix deps.get"},
+      {:run, "mix deps.get --check-locked"},
       {:run, "mix deps.compile"},
       {:run, "mix compile --warnings-as-errors", %{"id" => "compile"}},
       {:run, "mix format --check-formatted", %{"if" => @fail_late}},
@@ -295,13 +364,14 @@ defmodule AshReplicant.ReleaseContract do
        %{"if" => @fail_late}},
       {:run, "mix credo --strict", %{"if" => @fail_late}},
       {:run, "mix deps.audit", %{"if" => @fail_late}},
+      {:run, "scripts/audit-fixtures.sh", %{"if" => @fail_late}},
       {:run,
        "env -u ASH_REPLICANT_TEST_URL scripts/run-structural-tests.sh --allow-excluded --exclude integration",
        %{"if" => @fail_late}},
       {:run, String.trim(@mutation_gates_run), %{"if" => @fail_late}}
     ],
     "compatibility" => [
-      {:uses, @checkout, :absent},
+      {:uses, @checkout, %{"persist-credentials" => false}},
       {:run, String.trim(@postgres_run)},
       {:uses, @setup_beam, @setup_beam_inputs},
       {:run, String.trim(@resolve_dependencies)},
@@ -320,10 +390,10 @@ defmodule AshReplicant.ReleaseContract do
       {:run, "mix dialyzer", %{"if" => @fail_late}}
     ],
     "performance" => [
-      {:uses, @checkout, :absent},
+      {:uses, @checkout, %{"persist-credentials" => false}},
       {:run, String.trim(@performance_postgres_run)},
       {:uses, @setup_beam, @setup_beam_inputs},
-      {:run, "mix deps.get"},
+      {:run, "mix deps.get --check-locked"},
       {:run, "mix deps.compile"},
       {:run, "mix compile --warnings-as-errors"},
       {:run, String.trim(@create_database)},
@@ -331,12 +401,12 @@ defmodule AshReplicant.ReleaseContract do
        "scripts/run-structural-tests.sh test/integration/performance_bounds_test.exs --include integration"}
     ],
     "decoder-old-majors" => [
-      {:uses, @checkout, :absent},
+      {:uses, @checkout, %{"persist-credentials" => false}},
       {:uses, @setup_beam, @setup_beam_inputs},
       {:run,
        "docker build -f test/support/pg_old.dockerfile --build-arg BASE=${{ matrix.base }} -t pgold-plugins:ci ."},
       {:run, String.trim(@decoder_postgres_run)},
-      {:run, "mix deps.get"},
+      {:run, "mix deps.get --check-locked"},
       {:run, "mix deps.compile"},
       {:run, "mix compile --warnings-as-errors"},
       {:run, String.trim(@create_database)},
@@ -344,10 +414,10 @@ defmodule AshReplicant.ReleaseContract do
        "scripts/run-structural-tests.sh test/integration/decoder_admission_test.exs --include pgold"}
     ],
     "release-artifact" => [
-      {:uses, @checkout, :absent},
+      {:uses, @checkout, %{"persist-credentials" => false}},
       {:uses, @setup_beam, @setup_beam_inputs},
       {:run,
-       "env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix deps.get"},
+       "env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix deps.get --check-locked"},
       {:run, "mix deps.compile"},
       {:run, "mix compile --warnings-as-errors"},
       {:run, "elixir --version"},
@@ -538,6 +608,7 @@ defmodule AshReplicant.ReleaseContract do
     assert_publish(publish, root)
     assert_qualification(workflow)
     assert_workflow_runners(root)
+    assert_ci_sources(root)
     assert_qualification_inventory(root, workflow)
     assert_runtime(workflow, root)
     assert_jobs(workflow)
@@ -782,10 +853,14 @@ defmodule AshReplicant.ReleaseContract do
           "if" => @publish_owner_condition,
           "environment" => "publish",
           "runs-on" => "ubuntu-24.04",
-          "timeout-minutes" => 15,
+          "timeout-minutes" => 6,
           "permissions" => %{"contents" => "read"},
           "env" => %{"MIX_ENV" => "dev"},
           "steps" => [
+            %{
+              "name" => "Refuse publishing outside the default branch",
+              "run" => ~s(test "$GITHUB_REF" = "refs/heads/main")
+            },
             %{"uses" => @checkout, "with" => %{"persist-credentials" => false}},
             %{
               "uses" => @setup_beam,
@@ -798,6 +873,10 @@ defmodule AshReplicant.ReleaseContract do
             %{
               "name" => "Build and inspect Hex package",
               "run" => @publish_package_inspection
+            },
+            %{
+              "name" => "Refuse an already released version",
+              "run" => @publish_unreleased_check
             },
             %{
               "name" => "Publish to hex.pm",
@@ -816,19 +895,75 @@ defmodule AshReplicant.ReleaseContract do
     root
     |> Path.join(".github/workflows/*.{yml,yaml}")
     |> Path.wildcard()
-    |> Enum.flat_map(fn path ->
+    |> Enum.each(fn path ->
       workflow = YamlElixir.read_from_file!(path)
       assert_actions(workflow)
       assert_workflow_controls(workflow)
-      Map.values(Map.get(workflow, "jobs", %{}))
+
+      Enum.each(Map.get(workflow, "jobs", %{}), fn {name, job} ->
+        if Map.has_key?(job, "uses") do
+          assert(not Map.has_key?(job, "runs-on"), "workflow caller cannot select a runner")
+        else
+          assert(job["runs-on"] == "ubuntu-24.04", "workflow job runner must be ubuntu-24.04")
+          assert_timeout(path, name, job["timeout-minutes"])
+        end
+
+        Enum.each(Map.get(job, "steps", []), fn step ->
+          if String.starts_with?(Map.get(step, "uses", ""), "actions/checkout@") do
+            assert(
+              get_in(step, ["with", "persist-credentials"]) == false,
+              "checkout must disable persisted credentials"
+            )
+          end
+        end)
+      end)
     end)
-    |> Enum.each(fn job ->
-      if Map.has_key?(job, "uses") do
-        assert(not Map.has_key?(job, "runs-on"), "workflow caller cannot select a runner")
-      else
-        assert(job["runs-on"] == "ubuntu-24.04", "workflow job runner must be ubuntu-24.04")
-      end
-    end)
+  end
+
+  defp assert_timeout(path, name, timeout) do
+    pattern = ~r/^  #{Regex.escape(name)}:\n.*?(?=^  [a-z][a-z0-9-]+:\n|\z)/ms
+    [block] = Regex.run(pattern, File.read!(path)) || fail("CI job source is missing")
+
+    case Regex.run(~r/# Green run ([0-9]+):[^\n]*?([0-9]+)m([0-9]+)s/, block) do
+      [_comment, _run, minutes, seconds] ->
+        measured = String.to_integer(minutes) * 60 + String.to_integer(seconds)
+        expected = max(5, div(3 * measured + 59, 60))
+
+        assert(
+          measured > 0 and is_integer(timeout) and timeout == expected,
+          "CI timeout must follow its measured green run with 3x headroom"
+        )
+
+      _missing ->
+        fail("CI timeout needs its measured green run and duration comment")
+    end
+  end
+
+  defp assert_ci_sources(root) do
+    for {path, expected} <- [
+          {"scripts/audit-fixtures.sh", @fixture_audit_script},
+          {"scripts/assert-release-tree.sh", @release_tree_script}
+        ] do
+      assert(
+        File.read!(Path.join(root, path)) == expected,
+        "CI safety script contract is invalid"
+      )
+    end
+
+    upgrade = File.read!(Path.join(root, "test/integration/upgrade_checkpoint_test.exs"))
+
+    assert(
+      String.contains?(
+        upgrade,
+        ~s|assert_cmd!(:deps_get, mix, ["deps.get", "--check-locked"], temp, env)|
+      ),
+      "upgrade consumer must fetch its inherited lock without changes"
+    )
+
+    for label <- ["exact-floors", "latest-compatible"] do
+      path = Path.join(root, "locks/#{label}.lock")
+      assert(File.read!(path) != "", "compatibility lane needs a committed lock")
+    end
   end
 
   defp assert_qualification_inventory(root, workflow) do

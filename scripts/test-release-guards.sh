@@ -86,4 +86,27 @@ reject 'invalid release version' scripts/assert-release-tree.sh invalid vinvalid
 reject 'tag cannot be resolved' scripts/assert-release-tree.sh 1.6.4 v1.6.4
 git tag v1.6.4
 reject 'project version differs' scripts/assert-release-tree.sh 1.6.4 v1.6.4
+# Exercise the shipped guard against real Git repositories and public APIs.
+# Sourcing exposes the same HTTP predicate the pre-publish mode calls.
+source scripts/assert-release-tree.sh
+reject 'local tag already exists' scripts/assert-release-tree.sh 1.6.3 v1.6.3 --unreleased
+git init -q --bare "$work/remote.git"
+# Keep this real scratch remote out of the package tree/clean-tree predicate.
+mv "$work/remote.git" "$package/remote.git"
+git remote add origin "$package/remote.git"
+git push -q origin refs/tags/v1.6.3
+git tag -d v1.6.3 >/dev/null
+reject 'remote tag already exists' scripts/assert-release-tree.sh 1.6.3 v1.6.3 --unreleased
+reject 'GitHub release already exists' assert_release_absent 'GitHub release' \
+  https://api.github.com/repos/baselabs/ash_replicant/releases/tags/v1.6.3
+reject 'Hex release already exists' assert_release_absent 'Hex release' \
+  https://hex.pm/api/packages/ash_replicant/releases/1.6.3
+assert_release_absent 'GitHub release' \
+  https://api.github.com/repos/baselabs/ash_replicant/releases/tags/v999999.0.0
+assert_release_absent 'Hex release' \
+  https://hex.pm/api/packages/ash_replicant/releases/999999.0.0
+reject 'Hex release lookup failed' assert_release_absent 'Hex release' https://127.0.0.1:1
+# A real missing Git remote is a lookup failure, never an absent version.
+git remote set-url origin "$package/no-such-remote.git"
+reject 'remote tag lookup failed' scripts/assert-release-tree.sh 1.6.3 v1.6.3 --unreleased
 echo 'release guard self-tests: PASS'

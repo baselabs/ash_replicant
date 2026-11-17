@@ -112,7 +112,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
   @job_commands %{
     "no-database" => [
-      "mix deps.get",
+      "mix deps.get --check-locked",
       "mix deps.compile",
       "mix compile --warnings-as-errors",
       "mix format --check-formatted",
@@ -123,6 +123,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       "python3 -B -m unittest discover -s scripts -p 'test_qualify.py'",
       "mix credo --strict",
       "mix deps.audit",
+      "scripts/audit-fixtures.sh",
       "env -u ASH_REPLICANT_TEST_URL scripts/run-structural-tests.sh --allow-excluded --exclude integration",
       String.trim(@mutation_gates_run)
     ],
@@ -149,7 +150,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       "scripts/run-structural-tests.sh test/integration/performance_bounds_test.exs --include integration"
     ],
     "release-artifact" => [
-      "env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix deps.get",
+      "env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix deps.get --check-locked",
       "mix deps.compile",
       "mix compile --warnings-as-errors",
       "elixir --version",
@@ -336,6 +337,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       landing_and_fail_late_probes()
       qualification_probes()
       publish_probes()
+      ci_requirement_probes()
       decoder_job_probes()
       command_probes()
       compatibility_probes()
@@ -537,8 +539,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
       mutate_job!(
         job,
-        "      - uses: #{@checkout} # v7.0.1\n",
-        "      - uses: #{@checkout} # v7.0.1\n        with:\n          ref: stale-gate-revision\n"
+        "          persist-credentials: false\n",
+        "          persist-credentials: false\n          ref: stale-gate-revision\n"
       )
 
       assert_invalid!()
@@ -816,7 +818,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           {"mix deps.get --check-locked", "mix deps.get"},
           {"          persist-credentials: false\n", "          persist-credentials: true\n"},
           {"          version-type: strict\n", ""},
-          {"    timeout-minutes: 15\n", "    timeout-minutes: 30\n"},
+          {"    timeout-minutes: 6\n", "    timeout-minutes: 30\n"},
           {"          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}\n",
            "          HEX_API_KEY: ${{ secrets.OTHER_KEY }}\n"}
         ] do
@@ -902,6 +904,112 @@ defmodule AshReplicant.ReleaseContractSelfTest do
         "env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION scripts/with-release-runtime.sh #{command}"
 
       replace_once!(@publish, original, String.replace(original, "-u #{selector} ", ""))
+      assert_invalid!()
+    end
+  end
+
+  defp ci_requirement_probes do
+    jobs = [
+      {@workflow, "no-database", 78},
+      {@workflow, "compatibility", 56},
+      {@workflow, "performance", 9},
+      {@workflow, "decoder-old-majors", 8},
+      {@workflow, "release-artifact", 6},
+      {@landing, "qualified", 5},
+      {@publish, "publish", 6}
+    ]
+
+    for {workflow, job, timeout} <- jobs do
+      for replacement <- ["", "    timeout-minutes: 1\n"] do
+        prepare_fixture()
+        mutate_job!(job, "    timeout-minutes: #{timeout}\n", replacement, workflow)
+        assert_invalid!()
+      end
+
+      prepare_fixture()
+      mutate_job!(job, "# Green run 44172851101:", "# No measurement:", workflow)
+      assert_invalid!()
+
+      prepare_fixture()
+      mutate_job!(job, "persist-credentials: false", "persist-credentials: true", workflow)
+      assert_invalid!()
+
+      unless workflow == @landing do
+        prepare_fixture()
+        mutate_job!(job, "mix deps.get --check-locked", "mix deps.get", workflow)
+        assert_invalid!()
+      end
+    end
+
+    for label <- ["exact-floors", "latest-compatible"] do
+      prepare_fixture()
+      File.rm!(fixture_path("locks/#{label}.lock"))
+      assert_invalid!()
+    end
+
+    for {old, replacement} <- [
+          {"mix deps.audit --path test/fixtures/release_checker", ":"},
+          {"(cd test/fixtures/release_checker && mix hex.audit)", ":"},
+          {"cp mix.lock \"$fixture/mix.lock\"", ":"},
+          {"mix deps.get --check-locked", "mix deps.get"},
+          {"&& mix hex.audit)", ")"},
+          {"mix deps.audit --path \"$fixture\"", ":"},
+          {"trap 'rm -rf \"$fixture\"' EXIT", ":"}
+        ] do
+      prepare_fixture()
+      replace_once!("scripts/audit-fixtures.sh", old, replacement)
+      assert_invalid!()
+    end
+
+    prepare_fixture()
+
+    replace_once!(
+      "test/integration/upgrade_checkpoint_test.exs",
+      ~s|["deps.get", "--check-locked"]|,
+      ~s|["deps.get"]|
+    )
+
+    assert_invalid!()
+
+    ref_step =
+      "      - name: Refuse publishing outside the default branch\n" <>
+        "        run: test \"$GITHUB_REF\" = \"refs/heads/main\"\n"
+
+    for replacement <- ["", String.replace(ref_step, "refs/heads/main", "refs/heads/other")] do
+      prepare_fixture()
+      replace_once!(@publish, ref_step, replacement)
+      assert_invalid!()
+    end
+
+    prepare_fixture()
+    replace_once!(@publish, ref_step, "")
+
+    replace_once!(
+      @publish,
+      "          persist-credentials: false\n",
+      "          persist-credentials: false\n" <> ref_step
+    )
+
+    assert_invalid!()
+    prepare_fixture()
+    replace_once!(@publish, " --unreleased\n", "\n")
+    assert_invalid!()
+
+    for {old, replacement} <- [
+          {"0) release_tree_fail 'local tag already exists' ;;", "0) ;;"},
+          {"*) release_tree_fail 'local tag lookup failed' ;;", "*) ;;"},
+          {"0) release_tree_fail 'remote tag already exists' ;;", "0) ;;"},
+          {"*) release_tree_fail 'remote tag lookup failed' ;;", "*) ;;"},
+          {"404) ;;", "204) ;;"},
+          {"200) release_tree_fail \"$label already exists\" ;;", "200) ;;"},
+          {"*) release_tree_fail \"$label lookup failed\" ;;", "*) ;;"},
+          {"|| release_tree_fail \"$label lookup failed\"", "|| return 0"},
+          {"    assert_release_absent 'GitHub release'", "    : 'GitHub release'"},
+          {"    assert_release_absent 'Hex release'", "    : 'Hex release'"},
+          {"git ls-remote --exit-code --tags origin", ": --exit-code --tags origin"}
+        ] do
+      prepare_fixture()
+      replace_once!("scripts/assert-release-tree.sh", old, replacement)
       assert_invalid!()
     end
   end
@@ -1020,7 +1128,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     mutate_job!(
       "compatibility",
-      "          mix deps.get\n",
+      "          mix deps.get --check-locked\n",
       ""
     )
 
@@ -1050,31 +1158,23 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     mutate_job!(
       "compatibility",
-      "      - name: Resolve and assert dependency versions\n",
-      "      - name: Resolve and assert dependency versions\n        env:\n          ASH_REPLICANT_ASH_VERSION: latest\n"
+      "      - name: Fetch and assert dependency versions\n",
+      "      - name: Fetch and assert dependency versions\n        env:\n          ASH_REPLICANT_ASH_VERSION: latest\n"
     )
 
     assert_invalid!()
 
-    prepare_fixture()
+    for replacement <- ["            :\n", "            cp mix.lock mix.lock\n"] do
+      prepare_fixture()
 
-    mutate_job!(
-      "compatibility",
-      "            if [[ '${{ matrix.ash_unlock }}' == 'true' ]]; then\n              mix deps.unlock ash\n            fi\n",
-      "          mix deps.unlock ash\n          if [[ '${{ matrix.ash_unlock }}' == 'true' ]]; then\n            :\n          fi\n"
-    )
+      mutate_job!(
+        "compatibility",
+        "            cp '${{ matrix.lockfile }}' mix.lock\n",
+        replacement
+      )
 
-    assert_invalid!()
-
-    prepare_fixture()
-
-    mutate_job!(
-      "compatibility",
-      "            if [[ '${{ matrix.replicant_unlock }}' == 'true' ]]; then\n              mix deps.unlock replicant\n            fi\n",
-      "          mix deps.unlock replicant\n          if [[ '${{ matrix.replicant_unlock }}' == 'true' ]]; then\n            :\n          fi\n"
-    )
-
-    assert_invalid!()
+      assert_invalid!()
+    end
 
     prepare_fixture()
 
@@ -1109,7 +1209,11 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     end
 
     prepare_fixture()
-    mutate_job!("compatibility", "            mix deps.unlock --all\n", "            :\n")
+    mutate_job!(
+      "compatibility",
+      "          mix deps.get --check-locked\n",
+      "          mix deps.get\n"
+    )
     assert_invalid!()
 
     prepare_fixture()
@@ -1146,8 +1250,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     mutate_job!(
       "compatibility",
-      "            ash_unlock: false\n",
-      "            ash_unlock: true\n"
+      "            lockfile: mix.lock\n",
+      "            lockfile: locks/latest-compatible.lock\n"
     )
 
     assert_invalid!()
@@ -1156,8 +1260,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     mutate_job!(
       "compatibility",
-      "            replicant_unlock: false\n",
-      "            replicant_unlock: true\n"
+      "            lockfile: locks/exact-floors.lock\n",
+      "            lockfile: mix.lock\n"
     )
 
     assert_invalid!()
@@ -1226,8 +1330,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     mutate_job!(
       "release-artifact",
-      "      - run: env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix deps.get\n",
-      "      - run: env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION mix deps.get\n"
+      "      - run: env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix deps.get --check-locked\n",
+      "      - run: env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION mix deps.get --check-locked\n"
     )
 
     assert_invalid!()
@@ -1965,6 +2069,11 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           "mix.exs",
           "mix.lock",
           "scripts/test-release-checkers.sh",
+          "scripts/audit-fixtures.sh",
+          "scripts/assert-release-tree.sh",
+          "test/integration/upgrade_checkpoint_test.exs",
+          "locks/exact-floors.lock",
+          "locks/latest-compatible.lock",
           @inventory,
           "scripts/qualify.py",
           "lib/ash_replicant.ex",
@@ -1996,13 +2105,13 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   defp insert_after_first_checkout!(addition) do
     replace_once!(
       @workflow,
-      "      - uses: #{@checkout} # v7.0.1\n",
-      "      - uses: #{@checkout} # v7.0.1\n#{addition}"
+      "      - uses: #{@checkout} # v7.0.1\n        with:\n          persist-credentials: false\n",
+      "      - uses: #{@checkout} # v7.0.1\n        with:\n          persist-credentials: false\n#{addition}"
     )
   end
 
-  defp mutate_job!(job, old, replacement) do
-    path = fixture_path(@workflow)
+  defp mutate_job!(job, old, replacement, workflow \\ @workflow) do
+    path = fixture_path(workflow)
     content = File.read!(path)
     regex = ~r/^  #{Regex.escape(job)}:\n.*?(?=^  [a-z][a-z0-9-]+:\n|\z)/ms
 

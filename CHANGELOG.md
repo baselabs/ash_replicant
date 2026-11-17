@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Bound every CI job by its measured green duration, disable persisted checkout
+  credentials, and fetch only committed dependency locks. Exact-floor and
+  latest-compatible cells carry separate reviewed locks; new upstream releases
+  fail the newest-version assertions until the latest lock is refreshed.
+- Audit the recorded release-checker dependencies and the materialized upgrade
+  fixture in CI. The upgrade consumer fetch also refuses lock changes.
+- Refuse publishing outside `main` or when a local tag, remote tag, GitHub release,
+  or Hex release already exists. Failed release lookups refuse publication.
+
 ## [1.6.4] - 2026-11-17
 
 ### Fixed

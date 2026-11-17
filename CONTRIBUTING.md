@@ -31,7 +31,7 @@ git clone https://github.com/baselabs/ash_replicant.git
 cd ash_replicant
 asdf install
 scripts/with-release-runtime.sh scripts/assert-runtime-version.sh
-scripts/with-release-runtime.sh mix deps.get
+scripts/with-release-runtime.sh mix deps.get --check-locked
 env -u ASH_REPLICANT_TEST_URL \
   scripts/with-release-runtime.sh scripts/run-structural-tests.sh \
     --allow-excluded --exclude integration
@@ -180,21 +180,49 @@ affected tests in the same change, and record the Ash version contract delta in 
   These live-suite and migration-drift commands are mandatory parts of the
   pre-PR release battery, in addition to the checks in step 3.
 
-  CI also resolves the exact Replicant 1.4.0 floor independently of the current
-  lock (1.5.1). To reproduce that selector in an isolated instrument worktree:
-
-  ```bash
-  ASH_REPLICANT_REPLICANT_VERSION=1.4.0 \
-    scripts/with-release-runtime.sh mix deps.unlock replicant
-  ASH_REPLICANT_REPLICANT_VERSION=1.4.0 \
-    scripts/with-release-runtime.sh mix deps.get
-  ASH_REPLICANT_REPLICANT_VERSION=1.4.0 \
-    scripts/with-release-runtime.sh \
-      scripts/assert-dependency-version.sh replicant '== 1.4.0'
-  ```
+  CI fetches the exact-floor cell from `locks/exact-floors.lock`, the
+  latest-compatible cell from `locks/latest-compatible.lock`, and current-lock
+  cells from `mix.lock`. It copies the selected committed lock to `mix.lock`
+  before `mix deps.get --check-locked`; no qualification step resolves unlocked
+  dependencies. All version assertions remain, including `--newest`: an
+  upstream release makes latest-compatible red until a reviewed refresh commit
+  updates its lock. Upstream code enters qualification through that review.
 
   The full release battery is intentionally not represented by `mix quality`;
   that alias covers format, Credo, and Dialyzer only.
+
+## Refreshing compatibility locks
+
+Generate locks on GitHub, never by running Mix on the owner's Mac or by editing
+a lockfile. Use a throwaway branch from the feature branch's current head; the
+bootstrap commit must never enter that feature branch's history.
+
+1. On the throwaway branch, temporarily replace `ci.yml` with a workflow that
+   triggers only on `kci/lock-bootstrap-ash`, uses `ubuntu-24.04`, the pinned
+   checkout with `persist-credentials: false`, and the repository's pinned
+   setup-beam action with the exact runtime in `.tool-versions`. Give its jobs
+   measured timeouts using qualification's rule.
+2. Run two matrix cells with `MIX_ENV=test`. For exact-floors, set
+   `ASH_REPLICANT_ASH_VERSION=3.37.3`, `ASH_REPLICANT_REPLICANT_VERSION=1.4.0`,
+   and `ASH_REPLICANT_ONETIME_VERSION=1.3.2`; run `mix deps.unlock ash`,
+   `mix deps.unlock replicant`, `mix deps.unlock ash_onetime`, then `mix deps.get`.
+   For latest-compatible, set all three selectors to `latest`, run
+   `mix deps.unlock --all`, then `mix deps.get`. These unlocked fetches are
+   confined to the temporary bootstrap workflow.
+3. Upload each cell's `mix.lock` as a separate artifact using
+   `actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02` (v4.6.2),
+   with `if-no-files-found: error` and one-day retention. Commit the temporary
+   workflow and push only to `kci/lock-bootstrap-ash`.
+4. After that run succeeds, use `gh run download RUN_ID` to retrieve its two
+   artifacts. Return to the feature branch, copy the artifact bytes to
+   `locks/exact-floors.lock` and `locks/latest-compatible.lock`, and review the
+   dependency diff before committing those paths. Do not cherry-pick the
+   bootstrap commit.
+5. Remove the downloads and both bootstrap refs. To delete the unmerged local
+   branch with `git branch -d`, first set its upstream to the matching pushed
+   `origin/kci/lock-bootstrap-ash`, delete the local branch while that upstream
+   exists, then delete the remote ref. Qualify the feature branch normally;
+   the final workflow must contain only locked fetches.
 
 ## Shipping a release
 
@@ -215,7 +243,10 @@ Follow these steps in order:
    battery of record; the operator's tag, release, and publish bind to it.
 4. An owner dispatches `Publish to Hex` on `main` after the version
    commit's `qualified` run is green. Publishing runs only through this
-   workflow on a GitHub-hosted runner, never from a workstation. The
+   workflow on a GitHub-hosted runner, never from a workstation. Its first
+   step refuses every other ref. Before upload it refuses an existing local
+   tag, remote tag, GitHub release, or Hex release; a failed lookup also refuses
+   publication, and only a clean HTTP 404 proves absence. The
    `HEX_API_KEY` secret belongs only to the protected `publish` environment,
    whose deployment branch policy must admit only `main`; only the publish
    step receives it. The workflow fetches locked dependencies, builds docs,

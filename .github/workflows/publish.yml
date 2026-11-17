@@ -22,12 +22,15 @@ jobs:
     environment: publish
     # A public repository never uses the build box or its runners.
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # Green run 44172851101: release-artifact 1m51s (fallback; no successful publish run).
+    timeout-minutes: 6
     permissions:
       contents: read
     env:
       MIX_ENV: dev
     steps:
+      - name: Refuse publishing outside the default branch
+        run: test "$GITHUB_REF" = "refs/heads/main"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -45,6 +48,10 @@ jobs:
         run: |
           env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION scripts/with-release-runtime.sh mix hex.build --output "$RUNNER_TEMP/package.tar"
           scripts/inspect-release-package.sh "$RUNNER_TEMP/package.tar"
+      - name: Refuse an already released version
+        run: |
+          version="$(sed -n 's/^  @version "\(.*\)"$/\1/p' mix.exs)"
+          scripts/assert-release-tree.sh "$version" "v$version" --unreleased
       # These selectors pin dependencies for the compatibility matrix; if set here, they
       # would freeze the published requirements to those versions, so they are cleared.
       - name: Publish to hex.pm

@@ -365,7 +365,7 @@ defmodule AshReplicant.Upgrade.CheckpointIntegrationTest do
       {"MIX_ENV", "test"}
     ]
 
-    assert_cmd!(:deps_get, mix, ["deps.get"], temp, env)
+    assert_cmd!(:deps_get, mix, ["deps.get", "--check-locked"], temp, env)
     before_dry_run = source_digest(temp)
 
     binding =

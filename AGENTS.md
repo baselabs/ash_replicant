@@ -148,11 +148,19 @@ decoder options pass through with FULL decoder admission (ADR-0026).
 ```bash
 asdf install
 scripts/with-release-runtime.sh scripts/assert-runtime-version.sh
-scripts/with-release-runtime.sh mix deps.get
+scripts/with-release-runtime.sh mix deps.get --check-locked
 set -a; . ./.env; set +a    # loads ASH_REPLICANT_TEST_URL from the gitignored .env (live lane)
 scripts/prepush.sh          # runs CI's checks locally, except mutation gates,
                             # integration discovery and the performance lane
 ```
+
+CI fetches only committed locks: `mix.lock` for current-lock cells,
+`locks/exact-floors.lock` and `locks/latest-compatible.lock` for those cells.
+The latest-compatible cell still asserts the newest admitted Hex versions; an upstream
+release makes it red until a reviewed lock refresh lands. Generate refreshes on an isolated
+`kci/lock-bootstrap-ash` ref as described in `CONTRIBUTING.md`; the bootstrap commit never
+enters the feature branch's history. Nothing compiles or tests on the owner's Mac, and this
+public repository uses GitHub-hosted CI rather than the build box.
 
 The complete release battery is itemized in `CONTRIBUTING.md`; `mix quality` covers only
 format, Credo, and Dialyzer. Unit tests run without a server; integration tests
