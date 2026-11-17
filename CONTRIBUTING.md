@@ -198,16 +198,18 @@ affected tests in the same change, and record the Ash version contract delta in 
 
 ## Shipping a release
 
-The maintainers' release operator performs these steps. An agent's work ends
-with the qualified commit on `main`; agents never tag, release, publish, or
-handle publish credentials.
+Steps 1 to 3 make the version commit, which any contributor or agent lands
+like every other commit. Steps 4 to 8 belong to the maintainers' release
+operator alone. An agent's work ends with the qualified commit on `main`;
+agents never tag, release, publish, or handle publish credentials.
 
-The operator's routine is one command per step, in this order:
+One command per step, in this order:
 
 1. `scripts/bump-version.sh NEW_VERSION` — bumps the six version-bearing
    anchors (mix.exs, CHANGELOG fold + fresh `[Unreleased]`, README, notebook,
    CHARTER stamp) and prints the steps below.
-2. `scripts/prepush.sh` — the declared gate, on the bumped tree.
+2. Commit the bump with named paths. A contributor may run
+   `scripts/prepush.sh` on the bumped tree first, on their own machine.
 3. Land the bump commit through `kci/<commit>` qualification. `main` moves
    only on that commit's `qualified` check. The qualified release head is the
    battery of record; the operator's tag, release, and publish bind to it.

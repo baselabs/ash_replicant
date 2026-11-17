@@ -13,8 +13,9 @@
 #
 # Dependency-foundation lines (Ash / Replicant / AshOnetime ranges and locks)
 # are NEVER touched: the anchors below are exact strings, not a version sed.
-# Next steps after this script: scripts/prepush.sh, commit, push, watch the
-# CI battery, then tag + release + publish from the battery-green head.
+# Next steps after this script: commit the bump with named paths and land it
+# through kci/<commit> qualification. The maintainers' release operator then
+# tags, releases and publishes from that qualified commit.
 set -euo pipefail
 
 new_version="${1:?usage: bump-version.sh NEW_VERSION [--check] (e.g. 1.2.0)}"
@@ -88,7 +89,7 @@ if [[ "$check" == true ]]; then
   echo 'bump-version: anchors PASS (no files changed)'
   exit 0
 fi
-echo 'bump-version: next: scripts/prepush.sh, then land the bump commit through kci/<commit>'
+echo 'bump-version: next: commit the bump with named paths and land it through kci/<commit>'
 echo "bump-version: qualification; main moves only on that commit's qualified check."
 echo "bump-version: the maintainers' release operator tags and publishes from that qualified commit:"
 echo "bump-version:   tag v$new_version at that sha, then create the GitHub release with"

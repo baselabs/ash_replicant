@@ -163,9 +163,9 @@ artifact checksums name the exact tree they were built from.
 
 ## Workflow
 
-Make the change, run the tests that cover it, commit with named paths, and land it through
-`kci/<commit>`; `main` moves only on that commit's `qualified` check. If it goes red, fix
-forward in the next commit.
+Make the change, commit with named paths, and land it through `kci/<commit>`; `main` moves only
+on that commit's `qualified` check. If it goes red, fix forward in the next commit. A version
+bump (`scripts/bump-version.sh`) is an ordinary commit and lands the same way.
 
 An agent working in this repository never releases, deploys or publishes: no `mix hex.publish`,
 no `scripts/publish-release.sh`, no version tag, no GitHub release, no release workflow
