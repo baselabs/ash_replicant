@@ -42,6 +42,7 @@ fail() {
 
 command -v curl >/dev/null || fail "curl is required"
 command -v gh >/dev/null || fail "gh is required (the GitHub release target check)"
+[[ -n "${GH_TOKEN:-}" ]] || fail "GitHub token is required"
 
 # --- 1. the served artifact is the verified tree ---------------------------
 # A fresh build from THIS checkout; the publish itself must have run from the
@@ -66,32 +67,32 @@ for release in json.load(sys.stdin)["releases"]:
         break
 ' "$version"
 )"
-[[ -n "$release_json" ]] || fail "hex.pm does not serve version $version"
+[[ -n "$release_json" ]] || fail "hex.pm does not serve the release version"
 
 # The list entry carries only version/has_docs; the checksum lives on the
 # release detail resource it names.
 detail_url="$(printf '%s' "$release_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["url"])')"
-detail="$(curl -fsSL "$detail_url")" || fail "hex.pm release detail unreachable for $version"
+detail="$(curl -fsSL "$detail_url")" || fail "hex.pm release detail unreachable"
 
 served_checksum="$(printf '%s' "$detail" | python3 -c 'import json,sys; print(json.load(sys.stdin)["checksum"])')"
 has_docs="$(printf '%s' "$release_json" | python3 -c 'import json,sys; print(str(json.load(sys.stdin)["has_docs"]).lower())')"
 
 [[ "$served_checksum" == "$local_checksum" ]] \
-  || fail "served checksum $served_checksum != this tree's build $local_checksum — hex serves bytes this tree did not verify"
+  || fail "served checksum differs from this tree's build"
 echo "verify-release: hex.pm serves $version (checksum $served_checksum, equal to this tree's build)"
 
 # --- 2. the release carries docs -------------------------------------------
 [[ "$has_docs" == "true" ]] \
   || fail "has_docs is false — an incomplete release by contract; publish the docs from the exact released tree"
 docs_code="$(curl -s -o /dev/null -w '%{http_code}' "https://ash-replicant.hexdocs.pm/$version/")"
-[[ "$docs_code" == "200" ]] || fail "hexdocs for $version answered $docs_code, not 200"
+[[ "$docs_code" == "200" ]] || fail "hexdocs did not answer HTTP 200"
 echo "verify-release: hexdocs $version answers 200"
 
 # --- 3. the GitHub release targets the TAG's commit ------------------------
-target="$(gh api "repos/baselabs/ash_replicant/releases/tags/$tag" --jq .target_commitish)" \
-  || fail "no GitHub release found for $tag"
+target="$(gh api --hostname github.com "repos/baselabs/ash_replicant/releases/tags/$tag" --jq .target_commitish 2>/dev/null)" \
+  || fail "GitHub release lookup failed"
 [[ "$target" == "$tag_sha" ]] \
-  || fail "GitHub release $tag targets $target, not the tag's commit $tag_sha — PATCH the release's target_commitish to the sha"
+  || fail "GitHub release target differs from the tag commit"
 echo "verify-release: GitHub release $tag targets the tag's commit $tag_sha"
 
 echo "verify-release: PASS — $version is publicly the verified bytes, documented, and correctly targeted"

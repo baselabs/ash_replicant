@@ -174,6 +174,7 @@ affected tests in the same change, and record the Ash version contract delta in 
   ```bash
   scripts/with-release-runtime.sh scripts/test-migration-drift-gate.sh
   scripts/with-release-runtime.sh scripts/test-release-checkers.sh
+  scripts/with-release-runtime.sh scripts/test-release-guards.sh
   scripts/with-release-runtime.sh scripts/test-release-contract.sh
   ```
 
@@ -187,6 +188,23 @@ affected tests in the same change, and record the Ash version contract delta in 
   dependencies. All version assertions remain, including `--newest`: an
   upstream release makes latest-compatible red until a reviewed refresh commit
   updates its lock. Upstream code enters qualification through that review.
+
+  Live release guards run once in the no-database job, separately from the
+  dependency-sensitive checker tests that also run in every compatibility cell.
+  Every GitHub REST lookup uses `gh api`; the live-guard and publish-refusal
+  steps receive `GH_TOKEN: ${{ github.token }}` only in their step environment,
+  with job `permissions: contents: read`. The qualification verdict uses its
+  own job token through the same client. Missing tokens, transport failures,
+  and HTTP errors refuse; only HTTP 404 proves an absent release. Contributors
+  running live guards or post-release verification supply `GH_TOKEN` in their
+  environment, never as a command argument or in a file.
+
+  Fixture hygiene audits the release checker's recorded lock in place with
+  root `mix deps.audit --path test/fixtures/release_checker` and the fixture's
+  own `mix hex.audit`. Its project declares no executable dependencies, so
+  auditing never fetches or rewrites the recorded lock. The upgrade fixture
+  is copied to a temporary directory, inherits `mix.lock` exactly as the live
+  upgrade test does, and runs a locked fetch and both audits before cleanup.
 
   The full release battery is intentionally not represented by `mix quality`;
   that alias covers format, Credo, and Dialyzer only.
@@ -246,7 +264,9 @@ Follow these steps in order:
    workflow on a GitHub-hosted runner, never from a workstation. Its first
    step refuses every other ref. Before upload it refuses an existing local
    tag, remote tag, GitHub release, or Hex release; a failed lookup also refuses
-   publication, and only a clean HTTP 404 proves absence. The
+   publication, and only a clean HTTP 404 proves absence. The GitHub
+   lookup uses `gh api -i` with the job's read-only token scoped to that
+   refusal step. The
    `HEX_API_KEY` secret belongs only to the protected `publish` environment,
    whose deployment branch policy must admit only `main`; only the publish
    step receives it. The workflow fetches locked dependencies, builds docs,

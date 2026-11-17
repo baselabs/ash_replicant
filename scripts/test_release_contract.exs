@@ -119,6 +119,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       "elixir --version",
       "scripts/assert-runtime-version.sh",
       "scripts/test-release-checkers.sh",
+      "scripts/test-release-guards.sh",
       "scripts/test-release-contract.sh",
       "python3 -B -m unittest discover -s scripts -p 'test_qualify.py'",
       "mix credo --strict",
@@ -338,6 +339,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       qualification_probes()
       publish_probes()
       ci_requirement_probes()
+      github_lookup_probes()
       decoder_job_probes()
       command_probes()
       compatibility_probes()
@@ -1004,12 +1006,63 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           {"200) release_tree_fail \"$label already exists\" ;;", "200) ;;"},
           {"*) release_tree_fail \"$label lookup failed\" ;;", "*) ;;"},
           {"|| release_tree_fail \"$label lookup failed\"", "|| return 0"},
-          {"    assert_release_absent 'GitHub release'", "    : 'GitHub release'"},
+          {"    assert_github_release_absent", "    :"},
           {"    assert_release_absent 'Hex release'", "    : 'Hex release'"},
-          {"git ls-remote --exit-code --tags origin", ": --exit-code --tags origin"}
+          {"git ls-remote --exit-code --tags origin", ": --exit-code --tags origin"},
+          {"gh api --hostname github.com -i", "curl -i"},
+          {"[[ -n \"${GH_TOKEN:-}\" ]]", "true"},
+          {"read -r protocol code _", "read -r protocol _ code"},
+          {"404:1) ;;", "404:0) ;;"},
+          {"200:0) release_tree_fail 'GitHub release already exists' ;;", "200:0) ;;"},
+          {"*) release_tree_fail 'GitHub release lookup failed' ;;", "*) ;;"}
         ] do
       prepare_fixture()
       replace_once!("scripts/assert-release-tree.sh", old, replacement)
+      assert_invalid!()
+    end
+  end
+
+  defp github_lookup_probes do
+    for {workflow, job, command} <- [
+          {@workflow, "no-database", "scripts/test-release-guards.sh"},
+          {@publish, "publish", "scripts/assert-release-tree.sh"}
+        ] do
+      for replacement <- ["", "          GH_TOKEN: ${{ secrets.HEX_API_KEY }}\n"] do
+        prepare_fixture()
+        mutate_job!(job, "          GH_TOKEN: ${{ github.token }}\n", replacement, workflow)
+        assert_invalid!()
+      end
+
+      prepare_fixture()
+
+      mutate_job!(
+        job,
+        "      MIX_ENV:",
+        "      GH_TOKEN: ${{ github.token }}\n      MIX_ENV:",
+        workflow
+      )
+
+      assert_invalid!()
+      prepare_fixture()
+      mutate_job!(job, "      contents: read\n", "      contents: write\n", workflow)
+      assert_invalid!()
+      prepare_fixture()
+      mutate_job!(job, command, "true", workflow)
+      assert_invalid!()
+    end
+
+    for {path, old, replacement} <- [
+          {"scripts/test-release-checkers.sh", "scripts/test-newest-dependency.sh",
+           "scripts/test-release-guards.sh\nscripts/test-newest-dependency.sh"},
+          {"scripts/qualify.py", ~s|"gh", "api", "--hostname", "github.com"|, ~s|"curl"|},
+          {"scripts/qualify.py", ~s|if not os.environ.get("GH_TOKEN"):|, "if False:"},
+          {"scripts/verify-release.sh", "gh api --hostname github.com", "curl"},
+          {"scripts/verify-release.sh", ~s|[[ -n "${GH_TOKEN:-}" ]]|, "true"},
+          {"scripts/test-release-guards.sh", "without_github_token", "without_token_bypass"},
+          {"test/fixtures/release_checker/mix.exs", "deps: []", ~s|deps: [{:ash, ">= 0.0.0"}]|}
+        ] do
+      prepare_fixture()
+      replace_once!(path, old, replacement)
       assert_invalid!()
     end
   end
@@ -1209,11 +1262,13 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     end
 
     prepare_fixture()
+
     mutate_job!(
       "compatibility",
       "          mix deps.get --check-locked\n",
       "          mix deps.get\n"
     )
+
     assert_invalid!()
 
     prepare_fixture()
@@ -2071,6 +2126,9 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           "scripts/test-release-checkers.sh",
           "scripts/audit-fixtures.sh",
           "scripts/assert-release-tree.sh",
+          "scripts/test-release-guards.sh",
+          "scripts/verify-release.sh",
+          "test/fixtures/release_checker/mix.exs",
           "test/integration/upgrade_checkpoint_test.exs",
           "locks/exact-floors.lock",
           "locks/latest-compatible.lock",

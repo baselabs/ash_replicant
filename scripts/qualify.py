@@ -4,9 +4,8 @@
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
-from urllib.error import URLError
-from urllib.request import Request, urlopen
 
 
 INVENTORY = Path(__file__).with_name("qualification-jobs.json")
@@ -50,23 +49,22 @@ def refusals(qualification_result, jobs, expected):
     return refused
 
 
-def run_jobs(api, repository, run_id, token):
+def run_jobs(repository, run_id):
     """Read every latest job execution, refusing incomplete or oversized pagination."""
+    if not os.environ.get("GH_TOKEN"):
+        raise ValueError("GitHub token is required")
     jobs = []
     total = None
     for page in range(1, MAX_PAGES + 1):
-        request = Request(
-            f"{api}/repos/{repository}/actions/runs/{run_id}/jobs"
-            f"?filter=latest&per_page=100&page={page}",
-            headers={
-                "Accept": "application/vnd.github+json",
-                "Authorization": f"Bearer {token}",
-                "User-Agent": "AshReplicant-qualify",
-                "X-GitHub-Api-Version": "2022-11-28",
-            },
+        response = subprocess.run(
+            [
+                "gh", "api", "--hostname", "github.com",
+                f"repos/{repository}/actions/runs/{run_id}/jobs"
+                f"?filter=latest&per_page=100&page={page}",
+            ],
+            check=True, capture_output=True, text=True, timeout=30,
         )
-        with urlopen(request, timeout=30) as response:
-            body = json.load(response)
+        body = json.loads(response.stdout)
         if not isinstance(body, dict):
             raise ValueError("invalid job page")
         count = body.get("total_count")
@@ -88,13 +86,11 @@ def main():
     try:
         expected = json.loads(INVENTORY.read_text(encoding="utf-8"))
         jobs = run_jobs(
-            os.environ["GITHUB_API_URL"],
             os.environ["GITHUB_REPOSITORY"],
             os.environ["GITHUB_RUN_ID"],
-            os.environ["GH_TOKEN"],
         )
         refused = refusals(os.environ.get("QUALIFICATION_RESULT"), jobs, expected)
-    except (KeyError, OSError, URLError, ValueError, TypeError):
+    except (KeyError, OSError, subprocess.SubprocessError, ValueError, TypeError):
         refused = ["qualification inputs or Actions job inventory could not be read"]
     if refused:
         print("Qualification refused:\n  " + "\n  ".join(refused))

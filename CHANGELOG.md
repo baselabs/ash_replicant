@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Authenticate every GitHub REST lookup through `gh api` with a step-scoped
+  job token. Release guards distinguish HTTP 404 absence from lookup failures,
+  run their real-service self-tests once per qualification, and mutation-test
+  token placement and refusal controls.
+- Audit the release checker's recorded lock without loading unfetched fixture
+  dependencies, and correct release-contract test formatting.
 - Bound every CI job by its measured green duration, disable persisted checkout
   credentials, and fetch only committed dependency locks. Exact-floor and
   latest-compatible cells carry separate reviewed locks; new upstream releases

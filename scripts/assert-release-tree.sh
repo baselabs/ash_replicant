@@ -4,7 +4,7 @@ set -euo pipefail
 release_tree_fail() { echo "release tree: $1" >&2; exit 1; }
 
 # Only an HTTP 404 proves absence. A transport error, redirect, or any other
-# response refuses publication; neither endpoint needs the publish credential.
+# response refuses publication. GitHub uses the caller's read-only job token.
 assert_release_absent() {
   local label="$1" url="$2" code
   code="$(curl --silent --show-error --max-time 30 --output /dev/null \
@@ -13,6 +13,21 @@ assert_release_absent() {
     404) ;;
     200) release_tree_fail "$label already exists" ;;
     *) release_tree_fail "$label lookup failed" ;;
+  esac
+}
+
+# gh exits 1 for HTTP errors, including the 404 that proves absence. Inspect
+# the first status line and the exit code; never print the response or stderr.
+assert_github_release_absent() {
+  local path="$1" response protocol code result=0
+  [[ -n "${GH_TOKEN:-}" ]] || release_tree_fail 'GitHub token is required'
+  response="$(gh api --hostname github.com -i "$path" 2>/dev/null)" || result=$?
+  read -r protocol code _ <<< "$response"
+  [[ "$protocol" == HTTP/* ]] || release_tree_fail 'GitHub release lookup failed'
+  case "$code:$result" in
+    404:1) ;;
+    200:0) release_tree_fail 'GitHub release already exists' ;;
+    *) release_tree_fail 'GitHub release lookup failed' ;;
   esac
 }
 
@@ -42,7 +57,7 @@ release_tree_main() {
       2) ;;
       *) release_tree_fail 'remote tag lookup failed' ;;
     esac
-    assert_release_absent 'GitHub release' "https://api.github.com/repos/baselabs/ash_replicant/releases/tags/$tag"
+    assert_github_release_absent "repos/baselabs/ash_replicant/releases/tags/$tag"
     assert_release_absent 'Hex release' "https://hex.pm/api/packages/ash_replicant/releases/$version"
     echo 'release tree: version is unpublished and untagged'
     return

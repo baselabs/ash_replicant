@@ -18,6 +18,8 @@ jobs:
     runs-on: ubuntu-24.04
     # Green run 44172851101: No-database tests 25m49s.
     timeout-minutes: 78
+    permissions:
+      contents: read
     env:
       MIX_ENV: test
 
@@ -43,6 +45,10 @@ jobs:
         if: ${{ !cancelled() && steps.compile.outcome == 'success' }}
       - run: scripts/test-release-checkers.sh
         if: ${{ !cancelled() && steps.compile.outcome == 'success' }}
+      - run: scripts/test-release-guards.sh
+        if: ${{ !cancelled() && steps.compile.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
       - run: scripts/test-release-contract.sh
         if: ${{ !cancelled() && steps.compile.outcome == 'success' }}
       - run: python3 -B -m unittest discover -s scripts -p 'test_qualify.py'

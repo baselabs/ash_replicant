@@ -241,7 +241,6 @@ fi
 
 scripts/test-ash-onetime-migration-checker.sh >/dev/null
 scripts/test-release-package-inspection.sh >/dev/null
-scripts/test-release-guards.sh
 scripts/test-newest-dependency.sh
 scripts/test-fresh-consumer-requirements.sh
 scripts/test-fresh-consumer.sh --check

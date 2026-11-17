@@ -64,7 +64,7 @@ defmodule AshReplicant.ReleaseContract do
   release_tree_fail() { echo "release tree: $1" >&2; exit 1; }
 
   # Only an HTTP 404 proves absence. A transport error, redirect, or any other
-  # response refuses publication; neither endpoint needs the publish credential.
+  # response refuses publication. GitHub uses the caller's read-only job token.
   assert_release_absent() {
     local label="$1" url="$2" code
     code="$(curl --silent --show-error --max-time 30 --output /dev/null \
@@ -73,6 +73,21 @@ defmodule AshReplicant.ReleaseContract do
       404) ;;
       200) release_tree_fail "$label already exists" ;;
       *) release_tree_fail "$label lookup failed" ;;
+    esac
+  }
+
+  # gh exits 1 for HTTP errors, including the 404 that proves absence. Inspect
+  # the first status line and the exit code; never print the response or stderr.
+  assert_github_release_absent() {
+    local path="$1" response protocol code result=0
+    [[ -n "${GH_TOKEN:-}" ]] || release_tree_fail 'GitHub token is required'
+    response="$(gh api --hostname github.com -i "$path" 2>/dev/null)" || result=$?
+    read -r protocol code _ <<< "$response"
+    [[ "$protocol" == HTTP/* ]] || release_tree_fail 'GitHub release lookup failed'
+    case "$code:$result" in
+      404:1) ;;
+      200:0) release_tree_fail 'GitHub release already exists' ;;
+      *) release_tree_fail 'GitHub release lookup failed' ;;
     esac
   }
 
@@ -102,7 +117,7 @@ defmodule AshReplicant.ReleaseContract do
         2) ;;
         *) release_tree_fail 'remote tag lookup failed' ;;
       esac
-      assert_release_absent 'GitHub release' "https://api.github.com/repos/baselabs/ash_replicant/releases/tags/$tag"
+      assert_github_release_absent "repos/baselabs/ash_replicant/releases/tags/$tag"
       assert_release_absent 'Hex release' "https://hex.pm/api/packages/ash_replicant/releases/$version"
       echo 'release tree: version is unpublished and untagged'
       return
@@ -118,6 +133,56 @@ defmodule AshReplicant.ReleaseContract do
   if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     release_tree_main "$@"
   fi
+  """
+
+  @checker_fixture_project ~S"""
+  defmodule ReleaseChecker.MixProject do
+    use Mix.Project
+
+    def project do
+      [
+        app: :release_checker,
+        version: "0.1.0",
+        # The lock is recorded audit input; this checker executes no dependencies.
+        deps: []
+      ]
+    end
+  end
+  """
+
+  @github_target_lookup ~S"""
+  target="$(gh api --hostname github.com "repos/baselabs/ash_replicant/releases/tags/$tag" --jq .target_commitish 2>/dev/null)" \
+    || fail "GitHub release lookup failed"
+  """
+
+  @qualification_lookup ~S"""
+          response = subprocess.run(
+              [
+                  "gh", "api", "--hostname", "github.com",
+                  f"repos/{repository}/actions/runs/{run_id}/jobs"
+                  f"?filter=latest&per_page=100&page={page}",
+              ],
+              check=True, capture_output=True, text=True, timeout=30,
+          )
+          body = json.loads(response.stdout)
+  """
+
+  @github_guard_tests ~S"""
+  reject 'GitHub release already exists' assert_github_release_absent \
+    repos/baselabs/ash_replicant/releases/tags/v1.6.3
+  reject 'Hex release already exists' assert_release_absent 'Hex release' \
+    https://hex.pm/api/packages/ash_replicant/releases/1.6.3
+  assert_github_release_absent \
+    repos/baselabs/ash_replicant/releases/tags/v999999.0.0
+  without_github_token() (
+    unset GH_TOKEN
+    assert_github_release_absent "$@"
+  )
+  reject 'GitHub token is required' without_github_token \
+    repos/baselabs/ash_replicant/releases/tags/v999999.0.0
+  # A real invalid date query yields an HTTP error other than absence.
+  reject 'GitHub release lookup failed' assert_github_release_absent \
+    'repos/baselabs/ash_replicant/commits?since=not-a-date'
   """
 
   # The image ref rides the matrix (pg_image: the pinned digest ref per
@@ -341,7 +406,7 @@ defmodule AshReplicant.ReleaseContract do
   ]
 
   @job_keys %{
-    "no-database" => ~w(env name runs-on steps timeout-minutes),
+    "no-database" => ~w(env name permissions runs-on steps timeout-minutes),
     "compatibility" => ~w(env name runs-on steps strategy timeout-minutes),
     "release-artifact" => ~w(env name runs-on steps timeout-minutes),
     "performance" => ~w(env name runs-on steps timeout-minutes),
@@ -359,6 +424,8 @@ defmodule AshReplicant.ReleaseContract do
       {:run, "elixir --version", %{"if" => @fail_late}},
       {:run, "scripts/assert-runtime-version.sh", %{"if" => @fail_late}},
       {:run, "scripts/test-release-checkers.sh", %{"if" => @fail_late}},
+      {:run, "scripts/test-release-guards.sh",
+       %{"if" => @fail_late, "env" => %{"GH_TOKEN" => "${{ github.token }}"}}},
       {:run, "scripts/test-release-contract.sh", %{"if" => @fail_late}},
       {:run, "python3 -B -m unittest discover -s scripts -p 'test_qualify.py'",
        %{"if" => @fail_late}},
@@ -732,6 +799,11 @@ defmodule AshReplicant.ReleaseContract do
       |> Enum.count(&(String.trim(&1) == "scripts/test-postgres-readiness.sh >/dev/null"))
 
     assert(readiness_count == 1, "PostgreSQL readiness checker wiring is incomplete")
+
+    assert(
+      not String.contains?(source, "scripts/test-release-guards.sh"),
+      "live release guards must run only in their dedicated step"
+    )
   rescue
     _error in [File.Error] -> fail("release checker wiring input is invalid")
   end
@@ -876,6 +948,7 @@ defmodule AshReplicant.ReleaseContract do
             },
             %{
               "name" => "Refuse an already released version",
+              "env" => %{"GH_TOKEN" => "${{ github.token }}"},
               "run" => @publish_unreleased_check
             },
             %{
@@ -942,12 +1015,33 @@ defmodule AshReplicant.ReleaseContract do
   defp assert_ci_sources(root) do
     for {path, expected} <- [
           {"scripts/audit-fixtures.sh", @fixture_audit_script},
-          {"scripts/assert-release-tree.sh", @release_tree_script}
+          {"scripts/assert-release-tree.sh", @release_tree_script},
+          {"test/fixtures/release_checker/mix.exs", @checker_fixture_project}
         ] do
       assert(
         File.read!(Path.join(root, path)) == expected,
         "CI safety script contract is invalid"
       )
+    end
+
+    for {path, expected} <- [
+          {"scripts/verify-release.sh", @github_target_lookup},
+          {"scripts/qualify.py", @qualification_lookup},
+          {"scripts/test-release-guards.sh", @github_guard_tests}
+        ] do
+      source = File.read!(Path.join(root, path))
+      assert(String.contains?(source, expected), "GitHub API lookup contract is invalid")
+    end
+
+    for path <- ["scripts/verify-release.sh", "scripts/qualify.py"] do
+      source = File.read!(Path.join(root, path))
+
+      required =
+        if String.ends_with?(path, ".py"),
+          do: ~s|if not os.environ.get("GH_TOKEN"):|,
+          else: ~s|[[ -n "${GH_TOKEN:-}" ]] || fail "GitHub token is required"|
+
+      assert(String.contains?(source, required), "GitHub lookup must require its environment token")
     end
 
     upgrade = File.read!(Path.join(root, "test/integration/upgrade_checkpoint_test.exs"))
@@ -1103,6 +1197,13 @@ defmodule AshReplicant.ReleaseContract do
       assert(job["runs-on"] == "ubuntu-24.04", "CI release runner is invalid")
       assert(job["env"] == @job_env[name], "CI release job environment is invalid")
 
+      if name == "no-database" do
+        assert(
+          job["permissions"] == %{"contents" => "read"},
+          "release guards need read-only contents"
+        )
+      end
+
       assert(
         Enum.map(Map.get(job, "steps", []), &step_signature/1) == expected_steps,
         "CI release step contract is invalid"
@@ -1112,13 +1213,13 @@ defmodule AshReplicant.ReleaseContract do
 
   defp step_signature(%{"run" => run} = step) when is_binary(run) do
     assert(
-      Map.keys(step) -- ["name", "run", "id", "if"] == [],
+      Map.keys(step) -- ["name", "run", "id", "if", "env"] == [],
       "CI release run step control is invalid"
     )
 
-    # Controls participate in the exact per-job signature. Only the two
-    # compile steps admit an id, and only their listed checks admit an if.
-    case Map.take(step, ["id", "if"]) do
+    # Controls participate in the exact per-job signature, including the token
+    # environment admitted only for the dedicated live release-guard step.
+    case Map.take(step, ["id", "if", "env"]) do
       controls when map_size(controls) == 0 -> {:run, String.trim(run)}
       controls -> {:run, String.trim(run), controls}
     end

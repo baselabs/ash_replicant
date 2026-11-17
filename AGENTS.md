@@ -162,6 +162,17 @@ release makes it red until a reviewed lock refresh lands. Generate refreshes on 
 enters the feature branch's history. Nothing compiles or tests on the owner's Mac, and this
 public repository uses GitHub-hosted CI rather than the build box.
 
+Live release-guard self-tests run once in the no-database job, separately from
+matrix checker tests. Every GitHub REST lookup uses `gh api` with `GH_TOKEN`
+from the calling step's environment; the guard and publish-refusal jobs grant
+only `contents: read`. Only an HTTP 404 proves absence; a missing token,
+transport failure or any other unexpected response refuses. The workflow
+contract mutation-tests token placement, transport and refusal controls.
+Fixture hygiene audits the release checker's recorded lock in place without
+fetching dependencies (its project declares none), and audits a temporary
+upgrade consumer that inherits the root lock exactly as the live upgrade test
+does. No audit rewrites a committed lock.
+
 The complete release battery is itemized in `CONTRIBUTING.md`; `mix quality` covers only
 format, Credo, and Dialyzer. Unit tests run without a server; integration tests
 (`test/integration/**`, `@moduletag :integration`) need a live logical-replication Postgres and

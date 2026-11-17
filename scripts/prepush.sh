@@ -75,6 +75,8 @@ main() {
   step "prepush collector self-tests" scripts/test-prepush.sh
   step "release checkers" \
     env -u ASH_REPLICANT_TEST_URL scripts/with-release-runtime.sh scripts/test-release-checkers.sh
+  step "release guards (live APIs)" \
+    env -u ASH_REPLICANT_TEST_URL scripts/with-release-runtime.sh scripts/test-release-guards.sh
   step "release contract" \
     env -u ASH_REPLICANT_TEST_URL scripts/with-release-runtime.sh scripts/test-release-contract.sh
   step "credo --strict" \
