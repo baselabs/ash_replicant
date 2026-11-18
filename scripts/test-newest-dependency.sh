@@ -3,11 +3,10 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 fixture="$root/test/fixtures/release_checker"
 checker="$root/scripts/assert-dependency-version.sh"
-cd "$fixture"
 # Replay the recorded Hex API response and lock, independent of new releases.
-"$checker" --newest --hex-response "$fixture/ash.json" ash '>= 3.34.6 and < 4.0.0-0'
-"$checker" --newest --hex-response "$fixture/replicant.json" replicant '>= 1.4.0 and < 1.5.1'
-if output="$("$checker" --newest --hex-response "$fixture/replicant.json" replicant '>= 1.4.0 and < 2.0.0-0' 2>&1)"; then
+"$checker" --lock "$fixture/recorded.lock" --newest --hex-response "$fixture/ash.json" ash '>= 3.34.6 and < 4.0.0-0'
+"$checker" --lock "$fixture/recorded.lock" --newest --hex-response "$fixture/replicant.json" replicant '>= 1.4.0 and < 1.5.1'
+if output="$("$checker" --lock "$fixture/recorded.lock" --newest --hex-response "$fixture/replicant.json" replicant '>= 1.4.0 and < 2.0.0-0' 2>&1)"; then
   echo 'newest checker accepted the older recorded Replicant lock' >&2
   exit 1
 fi

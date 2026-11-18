@@ -1,23 +1,20 @@
 name: Qualification
 
-# Shared proofs called by ci.yml for landing and pull-request.yml for review.
+# Proofs called only by ci.yml for candidate qualification.
 on:
   workflow_call:
 
 permissions:
   contents: read
 
-env:
-  ELIXIR_VERSION: "1.20.3"
-  OTP_VERSION: "29.0.3"
-
-# Job timeout rule: ceil(3x measured green seconds / 60), minimum 5 minutes.
+# Job timeout rule (also ci.yml and publish.yml): ceil(2x measured green seconds / 60).
+# Floor: 3 minutes only when the doubled duration rounds to 1 or 2 minutes.
 jobs:
   no-database:
     name: No-database tests
     runs-on: ubuntu-24.04
-    # Green run 44172851101: No-database tests 25m49s.
-    timeout-minutes: 78
+    # Green run 44214414813: No-database tests 23m10s.
+    timeout-minutes: 47
     permissions:
       contents: read
     env:
@@ -29,9 +26,9 @@ jobs:
           persist-credentials: false
       - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
         with:
-          elixir-version: ${{ env.ELIXIR_VERSION }}
-          otp-version: ${{ env.OTP_VERSION }}
+          version-file: .tool-versions
           version-type: strict
+      - run: scripts/assert-runtime-version.sh
 
       - run: mix deps.get --check-locked
       - run: mix deps.compile
@@ -40,8 +37,6 @@ jobs:
       - run: mix format --check-formatted
         if: ${{ !cancelled() && steps.compile.outcome == 'success' }}
       - run: elixir --version
-        if: ${{ !cancelled() && steps.compile.outcome == 'success' }}
-      - run: scripts/assert-runtime-version.sh
         if: ${{ !cancelled() && steps.compile.outcome == 'success' }}
       - run: scripts/test-release-checkers.sh
         if: ${{ !cancelled() && steps.compile.outcome == 'success' }}
@@ -67,11 +62,10 @@ jobs:
 
       - name: Guard-mutation gates
         if: ${{ !cancelled() && steps.compile.outcome == 'success' }}
-        # Compare the candidate with the PR base or main, including a new kci/ ref.
+        # Compare the candidate with main, including a new kci/ ref.
         # An unavailable base or an evidence-machinery change runs the full matrix.
         run: |
-          BASE="${{ github.event.pull_request.base.sha || 'main' }}"
-          if git fetch --no-tags --quiet origin "$BASE"; then
+          if git fetch --no-tags --quiet origin main; then
             scripts/run-mutation-gates.py --diff-base FETCH_HEAD
           else
             scripts/run-mutation-gates.py
@@ -80,8 +74,8 @@ jobs:
   compatibility:
     name: Dependencies ${{ matrix.label }} / PostgreSQL ${{ matrix.pg_major }}
     runs-on: ubuntu-24.04
-    # Green run 44172851101: latest-compatible PG16, slowest compatibility cell 18m26s.
-    timeout-minutes: 56
+    # Green run 44214414813: current-lock PG16, slowest compatibility cell 15m1s.
+    timeout-minutes: 31
     strategy:
       fail-fast: false
       matrix:
@@ -149,36 +143,44 @@ jobs:
           persist-credentials: false
 
       - name: Start PostgreSQL ${{ matrix.pg_major }} with logical replication
+        env:
+          PG_IMAGE: ${{ matrix.pg_image }}
         run: |
           docker run -d --name pg \
             -e POSTGRES_HOST_AUTH_METHOD=trust \
             -p 5432:5432 \
-            ${{ matrix.pg_image }} \
+            "$PG_IMAGE" \
             -c wal_level=logical -c max_replication_slots=20 -c max_wal_senders=20
           scripts/wait-for-postgres.sh pg
 
       - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
         with:
-          elixir-version: ${{ env.ELIXIR_VERSION }}
-          otp-version: ${{ env.OTP_VERSION }}
+          version-file: .tool-versions
           version-type: strict
+      - run: scripts/assert-runtime-version.sh
 
       - name: Fetch and assert dependency versions
+        env:
+          LOCKFILE: ${{ matrix.lockfile }}
+          ASH_REQUIREMENT: ${{ matrix.ash_requirement }}
+          REPLICANT_REQUIREMENT: ${{ matrix.replicant_requirement }}
+          ONETIME_REQUIREMENT: ${{ matrix.onetime_requirement }}
+          DEPENDENCY_LANE: ${{ matrix.label }}
         run: |
-          if [[ '${{ matrix.lockfile }}' != 'mix.lock' ]]; then
-            cp '${{ matrix.lockfile }}' mix.lock
+          if [[ "$LOCKFILE" != 'mix.lock' ]]; then
+            cp "$LOCKFILE" mix.lock
           fi
           mix deps.get --check-locked
           mix deps ash
           mix deps replicant
           mix deps ash_onetime
-          scripts/assert-dependency-version.sh ash '${{ matrix.ash_requirement }}'
-          scripts/assert-dependency-version.sh replicant '${{ matrix.replicant_requirement }}'
-          scripts/assert-dependency-version.sh ash_onetime '${{ matrix.onetime_requirement }}'
-          if [[ '${{ matrix.label }}' == 'latest-compatible' ]]; then
-            scripts/assert-dependency-version.sh --newest ash '${{ matrix.ash_requirement }}'
-            scripts/assert-dependency-version.sh --newest replicant '${{ matrix.replicant_requirement }}'
-            scripts/assert-dependency-version.sh --newest ash_onetime '${{ matrix.onetime_requirement }}'
+          scripts/assert-dependency-version.sh ash "$ASH_REQUIREMENT"
+          scripts/assert-dependency-version.sh replicant "$REPLICANT_REQUIREMENT"
+          scripts/assert-dependency-version.sh ash_onetime "$ONETIME_REQUIREMENT"
+          if [[ "$DEPENDENCY_LANE" == 'latest-compatible' ]]; then
+            scripts/assert-dependency-version.sh --newest ash "$ASH_REQUIREMENT"
+            scripts/assert-dependency-version.sh --newest replicant "$REPLICANT_REQUIREMENT"
+            scripts/assert-dependency-version.sh --newest ash_onetime "$ONETIME_REQUIREMENT"
             scripts/assert-dependency-version.sh --newest ash_postgres '~> 2.13'
             scripts/assert-dependency-version.sh --newest spark '~> 2.7.0'
           fi
@@ -194,8 +196,6 @@ jobs:
         id: compile
 
       - run: elixir --version
-        if: ${{ !cancelled() && steps.compile.outcome == 'success' }}
-      - run: scripts/assert-runtime-version.sh
         if: ${{ !cancelled() && steps.compile.outcome == 'success' }}
       - run: scripts/test-release-checkers.sh
         if: ${{ !cancelled() && steps.compile.outcome == 'success' }}
@@ -224,8 +224,8 @@ jobs:
   performance:
     name: Measured performance bounds
     runs-on: ubuntu-24.04
-    # Green run 44172851101: Measured performance bounds 2m49s.
-    timeout-minutes: 9
+    # Green run 44214414813: Measured performance bounds 2m40s.
+    timeout-minutes: 6
     env:
       MIX_ENV: test
       ASH_REPLICANT_TEST_URL: postgres://postgres@localhost:5432/postgres
@@ -247,9 +247,9 @@ jobs:
 
       - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
         with:
-          elixir-version: ${{ env.ELIXIR_VERSION }}
-          otp-version: ${{ env.OTP_VERSION }}
+          version-file: .tool-versions
           version-type: strict
+      - run: scripts/assert-runtime-version.sh
 
       - run: mix deps.get --check-locked
       - run: mix deps.compile
@@ -268,8 +268,8 @@ jobs:
   decoder-old-majors:
     name: Plugin decoders / PostgreSQL ${{ matrix.pg_major }}
     runs-on: ubuntu-24.04
-    # Green run 44172851101: PG12, slowest plugin decoder cell 2m29s.
-    timeout-minutes: 8
+    # Green run 44214414813: PG12, slowest plugin decoder cell 2m36s.
+    timeout-minutes: 6
     strategy:
       fail-fast: false
       matrix:
@@ -295,12 +295,14 @@ jobs:
 
       - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
         with:
-          elixir-version: ${{ env.ELIXIR_VERSION }}
-          otp-version: ${{ env.OTP_VERSION }}
+          version-file: .tool-versions
           version-type: strict
+      - run: scripts/assert-runtime-version.sh
 
       - name: Build the old-major plugin substrate image
-        run: docker build -f test/support/pg_old.dockerfile --build-arg BASE=${{ matrix.base }} -t pgold-plugins:ci .
+        env:
+          PG_BASE: ${{ matrix.base }}
+        run: docker build -f test/support/pg_old.dockerfile --build-arg "BASE=$PG_BASE" -t pgold-plugins:ci .
 
       - name: Start the destination and the old-major source
         run: |
@@ -337,8 +339,8 @@ jobs:
   release-artifact:
     name: Selector-free docs and package
     runs-on: ubuntu-24.04
-    # Green run 44172851101: Selector-free docs and package 1m51s.
-    timeout-minutes: 6
+    # Green run 44214414813: Selector-free docs and package 1m52s.
+    timeout-minutes: 4
     env:
       MIX_ENV: dev
 
@@ -348,15 +350,14 @@ jobs:
           persist-credentials: false
       - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
         with:
-          elixir-version: ${{ env.ELIXIR_VERSION }}
-          otp-version: ${{ env.OTP_VERSION }}
+          version-file: .tool-versions
           version-type: strict
+      - run: scripts/assert-runtime-version.sh
 
       - run: env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix deps.get --check-locked
       - run: mix deps.compile
       - run: mix compile --warnings-as-errors
       - run: elixir --version
-      - run: scripts/assert-runtime-version.sh
       - run: scripts/assert-release-contract.sh
       - name: Assert selector-free public dependency requirements
         run: |

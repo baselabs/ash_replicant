@@ -3,18 +3,31 @@ set -euo pipefail
 
 newest=false
 hex_response=""
-if [[ "${1:-}" == --newest ]]; then
-  newest=true
-  shift
-fi
-if [[ "${1:-}" == --hex-response ]]; then
-  [[ "$newest" == true ]] || exit 2
-  hex_response="${2:?--hex-response requires a recorded Hex body}"
-  shift 2
-fi
-dependency="${1:?usage: assert-dependency-version.sh [--newest] DEPENDENCY REQUIREMENT}"
-requirement="${2:?usage: assert-dependency-version.sh [--newest] DEPENDENCY REQUIREMENT}"
-[[ "$#" -eq 2 ]] || exit 2
+lockfile="$(cd "$(dirname "$0")/.." && pwd)/mix.lock"
+usage='usage: assert-dependency-version.sh [--lock PATH] [--newest [--hex-response PATH]] DEPENDENCY REQUIREMENT'
+while [[ "${1:-}" == --* ]]; do
+  case "$1" in
+    --lock)
+      [[ "$#" -ge 2 && -n "$2" ]] || { echo "$usage" >&2; exit 2; }
+      lockfile="$2"
+      shift 2
+      ;;
+    --newest)
+      newest=true
+      shift
+      ;;
+    --hex-response)
+      [[ "$#" -ge 2 && -n "$2" ]] || { echo "$usage" >&2; exit 2; }
+      hex_response="$2"
+      shift 2
+      ;;
+    *) echo "$usage" >&2; exit 2 ;;
+  esac
+done
+[[ "$#" -eq 2 ]] || { echo "$usage" >&2; exit 2; }
+[[ -z "$hex_response" || "$newest" == true ]] || exit 2
+dependency="$1"
+requirement="$2"
 
 if [[ ! "$dependency" =~ ^[a-z][a-z0-9_]*$ ]]; then
   echo "dependency assertion name is invalid" >&2
@@ -22,13 +35,14 @@ if [[ ! "$dependency" =~ ^[a-z][a-z0-9_]*$ ]]; then
 fi
 
 # Read the lock as recorded input, independently of declared or fetched deps.
-# A fixture may deliberately declare no executable dependencies.
-version="$(ASH_REPLICANT_ASSERTED_DEPENDENCY="$dependency" elixir -e '
+# Recorded checker fixtures are data, never an Elixir project.
+version="$(ASH_REPLICANT_ASSERTED_DEPENDENCY="$dependency" \
+  ASH_REPLICANT_ASSERTED_LOCK="$lockfile" elixir -e '
   Mix.start()
   dependency = System.fetch_env!("ASH_REPLICANT_ASSERTED_DEPENDENCY")
 
   entry =
-    "mix.lock"
+    System.fetch_env!("ASH_REPLICANT_ASSERTED_LOCK")
     |> Mix.Dep.Lock.read()
     |> Enum.find(fn {name, _lock} -> to_string(name) == dependency end)
 

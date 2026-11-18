@@ -9,14 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Set CI timeouts to twice the slowest measured green row from run 44214414813,
+  rounded up, with a three-minute floor for short control jobs. Read exact runtime
+  versions only from `.tool-versions` and refuse mismatches after every install.
+- Qualify commits only through `kci/**`; remove pull-request execution and pass
+  matrix inputs into shell scripts through step environments.
 - Authenticate every GitHub REST lookup through `gh api` with a step-scoped
   job token. Release guards distinguish HTTP 404 absence from lookup failures,
   run their real-service self-tests once per qualification, and mutation-test
   token placement and refusal controls.
-- Audit the release checker's recorded lock without loading unfetched fixture
-  dependencies, scope its historical Ash advisory acknowledgments to the inert
-  fixture, and carry the root's guarded Cloak cipher policy into the upgrade
-  consumer. Correct release-contract test formatting and its shell-string sigil.
+- Treat release-checker fixtures as recorded data, with an explicit lock-path
+  input and no Elixir project or historical Ash advisory ignores. Preserve the
+  recorded lock bytes and the upgrade consumer's reasoned Cloak exception.
 - Read dependency versions directly from locks, including inert checker inputs,
   and require the upgrade fixture's database URL at repo initialization so
   metadata-only dependency audits remain database-free.
@@ -27,8 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   credentials, and fetch only committed dependency locks. Exact-floor and
   latest-compatible cells carry separate reviewed locks; new upstream releases
   fail the newest-version assertions until the latest lock is refreshed.
-- Audit the recorded release-checker dependencies and the materialized upgrade
-  fixture in CI. The upgrade consumer fetch also refuses lock changes.
+- Audit the materialized upgrade fixture with both feeds in CI. Its fetch
+  refuses lock changes.
 - Refuse publishing outside `main` or when a local tag, remote tag, GitHub release,
   or Hex release already exists. Failed release lookups refuse publication.
 

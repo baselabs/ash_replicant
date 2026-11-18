@@ -20,8 +20,7 @@ defmodule AshReplicant.ReleaseContract do
   @participant_example_end "<!-- ash-replicant-destination-participant-example:end -->"
 
   @setup_beam_inputs %{
-    "elixir-version" => "${{ env.ELIXIR_VERSION }}",
-    "otp-version" => "${{ env.OTP_VERSION }}",
+    "version-file" => ".tool-versions",
     "version-type" => "strict"
   }
 
@@ -42,10 +41,6 @@ defmodule AshReplicant.ReleaseContract do
 
   root="$(cd "$(dirname "$0")/.." && pwd)"
   cd "$root"
-
-  # This fixture is recorded checker input, never a dependency-fetch target.
-  mix deps.audit --path test/fixtures/release_checker
-  (cd test/fixtures/release_checker && mix hex.audit)
 
   # Match upgrade_checkpoint_test.exs: the real consumer inherits the root lock.
   fixture="$(mktemp -d "${RUNNER_TEMP:?}/ash-replicant-upgrade-audit.XXXXXX")"
@@ -135,24 +130,6 @@ defmodule AshReplicant.ReleaseContract do
   fi
   """
 
-  @checker_fixture_project """
-  defmodule ReleaseChecker.MixProject do
-    use Mix.Project
-
-    def project do
-      [
-        app: :release_checker,
-        version: "0.1.0",
-        # The lock is recorded audit input; this checker executes no dependencies.
-        deps: [],
-        # This historical lock is data, never executed (deps is empty and guarded).
-        # These Ash findings therefore have no runtime exposure in this fixture.
-        hex: [ignore_advisories: ["EEF-CVE-2026-96581", "EEF-CVE-2026-114214"]]
-      ]
-    end
-  end
-  """
-
   @upgrade_fixture_project """
   defmodule UpgradeFixture.MixProject do
     use Mix.Project
@@ -223,26 +200,26 @@ defmodule AshReplicant.ReleaseContract do
   docker run -d --name pg \\
     -e POSTGRES_HOST_AUTH_METHOD=trust \\
     -p 5432:5432 \\
-    ${{ matrix.pg_image }} \\
+    "$PG_IMAGE" \\
     -c wal_level=logical -c max_replication_slots=20 -c max_wal_senders=20
   scripts/wait-for-postgres.sh pg
   """
 
   @resolve_dependencies """
-  if [[ '${{ matrix.lockfile }}' != 'mix.lock' ]]; then
-    cp '${{ matrix.lockfile }}' mix.lock
+  if [[ "$LOCKFILE" != 'mix.lock' ]]; then
+    cp "$LOCKFILE" mix.lock
   fi
   mix deps.get --check-locked
   mix deps ash
   mix deps replicant
   mix deps ash_onetime
-  scripts/assert-dependency-version.sh ash '${{ matrix.ash_requirement }}'
-  scripts/assert-dependency-version.sh replicant '${{ matrix.replicant_requirement }}'
-  scripts/assert-dependency-version.sh ash_onetime '${{ matrix.onetime_requirement }}'
-  if [[ '${{ matrix.label }}' == 'latest-compatible' ]]; then
-    scripts/assert-dependency-version.sh --newest ash '${{ matrix.ash_requirement }}'
-    scripts/assert-dependency-version.sh --newest replicant '${{ matrix.replicant_requirement }}'
-    scripts/assert-dependency-version.sh --newest ash_onetime '${{ matrix.onetime_requirement }}'
+  scripts/assert-dependency-version.sh ash "$ASH_REQUIREMENT"
+  scripts/assert-dependency-version.sh replicant "$REPLICANT_REQUIREMENT"
+  scripts/assert-dependency-version.sh ash_onetime "$ONETIME_REQUIREMENT"
+  if [[ "$DEPENDENCY_LANE" == 'latest-compatible' ]]; then
+    scripts/assert-dependency-version.sh --newest ash "$ASH_REQUIREMENT"
+    scripts/assert-dependency-version.sh --newest replicant "$REPLICANT_REQUIREMENT"
+    scripts/assert-dependency-version.sh --newest ash_onetime "$ONETIME_REQUIREMENT"
     scripts/assert-dependency-version.sh --newest ash_postgres '~> 2.13'
     scripts/assert-dependency-version.sh --newest spark '~> 2.7.0'
   fi
@@ -253,11 +230,10 @@ defmodule AshReplicant.ReleaseContract do
   mix ecto.migrate
   """
 
-  # New candidate refs have no prior push head. Fetch the PR base or main;
+  # New candidate refs have no prior push head. Fetch main;
   # an unavailable base or an evidence-machinery diff runs the full matrix.
   @mutation_gates_run """
-  BASE="${{ github.event.pull_request.base.sha || 'main' }}"
-  if git fetch --no-tags --quiet origin "$BASE"; then
+  if git fetch --no-tags --quiet origin main; then
     scripts/run-mutation-gates.py --diff-base FETCH_HEAD
   else
     scripts/run-mutation-gates.py
@@ -449,12 +425,12 @@ defmodule AshReplicant.ReleaseContract do
     "no-database" => [
       {:uses, @checkout, %{"persist-credentials" => false}},
       {:uses, @setup_beam, @setup_beam_inputs},
+      {:run, "scripts/assert-runtime-version.sh"},
       {:run, "mix deps.get --check-locked"},
       {:run, "mix deps.compile"},
       {:run, "mix compile --warnings-as-errors", %{"id" => "compile"}},
       {:run, "mix format --check-formatted", %{"if" => @fail_late}},
       {:run, "elixir --version", %{"if" => @fail_late}},
-      {:run, "scripts/assert-runtime-version.sh", %{"if" => @fail_late}},
       {:run, "scripts/test-release-checkers.sh", %{"if" => @fail_late}},
       {:run, "scripts/test-release-guards.sh",
        %{"if" => @fail_late, "env" => %{"GH_TOKEN" => "${{ github.token }}"}}},
@@ -471,14 +447,23 @@ defmodule AshReplicant.ReleaseContract do
     ],
     "compatibility" => [
       {:uses, @checkout, %{"persist-credentials" => false}},
-      {:run, String.trim(@postgres_run)},
+      {:run, String.trim(@postgres_run), %{"env" => %{"PG_IMAGE" => "${{ matrix.pg_image }}"}}},
       {:uses, @setup_beam, @setup_beam_inputs},
-      {:run, String.trim(@resolve_dependencies)},
+      {:run, "scripts/assert-runtime-version.sh"},
+      {:run, String.trim(@resolve_dependencies),
+       %{
+         "env" => %{
+           "LOCKFILE" => "${{ matrix.lockfile }}",
+           "ASH_REQUIREMENT" => "${{ matrix.ash_requirement }}",
+           "REPLICANT_REQUIREMENT" => "${{ matrix.replicant_requirement }}",
+           "ONETIME_REQUIREMENT" => "${{ matrix.onetime_requirement }}",
+           "DEPENDENCY_LANE" => "${{ matrix.label }}"
+         }
+       }},
       {:run, "mix deps.compile"},
       {:run, String.trim(@create_database)},
       {:run, "mix compile --warnings-as-errors", %{"id" => "compile"}},
       {:run, "elixir --version", %{"if" => @fail_late}},
-      {:run, "scripts/assert-runtime-version.sh", %{"if" => @fail_late}},
       {:run, "scripts/test-release-checkers.sh", %{"if" => @fail_late}},
       {:run, "scripts/assert-release-contract.sh", %{"if" => @fail_late}},
       {:run, "mix deps.audit", %{"if" => @fail_late}},
@@ -492,6 +477,7 @@ defmodule AshReplicant.ReleaseContract do
       {:uses, @checkout, %{"persist-credentials" => false}},
       {:run, String.trim(@performance_postgres_run)},
       {:uses, @setup_beam, @setup_beam_inputs},
+      {:run, "scripts/assert-runtime-version.sh"},
       {:run, "mix deps.get --check-locked"},
       {:run, "mix deps.compile"},
       {:run, "mix compile --warnings-as-errors"},
@@ -502,8 +488,10 @@ defmodule AshReplicant.ReleaseContract do
     "decoder-old-majors" => [
       {:uses, @checkout, %{"persist-credentials" => false}},
       {:uses, @setup_beam, @setup_beam_inputs},
+      {:run, "scripts/assert-runtime-version.sh"},
       {:run,
-       "docker build -f test/support/pg_old.dockerfile --build-arg BASE=${{ matrix.base }} -t pgold-plugins:ci ."},
+       ~s(docker build -f test/support/pg_old.dockerfile --build-arg "BASE=$PG_BASE" -t pgold-plugins:ci .),
+       %{"env" => %{"PG_BASE" => "${{ matrix.base }}"}}},
       {:run, String.trim(@decoder_postgres_run)},
       {:run, "mix deps.get --check-locked"},
       {:run, "mix deps.compile"},
@@ -515,12 +503,12 @@ defmodule AshReplicant.ReleaseContract do
     "release-artifact" => [
       {:uses, @checkout, %{"persist-credentials" => false}},
       {:uses, @setup_beam, @setup_beam_inputs},
+      {:run, "scripts/assert-runtime-version.sh"},
       {:run,
        "env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix deps.get --check-locked"},
       {:run, "mix deps.compile"},
       {:run, "mix compile --warnings-as-errors"},
       {:run, "elixir --version"},
-      {:run, "scripts/assert-runtime-version.sh"},
       {:run, "scripts/assert-release-contract.sh"},
       {:run, String.trim(@public_dependency_check)},
       {:run, "mix docs --warnings-as-errors"},
@@ -697,13 +685,9 @@ defmodule AshReplicant.ReleaseContract do
     workflow = YamlElixir.read_from_file!(Path.join(root, ".github/workflows/qualification.yml"))
     landing = YamlElixir.read_from_file!(Path.join(root, ".github/workflows/ci.yml"))
 
-    pull_request =
-      YamlElixir.read_from_file!(Path.join(root, ".github/workflows/pull-request.yml"))
-
     publish = YamlElixir.read_from_file!(Path.join(root, ".github/workflows/publish.yml"))
 
     assert_landing(landing)
-    assert_pull_request(pull_request)
     assert_publish(publish, root)
     assert_qualification(workflow)
     assert_workflow_runners(root)
@@ -880,7 +864,7 @@ defmodule AshReplicant.ReleaseContract do
         "if" => "always()",
         "needs" => ["qualification"],
         "runs-on" => "ubuntu-24.04",
-        "timeout-minutes" => 5,
+        "timeout-minutes" => 3,
         "permissions" => %{"actions" => "read", "contents" => "read"},
         "steps" => [
           %{"uses" => @checkout, "with" => %{"persist-credentials" => false}},
@@ -897,31 +881,9 @@ defmodule AshReplicant.ReleaseContract do
     )
   end
 
-  defp assert_pull_request(workflow) do
-    assert(
-      Enum.sort(Map.keys(workflow)) == ~w(concurrency jobs name on permissions) and
-        workflow["name"] == "Pull request" and
-        workflow["permissions"] == %{"contents" => "read"} and
-        workflow["concurrency"] ==
-          %{
-            "group" => "pr-${{ github.event.pull_request.number }}",
-            "cancel-in-progress" => true
-          },
-      "pull request workflow control is invalid"
-    )
-
-    assert(workflow["on"] == %{"pull_request" => nil}, "pull request trigger is invalid")
-
-    assert(
-      workflow["jobs"] ==
-        %{"checks" => %{"uses" => "./.github/workflows/qualification.yml"}},
-      "pull request jobs must call proofs without a qualified verdict"
-    )
-  end
-
   defp assert_qualification(workflow) do
     assert(
-      Enum.sort(Map.keys(workflow)) == ~w(env jobs name on permissions) and
+      Enum.sort(Map.keys(workflow)) == ~w(jobs name on permissions) and
         workflow["name"] == "Qualification" and
         workflow["permissions"] == %{"contents" => "read"},
       "qualification workflow control is invalid"
@@ -935,7 +897,7 @@ defmodule AshReplicant.ReleaseContract do
 
   defp assert_publish(workflow, root) do
     assert(
-      Enum.sort(Map.keys(workflow)) == ~w(env jobs name on permissions) and
+      Enum.sort(Map.keys(workflow)) == ~w(jobs name on permissions) and
         workflow["name"] == "Publish to Hex" and
         workflow["permissions"] == %{"contents" => "read"},
       "publish workflow control is invalid"
@@ -957,7 +919,7 @@ defmodule AshReplicant.ReleaseContract do
           "if" => @publish_owner_condition,
           "environment" => "publish",
           "runs-on" => "ubuntu-24.04",
-          "timeout-minutes" => 6,
+          "timeout-minutes" => 4,
           "permissions" => %{"contents" => "read"},
           "env" => %{"MIX_ENV" => "dev"},
           "steps" => [
@@ -970,6 +932,7 @@ defmodule AshReplicant.ReleaseContract do
               "uses" => @setup_beam,
               "with" => @setup_beam_inputs
             },
+            %{"run" => "scripts/assert-runtime-version.sh"},
             %{"run" => "mix local.hex --force"},
             %{"run" => "mix local.rebar --force"},
             %{"name" => "Fetch dependencies", "run" => "mix deps.get --check-locked"},
@@ -1030,13 +993,13 @@ defmodule AshReplicant.ReleaseContract do
     [block] = Regex.run(pattern, File.read!(path)) || fail("CI job source is missing")
 
     case Regex.run(~r/# Green run ([0-9]+):[^\n]*?([0-9]+)m([0-9]+)s/, block) do
-      [_comment, _run, minutes, seconds] ->
+      [_comment, run, minutes, seconds] ->
         measured = String.to_integer(minutes) * 60 + String.to_integer(seconds)
-        expected = max(5, div(3 * measured + 59, 60))
+        expected = max(3, div(2 * measured + 59, 60))
 
         assert(
-          measured > 0 and is_integer(timeout) and timeout == expected,
-          "CI timeout must follow its measured green run with 3x headroom"
+          run == "44214414813" and measured > 0 and is_integer(timeout) and timeout == expected,
+          "CI timeout must follow its measured green run with 2x headroom and the 3-minute floor"
         )
 
       _missing ->
@@ -1048,7 +1011,6 @@ defmodule AshReplicant.ReleaseContract do
     for {path, expected} <- [
           {"scripts/audit-fixtures.sh", @fixture_audit_script},
           {"scripts/assert-release-tree.sh", @release_tree_script},
-          {"test/fixtures/release_checker/mix.exs", @checker_fixture_project},
           {"test/fixtures/upgrade_0_4_app/mix.exs", @upgrade_fixture_project}
         ] do
       assert(
@@ -1088,6 +1050,15 @@ defmodule AshReplicant.ReleaseContract do
         ~s|assert_cmd!(:deps_get, mix, ["deps.get", "--check-locked"], temp, env)|
       ),
       "upgrade consumer must fetch its inherited lock without changes"
+    )
+
+    checker = Path.join(root, "test/fixtures/release_checker")
+
+    assert(
+      not File.exists?(Path.join(checker, "mix.exs")) and
+        not File.exists?(Path.join(checker, "mix.lock")) and
+        File.regular?(Path.join(checker, "recorded.lock")),
+      "release checker fixtures must be recorded data, never an Elixir project"
     )
 
     for label <- ["exact-floors", "latest-compatible"] do
@@ -1132,17 +1103,21 @@ defmodule AshReplicant.ReleaseContract do
     "qualification / " <> expanded
   end
 
-  # setup-beam resolves `version-type: strict` versions exactly, so each workflow
-  # names the exact releases `.tool-versions` pins, the runtime the release
-  # wrapper asserts before it builds or publishes.
+  # Runtime installation reads .tool-versions directly; no workflow version copies.
   defp assert_runtime(workflow, root) do
-    env = Map.get(workflow, "env", %{})
-    {elixir, otp} = pinned_runtime(root)
+    pinned_runtime(root)
+    assert(not Map.has_key?(workflow, "env"), "CI runtime must come only from .tool-versions")
 
-    assert(
-      env == %{"ELIXIR_VERSION" => elixir, "OTP_VERSION" => otp},
-      "CI runtime differs from .tool-versions"
-    )
+    for {_name, job} <- Map.get(workflow, "jobs", %{}),
+        {step, index} <- Enum.with_index(Map.get(job, "steps", [])),
+        String.starts_with?(Map.get(step, "uses", ""), "erlef/setup-beam@") do
+      assert(step["with"] == @setup_beam_inputs, "CI runtime must read strict .tool-versions")
+
+      assert(
+        Enum.at(job["steps"], index + 1) == %{"run" => "scripts/assert-runtime-version.sh"},
+        "CI runtime installation must immediately refuse a version mismatch"
+      )
+    end
   end
 
   defp pinned_runtime(root) do
@@ -1203,6 +1178,21 @@ defmodule AshReplicant.ReleaseContract do
   end
 
   defp assert_workflow_controls(workflow) do
+    triggers = workflow["on"]
+    events = if is_map(triggers), do: Map.keys(triggers), else: List.wrap(triggers)
+
+    assert(
+      Enum.all?(events, &(&1 not in ["pull_request", "pull_request_target"])),
+      "CI must not run repository code from a pull request"
+    )
+
+    for {_name, job} <- Map.get(workflow, "jobs", %{}), step <- Map.get(job, "steps", []) do
+      assert(
+        not String.contains?(Map.get(step, "run", ""), "${{"),
+        "workflow expressions must enter run scripts through step env"
+      )
+    end
+
     assert(not Map.has_key?(workflow, "defaults"), "CI workflow can override release shells")
 
     assert(

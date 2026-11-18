@@ -1,16 +1,23 @@
 import Config
 
-# Checkout toolchain assertion: this repository's supported release
-# foundation is Elixir 1.20.3 on Erlang/OTP 29. config/ is NOT published
-# with the Hex package, so the package's declared Elixir ~> 1.20 support
-# window is unaffected — this fails config load in this checkout only.
-# `:erlang.system_info(:otp_release)` returns a charlist; `to_string/1`
-# normalizes it before the comparison.
-expected_elixir = "1.20.3"
-expected_otp = to_string(:erlang.system_info(:otp_release))
+# Checkout-only pins come from the same file setup-beam and the runtime scripts read.
+# config/ is excluded from the Hex package; consumer support stays in mix.exs.
+pins =
+  Path.expand("../.tool-versions", __DIR__)
+  |> File.read!()
+  |> String.split("\n", trim: true)
+  |> Map.new(fn line ->
+    [tool, version] = String.split(line)
+    {tool, version}
+  end)
 
-if System.version() != expected_elixir or expected_otp != "29" do
-  raise "ash_replicant checkout requires Elixir #{expected_elixir} on Erlang/OTP 29 (config loaded with Elixir #{System.version()} on OTP #{expected_otp}); run `asdf install` from the repository root and re-run through scripts/with-release-runtime.sh"
+expected_elixir = pins |> Map.fetch!("elixir") |> String.split("-otp-") |> hd()
+expected_otp = Map.fetch!(pins, "erlang")
+major = to_string(:erlang.system_info(:otp_release))
+actual_otp = :code.root_dir() |> Path.join("releases/#{major}/OTP_VERSION") |> File.read!()
+
+if System.version() != expected_elixir or String.trim(actual_otp) != expected_otp do
+  raise "ash_replicant checkout requires the exact .tool-versions runtime; run `asdf install` from the repository root and re-run through scripts/with-release-runtime.sh"
 end
 
 # The string-length counting basis this package's resources, snapshots,

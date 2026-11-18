@@ -9,10 +9,6 @@ on:
 permissions:
   contents: read
 
-env:
-  ELIXIR_VERSION: "1.20.3"
-  OTP_VERSION: "29.0.3"
-
 jobs:
   publish:
     name: Publish
@@ -22,8 +18,8 @@ jobs:
     environment: publish
     # A public repository never uses the build box or its runners.
     runs-on: ubuntu-24.04
-    # Green run 44172851101: release-artifact 1m51s (fallback; no successful publish run).
-    timeout-minutes: 6
+    # Green run 44214414813: release-artifact 1m52s; mirrors its docs/package job.
+    timeout-minutes: 4
     permissions:
       contents: read
     env:
@@ -36,9 +32,9 @@ jobs:
           persist-credentials: false
       - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
         with:
-          elixir-version: ${{ env.ELIXIR_VERSION }}
-          otp-version: ${{ env.OTP_VERSION }}
+          version-file: .tool-versions
           version-type: strict
+      - run: scripts/assert-runtime-version.sh
       - run: mix local.hex --force
       - run: mix local.rebar --force
       - name: Fetch dependencies

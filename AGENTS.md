@@ -162,22 +162,31 @@ release makes it red until a reviewed lock refresh lands. Generate refreshes on 
 enters the feature branch's history. Nothing compiles or tests on the owner's Mac, and this
 public repository uses GitHub-hosted CI rather than the build box.
 
+`.tool-versions` is the single checkout runtime source: every setup-beam install
+reads it with `version-file` and strict resolution, then immediately checks the
+installed Elixir and full OTP release. The wrapper and config assertion read
+the same file; package compatibility requirements remain in `mix.exs`.
+Job timeouts follow qualification.yml's measured rule: twice the slowest green
+row, rounded up to whole minutes, with a 3-minute floor only for 1–2-minute
+results. Comments cite run 44214414813 and its duration; publish mirrors the
+selector-free docs/package job. No workflow runs repository code from a pull
+request; a maintainer qualifies a fork's change through `kci/<commit>`.
+
 Live release-guard self-tests run once in the no-database job, separately from
 matrix checker tests. Every GitHub REST lookup uses `gh api` with `GH_TOKEN`
 from the calling step's environment; the guard and publish-refusal jobs grant
 only `contents: read`. Only an HTTP 404 proves absence; a missing token,
 transport failure or any other unexpected response refuses. The workflow
 contract mutation-tests token placement, transport and refusal controls.
-Fixture hygiene audits the release checker's recorded lock in place without
-fetching dependencies (its project declares none). Only that inert fixture
-acknowledges its historical Ash advisories; the release contract guards its
-empty dependency list. The upgrade fixture shares the root's GCM-only Cloak
-policy and cipher source guard. Fixture hygiene also audits a temporary
-upgrade consumer that inherits the root lock exactly as the live upgrade test
-does. Its database URL is required by the repo initialization callback, so
-metadata-only audits need no service configuration. Dependency-version assertions
-read the lock directly, including for inert recorded fixtures. No audit rewrites
-a committed lock.
+The release checker fixtures are recorded data, never fetched or executed as
+an Elixir project: `recorded.lock` is replayed with `assert-dependency-version.sh
+--lock PATH`, whose default is the repository root's `mix.lock`. There is no
+fixture `mix.exs` or `mix.lock` and no advisory ignore for recorded data.
+Fixture hygiene audits a temporary upgrade consumer that inherits the root lock
+exactly as the live upgrade test does, using a locked fetch and both audits.
+It shares the root's GCM-only Cloak policy and cipher source guard. Its database
+URL is required only at repo initialization, so metadata audits need no service
+configuration. No audit rewrites a committed lock.
 
 The complete release battery is itemized in `CONTRIBUTING.md`; `mix quality` covers only
 format, Credo, and Dialyzer. Unit tests run without a server; integration tests

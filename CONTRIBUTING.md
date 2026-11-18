@@ -4,7 +4,10 @@ Thank you for your interest in contributing to AshReplicant!
 
 ## Prerequisites
 
-- **Elixir 1.20.3** and **Erlang/OTP 29** (run `asdf install` from the repository root)
+- **Elixir 1.20.3** and **Erlang/OTP 29** support; exact checkout releases come only
+  from `.tool-versions` (run `asdf install` from the repository root). Every CI
+  install uses setup-beam's `version-file: .tool-versions` and `version-type: strict`,
+  then refuses unless installed Elixir and the full OTP release match that file.
 - Ash `>= 3.37.3 and < 4.0.0-0`; selector-free development uses this public range
 - Replicant `>= 1.4.0 and < 2.0.0-0` from Hex; the lock is 1.5.1.
   No sibling checkout is required to build or test. A local checkout at
@@ -87,8 +90,8 @@ the live `_build` as their warm cache, so a concurrent `mix compile`,
 `mix format`, or open editor save in the same checkout fails the run with
 `live_tree_mutated` or `baseline` classes that say more about the
 concurrency than about the guards.
-CI's no-database job scopes it to the candidate diff: it fetches the pull
-request's base SHA or `main`, then passes `--diff-base FETCH_HEAD`. Only the
+CI's no-database job scopes it to the candidate diff: it fetches `main`,
+then passes `--diff-base FETCH_HEAD`. Only the
 cells whose guard file or named test changed run. The scoping fails safe to
 the FULL matrix — a diff touching the evidence machinery
 (the runner's `FULL_MATRIX_PREFIXES`/`FULL_MATRIX_FILES` set: `scripts/`,
@@ -103,15 +106,23 @@ SIGINT/SIGTERM by stopping the active child process group before scratch cleanup
 4. Update `CHANGELOG.md` under `[Unreleased]`.
 5. Open a Pull Request against `main`.
 
-The proof jobs live in `.github/workflows/qualification.yml`, called by
-`.github/workflows/pull-request.yml` for review and `.github/workflows/ci.yml`
-for landing. Every executable job runs on GitHub-hosted `ubuntu-24.04`.
-Qualification runs once per `kci/<commit>` push, with no path or tag filters.
+The proof jobs live in `.github/workflows/qualification.yml`, called only by
+`.github/workflows/ci.yml`. Every executable job runs on GitHub-hosted
+`ubuntu-24.04`. Qualification runs once per `kci/<commit>` push, with no path
+or tag filters. No workflow runs repository code from a pull request. A fork's
+change is qualified when a maintainer lands it through a `kci/<commit>` branch.
 The final `qualified` check reads the run's complete job inventory and requires
 all ten expected proofs to finish successfully. `main` moves only on that
 commit's `qualified` check; a push to `main`, a tag, or a release starts no run.
-Pull request checks inform review under separate names and receive no secrets.
 If qualification fails, fix forward in the next commit.
+
+Job timeouts follow qualification.yml's rule: ceil(2 × the slowest measured
+green duration in minutes), with a 3-minute floor only when that rounds to
+1 or 2 minutes. Each comment names run 44214414813 and the measured duration;
+publish uses the selector-free docs/package job it mirrors.
+
+Infra's binding requirements live in [What infra requires of every product](https://github.com/baselabs/infra/blob/main/baselabs/docs/ci.md#what-infra-requires-of-every-product).
+Read that section from infra's default branch as directed in `AGENTS.md`.
 
 
 ### Ash-bump grep procedure (B6 old-contract clause)
@@ -204,18 +215,19 @@ affected tests in the same change, and record the Ash version contract delta in 
   running live guards or post-release verification supply `GH_TOKEN` in their
   environment, never as a command argument or in a file.
 
-  Fixture hygiene audits the release checker's recorded lock in place with
-  root `mix deps.audit --path test/fixtures/release_checker` and the fixture's
-  own `mix hex.audit`. Its project declares no executable dependencies, so
-  auditing never fetches or rewrites the recorded lock. Its two historical Ash
-  advisories are acknowledged only in this non-executing fixture, whose empty
-  dependency declarations are guarded by the release contract. The upgrade fixture
-  is copied to a temporary directory, inherits `mix.lock` exactly as the live
-  upgrade test does, and runs a locked fetch and both audits before cleanup.
-  It shares the root's Cloak AES-CTR exception and GCM-only source guard.
-  Its repo initialization requires the real database URL only when the repo is
-  used; metadata audits require no live database or placeholder endpoint.
-  Version assertions read the recorded lock without fetching dependencies.
+  `test/fixtures/release_checker` is recorded checker data, never fetched or
+  executed as an Elixir project. Its `recorded.lock` has no project metadata or
+  advisory ignore. Version assertions select it explicitly with
+  `scripts/assert-dependency-version.sh --lock PATH`; the default lock is the
+  repository root's `mix.lock`, independent of the working directory.
+  Recorded Hex responses are replayed against that data without fetching dependencies.
+  The upgrade fixture is copied to a temporary directory, inherits `mix.lock`
+  exactly as the live upgrade test does, and runs a locked fetch and both audits
+  before cleanup. It shares the root's reasoned no-fixed-release Cloak AES-CTR
+  exception and GCM-only source guard. Its repo initialization requires the real
+  database URL only when the repo is used; metadata audits require no live database
+  or placeholder endpoint. Root `mix deps.audit` also invokes `mix hex.audit`
+  through the repository alias, so every executable Elixir project receives both feeds.
 
   The full release battery is intentionally not represented by `mix quality`;
   that alias covers format, Credo, and Dialyzer only.

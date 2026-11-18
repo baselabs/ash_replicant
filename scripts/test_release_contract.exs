@@ -25,7 +25,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   docker run -d --name pg \\
     -e POSTGRES_HOST_AUTH_METHOD=trust \\
     -p 5432:5432 \\
-    ${{ matrix.pg_image }} \\
+    "$PG_IMAGE" \\
     -c wal_level=logical -c max_replication_slots=20 -c max_wal_senders=20
   scripts/wait-for-postgres.sh pg
   """
@@ -49,8 +49,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   # Mirrors assert_release_contract.exs's @mutation_gates_run byte-for-byte;
   # qualification.yml and both contract scripts move together.
   @mutation_gates_run """
-  BASE="${{ github.event.pull_request.base.sha || 'main' }}"
-  if git fetch --no-tags --quiet origin "$BASE"; then
+  if git fetch --no-tags --quiet origin main; then
     scripts/run-mutation-gates.py --diff-base FETCH_HEAD
   else
     scripts/run-mutation-gates.py
@@ -112,12 +111,12 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
   @job_commands %{
     "no-database" => [
+      "scripts/assert-runtime-version.sh",
       "mix deps.get --check-locked",
       "mix deps.compile",
       "mix compile --warnings-as-errors",
       "mix format --check-formatted",
       "elixir --version",
-      "scripts/assert-runtime-version.sh",
       "scripts/test-release-checkers.sh",
       "scripts/test-release-guards.sh",
       "scripts/test-release-contract.sh",
@@ -129,11 +128,11 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       String.trim(@mutation_gates_run)
     ],
     "compatibility" => [
+      "scripts/assert-runtime-version.sh",
       String.trim(@postgres_run),
       "mix deps.compile",
       "mix compile --warnings-as-errors",
       "elixir --version",
-      "scripts/assert-runtime-version.sh",
       "scripts/test-release-checkers.sh",
       "scripts/assert-release-contract.sh",
       "mix deps.audit",
@@ -144,6 +143,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       "mix dialyzer"
     ],
     "performance" => [
+      "scripts/assert-runtime-version.sh",
       String.trim(@performance_postgres_run),
       "mix deps.compile",
       "mix compile --warnings-as-errors",
@@ -151,11 +151,11 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       "scripts/run-structural-tests.sh test/integration/performance_bounds_test.exs --include integration"
     ],
     "release-artifact" => [
+      "scripts/assert-runtime-version.sh",
       "env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix deps.get --check-locked",
       "mix deps.compile",
       "mix compile --warnings-as-errors",
       "elixir --version",
-      "scripts/assert-runtime-version.sh",
       "scripts/assert-release-contract.sh",
       String.trim(@public_dependency_check),
       "mix docs --warnings-as-errors",
@@ -548,29 +548,33 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       assert_invalid!()
     end)
 
-    for job <- jobs,
-        {input, environment, replacement} <- [
-          {"elixir-version", "ELIXIR_VERSION", "1.18.0"},
-          {"otp-version", "OTP_VERSION", "28"}
+    runtimes = [
+      {@workflow, "no-database"},
+      {@workflow, "compatibility"},
+      {@workflow, "performance"},
+      {@workflow, "decoder-old-majors"},
+      {@workflow, "release-artifact"},
+      {@publish, "publish"}
+    ]
+
+    for {workflow, job} <- runtimes,
+        {old, replacement} <- [
+          {"          version-file: .tool-versions\n", ""},
+          {"          version-file: .tool-versions\n", "          version-file: other.versions\n"},
+          {"          version-file: .tool-versions\n", "          elixir-version: 1.20.3\n"},
+          {"          version-file: .tool-versions\n", "          otp-version: 29.0.3\n"},
+          {"          version-file: .tool-versions\n",
+           "          version-file: .tool-versions\n          elixir-version: 1.20.3\n"},
+          {"          version-type: strict\n", ""},
+          {"          version-type: strict\n", "          version-type: loose\n"},
+          {"      - run: scripts/assert-runtime-version.sh\n", ""},
+          {"      - run: scripts/assert-runtime-version.sh\n",
+           "      - run: scripts/assert-runtime-version.sh\n        if: false\n"}
         ] do
       prepare_fixture()
-
-      mutate_job!(
-        job,
-        "          #{input}: ${{ env.#{environment} }}\n",
-        "          #{input}: #{replacement}\n"
-      )
-
+      mutate_job!(job, old, replacement, workflow)
       assert_invalid!()
     end
-
-    Enum.each(jobs, fn job ->
-      prepare_fixture()
-
-      mutate_job!(job, "          version-type: strict\n", "")
-
-      assert_invalid!()
-    end)
   end
 
   defp landing_and_fail_late_probes do
@@ -726,7 +730,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           {"    if: always()\n", ""},
           {"    needs: [qualification]\n", "    needs: []\n"},
           {"    needs: [qualification]\n", ""},
-          {"    timeout-minutes: 5\n", "    timeout-minutes: 10\n"},
+          {"    timeout-minutes: 3\n", "    timeout-minutes: 10\n"},
           {"      actions: read\n", ""},
           {"          persist-credentials: false\n", "          persist-credentials: true\n"},
           {"      - run: python3 scripts/qualify.py\n", "      - run: true\n"},
@@ -740,47 +744,32 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       assert_invalid!()
     end
 
-    for declaration <- ["name: qualified", "name: review", "uses: ./other.yml"] do
+    for trigger <- ["pull_request", "pull_request_target"] do
       prepare_fixture()
-      path = fixture_path(@pull_request)
-      extra = "\n  qualified:\n    #{declaration}\n    runs-on: ubuntu-24.04\n"
-      File.write!(path, File.read!(path) <> extra)
+
+      File.write!(fixture_path(@pull_request), """
+      name: Forbidden pull request execution
+      on:
+        #{trigger}:
+      jobs:
+        check:
+          runs-on: ubuntu-24.04
+          # Green run 44214414813: qualified 0m16s.
+          timeout-minutes: 3
+          steps:
+            - uses: #{@checkout}
+              with:
+                persist-credentials: false
+            - run: true
+      """)
+
       assert_invalid!()
     end
 
-    prepare_fixture()
-
-    replace_once!(
-      @pull_request,
-      "  checks:\n",
-      "  checks:\n    name: qualified\n"
-    )
-
-    assert_invalid!()
-
-    for workflow <- [@landing, @workflow, @pull_request, @publish],
+    for workflow <- [@landing, @workflow, @publish],
         runner <- ["self-hosted", "${{ vars.BASELABS_RUNNER || 'ubuntu-24.04' }}"] do
       prepare_fixture()
-
-      if workflow == @pull_request do
-        replace_once!(
-          workflow,
-          "  checks:\n",
-          "  checks:\n    runs-on: #{runner}\n"
-        )
-      else
-        replace_once!(workflow, "runs-on: ubuntu-24.04", "runs-on: #{runner}")
-      end
-
-      assert_invalid!()
-    end
-
-    # Also reject either runner on an executable PR job, rather than only a caller.
-    for runner <- ["self-hosted", "${{ vars.BASELABS_RUNNER || 'ubuntu-24.04' }}"] do
-      prepare_fixture()
-      path = fixture_path(@pull_request)
-      extra = "\n  extra:\n    runs-on: #{runner}\n    steps:\n      - run: true\n"
-      File.write!(path, File.read!(path) <> extra)
+      replace_once!(workflow, "runs-on: ubuntu-24.04", "runs-on: #{runner}")
       assert_invalid!()
     end
 
@@ -794,10 +783,6 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     prepare_fixture()
     replace_once!(@workflow, "  workflow_call:\n", "  push:\n")
-    assert_invalid!()
-
-    prepare_fixture()
-    replace_once!(@pull_request, "  pull_request:\n", "  push:\n")
     assert_invalid!()
   end
 
@@ -820,7 +805,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           {"mix deps.get --check-locked", "mix deps.get"},
           {"          persist-credentials: false\n", "          persist-credentials: true\n"},
           {"          version-type: strict\n", ""},
-          {"    timeout-minutes: 6\n", "    timeout-minutes: 30\n"},
+          {"    timeout-minutes: 4\n", "    timeout-minutes: 30\n"},
           {"          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}\n",
            "          HEX_API_KEY: ${{ secrets.OTHER_KEY }}\n"}
         ] do
@@ -860,8 +845,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
         :workflow ->
           replace_once!(
             @publish,
-            "  OTP_VERSION: \"29.0.3\"\n",
-            "  OTP_VERSION: \"29.0.3\"\n  HEX_API_KEY: ${{ secrets.HEX_API_KEY }}\n"
+            "jobs:\n",
+            "env:\n  HEX_API_KEY: ${{ secrets.HEX_API_KEY }}\n\njobs:\n"
           )
       end
 
@@ -912,13 +897,13 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
   defp ci_requirement_probes do
     jobs = [
-      {@workflow, "no-database", 78},
-      {@workflow, "compatibility", 56},
-      {@workflow, "performance", 9},
-      {@workflow, "decoder-old-majors", 8},
-      {@workflow, "release-artifact", 6},
-      {@landing, "qualified", 5},
-      {@publish, "publish", 6}
+      {@workflow, "no-database", 47},
+      {@workflow, "compatibility", 31},
+      {@workflow, "performance", 6},
+      {@workflow, "decoder-old-majors", 6},
+      {@workflow, "release-artifact", 4},
+      {@landing, "qualified", 3},
+      {@publish, "publish", 4}
     ]
 
     for {workflow, job, timeout} <- jobs do
@@ -929,7 +914,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       end
 
       prepare_fixture()
-      mutate_job!(job, "# Green run 44172851101:", "# No measurement:", workflow)
+      mutate_job!(job, "# Green run 44214414813:", "# No measurement:", workflow)
       assert_invalid!()
 
       prepare_fixture()
@@ -943,6 +928,43 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       end
     end
 
+    prepare_fixture()
+    extra = fixture_path(".github/workflows/extra.yml")
+
+    File.write!(extra, """
+    name: Expression guard probe
+    on:
+      workflow_call:
+    jobs:
+      check:
+        runs-on: ubuntu-24.04
+        # Green run 44214414813: qualified 0m16s.
+        timeout-minutes: 3
+        steps:
+          - uses: #{@checkout}
+            with:
+              persist-credentials: false
+          - run: echo "$GITHUB_REF"
+    """)
+
+    assert_valid!()
+    replace_once!(
+      ".github/workflows/extra.yml",
+      ~s(echo "$GITHUB_REF"),
+      ~s(echo "${{ github.ref }}")
+    )
+    assert_invalid!()
+
+    for name <- ["mix.exs", "mix.lock"] do
+      prepare_fixture()
+      File.write!(fixture_path("test/fixtures/release_checker/#{name}"), "")
+      assert_invalid!()
+    end
+
+    prepare_fixture()
+    File.rm!(fixture_path("test/fixtures/release_checker/recorded.lock"))
+    assert_invalid!()
+
     for label <- ["exact-floors", "latest-compatible"] do
       prepare_fixture()
       File.rm!(fixture_path("locks/#{label}.lock"))
@@ -950,8 +972,6 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     end
 
     for {old, replacement} <- [
-          {"mix deps.audit --path test/fixtures/release_checker", ":"},
-          {"(cd test/fixtures/release_checker && mix hex.audit)", ":"},
           {"cp mix.lock \"$fixture/mix.lock\"", ":"},
           {"mix deps.get --check-locked", "mix deps.get"},
           {"&& mix hex.audit)", ")"},
@@ -1059,8 +1079,6 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           {"scripts/verify-release.sh", "gh api --hostname github.com", "curl"},
           {"scripts/verify-release.sh", ~s|[[ -n "${GH_TOKEN:-}" ]]|, "true"},
           {"scripts/test-release-guards.sh", "without_github_token", "without_token_bypass"},
-          {"test/fixtures/release_checker/mix.exs", "deps: []", ~s|deps: [{:ash, ">= 0.0.0"}]|},
-          {"test/fixtures/release_checker/mix.exs", "EEF-CVE-2026-96581", "unreviewed-advisory"},
           {"test/fixtures/upgrade_0_4_app/mix.exs", "EEF-CVE-2026-95105", "unreviewed-advisory"}
         ] do
       prepare_fixture()
@@ -1213,8 +1231,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     mutate_job!(
       "compatibility",
-      "      - name: Fetch and assert dependency versions\n",
-      "      - name: Fetch and assert dependency versions\n        env:\n          ASH_REPLICANT_ASH_VERSION: latest\n"
+      "          LOCKFILE: ${{ matrix.lockfile }}\n",
+      "          LOCKFILE: ${{ matrix.lockfile }}\n          ASH_REPLICANT_ASH_VERSION: latest\n"
     )
 
     assert_invalid!()
@@ -1224,7 +1242,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
       mutate_job!(
         "compatibility",
-        "            cp '${{ matrix.lockfile }}' mix.lock\n",
+        "            cp \"$LOCKFILE\" mix.lock\n",
         replacement
       )
 
@@ -1235,7 +1253,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     mutate_job!(
       "compatibility",
-      "          scripts/assert-dependency-version.sh ash '${{ matrix.ash_requirement }}'\n",
+      "          scripts/assert-dependency-version.sh ash \"$ASH_REQUIREMENT\"\n",
       "          :\n"
     )
 
@@ -1245,16 +1263,16 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     mutate_job!(
       "compatibility",
-      "          scripts/assert-dependency-version.sh replicant '${{ matrix.replicant_requirement }}'\n",
+      "          scripts/assert-dependency-version.sh replicant \"$REPLICANT_REQUIREMENT\"\n",
       "          :\n"
     )
 
     assert_invalid!()
 
     for command <- [
-          "scripts/assert-dependency-version.sh --newest ash '${{ matrix.ash_requirement }}'",
-          "scripts/assert-dependency-version.sh --newest replicant '${{ matrix.replicant_requirement }}'",
-          "scripts/assert-dependency-version.sh --newest ash_onetime '${{ matrix.onetime_requirement }}'",
+          "scripts/assert-dependency-version.sh --newest ash \"$ASH_REQUIREMENT\"",
+          "scripts/assert-dependency-version.sh --newest replicant \"$REPLICANT_REQUIREMENT\"",
+          "scripts/assert-dependency-version.sh --newest ash_onetime \"$ONETIME_REQUIREMENT\"",
           "scripts/assert-dependency-version.sh --newest ash_postgres '~> 2.13'",
           "scripts/assert-dependency-version.sh --newest spark '~> 2.7.0'"
         ] do
@@ -1566,34 +1584,24 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     assert_invalid!()
 
-    prepare_fixture()
-    replace_once!(@workflow, "\n  OTP_VERSION: \"29.0.3\"\n", "\n  OTP_VERSION: \"29\"\n")
-    assert_invalid!()
+    for workflow <- [@workflow, @publish],
+        declaration <- ["ELIXIR_VERSION: \"1.20.3\"", "OTP_VERSION: \"29.0.3\""] do
+      prepare_fixture()
+      replace_once!(workflow, "jobs:\n", "env:\n  #{declaration}\n\njobs:\n")
+      assert_invalid!()
+    end
 
-    prepare_fixture()
-    replace_once!(@publish, "\n  OTP_VERSION: \"29.0.3\"\n", "\n  OTP_VERSION: \"29\"\n")
-    assert_invalid!()
-
-    prepare_fixture()
-
-    replace_once!(
-      @publish,
-      "\n  ELIXIR_VERSION: \"1.20.3\"\n",
-      "\n  ELIXIR_VERSION: \"1.20.2\"\n"
-    )
-
-    assert_invalid!()
-
+    # A patch update changes the single source, with no workflow version edit.
     prepare_fixture()
     replace_once!(".tool-versions", "erlang 29.0.3", "erlang 29.0.4")
+    assert_valid!()
+
+    prepare_fixture()
+    replace_once!(".tool-versions", "erlang 29.0.3", "erlang 29")
     assert_invalid!()
 
     prepare_fixture()
     replace_once!(".tool-versions", "elixir 1.20.3-otp-29", "elixir 1.20.3-otp-28")
-    assert_invalid!()
-
-    prepare_fixture()
-    replace_once!(@workflow, "  ELIXIR_VERSION: \"1.20.3\"", "  ELIXIR_VERSION: \"1.19.5\"")
     assert_invalid!()
   end
 
@@ -2110,7 +2118,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     File.rm_rf!(@fixture_root)
     File.mkdir_p!(Path.join(@fixture_root, ".github/workflows"))
 
-    for path <- [@workflow, @landing, @pull_request, @publish] do
+    for path <- [@workflow, @landing, @publish] do
       File.cp!(Path.join(@source_root, path), fixture_path(path))
     end
 
@@ -2130,7 +2138,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           "scripts/assert-release-tree.sh",
           "scripts/test-release-guards.sh",
           "scripts/verify-release.sh",
-          "test/fixtures/release_checker/mix.exs",
+          "test/fixtures/release_checker/recorded.lock",
           "test/fixtures/upgrade_0_4_app/mix.exs",
           "test/integration/upgrade_checkpoint_test.exs",
           "locks/exact-floors.lock",
@@ -2280,7 +2288,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   defp assert_invalid! do
     Process.put({__MODULE__, :checks}, Process.get({__MODULE__, :checks}, 0) + 1)
 
-    for path <- [@workflow, @landing, @pull_request, @publish] do
+    for path <- [@workflow, @landing, @publish] do
       YamlElixir.read_from_file!(fixture_path(path))
     end
 

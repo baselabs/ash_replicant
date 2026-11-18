@@ -41,6 +41,13 @@ if scripts/assert-exunit-output.sh "$fixture_dir/intentional-exclusion.txt" >/de
 fi
 
 scripts/assert-dependency-version.sh ash '>= 3.37.3 and < 4.0.0-0' >/dev/null
+root="$(pwd)"
+(cd test/fixtures/release_checker && "$root/scripts/assert-dependency-version.sh" ash '>= 3.37.3 and < 4.0.0-0') >/dev/null
+scripts/assert-dependency-version.sh --lock test/fixtures/release_checker/recorded.lock ash '== 3.34.6' >/dev/null
+if scripts/assert-dependency-version.sh --lock test/fixtures/release_checker/recorded.lock ash '>= 3.37.3' >/dev/null 2>&1; then
+  echo "dependency checker ignored the explicit recorded lock" >&2
+  exit 1
+fi
 scripts/assert-dependency-version.sh replicant '>= 1.4.0 and < 2.0.0-0' >/dev/null
 scripts/assert-dependency-version.sh ash_onetime '>= 1.3.2 and < 2.0.0-0' >/dev/null
 

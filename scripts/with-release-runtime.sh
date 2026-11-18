@@ -23,8 +23,7 @@ if command -v asdf >/dev/null 2>&1; then
   erlang_root="$(asdf where erlang "$erlang_pin")"
   elixir_root="$(asdf where elixir "$elixir_pin")"
   export PATH="$erlang_root/bin:$elixir_root/bin:$PATH"
-else
-  "$(cd "$(dirname "$0")" && pwd)/assert-runtime-version.sh"
 fi
+"$root/scripts/assert-runtime-version.sh"
 
 exec "$@"
