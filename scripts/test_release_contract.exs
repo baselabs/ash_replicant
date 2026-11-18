@@ -835,6 +835,9 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           {"        id: runtime\n", ""},
           {"    timeout-minutes: 90 # no green run yet\n", "    timeout-minutes: 90\n"},
           {"          rm mix.lock\n", "          true\n"},
+          {"        working-directory: ${{ runner.temp }}\n", ""},
+          {"        working-directory: ${{ runner.temp }}\n",
+           "        working-directory: ${{ github.workspace }}\n"},
           {"          mix deps.get\n", "          mix deps.get --check-locked\n"}
         ] do
       prepare_fixture()

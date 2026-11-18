@@ -56,14 +56,18 @@ jobs:
       - name: Resolve upstream within public dependency requirements
         if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
         run: |
-          cp locks/latest-compatible.lock mix.lock
           rm mix.lock
           mix deps.get
+      # Run from a directory without mix.exs, so Mix loads no project for this read.
       - name: Report all resolved versions against the compatibility lock
         if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        working-directory: ${{ runner.temp }}
         run: |
           mix run --no-mix-exs --no-start -e '
+          workspace = System.fetch_env!("GITHUB_WORKSPACE")
+
           versions = fn path ->
+            path = Path.join(workspace, path)
             unless File.regular?(path), do: raise("dependency resolution lock is missing")
 
             Map.new(Mix.Dep.Lock.read(path), fn

@@ -484,14 +484,16 @@ defmodule AshReplicant.ReleaseContract do
   ]
 
   @drift_resolution """
-  cp locks/latest-compatible.lock mix.lock
   rm mix.lock
   mix deps.get
   """
 
   @drift_versions ~S"""
   mix run --no-mix-exs --no-start -e '
+  workspace = System.fetch_env!("GITHUB_WORKSPACE")
+
   versions = fn path ->
+    path = Path.join(workspace, path)
     unless File.regular?(path), do: raise("dependency resolution lock is missing")
 
     Map.new(Mix.Dep.Lock.read(path), fn
@@ -1231,7 +1233,7 @@ defmodule AshReplicant.ReleaseContract do
       @drift_newest_checks ++
         [
           String.trim(@drift_resolution),
-          String.trim(@drift_versions),
+          {String.trim(@drift_versions), %{"working-directory" => "${{ runner.temp }}"}},
           "mix hex.audit",
           "mix deps.audit",
           "mix deps.compile",
@@ -1242,7 +1244,12 @@ defmodule AshReplicant.ReleaseContract do
           "scripts/run-structural-tests.sh test/integration --include integration"
         ]
 
-    expected = admission ++ Enum.map(reports, &{:run, &1, %{"if" => @report_if}})
+    expected =
+      admission ++
+        Enum.map(reports, fn
+          {run, controls} -> {:run, run, Map.put(controls, "if", @report_if)}
+          run -> {:run, run, %{"if" => @report_if}}
+        end)
 
     assert(
       Enum.map(Map.get(job, "steps", []), &step_signature/1) == expected,
@@ -1649,13 +1656,13 @@ defmodule AshReplicant.ReleaseContract do
 
   defp step_signature(%{"run" => run} = step) when is_binary(run) do
     assert(
-      Map.keys(step) -- ["name", "run", "id", "if", "env"] == [],
+      Map.keys(step) -- ["name", "run", "id", "if", "env", "working-directory"] == [],
       "CI release run step control is invalid"
     )
 
     # Controls participate in the exact per-job signature, including the token
     # environment admitted only for the dedicated live release-guard step.
-    case Map.take(step, ["id", "if", "env"]) do
+    case Map.take(step, ["id", "if", "env", "working-directory"]) do
       controls when map_size(controls) == 0 -> {:run, String.trim(run)}
       controls -> {:run, String.trim(run), controls}
     end
