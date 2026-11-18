@@ -624,7 +624,7 @@ defmodule AshReplicant.StartLinkTest do
       callback =
         Task.async(fn ->
           result =
-            AshReplicant.run_callback("lease_slot", LeaseSink, :mutate, fn config ->
+            AshReplicant.run_callback("lease_slot", LeaseSink, fn config ->
               send(observer, {:inside_callback, self(), config.dynamic_repo})
 
               receive do
@@ -706,7 +706,7 @@ defmodule AshReplicant.StartLinkTest do
 
       callback =
         Task.async(fn ->
-          AshReplicant.run_callback("lease_slot", LeaseSink, :mutate, fn _config ->
+          AshReplicant.run_callback("lease_slot", LeaseSink, fn _config ->
             send(observer, {:inside_stop_window, self()})
 
             receive do

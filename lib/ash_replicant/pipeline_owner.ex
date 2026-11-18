@@ -103,6 +103,17 @@ defmodule AshReplicant.PipelineOwner do
     end
   end
 
+  @doc false
+  @spec stop(pid()) :: :ok
+  def stop(owner) when is_pid(owner) do
+    monitor = Process.monitor(owner)
+    Process.exit(owner, :shutdown)
+
+    receive do
+      {:DOWN, ^monitor, :process, ^owner, _reason} -> :ok
+    end
+  end
+
   defp slot_name_of(opts) when is_list(opts) do
     sink = Keyword.get(opts, :sink)
 
@@ -219,14 +230,11 @@ defmodule AshReplicant.PipelineOwner do
         %{
           census_run: %{
             token: token,
-            monitor: monitor,
-            timeout: timeout,
             timed_out?: false
-          }
+          } = run
         } = state
       ) do
-    cancel_timer(timeout)
-    Process.demonitor(monitor, [:flush])
+    cancel_census_run(run)
     apply_census_report(report, %{state | census_run: nil})
   end
 
@@ -300,8 +308,8 @@ defmodule AshReplicant.PipelineOwner do
   defp cleanup(%{slot_name: slot_name, generation_ref: generation_ref, monitor: monitor} = state) do
     state = stop_census(state)
     Process.demonitor(monitor, [:flush])
-    :ok = AshReplicant.erase_generation(slot_name, generation_ref)
     Impl.clear_snapshot_ordinals(slot_name)
+    :ok = AshReplicant.erase_generation(slot_name, generation_ref)
     state
   end
 
@@ -416,9 +424,11 @@ defmodule AshReplicant.PipelineOwner do
 
   defp cancel_census_run(%{pid: pid, monitor: monitor, timeout: timeout}) do
     cancel_timer(timeout)
-    Process.demonitor(monitor, [:flush])
-    if Process.alive?(pid), do: Process.exit(pid, :kill)
-    :ok
+    Process.exit(pid, :kill)
+
+    receive do
+      {:DOWN, ^monitor, :process, ^pid, _reason} -> :ok
+    end
   end
 
   defp cancel_census_run(_other), do: :ok

@@ -397,21 +397,21 @@ defmodule AshReplicant.Sink do
 
       @impl Replicant.Sink
       def handle_session_identity(identity, context) do
-        AshReplicant.run_callback(unquote(slot_name), __MODULE__, :mutate, fn config ->
+        AshReplicant.run_callback(unquote(slot_name), __MODULE__, fn config ->
           Impl.handle_session_identity(config, identity, context)
         end)
       end
 
       @impl Replicant.Sink
       def checkpoint do
-        AshReplicant.run_callback(unquote(slot_name), __MODULE__, :read, fn config ->
+        AshReplicant.run_callback(unquote(slot_name), __MODULE__, fn config ->
           Impl.checkpoint(config)
         end)
       end
 
       @impl Replicant.Sink
       def handle_transaction(txn) do
-        AshReplicant.run_callback(unquote(slot_name), __MODULE__, :mutate, fn config ->
+        AshReplicant.run_callback(unquote(slot_name), __MODULE__, fn config ->
           Impl.handle_transaction(config, txn)
         end)
       end
@@ -422,7 +422,7 @@ defmodule AshReplicant.Sink do
       # satisfies Replicant's supports_batch?/1 gate for any caller opting in.
       @impl Replicant.Sink
       def handle_batch(transactions) do
-        AshReplicant.run_callback(unquote(slot_name), __MODULE__, :mutate, fn config ->
+        AshReplicant.run_callback(unquote(slot_name), __MODULE__, fn config ->
           Impl.handle_batch(config, transactions)
         end)
       end
@@ -430,7 +430,7 @@ defmodule AshReplicant.Sink do
       if unquote(message_capable?) do
         @impl Replicant.Sink
         def handle_message(message, ctx) do
-          AshReplicant.run_callback(unquote(slot_name), __MODULE__, :mutate, fn config ->
+          AshReplicant.run_callback(unquote(slot_name), __MODULE__, fn config ->
             Impl.handle_message(config, message, ctx)
           end)
         end
@@ -442,7 +442,7 @@ defmodule AshReplicant.Sink do
       if unquote(slot_origin_capable?) do
         @impl Replicant.Sink
         def handle_slot_origin(origin, ctx) do
-          AshReplicant.run_callback(unquote(slot_name), __MODULE__, :mutate, fn config ->
+          AshReplicant.run_callback(unquote(slot_name), __MODULE__, fn config ->
             Impl.handle_slot_origin(config, origin, ctx)
           end)
         end
@@ -450,28 +450,28 @@ defmodule AshReplicant.Sink do
 
       @impl Replicant.Sink
       def handle_schema_change(sc, ctx) do
-        AshReplicant.run_callback(unquote(slot_name), __MODULE__, :read, fn config ->
+        AshReplicant.run_callback(unquote(slot_name), __MODULE__, fn config ->
           Impl.handle_schema_change(config, sc, ctx)
         end)
       end
 
       @impl Replicant.Sink
       def handle_snapshot(changes, ctx) do
-        AshReplicant.run_callback(unquote(slot_name), __MODULE__, :mutate, fn config ->
+        AshReplicant.run_callback(unquote(slot_name), __MODULE__, fn config ->
           Impl.handle_snapshot(config, changes, ctx)
         end)
       end
 
       @impl Replicant.Sink
       def handle_snapshot_complete(lsn) do
-        AshReplicant.run_callback(unquote(slot_name), __MODULE__, :mutate, fn config ->
+        AshReplicant.run_callback(unquote(slot_name), __MODULE__, fn config ->
           Impl.handle_snapshot_complete(config, lsn)
         end)
       end
 
       @impl Replicant.Sink
       def snapshot_progress do
-        AshReplicant.run_callback(unquote(slot_name), __MODULE__, :mutate, fn config ->
+        AshReplicant.run_callback(unquote(slot_name), __MODULE__, fn config ->
           Impl.snapshot_progress(config)
         end)
       end

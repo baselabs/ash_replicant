@@ -21,8 +21,10 @@ defmodule AshReplicant do
   alias AshReplicant.Census
   alias AshReplicant.Checkpoint.Identity
   alias AshReplicant.Coverage
+  alias AshReplicant.Destination
   alias AshReplicant.Destination.Generation
   alias AshReplicant.Error
+  alias AshReplicant.PipelineOwner
   alias AshReplicant.Resource.Info
   alias AshReplicant.Sink.Impl
   alias AshReplicant.Snapshot.Provenance
@@ -93,12 +95,13 @@ defmodule AshReplicant do
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
-    AshReplicant.PipelineOwner.start_link(opts)
+    PipelineOwner.start_link(opts)
   end
 
   @doc """
   Stop a running pipeline by slot name (idempotent). Clears the cached resolver
   index from `:persistent_term` so a subsequent `start_link/1` rebuilds it fresh.
+  Waits for admitted callbacks and the owner's census teardown to finish.
   Stopping a slot whose owner is live records the `:operator_stopped` terminal
   tombstone first (O02); stopping an already-dead slot leaves whatever terminal
   cause it already recorded.
@@ -116,6 +119,15 @@ defmodule AshReplicant do
       stop_fact = capture_stop_fact(slot_name)
       write_stop_fact(slot_name, stop_fact)
       result = safe_stop(slot_name)
+
+      # The owner can still be writing a terminal cause or cancelling its
+      # census after the transport is gone. It never takes this lease, so
+      # join it here before releasing destination ownership to the caller.
+      case stop_fact do
+        %Generation{owner: owner} -> PipelineOwner.stop(owner)
+        :none -> :ok
+      end
+
       write_stop_fact(slot_name, stop_fact)
       :persistent_term.erase({AshReplicant, slot_name})
       Impl.clear_snapshot_ordinals(slot_name)
@@ -125,8 +137,8 @@ defmodule AshReplicant do
 
   defp capture_stop_fact(slot_name) do
     case :persistent_term.get({AshReplicant, slot_name}, :none) do
-      %Generation{sink: sink, source_identity: identity, owner: owner} ->
-        if owner_alive?(owner), do: {sink, identity}, else: :none
+      %Generation{owner: owner} = generation ->
+        if owner_alive?(owner), do: generation, else: :none
 
       _absent ->
         :none
@@ -135,8 +147,21 @@ defmodule AshReplicant do
 
   defp write_stop_fact(_slot_name, :none), do: :ok
 
-  defp write_stop_fact(slot_name, {sink, identity}),
-    do: Status.record_terminal(slot_name, sink, identity, :operator_stopped)
+  defp write_stop_fact(slot_name, %Generation{} = generation) do
+    config = Map.put(generation.sink_config, :dynamic_repo, generation.dynamic_repo)
+
+    # The owner may have erased its generation before the final write.
+    # Retain its admitted destination rather than falling back to the
+    # stopping caller's process-local repo binding.
+    Destination.with_repo_binding(config, fn ->
+      Status.record_terminal(
+        slot_name,
+        generation.sink,
+        generation.source_identity,
+        :operator_stopped
+      )
+    end)
+  end
 
   @doc false
   def erase_generation(slot_name, generation),
@@ -537,29 +562,22 @@ defmodule AshReplicant do
   end
 
   @doc false
-  @spec run_callback(String.t(), module(), :read | :mutate, (map() -> term()), keyword()) ::
-          term()
-  def run_callback(slot_name, sink, mode, effect, opts \\ [])
-      when is_binary(slot_name) and is_atom(sink) and mode in [:read, :mutate] and
-             is_function(effect, 1) and is_list(opts) do
-    runner = fn -> run_admitted_callback(slot_name, sink, effect) end
+  @spec run_callback(String.t(), module(), (map() -> term()), keyword()) :: term()
+  def run_callback(slot_name, sink, effect, opts \\ [])
+      when is_binary(slot_name) and is_atom(sink) and is_function(effect, 1) and
+             is_list(opts) do
+    activation_lock(slot_name, fn ->
+      result = run_admitted_callback(slot_name, sink, effect)
 
-    result =
-      case mode do
-        :read -> runner.()
-        :mutate -> activation_lock(slot_name, runner)
-      end
-
-    # O02 (cross-vendor F3): this is the ONE boundary every generated sink
-    # callback crosses, and Replicant halts the pipeline on ANY non-ok sink
-    # return — so an error leaving it is terminal, and the scrubbed reason
-    # it carries is the precise cause. That covers the halt funnels AND the
-    # bind-conflict/session-identity/slot-origin paths that never pass
-    # through them. The census opts out (`terminal?: false`): its faults
-    # feed the consecutive-fault budget, not a tombstone.
-    if Keyword.get(opts, :terminal?, true),
-      do: Status.record_callback_error(slot_name, result),
-      else: result
+      # Reads own destination connections too; the census can also rebind
+      # the durable key witness. Keep every admitted operation AND its
+      # terminal write inside the same lease that stop drains.
+      # The census opts out of terminal recording: its faults feed the
+      # consecutive-fault budget rather than a tombstone.
+      if Keyword.get(opts, :terminal?, true),
+        do: Status.record_callback_error(slot_name, result),
+        else: result
+    end)
   end
 
   @doc false

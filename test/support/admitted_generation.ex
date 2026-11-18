@@ -69,11 +69,12 @@ defmodule AshReplicant.Test.AdmittedGeneration do
   # ADR-0014: a generation admits callbacks only while its owner is alive.
   # Tests that put! a generation without a real pipeline owner get a live
   # placeholder tied to the CALLER — it exits when the caller does, so it can
-  # never outlive the test that owns the generation.
+  # never outlive the test that owns the generation. Like the real owner it
+  # is unlinked, so its explicit shutdown cannot take the caller down.
   defp placeholder_owner do
     caller = self()
 
-    spawn_link(fn ->
+    spawn(fn ->
       ref = Process.monitor(caller)
 
       receive do

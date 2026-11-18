@@ -215,13 +215,11 @@ defmodule AshReplicant.CensusDriftTest do
   def hold_transaction(_event, _measurements, _metadata, _config), do: :ok
 
   defp stop_while_paused(target, barrier) do
-    try do
-      assert_receive {:transaction_checked_out, ^barrier, ^target}, 5_000
-      stopper = Task.async(fn -> AshReplicant.stop_supervised(@slot) end)
-      {stopper, Task.yield(stopper, 250)}
-    after
-      send(target, {:release_transaction, barrier})
-    end
+    assert_receive {:transaction_checked_out, ^barrier, ^target}, 5_000
+    stopper = Task.async(fn -> AshReplicant.stop_supervised(@slot) end)
+    {stopper, Task.yield(stopper, 250)}
+  after
+    send(target, {:release_transaction, barrier})
   end
 
   defp stop_result(stopper, nil), do: Task.await(stopper, 5_000)
@@ -253,7 +251,7 @@ defmodule AshReplicant.CensusDriftTest do
 
     reader =
       Task.async(fn ->
-        AshReplicant.run_callback(@slot, Sink, :read, fn config ->
+        AshReplicant.run_callback(@slot, Sink, fn config ->
           hold_admitted_read(config, parent, barrier)
         end)
       end)
@@ -284,7 +282,7 @@ defmodule AshReplicant.CensusDriftTest do
           {:start_callback, ^barrier} -> :ok
         end
 
-        AshReplicant.run_callback(@slot, Sink, :mutate, fn config ->
+        AshReplicant.run_callback(@slot, Sink, fn config ->
           Impl.handle_schema_change(
             config,
             %SchemaChange{
@@ -361,6 +359,12 @@ defmodule AshReplicant.CensusDriftTest do
     assert_receive {:DOWN, ^monitor, :process, ^owner, :normal}, 5_000
     assert stop_result(stopper, early_stop) == :ok
     assert is_nil(early_stop), "stop returned while its owner held a real connection"
+
+    assert [["operator_stopped"]] =
+             Marquee.q!(
+               "SELECT terminal_cause FROM ash_replicant_checkpoints WHERE slot_name = $1",
+               [@slot]
+             ).rows
   end
 
   test "coverage drift AFTER activation halts the pipeline with no restart and no affected row" do
