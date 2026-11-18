@@ -288,7 +288,7 @@ privacy_output="$(env -u ASH_REPLICANT_TEST_URL TMPDIR="$fixture_dir" bash "$pri
 
 rm -f "$fixture_test"
 
-if [[ "$privacy_exit" -eq 0 ]] || [[ "$privacy_output" != *"912345"* ]]; then
+if [[ "$privacy_exit" -eq 0 ]] || [[ "$privacy_output" != *"ERROR-SITE: $fixture_test:912345"* ]]; then
   echo "source-line privacy assertion did not detect its exact guard mutation" >&2
   exit 1
 fi
