@@ -190,8 +190,9 @@ defmodule AshReplicant.CensusDriftTest do
 
   @doc false
   def hold_transaction(_event, _measurements, %{query: "begin"}, {parent, target, barrier})
-      when target == self() do
-    send(parent, {:transaction_checked_out, barrier})
+      when target == self() or target == :any do
+    :telemetry.detach({__MODULE__, barrier})
+    send(parent, {:transaction_checked_out, barrier, self()})
 
     receive do
       {:release_transaction, ^barrier} -> :ok
@@ -204,7 +205,7 @@ defmodule AshReplicant.CensusDriftTest do
 
   defp stop_while_paused(target, barrier) do
     try do
-      assert_receive {:transaction_checked_out, ^barrier}, 5_000
+      assert_receive {:transaction_checked_out, ^barrier, ^target}, 5_000
       stopper = Task.async(fn -> AshReplicant.stop_supervised(@slot) end)
       {stopper, Task.yield(stopper, 250)}
     after
@@ -294,6 +295,38 @@ defmodule AshReplicant.CensusDriftTest do
 
     assert stop_result(stopper, early_stop) == :ok
     assert is_nil(early_stop), "stop returned while a terminal write held a real connection"
+  end
+
+  test "stop drains the actual census worker instead of killing its checked-out connection" do
+    assert {:ok, owner} = start(interval_ms: 60_000, jitter_ratio: 0.0, timeout_ms: 10_000)
+
+    await_bound()
+
+    # A pre-witness checkpoint takes the real census rebind transaction.
+    Marquee.q!(
+      "UPDATE ash_replicant_checkpoints SET digest_key_state = NULL WHERE slot_name = $1",
+      [@slot]
+    )
+
+    barrier = make_ref()
+    pause_transaction(:any, barrier)
+    %{census_timer: %{token: token}} = :sys.get_state(owner)
+    send(owner, {:census_tick, token})
+    assert_receive {:transaction_checked_out, ^barrier, worker}, 5_000
+    assert %{census_run: %{pid: ^worker}} = :sys.get_state(owner)
+    monitor = Process.monitor(worker)
+
+    {stopper, early_stop} =
+      try do
+        stopper = Task.async(fn -> AshReplicant.stop_supervised(@slot) end)
+        {stopper, Task.yield(stopper, 250)}
+      after
+        send(worker, {:release_transaction, barrier})
+      end
+
+    assert_receive {:DOWN, ^monitor, :process, ^worker, _reason}, 5_000
+    assert stop_result(stopper, early_stop) == :ok
+    assert is_nil(early_stop), "stop killed a census worker while it held a real connection"
   end
 
   test "stop waits for the owner's terminal transaction after the transport exits" do
