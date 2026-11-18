@@ -1165,6 +1165,7 @@ defmodule AshReplicant.ReleaseContract do
       not String.contains?(source, "mix hex.publish"),
       "publish must only upload inspected files"
     )
+
     assert_runtime(workflow, root)
 
     # Exact workflow, job, and step maps keep HEX_API_KEY and secrets references
