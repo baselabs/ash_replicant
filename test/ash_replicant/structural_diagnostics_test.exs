@@ -3,7 +3,7 @@ defmodule AshReplicant.StructuralDiagnosticsTest do
 
   setup do
     capture =
-      Path.join(System.tmp_dir!(), "ash-replicant-diagnostics-#{System.unique_integer([:positive])}")
+      Path.join(System.tmp_dir!(), "ash-replicant-diag-#{System.unique_integer([:positive])}")
 
     on_exit(fn -> File.rm(capture) end)
     {:ok, capture: capture}
@@ -42,7 +42,7 @@ defmodule AshReplicant.StructuralDiagnosticsTest do
     end)
   end
 
-  test "unknown emitters and embedded templates never become diagnostic values", %{capture: capture} do
+  test "unknown emitters and embedded templates stay private", %{capture: capture} do
     output =
       diagnose(
         capture,

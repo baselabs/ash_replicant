@@ -25,14 +25,16 @@ defmodule AshReplicant.FreshConsumerDatabaseTest do
     seeded_slots = [own, abandoned, leased, unrelated] |> Enum.sort()
     ready = Path.join(System.tmp_dir!(), "ash-replicant-consumer-lease-#{run}")
     channel = ready <> ".fifo"
-    {_output, 0} = System.cmd("mkfifo", ["-m", "600", channel])
+    # Readiness is a handshake, not a four-second assumption about how long
+    # connecting and reclaiming databases will take on the live server.
+    {_output, 0} = System.cmd("mkfifo", ["-m", "600", channel, ready])
     admin = connect(url, "postgres", own)
 
     owner =
       Port.open({:spawn_executable, System.find_executable("sh")}, [
         :binary,
         :exit_status,
-        args: ["-c", ~s(exec 9>"$1"; exec sleep 60), "consumer-owner", channel]
+        args: ["-c", ~s(exec 9>"$1"; exec cat >/dev/null), "consumer-owner", channel]
       ])
 
     {:os_pid, owner_pid} = Port.info(owner, :os_pid)
@@ -45,7 +47,7 @@ defmodule AshReplicant.FreshConsumerDatabaseTest do
         Postgrex.query!(admin, ~s(CREATE DATABASE "#{database}"), [])
       end)
 
-      Enum.each(seeded_slots, &create_inactive_slot!(url, &1))
+      Enum.each(seeded_slots, &create_inactive_slot!(url, &1, admin))
       live_connection = tracked_connect(url, live, "ash_replicant_reclaim_test")
       assert Process.alive?(live_connection)
 
@@ -64,12 +66,12 @@ defmodule AshReplicant.FreshConsumerDatabaseTest do
         end)
 
       try do
-        eventually(fn -> File.exists?(ready) end)
+        assert File.read!(ready) == "ready\n"
 
-        assert [[1]] ==
+        assert [[lease_backend]] =
                  Postgrex.query!(
                    admin,
-                   "SELECT count(*) FROM pg_stat_activity WHERE application_name = $1 AND datname = 'postgres'",
+                   "SELECT pid FROM pg_stat_activity WHERE application_name = $1 AND datname = 'postgres'",
                    [leased]
                  ).rows
 
@@ -114,7 +116,8 @@ defmodule AshReplicant.FreshConsumerDatabaseTest do
 
         {_output, 0} = System.cmd("kill", ["-KILL", Integer.to_string(owner_pid)])
         assert :ok == Task.await(lease, 5_000)
-        eventually(fn -> not File.exists?(ready) end)
+        refute File.exists?(ready)
+        eventually(fn -> backend_absent?(admin, lease_backend) end)
 
         FreshConsumerDatabase.reclaim!(admin, own)
         retained = [own, live, unrelated] |> Enum.sort()
@@ -143,7 +146,8 @@ defmodule AshReplicant.FreshConsumerDatabaseTest do
       File.rm(channel)
 
       Enum.each(Process.get(@connection_key, []), fn connection ->
-        if connection != admin and Process.alive?(connection), do: GenServer.stop(connection)
+        if connection != admin and Process.alive?(connection),
+          do: stop_connection!(connection, admin)
       end)
 
       Enum.each(databases, fn database ->
@@ -186,10 +190,26 @@ defmodule AshReplicant.FreshConsumerDatabaseTest do
     connection
   end
 
-  defp create_inactive_slot!(url, database) do
+  defp create_inactive_slot!(url, database, admin) do
     connection = tracked_connect(url, database, "ash_replicant_reclaim_test")
     create_slot!(connection, database)
+    stop_connection!(connection, admin)
+  end
+
+  defp stop_connection!(connection, admin) do
+    [[backend]] = Postgrex.query!(connection, "SELECT pg_backend_pid()", []).rows
     GenServer.stop(connection)
+    # Closing the local client does not acknowledge the server's exit. The
+    # reclaimer correctly retains a resource until its backend is gone.
+    eventually(fn -> backend_absent?(admin, backend) end)
+  end
+
+  defp backend_absent?(admin, backend) do
+    Postgrex.query!(
+      admin,
+      "SELECT NOT EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid = $1)",
+      [backend]
+    ).rows == [[true]]
   end
 
   defp create_slot!(connection, slot) do
