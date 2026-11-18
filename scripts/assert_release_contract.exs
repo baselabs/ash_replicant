@@ -1187,8 +1187,10 @@ defmodule AshReplicant.ReleaseContract do
     )
 
     for {_name, job} <- Map.get(workflow, "jobs", %{}), step <- Map.get(job, "steps", []) do
+      run = Map.get(step, "run", "")
+
       assert(
-        not String.contains?(Map.get(step, "run", ""), "${{"),
+        is_binary(run) and not String.contains?(run, "${{"),
         "workflow expressions must enter run scripts through step env"
       )
     end

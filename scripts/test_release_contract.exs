@@ -560,7 +560,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     for {workflow, job} <- runtimes,
         {old, replacement} <- [
           {"          version-file: .tool-versions\n", ""},
-          {"          version-file: .tool-versions\n", "          version-file: other.versions\n"},
+          {"          version-file: .tool-versions\n",
+           "          version-file: other.versions\n"},
           {"          version-file: .tool-versions\n", "          elixir-version: 1.20.3\n"},
           {"          version-file: .tool-versions\n", "          otp-version: 29.0.3\n"},
           {"          version-file: .tool-versions\n",
@@ -948,11 +949,13 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     """)
 
     assert_valid!()
+
     replace_once!(
       ".github/workflows/extra.yml",
       ~s(echo "$GITHUB_REF"),
       ~s(echo "${{ github.ref }}")
     )
+
     assert_invalid!()
 
     for name <- ["mix.exs", "mix.lock"] do
@@ -1472,8 +1475,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       @workflow,
-      "env:\n  ELIXIR_VERSION:",
-      "defaults:\n  run:\n    shell: echo {0}\n\nenv:\n  ELIXIR_VERSION:"
+      "permissions:\n",
+      "defaults:\n  run:\n    shell: echo {0}\n\npermissions:\n"
     )
 
     assert_invalid!()
@@ -1482,8 +1485,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       @workflow,
-      "env:\n  ELIXIR_VERSION:",
-      "env:\n  BASH_ENV: /tmp/release-bypass\n  ELIXIR_VERSION:"
+      "permissions:\n",
+      "env:\n  BASH_ENV: /tmp/release-bypass\n\npermissions:\n"
     )
 
     assert_invalid!()
