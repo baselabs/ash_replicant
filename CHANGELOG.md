@@ -14,9 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Set CI timeouts to twice the slowest measured green row from run 44214414813,
-  rounded up, with a three-minute floor for short control jobs. Read exact runtime
-  versions only from `.tool-versions` and refuse mismatches after every install.
+- Set CI timeouts from each job's slowest green run on this branch, following
+  infra's measured timeout rule. Publish records that it has no green run yet.
+  Read exact runtime versions only from `.tool-versions` and refuse mismatches
+  after every install.
 - Qualify commits only through `kci/**`; remove pull-request execution and pass
   matrix inputs into shell scripts through step environments.
 - Authenticate every GitHub REST lookup through `gh api` with a step-scoped
@@ -38,8 +39,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fail the newest-version assertions until the latest lock is refreshed.
 - Audit the materialized upgrade fixture with both feeds in CI. Its fetch
   refuses lock changes.
-- Refuse publishing outside `main` or when a local tag, remote tag, GitHub release,
-  or Hex release already exists. Failed release lookups refuse publication.
+- Refuse publishing outside `main`, creating a new Hex package name, or reusing
+  a local tag, remote tag, GitHub release, or Hex version. Anonymous package
+  existence and version absence are rechecked through Hex's API before upload;
+  failed or unexpected lookups refuse publication.
+- Build and inspect package and docs archives without a key, then upload those
+  exact bytes through Hex 2.7.0's API without loading the Mix project. Read both
+  archives before uploading either; only the upload step receives the key.
+  Qualify the archive guards against real docs, altered archives, and live Hex.
+- Remove the temporary workflow procedure for unlocked upstream resolution and
+  its stale documentation. Qualification keeps the reviewed locks and newest
+  assertions; upstream-resolution workflows belong only in a drift report.
 
 ## [1.6.4] - 2026-11-17
 

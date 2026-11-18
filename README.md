@@ -1096,7 +1096,7 @@ violates one of these rules.
 ```bash
 asdf install
 scripts/with-release-runtime.sh scripts/assert-runtime-version.sh
-scripts/with-release-runtime.sh mix deps.get
+scripts/with-release-runtime.sh mix deps.get --check-locked
 env -u ASH_REPLICANT_TEST_URL \
   scripts/with-release-runtime.sh scripts/run-structural-tests.sh \
     --allow-excluded --exclude integration

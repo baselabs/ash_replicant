@@ -18,8 +18,7 @@ jobs:
     environment: publish
     # A public repository never uses the build box or its runners.
     runs-on: ubuntu-24.04
-    # Green run 44214414813: release-artifact 1m52s; mirrors its docs/package job.
-    timeout-minutes: 4
+    timeout-minutes: 90 # no green run yet
     permissions:
       contents: read
     env:
@@ -35,24 +34,31 @@ jobs:
           version-file: .tool-versions
           version-type: strict
       - run: scripts/assert-runtime-version.sh
-      - run: mix local.hex --force
+      - run: mix local.hex 2.7.0 --force
       - run: mix local.rebar --force
-      - name: Fetch dependencies
-        run: mix deps.get --check-locked
-      - run: mix docs --warnings-as-errors
-      - name: Build and inspect Hex package
-        run: |
-          env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION scripts/with-release-runtime.sh mix hex.build --output "$RUNNER_TEMP/package.tar"
-          scripts/inspect-release-package.sh "$RUNNER_TEMP/package.tar"
       - name: Refuse an already released version
+        id: release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           version="$(sed -n 's/^  @version "\(.*\)"$/\1/p' mix.exs)"
           scripts/assert-release-tree.sh "$version" "v$version" --unreleased
-      # These selectors pin dependencies for the compatibility matrix; if set here, they
-      # would freeze the published requirements to those versions, so they are cleared.
-      - name: Publish to hex.pm
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+      - name: Fetch dependencies
+        run: mix deps.get --check-locked
+      - run: mix docs --warnings-as-errors
+      # The selectors are cleared while building; the upload loads no project.
+      - name: Build and inspect package and docs archives
+        run: |
+          tar -czf "$RUNNER_TEMP/hex-docs.tar.gz" -C doc .
+          python3 -B scripts/inspect-release-docs.py "$RUNNER_TEMP/hex-docs.tar.gz" doc
+          env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION scripts/with-release-runtime.sh mix hex.build --output "$RUNNER_TEMP/package.tar"
+          scripts/inspect-release-package.sh "$RUNNER_TEMP/package.tar"
+      - name: Upload inspected archives to hex.pm
         env:
+          VERSION: ${{ steps.release.outputs.version }}
           HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
-        run: env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION scripts/with-release-runtime.sh mix hex.publish --yes
+        run: mix run --no-mix-exs scripts/publish_hex_artifacts.exs ash_replicant "$VERSION" "$RUNNER_TEMP/package.tar" "$RUNNER_TEMP/hex-docs.tar.gz"
+      - name: Remove release archives
+        if: always()
+        run: rm -f "$RUNNER_TEMP/package.tar" "$RUNNER_TEMP/hex-docs.tar.gz"

@@ -22,8 +22,8 @@ jobs:
     if: always()
     needs: [qualification]
     runs-on: ubuntu-24.04
-    # Green run 44214414813: qualified 0m16s; 3-minute floor (qualification.yml rule).
-    timeout-minutes: 3
+    # Green run 44214414813: qualified 0m16s; 5-minute floor (infra ci.md).
+    timeout-minutes: 5
     permissions:
       actions: read
       contents: read

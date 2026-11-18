@@ -157,19 +157,18 @@ scripts/prepush.sh          # runs CI's checks locally, except mutation gates,
 CI fetches only committed locks: `mix.lock` for current-lock cells,
 `locks/exact-floors.lock` and `locks/latest-compatible.lock` for those cells.
 The latest-compatible cell still asserts the newest admitted Hex versions; an upstream
-release makes it red until a reviewed lock refresh lands. Generate refreshes on an isolated
-`kci/lock-bootstrap-ash` ref as described in `CONTRIBUTING.md`; the bootstrap commit never
-enters the feature branch's history. Nothing compiles or tests on the owner's Mac, and this
-public repository uses GitHub-hosted CI rather than the build box.
+release makes it red until a reviewed lock refresh lands. Upstream resolution in a workflow
+belongs only in a drift report under infra's dependency requirements, never qualification.
+Nothing compiles or tests on the owner's Mac, and this public repository uses GitHub-hosted
+CI rather than the build box.
 
 `.tool-versions` is the single checkout runtime source: every setup-beam install
 reads it with `version-file` and strict resolution, then immediately checks the
 installed Elixir and full OTP release. The wrapper and config assertion read
 the same file; package compatibility requirements remain in `mix.exs`.
-Job timeouts follow qualification.yml's measured rule: twice the slowest green
-row, rounded up to whole minutes, with a 3-minute floor only for 1–2-minute
-results. Comments cite run 44214414813 and its duration; publish mirrors the
-selector-free docs/package job. No workflow runs repository code from a pull
+Job timeouts follow infra's binding CI requirements linked below; each comment
+names its slowest measured green run and duration. Publish has no green run yet
+and uses `90 # no green run yet` until infra measures one. No workflow runs repository code from a pull
 request; a maintainer qualifies a fork's change through `kci/<commit>`.
 
 Live release-guard self-tests run once in the no-database job, separately from
@@ -178,6 +177,11 @@ from the calling step's environment; the guard and publish-refusal jobs grant
 only `contents: read`. Only an HTTP 404 proves absence; a missing token,
 transport failure or any other unexpected response refuses. The workflow
 contract mutation-tests token placement, transport and refusal controls.
+Publication first requires an anonymous HTTP 200 for the existing Hex package
+name. A missing name refuses: first publication is the owner's decision. Keyless
+steps build and inspect package and docs archives. Only the upload step receives
+the publish key; it loads no project, rechecks package existence and version
+absence, and uploads those exact files with Hex's API.
 The release checker fixtures are recorded data, never fetched or executed as
 an Elixir project: `recorded.lock` is replayed with `assert-dependency-version.sh
 --lock PATH`, whose default is the repository root's `mix.lock`. There is no

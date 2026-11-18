@@ -116,10 +116,9 @@ all ten expected proofs to finish successfully. `main` moves only on that
 commit's `qualified` check; a push to `main`, a tag, or a release starts no run.
 If qualification fails, fix forward in the next commit.
 
-Job timeouts follow qualification.yml's rule: ceil(2 × the slowest measured
-green duration in minutes), with a 3-minute floor only when that rounds to
-1 or 2 minutes. Each comment names run 44214414813 and the measured duration;
-publish uses the selector-free docs/package job it mirrors.
+Job timeouts follow infra's binding CI requirements linked below. Each job's
+comment identifies its slowest measured green run and duration. Publish has no
+green run yet and uses `90 # no green run yet` until infra measures one.
 
 Infra's binding requirements live in [What infra requires of every product](https://github.com/baselabs/infra/blob/main/baselabs/docs/ci.md#what-infra-requires-of-every-product).
 Read that section from infra's default branch as directed in `AGENTS.md`.
@@ -232,38 +231,12 @@ affected tests in the same change, and record the Ash version contract delta in 
   The full release battery is intentionally not represented by `mix quality`;
   that alias covers format, Credo, and Dialyzer only.
 
-## Refreshing compatibility locks
+## Compatibility locks
 
-Generate locks on GitHub, never by running Mix on the owner's Mac or by editing
-a lockfile. Use a throwaway branch from the feature branch's current head; the
-bootstrap commit must never enter that feature branch's history.
-
-1. On the throwaway branch, temporarily replace `ci.yml` with a workflow that
-   triggers only on `kci/lock-bootstrap-ash`, uses `ubuntu-24.04`, the pinned
-   checkout with `persist-credentials: false`, and the repository's pinned
-   setup-beam action with the exact runtime in `.tool-versions`. Give its jobs
-   measured timeouts using qualification's rule.
-2. Run two matrix cells with `MIX_ENV=test`. For exact-floors, set
-   `ASH_REPLICANT_ASH_VERSION=3.37.3`, `ASH_REPLICANT_REPLICANT_VERSION=1.4.0`,
-   and `ASH_REPLICANT_ONETIME_VERSION=1.3.2`; run `mix deps.unlock ash`,
-   `mix deps.unlock replicant`, `mix deps.unlock ash_onetime`, then `mix deps.get`.
-   For latest-compatible, set all three selectors to `latest`, run
-   `mix deps.unlock --all`, then `mix deps.get`. These unlocked fetches are
-   confined to the temporary bootstrap workflow.
-3. Upload each cell's `mix.lock` as a separate artifact using
-   `actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02` (v4.6.2),
-   with `if-no-files-found: error` and one-day retention. Commit the temporary
-   workflow and push only to `kci/lock-bootstrap-ash`.
-4. After that run succeeds, use `gh run download RUN_ID` to retrieve its two
-   artifacts. Return to the feature branch, copy the artifact bytes to
-   `locks/exact-floors.lock` and `locks/latest-compatible.lock`, and review the
-   dependency diff before committing those paths. Do not cherry-pick the
-   bootstrap commit.
-5. Remove the downloads and both bootstrap refs. To delete the unmerged local
-   branch with `git branch -d`, first set its upstream to the matching pushed
-   `origin/kci/lock-bootstrap-ash`, delete the local branch while that upstream
-   exists, then delete the remote ref. Qualify the feature branch normally;
-   the final workflow must contain only locked fetches.
+Qualification fetches the committed, reviewed locks and keeps its newest-version
+assertions. Upstream resolution in a workflow belongs only in a drift report,
+under infra's [dependency requirements](https://github.com/baselabs/infra/blob/main/baselabs/docs/ci.md#what-infra-requires-of-every-product);
+it never decides qualification. This repository has no drift-report workflow.
 
 ## Shipping a release
 
@@ -285,16 +258,20 @@ Follow these steps in order:
 4. An owner dispatches `Publish to Hex` on `main` after the version
    commit's `qualified` run is green. Publishing runs only through this
    workflow on a GitHub-hosted runner, never from a workstation. Its first
-   step refuses every other ref. Before upload it refuses an existing local
-   tag, remote tag, GitHub release, or Hex release; a failed lookup also refuses
-   publication, and only a clean HTTP 404 proves absence. The GitHub
+   step refuses every other ref. An anonymous Hex read must first prove that
+   `ash_replicant` already exists. A missing package name refuses publication;
+   first publication is the owner's decision. Before upload it also refuses an
+   existing local tag, remote tag, GitHub release, or Hex release. A failed lookup
+   refuses publication, and only a clean HTTP 404 proves an absent version. The GitHub
    lookup uses `gh api -i` with the job's read-only token scoped to that
    refusal step. The
    `HEX_API_KEY` secret belongs only to the protected `publish` environment,
-   whose deployment branch policy must admit only `main`; only the publish
-   step receives it. The workflow fetches locked dependencies, builds docs,
-   and builds and inspects the package with all three dependency selectors
-   cleared before uploading the package and docs.
+   whose deployment branch policy must admit only `main`; only the upload
+   step receives it. Keyless steps fetch locked dependencies, build docs, and
+   build and inspect both archives, clearing all three dependency selectors for
+   the package build. The upload runs `mix run --no-mix-exs` with Hex 2.7.0's API,
+   loading no project and uploading those exact files. It reads both archives and
+   rechecks package existence and version absence before either upload.
 5. After the Hex read-back, tag that same qualified version commit:
    `git tag vNEW_VERSION <sha> && git push origin vNEW_VERSION`.
 6. `gh release create vNEW_VERSION --verify-tag --target <sha>` with the

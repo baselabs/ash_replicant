@@ -3,6 +3,18 @@ set -euo pipefail
 
 release_tree_fail() { echo "release tree: $1" >&2; exit 1; }
 
+# Publication may add a version, never a package name. Read anonymously first.
+assert_hex_package_exists() {
+  local name="$1" url="$2" code
+  code="$(curl --silent --show-error --max-time 30 --output /dev/null \
+    --write-out '%{http_code}' "$url")" || release_tree_fail "$name package lookup failed"
+  case "$code" in
+    200) ;;
+    404) release_tree_fail "$name is not on Hex; first publication is the owner's decision" ;;
+    *) release_tree_fail "$name package lookup failed" ;;
+  esac
+}
+
 # Only an HTTP 404 proves absence. A transport error, redirect, or any other
 # response refuses publication. GitHub uses the caller's read-only job token.
 assert_release_absent() {
@@ -41,6 +53,7 @@ release_tree_main() {
   [[ -z "$(git status --porcelain --untracked-files=all)" ]] || release_tree_fail 'dirty tree'
 
   if [[ "$mode" == --unreleased ]]; then
+    assert_hex_package_exists ash_replicant https://hex.pm/api/packages/ash_replicant
     [[ "$(sed -n 's/^  @version "\(.*\)"$/\1/p' mix.exs)" == "$version" ]] \
       || release_tree_fail 'project version differs from release version'
     result=0

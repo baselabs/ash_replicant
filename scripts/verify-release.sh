@@ -10,8 +10,8 @@
 #      package build from the CURRENT tree — the caller runs this from the
 #      tagged, battery-green checkout, so checksum equality proves the served
 #      bytes are the verified bytes.
-#   2. The release carries docs (has_docs: true — hex.publish uploads them
-#      from this same tree by default; has_docs: false is an INCOMPLETE
+#   2. The release carries docs (has_docs: true — publish.yml uploads the
+#      inspected docs archive; has_docs: false is an INCOMPLETE
 #      release by contract) and https://ash-replicant.hexdocs.pm/NEW_VERSION
 #      answers 200.
 #   3. The GitHub release's target_commitish equals the TAG's commit sha —

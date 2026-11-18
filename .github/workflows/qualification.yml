@@ -7,14 +7,14 @@ on:
 permissions:
   contents: read
 
-# Job timeout rule (also ci.yml and publish.yml): ceil(2x measured green seconds / 60).
-# Floor: 3 minutes only when the doubled duration rounds to 1 or 2 minutes.
+# Timeouts follow infra ci.md: twice the slowest green duration, rounded up.
+# Jobs measured under 2.5 minutes get 5; unmeasured jobs get 90, stating why.
 jobs:
   no-database:
     name: No-database tests
     runs-on: ubuntu-24.04
-    # Green run 44214414813: No-database tests 23m10s.
-    timeout-minutes: 47
+    # Green run 44208487858: No-database tests 38m14s.
+    timeout-minutes: 77
     permissions:
       contents: read
     env:
@@ -74,8 +74,8 @@ jobs:
   compatibility:
     name: Dependencies ${{ matrix.label }} / PostgreSQL ${{ matrix.pg_major }}
     runs-on: ubuntu-24.04
-    # Green run 44214414813: current-lock PG16, slowest compatibility cell 15m1s.
-    timeout-minutes: 31
+    # Green run 44224060553: current-lock PG18, slowest compatibility cell 18m29s.
+    timeout-minutes: 37
     strategy:
       fail-fast: false
       matrix:
@@ -224,8 +224,8 @@ jobs:
   performance:
     name: Measured performance bounds
     runs-on: ubuntu-24.04
-    # Green run 44214414813: Measured performance bounds 2m40s.
-    timeout-minutes: 6
+    # Green run 44208487858: Measured performance bounds 3m14s.
+    timeout-minutes: 7
     env:
       MIX_ENV: test
       ASH_REPLICANT_TEST_URL: postgres://postgres@localhost:5432/postgres
@@ -268,8 +268,8 @@ jobs:
   decoder-old-majors:
     name: Plugin decoders / PostgreSQL ${{ matrix.pg_major }}
     runs-on: ubuntu-24.04
-    # Green run 44214414813: PG12, slowest plugin decoder cell 2m36s.
-    timeout-minutes: 6
+    # Green run 44224060553: PG12, slowest plugin decoder cell 3m15s.
+    timeout-minutes: 7
     strategy:
       fail-fast: false
       matrix:
@@ -339,8 +339,8 @@ jobs:
   release-artifact:
     name: Selector-free docs and package
     runs-on: ubuntu-24.04
-    # Green run 44214414813: Selector-free docs and package 1m52s.
-    timeout-minutes: 4
+    # Green run 44208487858: Selector-free docs and package 2m17s; 5-minute floor.
+    timeout-minutes: 5
     env:
       MIX_ENV: dev
 
@@ -353,6 +353,7 @@ jobs:
           version-file: .tool-versions
           version-type: strict
       - run: scripts/assert-runtime-version.sh
+      - run: mix local.hex 2.7.0 --force
 
       - run: env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix deps.get --check-locked
       - run: mix deps.compile
@@ -378,6 +379,16 @@ jobs:
           '
 
       - run: mix docs --warnings-as-errors
+
+      - name: Inspect the upload archives and exercise their guards without a key
+        run: |
+          trap 'rm -f "$RUNNER_TEMP/package.tar" "$RUNNER_TEMP/hex-docs.tar.gz"' EXIT
+          tar -czf "$RUNNER_TEMP/hex-docs.tar.gz" -C doc .
+          python3 -B scripts/inspect-release-docs.py "$RUNNER_TEMP/hex-docs.tar.gz" doc
+          env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION scripts/with-release-runtime.sh mix hex.build --output "$RUNNER_TEMP/package.tar"
+          scripts/inspect-release-package.sh "$RUNNER_TEMP/package.tar"
+          python3 -B scripts/test_release_docs.py "$RUNNER_TEMP/hex-docs.tar.gz" doc
+          mix run --no-mix-exs scripts/test_publish_hex_artifacts.exs
 
       - name: Build and inspect unpacked Hex package
         run: |

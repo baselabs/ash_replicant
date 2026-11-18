@@ -109,6 +109,16 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   fi
   """
 
+  @upload_archive_checks ~S"""
+  trap 'rm -f "$RUNNER_TEMP/package.tar" "$RUNNER_TEMP/hex-docs.tar.gz"' EXIT
+  tar -czf "$RUNNER_TEMP/hex-docs.tar.gz" -C doc .
+  python3 -B scripts/inspect-release-docs.py "$RUNNER_TEMP/hex-docs.tar.gz" doc
+  env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION scripts/with-release-runtime.sh mix hex.build --output "$RUNNER_TEMP/package.tar"
+  scripts/inspect-release-package.sh "$RUNNER_TEMP/package.tar"
+  python3 -B scripts/test_release_docs.py "$RUNNER_TEMP/hex-docs.tar.gz" doc
+  mix run --no-mix-exs scripts/test_publish_hex_artifacts.exs
+  """
+
   @job_commands %{
     "no-database" => [
       "scripts/assert-runtime-version.sh",
@@ -152,6 +162,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     ],
     "release-artifact" => [
       "scripts/assert-runtime-version.sh",
+      "mix local.hex 2.7.0 --force",
       "env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix deps.get --check-locked",
       "mix deps.compile",
       "mix compile --warnings-as-errors",
@@ -159,6 +170,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       "scripts/assert-release-contract.sh",
       String.trim(@public_dependency_check),
       "mix docs --warnings-as-errors",
+      String.trim(@upload_archive_checks),
       String.trim(@package_inspection)
     ]
   }
@@ -392,10 +404,10 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   end
 
   defp replicant_selector_probes do
-    # The exact-floor CI cell re-resolves the lock to the selector's version
+    # The exact-floor CI cell loads the reviewed lock for the selector's version
     # before the contract runs, so a floor-selector run is modeled by moving
     # the fixture lock TO the floor first (the lock is 1.5.1 now — the floor
-    # cell's re-resolve is what puts 1.4.0 in it); any other lock under that
+    # cell's reviewed lock is what puts 1.4.0 in it); any other lock under that
     # selector — stale in-window or below-floor — is rejected.
     prepare_fixture()
 
@@ -731,7 +743,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           {"    if: always()\n", ""},
           {"    needs: [qualification]\n", "    needs: []\n"},
           {"    needs: [qualification]\n", ""},
-          {"    timeout-minutes: 3\n", "    timeout-minutes: 10\n"},
+          {"    timeout-minutes: 5\n", "    timeout-minutes: 10\n"},
           {"      actions: read\n", ""},
           {"          persist-credentials: false\n", "          persist-credentials: true\n"},
           {"      - run: python3 scripts/qualify.py\n", "      - run: true\n"},
@@ -756,7 +768,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
         check:
           runs-on: ubuntu-24.04
           # Green run 44214414813: qualified 0m16s.
-          timeout-minutes: 3
+          timeout-minutes: 5
           steps:
             - uses: #{@checkout}
               with:
@@ -806,9 +818,27 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           {"mix deps.get --check-locked", "mix deps.get"},
           {"          persist-credentials: false\n", "          persist-credentials: true\n"},
           {"          version-type: strict\n", ""},
-          {"    timeout-minutes: 4\n", "    timeout-minutes: 30\n"},
+          {"    timeout-minutes: 90 # no green run yet\n", "    timeout-minutes: 30\n"},
+          {"90 # no green run yet", "90 # unmeasured"},
+          {"90 # no green run yet", "90"},
           {"          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}\n",
-           "          HEX_API_KEY: ${{ secrets.OTHER_KEY }}\n"}
+           "          HEX_API_KEY: ${{ secrets.OTHER_KEY }}\n"},
+          {"mix local.hex 2.7.0 --force", "mix local.hex --force"},
+          {"mix docs --warnings-as-errors", "true"},
+          {"tar -czf", "true -czf"},
+          {"python3 -B scripts/inspect-release-docs.py", "true"},
+          {"scripts/inspect-release-package.sh", "true"},
+          {"mix run --no-mix-exs scripts/publish_hex_artifacts.exs", "mix hex.publish --yes"},
+          {"mix run --no-mix-exs scripts/publish_hex_artifacts.exs",
+           "mix run scripts/publish_hex_artifacts.exs"},
+          {"mix run --no-mix-exs scripts/publish_hex_artifacts.exs",
+           "mix compile && mix run --no-mix-exs scripts/publish_hex_artifacts.exs"},
+          {"mix run --no-mix-exs scripts/publish_hex_artifacts.exs",
+           "mix run --no-mix-exs scripts/other.exs"},
+          {"ash_replicant \"$VERSION\" \"$RUNNER_TEMP/package.tar\"",
+           "ash_replicant \"$VERSION\" \"$RUNNER_TEMP/other.tar\""},
+          {"\"$RUNNER_TEMP/hex-docs.tar.gz\"\n      - name: Remove release archives",
+           "\"$RUNNER_TEMP/other-docs.tar.gz\"\n      - name: Remove release archives"}
         ] do
       prepare_fixture()
       replace_once!(@publish, old, replacement)
@@ -828,12 +858,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     for scope <- [:job, :workflow] do
       prepare_fixture()
-
-      replace_once!(
-        @publish,
-        "        env:\n          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}\n",
-        ""
-      )
+      replace_once!(@publish, "          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}\n", "")
 
       case scope do
         :job ->
@@ -854,68 +879,107 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       assert_invalid!()
     end
 
+    # Every other step, including actions and cleanup, must reject the publish key.
+    source = File.read!(Path.join(@source_root, @publish))
+    steps = Regex.scan(~r/^      - .*?(?=^      - |\z)/ms, source) |> List.flatten()
+
+    for step <- steps, not String.contains?(step, "name: Upload inspected archives") do
+      prepare_fixture()
+
+      replacement =
+        if String.contains?(step, "        env:\n") do
+          String.replace(
+            step,
+            "        env:\n",
+            "        env:\n          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}\n"
+          )
+        else
+          String.trim_trailing(step) <>
+            "\n        env:\n          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}\n"
+        end
+
+      replace_once!(@publish, step, replacement)
+      assert_invalid!()
+    end
+
     prepare_fixture()
-
-    replace_once!(
-      @publish,
-      "      - run: mix docs --warnings-as-errors\n",
-      "      - run: mix docs --warnings-as-errors\n" <>
-        "        env:\n          OTHER_KEY: ${{ secrets.OTHER_KEY }}\n"
-    )
-
-    assert_invalid!()
-    prepare_fixture()
-
-    replace_once!(
-      @publish,
-      "      - name: Build and inspect Hex package\n" <>
-        "        run: |\n" <>
-        "          env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION scripts/with-release-runtime.sh mix hex.build --output \"$RUNNER_TEMP/package.tar\"\n" <>
-        "          scripts/inspect-release-package.sh \"$RUNNER_TEMP/package.tar\"\n",
-      ""
-    )
-
+    replace_once!(@publish, "name: Publish to Hex", "name: Publish to Hex\n# mix hex.publish")
     assert_invalid!()
 
     for selector <- [
           "ASH_REPLICANT_ASH_VERSION",
           "ASH_REPLICANT_REPLICANT_VERSION",
           "ASH_REPLICANT_ONETIME_VERSION"
-        ],
-        command <- [
-          "mix hex.build --output \"$RUNNER_TEMP/package.tar\"",
-          "mix hex.publish --yes"
         ] do
       prepare_fixture()
+      replace_once!(@publish, "-u #{selector} ", "")
+      assert_invalid!()
+    end
 
-      original =
-        "env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION scripts/with-release-runtime.sh #{command}"
+    for {old, replacement} <- [
+          {"    exists!(Hex.API.Package.get_anonymous(nil, name), name)\n", ""},
+          {"    absent!(Hex.API.Release.get(nil, name, version), name, version)\n", ""},
+          {"    available!(name, version)\n", ""},
+          {"{200, _headers, _body}", "{201, _headers, _body}"},
+          {"{404, _headers, _body}", "{403, _headers, _body}"},
+          {"first publication is the owner's decision", "create a package"},
+          {"    docs_bytes = File.read!(docs)\n", ""},
+          {"  defp exists!(_result, name) do",
+           "  defp exists!(_result, _name), do: :ok\n\n  defp bypass(name) do"},
+          {"  defp absent!(_result, name, version) do",
+           "  defp absent!(_result, _name, _version), do: :ok\n\n  defp bypass(name, version) do"},
+          {"Hex.API.Release.publish(nil, package_bytes, auth)", "Mix.Task.run(\"compile\")"}
+        ] do
+      prepare_fixture()
+      replace_once!("scripts/publish_hex_artifacts.exs", old, replacement)
+      assert_invalid!()
+    end
 
-      replace_once!(@publish, original, String.replace(original, "-u #{selector} ", ""))
+    for {path, old} <- [
+          {"scripts/inspect-release-docs.py", "if seen != expected.keys():"},
+          {"scripts/test_release_docs.py", "inspector.inspect(candidate, directory)"},
+          {"scripts/test_publish_hex_artifacts.exs",
+           "PublishHexArtifacts.available!(\"ash_replicant\", \"999999.0.0\")"}
+        ] do
+      prepare_fixture()
+      replace_once!(path, old, "removed_guard")
       assert_invalid!()
     end
   end
 
   defp ci_requirement_probes do
     jobs = [
-      {@workflow, "no-database", 47},
-      {@workflow, "compatibility", 31},
-      {@workflow, "performance", 6},
-      {@workflow, "decoder-old-majors", 6},
-      {@workflow, "release-artifact", 4},
-      {@landing, "qualified", 3},
-      {@publish, "publish", 4}
+      {@workflow, "no-database", 77},
+      {@workflow, "compatibility", 37},
+      {@workflow, "performance", 7},
+      {@workflow, "decoder-old-majors", 7},
+      {@workflow, "release-artifact", 5},
+      {@landing, "qualified", 5},
+      {@publish, "publish", 90}
     ]
 
     for {workflow, job, timeout} <- jobs do
+      suffix = if workflow == @publish, do: " # no green run yet", else: ""
+
       for replacement <- ["", "    timeout-minutes: 1\n"] do
         prepare_fixture()
-        mutate_job!(job, "    timeout-minutes: #{timeout}\n", replacement, workflow)
+        mutate_job!(job, "    timeout-minutes: #{timeout}#{suffix}\n", replacement, workflow)
         assert_invalid!()
       end
 
       prepare_fixture()
-      mutate_job!(job, "# Green run 44214414813:", "# No measurement:", workflow)
+
+      if workflow == @publish do
+        mutate_job!(job, "# no green run yet", "# No measurement", workflow)
+      else
+        path = fixture_path(workflow)
+        source = File.read!(path)
+        pattern = ~r/^  #{Regex.escape(job)}:\n.*?(?=^  [a-z][a-z0-9-]+:\n|\z)/ms
+        [block] = Regex.run(pattern, source)
+        [comment] = Regex.run(~r/# Green run [0-9]+:/, block)
+        mutate_job!(job, comment, "# No measurement:", workflow)
+      end
+
       assert_invalid!()
 
       prepare_fixture()
@@ -940,7 +1004,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       check:
         runs-on: ubuntu-24.04
         # Green run 44214414813: qualified 0m16s.
-        timeout-minutes: 3
+        timeout-minutes: 5
         steps:
           - uses: #{@checkout}
             with:
@@ -949,6 +1013,14 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     """)
 
     assert_valid!()
+    extra_source = File.read!(extra)
+
+    for command <- ["mix deps.get", "mix deps.unlock --all", "mix deps.update --all"] do
+      File.write!(extra, String.replace(extra_source, ~s(echo "$GITHUB_REF"), command))
+      assert_invalid!()
+    end
+
+    File.write!(extra, extra_source)
 
     replace_once!(
       ".github/workflows/extra.yml",
@@ -957,6 +1029,15 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     )
 
     assert_invalid!()
+
+    paths = ~w(AGENTS.md CONTRIBUTING.md docs/adr/0002-supported-runtime-and-dependencies.md)
+
+    for path <- paths do
+      prepare_fixture()
+      source = File.read!(fixture_path(path))
+      File.write!(fixture_path(path), source <> "\nUse kci/lock-bootstrap-ash.\n")
+      assert_invalid!()
+    end
 
     for name <- ["mix.exs", "mix.lock"] do
       prepare_fixture()
@@ -1021,6 +1102,13 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     assert_invalid!()
 
     for {old, replacement} <- [
+          {"    assert_hex_package_exists ash_replicant https://hex.pm/api/packages/ash_replicant",
+           "    :"},
+          {"200) ;;", "201) ;;"},
+          {"404) release_tree_fail \"$name is not on Hex; first publication is the owner's decision\" ;;",
+           "404) ;;"},
+          {"*) release_tree_fail \"$name package lookup failed\" ;;", "*) ;;"},
+          {"|| release_tree_fail \"$name package lookup failed\"", "|| return 0"},
           {"0) release_tree_fail 'local tag already exists' ;;", "0) ;;"},
           {"*) release_tree_fail 'local tag lookup failed' ;;", "*) ;;"},
           {"0) release_tree_fail 'remote tag already exists' ;;", "0) ;;"},
@@ -1082,6 +1170,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           {"scripts/verify-release.sh", "gh api --hostname github.com", "curl"},
           {"scripts/verify-release.sh", ~s|[[ -n "${GH_TOKEN:-}" ]]|, "true"},
           {"scripts/test-release-guards.sh", "without_github_token", "without_token_bypass"},
+          {"scripts/test-release-guards.sh", "assert_hex_package_exists ash_replicant.invalid",
+           "true"},
           {"test/fixtures/upgrade_0_4_app/mix.exs", "EEF-CVE-2026-95105", "unreviewed-advisory"}
         ] do
       prepare_fixture()
@@ -2133,12 +2223,17 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           "usage-rules.md",
           "docs/CHARTER.md",
           "docs/adr/0007-source-bound-checkpoint-effect-once.md",
+          "docs/adr/0002-supported-runtime-and-dependencies.md",
           ".tool-versions",
           "mix.exs",
           "mix.lock",
           "scripts/test-release-checkers.sh",
           "scripts/audit-fixtures.sh",
           "scripts/assert-release-tree.sh",
+          "scripts/publish_hex_artifacts.exs",
+          "scripts/inspect-release-docs.py",
+          "scripts/test_publish_hex_artifacts.exs",
+          "scripts/test_release_docs.py",
           "scripts/test-release-guards.sh",
           "scripts/verify-release.sh",
           "test/fixtures/release_checker/recorded.lock",

@@ -25,7 +25,9 @@ defmodule AshReplicant.ReleaseContract do
   }
 
   @publish_owner_condition "contains(fromJSON('[\"corepay\",\"palermo-git\"]'), github.actor) && contains(fromJSON('[\"corepay\",\"palermo-git\"]'), github.triggering_actor)"
-  @publish_package_inspection """
+  @publish_package_inspection ~S"""
+  tar -czf "$RUNNER_TEMP/hex-docs.tar.gz" -C doc .
+  python3 -B scripts/inspect-release-docs.py "$RUNNER_TEMP/hex-docs.tar.gz" doc
   env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION scripts/with-release-runtime.sh mix hex.build --output "$RUNNER_TEMP/package.tar"
   scripts/inspect-release-package.sh "$RUNNER_TEMP/package.tar"
   """
@@ -33,6 +35,227 @@ defmodule AshReplicant.ReleaseContract do
   @publish_unreleased_check ~S"""
   version="$(sed -n 's/^  @version "\(.*\)"$/\1/p' mix.exs)"
   scripts/assert-release-tree.sh "$version" "v$version" --unreleased
+  printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+  """
+
+  @publish_hex_artifacts_script ~S"""
+  # Upload inspected archives with Hex 2.7.0, without loading a Mix project.
+  # Usage: mix run --no-mix-exs scripts/publish_hex_artifacts.exs NAME VERSION ARCHIVE DOCS
+  # No builds, tasks, persisted authentication, response bodies, or credentials in output.
+  defmodule PublishHexArtifacts do
+    @moduledoc false
+
+    def main([name, version, archive, docs]) do
+      # Read BOTH inspected files before either upload can begin.
+      package_bytes = File.read!(archive)
+      docs_bytes = File.read!(docs)
+      key = System.fetch_env!("HEX_API_KEY")
+      if key == "", do: raise("HEX_API_KEY is empty; publication stopped")
+      Hex.start()
+      auth = [key: key]
+
+      available!(name, version)
+      package_state = accepted!(Hex.API.Release.publish(nil, package_bytes, auth), "Hex package")
+
+      docs_state =
+        accepted!(
+          Hex.API.ReleaseDocs.publish(nil, name, version, docs_bytes, auth),
+          "Hex docs"
+        )
+
+      if :staged in [package_state, docs_state] do
+        raise "Hex approval pending; recover by hand with the inspected archives, do not redispatch"
+      end
+    end
+
+    def main(_argv), do: raise("usage: publish_hex_artifacts.exs NAME VERSION ARCHIVE DOCS")
+
+    # Public only so the keyless live self-test exercises the actual upload preconditions.
+    def available!(name, version) do
+      exists!(Hex.API.Package.get_anonymous(nil, name), name)
+      absent!(Hex.API.Release.get(nil, name, version), name, version)
+    end
+
+    defp exists!({:ok, {200, _headers, _body}}, _name), do: :ok
+
+    defp exists!({:ok, {404, _headers, _body}}, name) do
+      raise "#{name} is not on Hex; first publication is the owner's decision"
+    end
+
+    defp exists!(_result, name) do
+      raise "could not confirm #{name} exists on Hex; publication refused"
+    end
+
+    defp absent!({:ok, {404, _headers, _body}}, _name, _version), do: :ok
+
+    defp absent!({:ok, {200, _headers, _body}}, name, version) do
+      raise "Hex already has #{name} #{version}; publication refused"
+    end
+
+    defp absent!(_result, name, version) do
+      raise "could not confirm #{name} #{version} is absent from Hex; publication refused"
+    end
+
+    defp accepted!({:ok, {code, _headers, body}}, label) when code in 200..299 do
+      IO.puts("#{label}: archive accepted")
+      if is_map(body) and body["status"] == "staged", do: :staged, else: :published
+    end
+
+    defp accepted!(_result, label) do
+      raise "#{label} upload failed or occupied; manual recovery required, do not redispatch"
+    end
+  end
+
+  PublishHexArtifacts.main(System.argv())
+  """
+
+  @docs_inspection_script ~S"""
+  #!/usr/bin/env python3
+  # Require the archive to contain exactly the generated docs, without extracting it.
+
+  import sys
+  import tarfile
+  from pathlib import Path, PurePosixPath
+
+
+  def inspect(archive, directory):
+      root = Path(directory)
+      expected = {}
+      for path in root.rglob("*"):
+          if path.is_symlink() or not (path.is_file() or path.is_dir()):
+              raise ValueError("unsupported generated docs entry")
+          if path.is_file():
+              expected[path.relative_to(root).as_posix()] = path.read_bytes()
+      if not expected.get("index.html"):
+          raise ValueError("generated docs have no index.html")
+
+      seen = set()
+      with tarfile.open(archive, "r:gz") as contents:
+          for entry in contents:
+              path = PurePosixPath(entry.name)
+              if path.is_absolute() or ".." in path.parts:
+                  raise ValueError("unsafe docs archive path")
+              if entry.isdir():
+                  continue
+              name = path.as_posix()
+              if not entry.isfile() or name in seen or name not in expected:
+                  raise ValueError("unexpected docs archive entry")
+              seen.add(name)
+              with contents.extractfile(entry) as source:
+                  if source.read() != expected[name]:
+                      raise ValueError("docs archive content differs from generated docs")
+      if seen != expected.keys():
+          raise ValueError("docs archive files differ from generated docs")
+
+
+  if __name__ == "__main__":
+      try:
+          if len(sys.argv) != 3:
+              raise ValueError("usage: inspect-release-docs.py ARCHIVE DOC_DIRECTORY")
+          inspect(*sys.argv[1:])
+      except (OSError, ValueError, tarfile.TarError) as error:
+          sys.exit(f"inspect-release-docs: {error}")
+      print("inspect-release-docs: archive matches generated docs")
+  """
+
+  @publish_hex_artifacts_tests ~S"""
+  # Load the real uploader module, without executing its publication entrypoint.
+  path = Path.join(__DIR__, "publish_hex_artifacts.exs")
+  {:ok, {:__block__, _, [module, _entrypoint]}} = Code.string_to_quoted(File.read!(path))
+  Code.compile_quoted(module, path)
+  Hex.start()
+
+  defmodule PublishHexArtifactsSelfTest do
+    def reject(expected, function) do
+      function.()
+      raise "upload preconditions accepted a forbidden release"
+    rescue
+      error in RuntimeError ->
+        unless error.message == expected, do: reraise(error, __STACKTRACE__)
+    end
+  end
+
+  PublishHexArtifacts.available!("ash_replicant", "999999.0.0")
+
+  # A dot cannot occur in a Hex package name, so this real lookup cannot name a package.
+  PublishHexArtifactsSelfTest.reject(
+    "ash_replicant.invalid is not on Hex; first publication is the owner's decision",
+    fn -> PublishHexArtifacts.available!("ash_replicant.invalid", "999999.0.0") end
+  )
+
+  PublishHexArtifactsSelfTest.reject(
+    "Hex already has ash_replicant 1.6.3; publication refused",
+    fn -> PublishHexArtifacts.available!("ash_replicant", "1.6.3") end
+  )
+
+  IO.puts("upload preconditions: live Hex self-tests PASS (no upload or key)")
+  """
+
+  @docs_inspection_tests ~S"""
+  #!/usr/bin/env python3
+  # Exercise the inspector against actual ExDoc output and mutated archive bytes.
+
+  import importlib.util
+  import io
+  import sys
+  import tarfile
+  import tempfile
+  from pathlib import Path
+
+  spec = importlib.util.spec_from_file_location(
+      "release_docs", Path(__file__).with_name("inspect-release-docs.py")
+  )
+  inspector = importlib.util.module_from_spec(spec)
+  spec.loader.exec_module(inspector)
+  archive, directory = sys.argv[1:]
+  inspector.inspect(archive, directory)
+
+  with tempfile.TemporaryDirectory(prefix="ash-replicant-docs-check-") as work:
+      for mutation in ["missing", "changed", "extra", "duplicate", "traversal", "symlink"]:
+          candidate = Path(work) / "docs.tar.gz"
+          with tarfile.open(archive, "r:gz") as original, tarfile.open(candidate, "w:gz") as output:
+              for entry in original:
+                  if entry.isfile():
+                      payload = original.extractfile(entry).read()
+                      if entry.name.removeprefix("./") == "index.html":
+                          if mutation == "missing":
+                              continue
+                          if mutation == "changed":
+                              payload += b"changed"
+                              entry.size = len(payload)
+                      output.addfile(entry, io.BytesIO(payload))
+                  else:
+                      output.addfile(entry)
+              if mutation in ["extra", "duplicate", "traversal", "symlink"]:
+                  name = {
+                      "extra": "unexpected.html",
+                      "duplicate": "index.html",
+                      "traversal": "../outside.html",
+                      "symlink": "linked.html",
+                  }[mutation]
+                  entry = tarfile.TarInfo(name)
+                  if mutation == "symlink":
+                      entry.type = tarfile.SYMTYPE
+                      entry.linkname = "index.html"
+                  output.addfile(entry, io.BytesIO(b""))
+          try:
+              inspector.inspect(candidate, directory)
+          except ValueError:
+              pass
+          else:
+              raise AssertionError(f"docs inspector accepted {mutation}")
+
+  print("docs archive inspection: real docs and six negative archives PASS")
+  """
+
+  @upload_archive_checks ~S"""
+  trap 'rm -f "$RUNNER_TEMP/package.tar" "$RUNNER_TEMP/hex-docs.tar.gz"' EXIT
+  tar -czf "$RUNNER_TEMP/hex-docs.tar.gz" -C doc .
+  python3 -B scripts/inspect-release-docs.py "$RUNNER_TEMP/hex-docs.tar.gz" doc
+  env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION scripts/with-release-runtime.sh mix hex.build --output "$RUNNER_TEMP/package.tar"
+  scripts/inspect-release-package.sh "$RUNNER_TEMP/package.tar"
+  python3 -B scripts/test_release_docs.py "$RUNNER_TEMP/hex-docs.tar.gz" doc
+  mix run --no-mix-exs scripts/test_publish_hex_artifacts.exs
   """
 
   @fixture_audit_script ~S"""
@@ -57,6 +280,18 @@ defmodule AshReplicant.ReleaseContract do
   set -euo pipefail
 
   release_tree_fail() { echo "release tree: $1" >&2; exit 1; }
+
+  # Publication may add a version, never a package name. Read anonymously first.
+  assert_hex_package_exists() {
+    local name="$1" url="$2" code
+    code="$(curl --silent --show-error --max-time 30 --output /dev/null \
+      --write-out '%{http_code}' "$url")" || release_tree_fail "$name package lookup failed"
+    case "$code" in
+      200) ;;
+      404) release_tree_fail "$name is not on Hex; first publication is the owner's decision" ;;
+      *) release_tree_fail "$name package lookup failed" ;;
+    esac
+  }
 
   # Only an HTTP 404 proves absence. A transport error, redirect, or any other
   # response refuses publication. GitHub uses the caller's read-only job token.
@@ -96,6 +331,7 @@ defmodule AshReplicant.ReleaseContract do
     [[ -z "$(git status --porcelain --untracked-files=all)" ]] || release_tree_fail 'dirty tree'
 
     if [[ "$mode" == --unreleased ]]; then
+      assert_hex_package_exists ash_replicant https://hex.pm/api/packages/ash_replicant
       [[ "$(sed -n 's/^  @version "\(.*\)"$/\1/p' mix.exs)" == "$version" ]] \
         || release_tree_fail 'project version differs from release version'
       result=0
@@ -174,6 +410,14 @@ defmodule AshReplicant.ReleaseContract do
               check=True, capture_output=True, text=True, timeout=30,
           )
           body = json.loads(response.stdout)
+  """
+
+  @hex_package_guard_tests ~S"""
+  assert_hex_package_exists ash_replicant https://hex.pm/api/packages/ash_replicant
+  # A dot cannot occur in a Hex package name; this real name can never exist.
+  reject "ash_replicant.invalid is not on Hex; first publication is the owner's decision" \
+    assert_hex_package_exists ash_replicant.invalid https://hex.pm/api/packages/ash_replicant.invalid
+  reject 'ash_replicant package lookup failed' assert_hex_package_exists ash_replicant https://127.0.0.1:1
   """
 
   @github_guard_tests ~S"""
@@ -504,6 +748,7 @@ defmodule AshReplicant.ReleaseContract do
       {:uses, @checkout, %{"persist-credentials" => false}},
       {:uses, @setup_beam, @setup_beam_inputs},
       {:run, "scripts/assert-runtime-version.sh"},
+      {:run, "mix local.hex 2.7.0 --force"},
       {:run,
        "env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix deps.get --check-locked"},
       {:run, "mix deps.compile"},
@@ -512,6 +757,7 @@ defmodule AshReplicant.ReleaseContract do
       {:run, "scripts/assert-release-contract.sh"},
       {:run, String.trim(@public_dependency_check)},
       {:run, "mix docs --warnings-as-errors"},
+      {:run, String.trim(@upload_archive_checks)},
       {:run, String.trim(@package_inspection)}
     ]
   }
@@ -864,7 +1110,7 @@ defmodule AshReplicant.ReleaseContract do
         "if" => "always()",
         "needs" => ["qualification"],
         "runs-on" => "ubuntu-24.04",
-        "timeout-minutes" => 3,
+        "timeout-minutes" => 5,
         "permissions" => %{"actions" => "read", "contents" => "read"},
         "steps" => [
           %{"uses" => @checkout, "with" => %{"persist-credentials" => false}},
@@ -908,10 +1154,15 @@ defmodule AshReplicant.ReleaseContract do
       "publish trigger must be workflow_dispatch only"
     )
 
+    source = File.read!(Path.join(root, ".github/workflows/publish.yml"))
+    assert(
+      not String.contains?(source, "mix hex.publish"),
+      "publish must only upload inspected files"
+    )
     assert_runtime(workflow, root)
 
     # Exact workflow, job, and step maps keep HEX_API_KEY and secrets references
-    # exclusively in the final publish step's environment.
+    # exclusively in the upload step's environment.
     assert(
       workflow["jobs"] == %{
         "publish" => %{
@@ -919,7 +1170,7 @@ defmodule AshReplicant.ReleaseContract do
           "if" => @publish_owner_condition,
           "environment" => "publish",
           "runs-on" => "ubuntu-24.04",
-          "timeout-minutes" => 4,
+          "timeout-minutes" => 90,
           "permissions" => %{"contents" => "read"},
           "env" => %{"MIX_ENV" => "dev"},
           "steps" => [
@@ -933,24 +1184,33 @@ defmodule AshReplicant.ReleaseContract do
               "with" => @setup_beam_inputs
             },
             %{"run" => "scripts/assert-runtime-version.sh"},
-            %{"run" => "mix local.hex --force"},
+            %{"run" => "mix local.hex 2.7.0 --force"},
             %{"run" => "mix local.rebar --force"},
-            %{"name" => "Fetch dependencies", "run" => "mix deps.get --check-locked"},
-            %{"run" => "mix docs --warnings-as-errors"},
-            %{
-              "name" => "Build and inspect Hex package",
-              "run" => @publish_package_inspection
-            },
             %{
               "name" => "Refuse an already released version",
+              "id" => "release",
               "env" => %{"GH_TOKEN" => "${{ github.token }}"},
               "run" => @publish_unreleased_check
             },
+            %{"name" => "Fetch dependencies", "run" => "mix deps.get --check-locked"},
+            %{"run" => "mix docs --warnings-as-errors"},
             %{
-              "name" => "Publish to hex.pm",
-              "env" => %{"HEX_API_KEY" => "${{ secrets.HEX_API_KEY }}"},
+              "name" => "Build and inspect package and docs archives",
+              "run" => @publish_package_inspection
+            },
+            %{
+              "name" => "Upload inspected archives to hex.pm",
+              "env" => %{
+                "VERSION" => "${{ steps.release.outputs.version }}",
+                "HEX_API_KEY" => "${{ secrets.HEX_API_KEY }}"
+              },
               "run" =>
-                "env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION scripts/with-release-runtime.sh mix hex.publish --yes"
+                ~s(mix run --no-mix-exs scripts/publish_hex_artifacts.exs ash_replicant "$VERSION" "$RUNNER_TEMP/package.tar" "$RUNNER_TEMP/hex-docs.tar.gz")
+            },
+            %{
+              "name" => "Remove release archives",
+              "if" => "always()",
+              "run" => ~s(rm -f "$RUNNER_TEMP/package.tar" "$RUNNER_TEMP/hex-docs.tar.gz")
             }
           ]
         }
@@ -992,14 +1252,28 @@ defmodule AshReplicant.ReleaseContract do
     pattern = ~r/^  #{Regex.escape(name)}:\n.*?(?=^  [a-z][a-z0-9-]+:\n|\z)/ms
     [block] = Regex.run(pattern, File.read!(path)) || fail("CI job source is missing")
 
+    if Path.basename(path) == "publish.yml" and name == "publish" do
+      assert(
+        timeout == 90 and
+          String.contains?(block, "    timeout-minutes: 90 # no green run yet\n"),
+        "publish timeout must be 90 # no green run yet"
+      )
+    else
+      assert_measured_timeout(block, timeout)
+    end
+  end
+
+  defp assert_measured_timeout(block, timeout) do
     case Regex.run(~r/# Green run ([0-9]+):[^\n]*?([0-9]+)m([0-9]+)s/, block) do
       [_comment, run, minutes, seconds] ->
         measured = String.to_integer(minutes) * 60 + String.to_integer(seconds)
-        expected = max(3, div(2 * measured + 59, 60))
+        expected = if measured < 150, do: 5, else: div(2 * measured + 59, 60)
 
         assert(
-          run == "44214414813" and measured > 0 and is_integer(timeout) and timeout == expected,
-          "CI timeout must follow its measured green run with 2x headroom and the 3-minute floor"
+          run in ~w(44208487858 44214414813 44224060553 44227674373) and
+            measured > 0 and measured <= 2700 and is_integer(timeout) and timeout <= 90 and
+            timeout == expected,
+          "CI timeout must follow its slowest measured green run and infra's 5-minute floor"
         )
 
       _missing ->
@@ -1011,6 +1285,10 @@ defmodule AshReplicant.ReleaseContract do
     for {path, expected} <- [
           {"scripts/audit-fixtures.sh", @fixture_audit_script},
           {"scripts/assert-release-tree.sh", @release_tree_script},
+          {"scripts/publish_hex_artifacts.exs", @publish_hex_artifacts_script},
+          {"scripts/inspect-release-docs.py", @docs_inspection_script},
+          {"scripts/test_publish_hex_artifacts.exs", @publish_hex_artifacts_tests},
+          {"scripts/test_release_docs.py", @docs_inspection_tests},
           {"test/fixtures/upgrade_0_4_app/mix.exs", @upgrade_fixture_project}
         ] do
       assert(
@@ -1022,7 +1300,8 @@ defmodule AshReplicant.ReleaseContract do
     for {path, expected} <- [
           {"scripts/verify-release.sh", @github_target_lookup},
           {"scripts/qualify.py", @qualification_lookup},
-          {"scripts/test-release-guards.sh", @github_guard_tests}
+          {"scripts/test-release-guards.sh", @github_guard_tests},
+          {"scripts/test-release-guards.sh", @hex_package_guard_tests}
         ] do
       source = File.read!(Path.join(root, path))
       assert(String.contains?(source, expected), "GitHub API lookup contract is invalid")
@@ -1192,6 +1471,14 @@ defmodule AshReplicant.ReleaseContract do
       assert(
         is_binary(run) and not String.contains?(run, "${{"),
         "workflow expressions must enter run scripts through step env"
+      )
+
+      assert(
+        not Regex.match?(~r/\bmix\s+deps\.(?:unlock|update)\b/, run) and
+          Enum.all?(Regex.scan(~r/\bmix\s+deps\.get\b([^\n;&|]*)/, run), fn [_command, args] ->
+            String.contains?(args, "--check-locked")
+          end),
+        "upstream resolution belongs only in a drift report, never qualification or publication"
       )
     end
 
@@ -1522,6 +1809,18 @@ defmodule AshReplicant.ReleaseContract do
   defp block_expressions(expression), do: [expression]
 
   defp assert_docs(root) do
+    paths = ~w(AGENTS.md CONTRIBUTING.md docs/adr/0002-supported-runtime-and-dependencies.md)
+
+    for path <- paths do
+      source = File.read!(Path.join(root, path))
+
+      assert(
+        not String.contains?(source, "kci/lock-bootstrap-ash") and
+          not String.contains?(source, "uses `mix deps.unlock --all`"),
+        "docs must not prescribe an upstream-resolution qualification workflow"
+      )
+    end
+
     Enum.each(@doc_contracts, fn {path, heading, required_texts} ->
       visible = root |> Path.join(path) |> File.read!() |> visible_markdown()
       section = section(visible, heading)

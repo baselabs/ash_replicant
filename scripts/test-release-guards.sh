@@ -89,6 +89,11 @@ reject 'project version differs' scripts/assert-release-tree.sh 1.6.4 v1.6.4
 # Exercise the shipped guard against real Git repositories and public APIs.
 # Sourcing exposes the same HTTP predicates the pre-publish mode calls.
 source scripts/assert-release-tree.sh
+assert_hex_package_exists ash_replicant https://hex.pm/api/packages/ash_replicant
+# A dot cannot occur in a Hex package name; this real name can never exist.
+reject "ash_replicant.invalid is not on Hex; first publication is the owner's decision" \
+  assert_hex_package_exists ash_replicant.invalid https://hex.pm/api/packages/ash_replicant.invalid
+reject 'ash_replicant package lookup failed' assert_hex_package_exists ash_replicant https://127.0.0.1:1
 reject 'local tag already exists' scripts/assert-release-tree.sh 1.6.3 v1.6.3 --unreleased
 git init -q --bare "$work/remote.git"
 # Keep this real scratch remote out of the package tree/clean-tree predicate.
