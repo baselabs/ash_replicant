@@ -563,7 +563,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           {"          version-file: .tool-versions\n",
            "          version-file: other.versions\n"},
           {"          version-file: .tool-versions\n", "          elixir-version: 1.20.3\n"},
-          {"          version-file: .tool-versions\n", "          otp-version: 29.0.3\n"},
+          {"          version-file: .tool-versions\n", "          otp-version: 29.0.5\n"},
           {"          version-file: .tool-versions\n",
            "          version-file: .tool-versions\n          elixir-version: 1.20.3\n"},
           {"          version-type: strict\n", ""},
@@ -1588,7 +1588,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     assert_invalid!()
 
     for workflow <- [@workflow, @publish],
-        declaration <- ["ELIXIR_VERSION: \"1.20.3\"", "OTP_VERSION: \"29.0.3\""] do
+        declaration <- ["ELIXIR_VERSION: \"1.20.3\"", "OTP_VERSION: \"29.0.5\""] do
       prepare_fixture()
       replace_once!(workflow, "jobs:\n", "env:\n  #{declaration}\n\njobs:\n")
       assert_invalid!()
@@ -1596,11 +1596,11 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     # A patch update changes the single source, with no workflow version edit.
     prepare_fixture()
-    replace_once!(".tool-versions", "erlang 29.0.3", "erlang 29.0.4")
+    replace_once!(".tool-versions", "erlang 29.0.5", "erlang 29.0.6")
     assert_valid!()
 
     prepare_fixture()
-    replace_once!(".tool-versions", "erlang 29.0.3", "erlang 29")
+    replace_once!(".tool-versions", "erlang 29.0.5", "erlang 29")
     assert_invalid!()
 
     prepare_fixture()

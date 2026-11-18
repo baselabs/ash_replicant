@@ -28,7 +28,7 @@ bound does not mean “Ash 3 only.”
 ## Decision
 
 - The package requires Elixir `~> 1.20.3`. The repository and release evidence
-  use Elixir 1.20.3 compiled for Erlang/OTP 29, with Erlang 29.0.3 in
+  use Elixir 1.20.3 compiled for Erlang/OTP 29, with Erlang 29.0.5 in
   `.tool-versions`.
 - Ash is declared as `>= 3.31.3 and < 4.0.0-0`. The lower bound excludes the
   known-vulnerable patches; the `-0` upper bound excludes every Ash 4

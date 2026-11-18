@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Run Erlang/OTP 29.0.5, the same exact runtime as Replicant, whose example
+  image exists for Elixir 1.20.3 only on that OTP patch.
+
 ### Fixed
 
 - Set CI timeouts to twice the slowest measured green row from run 44214414813,
