@@ -68,8 +68,12 @@ defmodule AshReplicant.CensusDriftTest do
 
   @moduletag :integration
 
+  alias AshReplicant.{Destination, Error}
+  alias AshReplicant.Sink.Impl
   alias AshReplicant.Test.CensusDrift.Sink
   alias AshReplicant.Test.{Marquee, PG}
+  alias Ecto.Adapters.SQL
+  alias Replicant.SchemaChange
 
   @slot "c01_census_slot"
   @publication "repl_c01_census_pub"
@@ -156,9 +160,9 @@ defmodule AshReplicant.CensusDriftTest do
   end
 
   defp hold_admitted_read(config, parent, barrier) do
-    AshReplicant.Destination.with_repo_binding(config, fn ->
+    Destination.with_repo_binding(config, fn ->
       config.repo.transaction(fn ->
-        assert %{rows: [[1]]} = Ecto.Adapters.SQL.query!(config.repo, "SELECT 1", [])
+        assert %{rows: [[1]]} = SQL.query!(config.repo, "SELECT 1", [])
         send(parent, {:read_checked_out, barrier})
 
         receive do
@@ -250,7 +254,7 @@ defmodule AshReplicant.CensusDriftTest do
         {stopper, Task.yield(stopper, 250)}
       after
         send(reader.pid, {:release_read, barrier})
-        assert {:ok, :ok} = Task.await(reader, 5_000)
+        Task.await(reader, 5_000)
       end
 
     assert stop_result(stopper, early_stop) == :ok
@@ -269,9 +273,9 @@ defmodule AshReplicant.CensusDriftTest do
         end
 
         AshReplicant.run_callback(@slot, Sink, :mutate, fn config ->
-          AshReplicant.Sink.Impl.handle_schema_change(
+          Impl.handle_schema_change(
             config,
-            %Replicant.SchemaChange{
+            %SchemaChange{
               kind: :destructive,
               change: :column_dropped,
               schema: "public",
@@ -286,8 +290,7 @@ defmodule AshReplicant.CensusDriftTest do
     send(callback.pid, {:start_callback, barrier})
     {stopper, early_stop} = stop_while_paused(callback.pid, barrier)
 
-    assert {:error, %AshReplicant.Error{reason: :schema_change_destructive}} =
-             Task.await(callback, 5_000)
+    assert {:error, %Error{reason: :schema_change_destructive}} = Task.await(callback, 5_000)
 
     assert stop_result(stopper, early_stop) == :ok
     assert is_nil(early_stop), "stop returned while a terminal write held a real connection"
