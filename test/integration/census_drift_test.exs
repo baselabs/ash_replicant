@@ -54,6 +54,17 @@ defmodule AshReplicant.Test.CensusDrift.Sink do
     slot_name: "c01_census_slot"
 end
 
+defmodule AshReplicant.Test.CensusDrift.ClaimSink do
+  @moduledoc false
+  use AshReplicant.Sink,
+    repo: AshReplicant.TestRepo,
+    domains: [AshReplicant.Test.CensusDrift.Domain, AshReplicant.Test.Messages.Domain],
+    checkpoint_resource: AshReplicant.Test.Checkpoint,
+    slot_name: "c01_census_slot",
+    message_routes: [{"outbox", AshReplicant.Test.Messages.Outbox, :record}],
+    recovery_horizon: {1, :second}
+end
+
 defmodule AshReplicant.CensusDriftTest do
   @moduledoc """
   C01 (ADR-0019) live acceptance: drift that appears AFTER activation is
@@ -70,8 +81,8 @@ defmodule AshReplicant.CensusDriftTest do
 
   alias AshReplicant.{Destination, Error}
   alias AshReplicant.Sink.Impl
-  alias AshReplicant.Test.CensusDrift.Sink
-  alias AshReplicant.Test.{Marquee, PG}
+  alias AshReplicant.Test.CensusDrift.{ClaimSink, Sink}
+  alias AshReplicant.Test.{Marquee, Messages, PG}
   alias Ecto.Adapters.SQL
   alias Replicant.SchemaChange
 
@@ -117,9 +128,9 @@ defmodule AshReplicant.CensusDriftTest do
     :ok
   end
 
-  defp start(census \\ @census) do
+  defp start(census \\ @census, sink \\ Sink) do
     AshReplicant.start_link(
-      sink: Sink,
+      sink: sink,
       connection: Marquee.conn(),
       publication: @publication,
       source_identity: Marquee.source_identity(),
@@ -298,7 +309,15 @@ defmodule AshReplicant.CensusDriftTest do
   end
 
   test "stop drains the actual census worker instead of killing its checked-out connection" do
-    assert {:ok, owner} = start(interval_ms: 60_000, jitter_ratio: 0.0, timeout_ms: 10_000)
+    Messages.setup_schema!()
+
+    on_exit(fn ->
+      AshReplicant.stop_supervised(@slot)
+      Messages.teardown_schema!()
+    end)
+
+    assert {:ok, owner} =
+             start([interval_ms: 60_000, jitter_ratio: 0.0, timeout_ms: 10_000], ClaimSink)
 
     await_bound()
 
