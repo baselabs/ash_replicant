@@ -155,6 +155,21 @@ defmodule AshReplicant.CensusDriftTest do
     end)
   end
 
+  defp hold_admitted_read(config, parent, barrier) do
+    AshReplicant.Destination.with_repo_binding(config, fn ->
+      config.repo.transaction(fn ->
+        assert %{rows: [[1]]} = Ecto.Adapters.SQL.query!(config.repo, "SELECT 1", [])
+        send(parent, {:read_checked_out, barrier})
+
+        receive do
+          {:release_read, ^barrier} -> :ok
+        after
+          10_000 -> flunk("admitted read was never released")
+        end
+      end)
+    end)
+  end
+
   test "a quiet, undrifted stream censuses HEALTHY repeatedly without a restart" do
     ref = attach()
 
@@ -170,6 +185,43 @@ defmodule AshReplicant.CensusDriftTest do
 
     assert Process.alive?(owner)
     assert :ok = AshReplicant.stop_supervised(@slot)
+  end
+
+  test "stop drains admitted reads before their destination connection outlives the pipeline" do
+    assert {:ok, _owner} = start(enabled?: false)
+    await_bound()
+
+    parent = self()
+    barrier = make_ref()
+
+    reader =
+      Task.async(fn ->
+        AshReplicant.run_callback(@slot, Sink, :read, fn config ->
+          hold_admitted_read(config, parent, barrier)
+        end)
+      end)
+
+    try do
+      assert_receive {:read_checked_out, ^barrier}, 5_000
+
+      stopper = Task.async(fn -> AshReplicant.stop_supervised(@slot) end)
+      early_stop = Task.yield(stopper, 250)
+
+      send(reader.pid, {:release_read, barrier})
+      assert {:ok, :ok} = Task.await(reader, 5_000)
+
+      stop_result =
+        case early_stop do
+          nil -> Task.await(stopper, 5_000)
+          {:ok, result} -> result
+        end
+
+      assert stop_result == :ok
+      assert is_nil(early_stop), "stop returned while an admitted read held a real connection"
+    after
+      send(reader.pid, {:release_read, barrier})
+      if Process.alive?(reader.pid), do: Task.await(reader, 5_000)
+    end
   end
 
   test "coverage drift AFTER activation halts the pipeline with no restart and no affected row" do
