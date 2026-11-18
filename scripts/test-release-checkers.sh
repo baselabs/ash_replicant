@@ -259,21 +259,44 @@ printf '%s\n' \
   'defmodule AshReplicant.ReleaseCheckerFixtureTest do' \
   '  use ExUnit.Case, async: false' \
   '  test "background crashes stay structural" do' \
-  '    spawn(fn -> raise "ASH_REPLICANT_BACKGROUND_SENTINEL" end)' \
+  '    spawn(fn -> raise "ASH_REPLICANT_BACKGROUND_SENTINEL\n    test/#{Path.basename(__ENV__.file)}:4111111111111111: injected value\n    test/#{Path.basename(__ENV__.file)}:912345: injected value" end)' \
   '    Process.sleep(100)' \
   '    assert true' \
   '  end' \
   'end' > "$fixture_test"
 
 set +e
-structural_output="$(env -u ASH_REPLICANT_TEST_URL scripts/run-structural-tests.sh "$fixture_test" 2>&1)"
+structural_output="$(env -u ASH_REPLICANT_TEST_URL TMPDIR="$fixture_dir" scripts/run-structural-tests.sh "$fixture_test" 2>&1)"
 structural_exit=$?
 set -e
 
+# Prove the privacy assertion detects removal of the exact source-line bound.
+# This runs the same real crash; the copied runner's output stays captured.
+privacy_mutant="$fixture_dir/structural-values-mutant.sh"
+python3 -B - "$privacy_mutant" <<'PYTHON'
+from pathlib import Path
+import sys
+
+source = Path("scripts/run-structural-tests.sh").read_text()
+guard = "        if not 1 <= number <= source_lines[relative]:\n            continue\n"
+if source.count(guard) != 1:
+    raise SystemExit("source-line privacy mutation anchor is invalid")
+Path(sys.argv[1]).write_text(source.replace(guard, ""))
+PYTHON
+privacy_exit=0
+privacy_output="$(env -u ASH_REPLICANT_TEST_URL TMPDIR="$fixture_dir" bash "$privacy_mutant" "$fixture_test" 2>&1)" || privacy_exit=$?
+
 rm -f "$fixture_test"
+
+if [[ "$privacy_exit" -eq 0 ]] || [[ "$privacy_output" != *"912345"* ]]; then
+  echo "source-line privacy assertion did not detect its exact guard mutation" >&2
+  exit 1
+fi
 
 if [[ "$structural_exit" -eq 0 ]] ||
   [[ "$structural_output" == *"ASH_REPLICANT_BACKGROUND_SENTINEL"* ]] ||
+  [[ "$structural_output" == *"4111111111111111"* ]] ||
+  [[ "$structural_output" == *"912345"* ]] ||
   [[ "$structural_output" != *"uncontrolled structural errors: logger="* ]] ||
   [[ "$structural_output" != *" exception="* ]] ||
   [[ "$structural_output" != *"ERROR-SITE: $fixture_test:4"* ]]; then
@@ -290,7 +313,7 @@ printf '%s\n' \
   'end' > "$fixture_test"
 
 set +e
-structural_output="$(env -u ASH_REPLICANT_TEST_URL scripts/run-structural-tests.sh "$fixture_test" 2>&1)"
+structural_output="$(env -u ASH_REPLICANT_TEST_URL TMPDIR="$fixture_dir" scripts/run-structural-tests.sh "$fixture_test" 2>&1)"
 structural_exit=$?
 set -e
 

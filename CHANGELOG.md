@@ -21,7 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and require the upgrade fixture's database URL at repo initialization so
   metadata-only dependency audits remain database-free.
 - Report checked-out source locations for uncontrolled test-process errors
-  without exposing messages or stack-frame arguments.
+  without exposing messages or stack-frame arguments. Source-like message text
+  cannot emit arbitrary line values; locations must exist in checked-out source.
 - Bound every CI job by its measured green duration, disable persisted checkout
   credentials, and fetch only committed dependency locks. Exact-floor and
   latest-compatible cells carry separate reviewed locks; new upstream releases

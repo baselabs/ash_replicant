@@ -31,16 +31,23 @@ frame = re.compile(
     r"((?:lib|test|src)/[A-Za-z0-9_./-]+\.(?:ex|exs|erl)):(\d+):"
 )
 seen = set()
+source_lines = {}
 with open(sys.argv[1], encoding="utf-8", errors="replace") as capture:
     for line in capture:
         match = frame.match(line)
         if not match:
             continue
         package, file, number = match.groups()
-        if ".." in Path(file).parts:
+        if ".." in Path(file).parts or len(number) > 6:
             continue
         relative = Path(file) if package in (None, "ash_replicant") else Path("deps", package, file)
         if not (root / relative).is_file():
+            continue
+        if relative not in source_lines:
+            with (root / relative).open(encoding="utf-8", errors="replace") as source:
+                source_lines[relative] = sum(1 for _line in source)
+        number = int(number)
+        if not 1 <= number <= source_lines[relative]:
             continue
         site = f"{relative}:{number}"
         if site not in seen:
