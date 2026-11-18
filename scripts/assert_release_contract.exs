@@ -1183,9 +1183,10 @@ defmodule AshReplicant.ReleaseContract do
     )
 
     source = File.read!(Path.join(root, ".github/workflows/qualification.yml"))
+    freshness_queries = ["--newest", "hex.pm/api/packages", "hex-release-candidates"]
 
     assert(
-      not String.contains?(source, ["--newest", "hex.pm/api/packages", "hex-release-candidates"]) and
+      not String.contains?(source, freshness_queries) and
         not Regex.match?(~r/\bmix\s+hex\.(?:outdated|info)\b/, source),
       "qualification must not query newest upstream releases"
     )
@@ -1589,14 +1590,17 @@ defmodule AshReplicant.ReleaseContract do
         "workflow expressions must enter run scripts through step env"
       )
 
-      assert(
-        drift_report? or
-          (not Regex.match?(~r/\bmix\s+deps\.(?:unlock|update)\b/, run) and
-             Enum.all?(Regex.scan(~r/\bmix\s+deps\.get\b([^\n;&|]*)/, run), fn [_command, args] ->
-               String.contains?(args, "--check-locked")
-             end)),
-        "upstream resolution belongs only in a drift report, never qualification or publication"
-      )
+      unless drift_report? do
+        fetches = Regex.scan(~r/\bmix\s+deps\.get\b([^\n;&|]*)/, run)
+
+        assert(
+          not Regex.match?(~r/\bmix\s+deps\.(?:unlock|update)\b/, run) and
+            Enum.all?(fetches, fn [_command, args] ->
+              String.contains?(args, "--check-locked")
+            end),
+          "upstream resolution belongs only in a drift report, never qualification or publication"
+        )
+      end
     end
 
     assert(not Map.has_key?(workflow, "defaults"), "CI workflow can override release shells")

@@ -232,7 +232,7 @@ diff is:
 Qualification fetches both exact-floors and latest-compatible from their
 committed, reviewed locks with `mix deps.get --check-locked`. Version assertions
 check those locks against their requirements without querying newest releases.
-An upstream release alone cannot turn an unchanged qualification red.
+New upstream releases do not change those lock-version assertions.
 
 The separate `drift-report.yml` runs daily or by dispatch on the default branch,
 refusing every other ref before checkout. Five independent newest-release checks

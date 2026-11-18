@@ -236,7 +236,7 @@ affected tests in the same change, and record the Ash version contract delta in 
 Qualification fetches only the committed, reviewed locks: `mix.lock`,
 `locks/exact-floors.lock`, and `locks/latest-compatible.lock`. Its version
 assertions check compatibility without asking which upstream release is newest.
-An upstream release cannot change that qualification result by itself.
+New upstream releases do not change those lock-version assertions.
 
 `drift-report.yml` runs daily at 06:23 UTC or by `workflow_dispatch`, on the
 default branch only. Its first step refuses every other ref. Five independent
