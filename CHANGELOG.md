@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Run Erlang/OTP 29.0.5, the same exact runtime as Replicant, whose example
   image exists for Elixir 1.20.3 only on that OTP patch.
+- Refresh the latest-compatible lock to Ash 3.37.7, the newest release, so the
+  newest-version qualification check passes. The entry is Hex's registry
+  record; CI verifies both checksums when it fetches.
 
 ### Fixed
 
