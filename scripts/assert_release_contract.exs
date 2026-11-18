@@ -1074,7 +1074,10 @@ defmodule AshReplicant.ReleaseContract do
           do: ~s|if not os.environ.get("GH_TOKEN"):|,
           else: ~s([[ -n "${GH_TOKEN:-}" ]] || fail "GitHub token is required")
 
-      assert(String.contains?(source, required), "GitHub lookup must require its environment token")
+      assert(
+        String.contains?(source, required),
+        "GitHub lookup must require its environment token"
+      )
     end
 
     upgrade = File.read!(Path.join(root, "test/integration/upgrade_checkpoint_test.exs"))

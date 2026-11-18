@@ -17,17 +17,31 @@ requirement="${2:?usage: assert-dependency-version.sh [--newest] DEPENDENCY REQU
 [[ "$#" -eq 2 ]] || exit 2
 
 if [[ ! "$dependency" =~ ^[a-z][a-z0-9_]*$ ]]; then
-  echo "invalid dependency name: $dependency" >&2
+  echo "dependency assertion name is invalid" >&2
   exit 2
 fi
 
-dependency_output="$(mix deps "$dependency")"
-version="$(awk '$1 == "locked" && $2 == "at" { print $3; exit }' <<<"$dependency_output")"
+# Read the lock as recorded input, independently of declared or fetched deps.
+# A fixture may deliberately declare no executable dependencies.
+version="$(ASH_REPLICANT_ASSERTED_DEPENDENCY="$dependency" elixir -e '
+  Mix.start()
+  dependency = System.fetch_env!("ASH_REPLICANT_ASSERTED_DEPENDENCY")
 
-if [[ -z "$version" ]]; then
-  echo "could not resolve locked version for dependency: $dependency" >&2
-  exit 1
-fi
+  entry =
+    "mix.lock"
+    |> Mix.Dep.Lock.read()
+    |> Enum.find(fn {name, _lock} -> to_string(name) == dependency end)
+
+  case entry do
+    {_name, {:hex, _package, version, _checksum, _managers, _deps, _repo, _outer}}
+    when is_binary(version) ->
+      IO.write(version)
+
+    _ ->
+      IO.puts(:stderr, "could not resolve the locked dependency version")
+      System.halt(1)
+  end
+')"
 
 ASH_REPLICANT_ASSERTED_VERSION="$version" \
 ASH_REPLICANT_ASSERTED_REQUIREMENT="$requirement" \
@@ -77,7 +91,7 @@ if [[ "$newest" == true ]]; then
       [newest | _] ->
         locked = System.fetch_env!("ASH_REPLICANT_ASSERTED_VERSION")
         unless Version.compare(locked, newest) == :eq do
-          IO.puts(:stderr, "locked #{locked} differs from newest compatible Hex release #{newest}")
+          IO.puts(:stderr, "locked dependency differs from newest compatible Hex release")
           System.halt(1)
         end
       [] ->

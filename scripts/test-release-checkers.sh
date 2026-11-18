@@ -242,6 +242,15 @@ fi
 scripts/test-ash-onetime-migration-checker.sh >/dev/null
 scripts/test-release-package-inspection.sh >/dev/null
 scripts/test-newest-dependency.sh
+
+for dependency_name in ASH_REPLICANT_DEPENDENCY_SENTINEL ash_replicant_missing_dependency; do
+  dependency_exit=0
+  dependency_output="$(scripts/assert-dependency-version.sh "$dependency_name" '>= 0.0.0' 2>&1)" || dependency_exit=$?
+  if [[ "$dependency_exit" -eq 0 ]] || [[ "$dependency_output" == *"$dependency_name"* ]]; then
+    echo "dependency assertion did not refuse invalid or absent input structurally" >&2
+    exit 1
+  fi
+done
 scripts/test-fresh-consumer-requirements.sh
 scripts/test-fresh-consumer.sh --check
 scripts/test-postgres-readiness.sh >/dev/null

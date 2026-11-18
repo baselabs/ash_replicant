@@ -213,6 +213,9 @@ affected tests in the same change, and record the Ash version contract delta in 
   is copied to a temporary directory, inherits `mix.lock` exactly as the live
   upgrade test does, and runs a locked fetch and both audits before cleanup.
   It shares the root's Cloak AES-CTR exception and GCM-only source guard.
+  Its repo initialization requires the real database URL only when the repo is
+  used; metadata audits require no live database or placeholder endpoint.
+  Version assertions read the recorded lock without fetching dependencies.
 
   The full release battery is intentionally not represented by `mix quality`;
   that alias covers format, Credo, and Dialyzer only.

@@ -174,7 +174,10 @@ acknowledges its historical Ash advisories; the release contract guards its
 empty dependency list. The upgrade fixture shares the root's GCM-only Cloak
 policy and cipher source guard. Fixture hygiene also audits a temporary
 upgrade consumer that inherits the root lock exactly as the live upgrade test
-does. No audit rewrites a committed lock.
+does. Its database URL is required by the repo initialization callback, so
+metadata-only audits need no service configuration. Dependency-version assertions
+read the lock directly, including for inert recorded fixtures. No audit rewrites
+a committed lock.
 
 The complete release battery is itemized in `CONTRIBUTING.md`; `mix quality` covers only
 format, Credo, and Dialyzer. Unit tests run without a server; integration tests

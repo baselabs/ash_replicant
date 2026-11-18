@@ -11,7 +11,7 @@ if output="$("$checker" --newest --hex-response "$fixture/replicant.json" replic
   echo 'newest checker accepted the older recorded Replicant lock' >&2
   exit 1
 fi
-[[ "$output" == *'locked 1.4.2 differs from newest compatible Hex release 1.5.1'* ]] || { echo "$output" >&2; exit 1; }
+[[ "$output" == *'locked dependency differs from newest compatible Hex release'* ]] || { echo "$output" >&2; exit 1; }
 echo "newest checker: RED — $output"
 for defect in network http empty malformed; do
   body="$fixture/replicant.json"

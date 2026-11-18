@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dependencies, scope its historical Ash advisory acknowledgments to the inert
   fixture, and carry the root's guarded Cloak cipher policy into the upgrade
   consumer. Correct release-contract test formatting and its shell-string sigil.
+- Read dependency versions directly from locks, including inert checker inputs,
+  and require the upgrade fixture's database URL at repo initialization so
+  metadata-only dependency audits remain database-free.
 - Report checked-out source locations for uncontrolled test-process errors
   without exposing messages or stack-frame arguments.
 - Bound every CI job by its measured green duration, disable persisted checkout
