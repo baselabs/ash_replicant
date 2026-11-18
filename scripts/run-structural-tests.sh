@@ -26,6 +26,25 @@ import re
 import sys
 
 root = Path.cwd()
+# Match library-owned templates only. Message suffixes, PIDs, durations and
+# exit reasons remain private, including when no known template matches.
+pid = r"#PID<[0-9.]+>"
+templates = [
+    ("client_exited", rf"client {pid} exited(?:$|:)"),
+    ("owner_exited", rf"owner {pid} exited(?:$|:)"),
+    ("checkout_timeout", rf"client {pid} timed out because it checked out the connection"),
+    ("queue_checkout_timeout", rf"client {pid} timed out because it queued and checked out"),
+    ("ownership_timeout", rf"owner {pid} timed out because it owned the connection"),
+    ("queue_drop", r"connection not available and request was dropped from queue"),
+    ("queue_disabled", r"connection not available and queuing is disabled$"),
+    ("checked_in", rf"{pid} checked in the connection owned by {pid}"),
+    ("tcp_closed", r"tcp (?:recv|send)(?: \([^)]*\))?: closed$"),
+    ("ssl_closed", r"ssl (?:recv|send)(?: \([^)]*\))?: closed$"),
+]
+connection_banner = "** (DBConnection.ConnectionError) "
+protocol_emitter = re.compile(
+    rf"(?:^|\] )Postgrex\.Protocol \({pid}\) disconnected: "
+)
 frame = re.compile(
     r"^\s+(?:\(([a-z][a-z0-9_]*) [0-9][^ )]*\) )?"
     r"((?:lib|test|src)/[A-Za-z0-9_./-]+\.(?:ex|exs|erl)):(\d+):"
@@ -34,6 +53,14 @@ seen = set()
 source_lines = {}
 with open(sys.argv[1], encoding="utf-8", errors="replace") as capture:
     for line in capture:
+        if connection_banner in line:
+            prefix, message = line.split(connection_banner, 1)
+            template = next(
+                (name for name, pattern in templates if re.match(pattern, message.rstrip("\n"))),
+                "unknown",
+            )
+            emitter = "postgrex_protocol" if protocol_emitter.search(prefix) else "other"
+            print(f"CONNECTION-ERROR: template={template} emitter={emitter}", file=sys.stderr)
         match = frame.match(line)
         if not match:
             continue
