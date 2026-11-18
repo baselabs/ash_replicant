@@ -66,7 +66,9 @@ defmodule AshReplicant.FreshConsumerDatabaseTest do
         end)
 
       try do
-        assert File.read!(ready) == "ready\n"
+        # The lease needs the shared file server to open its channel and write
+        # readiness. A blocking read on that same server would deadlock it.
+        assert {:ok, "ready\n"} == :file.read_file(ready, [:raw])
 
         assert [[lease_backend]] =
                  Postgrex.query!(
