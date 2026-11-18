@@ -170,6 +170,47 @@ defmodule AshReplicant.CensusDriftTest do
     end)
   end
 
+  defp pause_transaction(target, barrier) do
+    handler = {__MODULE__, barrier}
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:ash_replicant, :test_repo, :query],
+        &__MODULE__.hold_transaction/4,
+        {self(), target, barrier}
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+  end
+
+  @doc false
+  def hold_transaction(_event, _measurements, %{query: "begin"}, {parent, target, barrier})
+      when target == self() do
+    send(parent, {:transaction_checked_out, barrier})
+
+    receive do
+      {:release_transaction, ^barrier} -> :ok
+    after
+      10_000 -> flunk("destination transaction was never released")
+    end
+  end
+
+  def hold_transaction(_event, _measurements, _metadata, _config), do: :ok
+
+  defp stop_while_paused(target, barrier) do
+    try do
+      assert_receive {:transaction_checked_out, ^barrier}, 5_000
+      stopper = Task.async(fn -> AshReplicant.stop_supervised(@slot) end)
+      {stopper, Task.yield(stopper, 250)}
+    after
+      send(target, {:release_transaction, barrier})
+    end
+  end
+
+  defp stop_result(stopper, nil), do: Task.await(stopper, 5_000)
+  defp stop_result(_stopper, {:ok, result}), do: result
+
   test "a quiet, undrifted stream censuses HEALTHY repeatedly without a restart" do
     ref = attach()
 
@@ -201,27 +242,70 @@ defmodule AshReplicant.CensusDriftTest do
         end)
       end)
 
-    try do
-      assert_receive {:read_checked_out, ^barrier}, 5_000
+    {stopper, early_stop} =
+      try do
+        assert_receive {:read_checked_out, ^barrier}, 5_000
 
-      stopper = Task.async(fn -> AshReplicant.stop_supervised(@slot) end)
-      early_stop = Task.yield(stopper, 250)
+        stopper = Task.async(fn -> AshReplicant.stop_supervised(@slot) end)
+        {stopper, Task.yield(stopper, 250)}
+      after
+        send(reader.pid, {:release_read, barrier})
+        assert {:ok, :ok} = Task.await(reader, 5_000)
+      end
 
-      send(reader.pid, {:release_read, barrier})
-      assert {:ok, :ok} = Task.await(reader, 5_000)
+    assert stop_result(stopper, early_stop) == :ok
+    assert is_nil(early_stop), "stop returned while an admitted read held a real connection"
+  end
 
-      stop_result =
-        case early_stop do
-          nil -> Task.await(stopper, 5_000)
-          {:ok, result} -> result
+  test "stop drains a mutating callback's terminal write with its admitted effect" do
+    assert {:ok, _owner} = start(enabled?: false)
+    await_bound()
+    barrier = make_ref()
+
+    callback =
+      Task.async(fn ->
+        receive do
+          {:start_callback, ^barrier} -> :ok
         end
 
-      assert stop_result == :ok
-      assert is_nil(early_stop), "stop returned while an admitted read held a real connection"
-    after
-      send(reader.pid, {:release_read, barrier})
-      if Process.alive?(reader.pid), do: Task.await(reader, 5_000)
-    end
+        AshReplicant.run_callback(@slot, Sink, :mutate, fn config ->
+          AshReplicant.Sink.Impl.handle_schema_change(
+            config,
+            %Replicant.SchemaChange{
+              kind: :destructive,
+              change: :column_dropped,
+              schema: "public",
+              table: @src
+            },
+            %{}
+          )
+        end)
+      end)
+
+    pause_transaction(callback.pid, barrier)
+    send(callback.pid, {:start_callback, barrier})
+    {stopper, early_stop} = stop_while_paused(callback.pid, barrier)
+
+    assert {:error, %AshReplicant.Error{reason: :schema_change_destructive}} =
+             Task.await(callback, 5_000)
+
+    assert stop_result(stopper, early_stop) == :ok
+    assert is_nil(early_stop), "stop returned while a terminal write held a real connection"
+  end
+
+  test "stop waits for the owner's terminal transaction after the transport exits" do
+    assert {:ok, owner} = start(enabled?: false)
+    await_bound()
+    barrier = make_ref()
+    monitor = Process.monitor(owner)
+    pause_transaction(owner, barrier)
+
+    assert :ok = Replicant.stop(@slot)
+    {stopper, early_stop} = stop_while_paused(owner, barrier)
+
+    assert_receive {:DOWN, ^monitor, :process, ^owner, :normal}, 5_000
+    assert stop_result(stopper, early_stop) == :ok
+    assert is_nil(early_stop), "stop returned while its owner held a real connection"
   end
 
   test "coverage drift AFTER activation halts the pipeline with no restart and no affected row" do
