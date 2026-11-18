@@ -55,10 +55,11 @@ jobs:
           env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION scripts/with-release-runtime.sh mix hex.build --output "$RUNNER_TEMP/package.tar"
           scripts/inspect-release-package.sh "$RUNNER_TEMP/package.tar"
       - name: Upload inspected archives to hex.pm
+        working-directory: ${{ runner.temp }}
         env:
           VERSION: ${{ steps.release.outputs.version }}
           HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
-        run: mix run --no-mix-exs scripts/publish_hex_artifacts.exs ash_replicant "$VERSION" "$RUNNER_TEMP/package.tar" "$RUNNER_TEMP/hex-docs.tar.gz"
+        run: mix run --no-mix-exs "$GITHUB_WORKSPACE/scripts/publish_hex_artifacts.exs" ash_replicant "$VERSION" "$RUNNER_TEMP/package.tar" "$RUNNER_TEMP/hex-docs.tar.gz"
       - name: Remove release archives
         if: always()
         run: rm -f "$RUNNER_TEMP/package.tar" "$RUNNER_TEMP/hex-docs.tar.gz"

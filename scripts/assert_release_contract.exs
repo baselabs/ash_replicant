@@ -46,6 +46,8 @@ defmodule AshReplicant.ReleaseContract do
     @moduledoc false
 
     def main([name, version, archive, docs]) do
+      if Mix.Project.get(), do: raise("publication must run without a Mix project")
+
       # Read BOTH inspected files before either upload can begin.
       package_bytes = File.read!(archive)
       docs_bytes = File.read!(docs)
@@ -160,6 +162,8 @@ defmodule AshReplicant.ReleaseContract do
 
   @publish_hex_artifacts_tests ~S"""
   # Load the real uploader module, without executing its publication entrypoint.
+  if Mix.Project.get(), do: raise("upload preconditions must run without a Mix project")
+
   path = Path.join(__DIR__, "publish_hex_artifacts.exs")
   {:ok, {:__block__, _, [module, _entrypoint]}} = Code.string_to_quoted(File.read!(path))
   Code.compile_quoted(module, path)
@@ -255,7 +259,8 @@ defmodule AshReplicant.ReleaseContract do
   env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION scripts/with-release-runtime.sh mix hex.build --output "$RUNNER_TEMP/package.tar"
   scripts/inspect-release-package.sh "$RUNNER_TEMP/package.tar"
   python3 -B scripts/test_release_docs.py "$RUNNER_TEMP/hex-docs.tar.gz" doc
-  mix run --no-mix-exs scripts/test_publish_hex_artifacts.exs
+  cd "$RUNNER_TEMP"
+  mix run --no-mix-exs "$GITHUB_WORKSPACE/scripts/test_publish_hex_artifacts.exs"
   """
 
   @fixture_audit_script ~S"""
@@ -1155,6 +1160,7 @@ defmodule AshReplicant.ReleaseContract do
     )
 
     source = File.read!(Path.join(root, ".github/workflows/publish.yml"))
+
     assert(
       not String.contains?(source, "mix hex.publish"),
       "publish must only upload inspected files"
@@ -1200,12 +1206,13 @@ defmodule AshReplicant.ReleaseContract do
             },
             %{
               "name" => "Upload inspected archives to hex.pm",
+              "working-directory" => "${{ runner.temp }}",
               "env" => %{
                 "VERSION" => "${{ steps.release.outputs.version }}",
                 "HEX_API_KEY" => "${{ secrets.HEX_API_KEY }}"
               },
               "run" =>
-                ~s(mix run --no-mix-exs scripts/publish_hex_artifacts.exs ash_replicant "$VERSION" "$RUNNER_TEMP/package.tar" "$RUNNER_TEMP/hex-docs.tar.gz")
+                ~s(mix run --no-mix-exs "$GITHUB_WORKSPACE/scripts/publish_hex_artifacts.exs" ash_replicant "$VERSION" "$RUNNER_TEMP/package.tar" "$RUNNER_TEMP/hex-docs.tar.gz")
             },
             %{
               "name" => "Remove release archives",

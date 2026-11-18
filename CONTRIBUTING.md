@@ -270,6 +270,7 @@ Follow these steps in order:
    step receives it. Keyless steps fetch locked dependencies, build docs, and
    build and inspect both archives, clearing all three dependency selectors for
    the package build. The upload runs `mix run --no-mix-exs` with Hex 2.7.0's API,
+   from the runner's temporary directory with the script's absolute path,
    loading no project and uploading those exact files. It reads both archives and
    rechecks package existence and version absence before either upload.
 5. After the Hex read-back, tag that same qualified version commit:

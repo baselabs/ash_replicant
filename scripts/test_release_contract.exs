@@ -116,7 +116,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION scripts/with-release-runtime.sh mix hex.build --output "$RUNNER_TEMP/package.tar"
   scripts/inspect-release-package.sh "$RUNNER_TEMP/package.tar"
   python3 -B scripts/test_release_docs.py "$RUNNER_TEMP/hex-docs.tar.gz" doc
-  mix run --no-mix-exs scripts/test_publish_hex_artifacts.exs
+  cd "$RUNNER_TEMP"
+  mix run --no-mix-exs "$GITHUB_WORKSPACE/scripts/test_publish_hex_artifacts.exs"
   """
 
   @job_commands %{
@@ -828,12 +829,15 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           {"tar -czf", "true -czf"},
           {"python3 -B scripts/inspect-release-docs.py", "true"},
           {"scripts/inspect-release-package.sh", "true"},
-          {"mix run --no-mix-exs scripts/publish_hex_artifacts.exs", "mix hex.publish --yes"},
-          {"mix run --no-mix-exs scripts/publish_hex_artifacts.exs",
+          {"        working-directory: ${{ runner.temp }}\n", ""},
+          {"working-directory: ${{ runner.temp }}", "working-directory: ${{ github.workspace }}"},
+          {~s(mix run --no-mix-exs "$GITHUB_WORKSPACE/scripts/publish_hex_artifacts.exs"),
+           "mix hex.publish --yes"},
+          {~s(mix run --no-mix-exs "$GITHUB_WORKSPACE/scripts/publish_hex_artifacts.exs"),
            "mix run scripts/publish_hex_artifacts.exs"},
-          {"mix run --no-mix-exs scripts/publish_hex_artifacts.exs",
+          {~s(mix run --no-mix-exs "$GITHUB_WORKSPACE/scripts/publish_hex_artifacts.exs"),
            "mix compile && mix run --no-mix-exs scripts/publish_hex_artifacts.exs"},
-          {"mix run --no-mix-exs scripts/publish_hex_artifacts.exs",
+          {~s(mix run --no-mix-exs "$GITHUB_WORKSPACE/scripts/publish_hex_artifacts.exs"),
            "mix run --no-mix-exs scripts/other.exs"},
           {"ash_replicant \"$VERSION\" \"$RUNNER_TEMP/package.tar\"",
            "ash_replicant \"$VERSION\" \"$RUNNER_TEMP/other.tar\""},
@@ -917,6 +921,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     end
 
     for {old, replacement} <- [
+          {"    if Mix.Project.get(), do: raise(\"publication must run without a Mix project\")\n",
+           ""},
           {"    exists!(Hex.API.Package.get_anonymous(nil, name), name)\n", ""},
           {"    absent!(Hex.API.Release.get(nil, name, version), name, version)\n", ""},
           {"    available!(name, version)\n", ""},

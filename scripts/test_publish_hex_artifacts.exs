@@ -1,4 +1,6 @@
 # Load the real uploader module, without executing its publication entrypoint.
+if Mix.Project.get(), do: raise("upload preconditions must run without a Mix project")
+
 path = Path.join(__DIR__, "publish_hex_artifacts.exs")
 {:ok, {:__block__, _, [module, _entrypoint]}} = Code.string_to_quoted(File.read!(path))
 Code.compile_quoted(module, path)

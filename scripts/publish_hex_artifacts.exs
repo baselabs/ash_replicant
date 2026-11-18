@@ -5,6 +5,8 @@ defmodule PublishHexArtifacts do
   @moduledoc false
 
   def main([name, version, archive, docs]) do
+    if Mix.Project.get(), do: raise("publication must run without a Mix project")
+
     # Read BOTH inspected files before either upload can begin.
     package_bytes = File.read!(archive)
     docs_bytes = File.read!(docs)

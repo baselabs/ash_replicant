@@ -180,8 +180,9 @@ contract mutation-tests token placement, transport and refusal controls.
 Publication first requires an anonymous HTTP 200 for the existing Hex package
 name. A missing name refuses: first publication is the owner's decision. Keyless
 steps build and inspect package and docs archives. Only the upload step receives
-the publish key; it loads no project, rechecks package existence and version
-absence, and uploads those exact files with Hex's API.
+the publish key; it runs from the runner's temporary directory, loads no project,
+rechecks package existence and version absence, and uploads those exact files
+with Hex's API.
 The release checker fixtures are recorded data, never fetched or executed as
 an Elixir project: `recorded.lock` is replayed with `assert-dependency-version.sh
 --lock PATH`, whose default is the repository root's `mix.lock`. There is no

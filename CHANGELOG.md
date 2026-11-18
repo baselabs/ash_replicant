@@ -44,7 +44,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   existence and version absence are rechecked through Hex's API before upload;
   failed or unexpected lookups refuse publication.
 - Build and inspect package and docs archives without a key, then upload those
-  exact bytes through Hex 2.7.0's API without loading the Mix project. Read both
+  exact bytes through Hex 2.7.0's API from the runner's temporary directory,
+  without loading the Mix project. Read both
   archives before uploading either; only the upload step receives the key.
   Qualify the archive guards against real docs, altered archives, and live Hex.
 - Remove the temporary workflow procedure for unlocked upstream resolution and
