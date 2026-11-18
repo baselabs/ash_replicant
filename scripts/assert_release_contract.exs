@@ -8,6 +8,7 @@ defmodule AshReplicant.ReleaseContract do
   alias YamlElixir.ParsingError
 
   @fail_late "${{ !cancelled() && steps.compile.outcome == 'success' }}"
+  @report_if "${{ !cancelled() && steps.runtime.outcome == 'success' }}"
   @immutable_action ~r/\A[^@\s]+@[0-9a-f]{40}\z/
   @pg16_image "postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b"
   @ash_requirement ">= 3.37.3 and < 4.0.0-0"
@@ -465,13 +466,49 @@ defmodule AshReplicant.ReleaseContract do
   scripts/assert-dependency-version.sh ash "$ASH_REQUIREMENT"
   scripts/assert-dependency-version.sh replicant "$REPLICANT_REQUIREMENT"
   scripts/assert-dependency-version.sh ash_onetime "$ONETIME_REQUIREMENT"
-  if [[ "$DEPENDENCY_LANE" == 'latest-compatible' ]]; then
-    scripts/assert-dependency-version.sh --newest ash "$ASH_REQUIREMENT"
-    scripts/assert-dependency-version.sh --newest replicant "$REPLICANT_REQUIREMENT"
-    scripts/assert-dependency-version.sh --newest ash_onetime "$ONETIME_REQUIREMENT"
-    scripts/assert-dependency-version.sh --newest ash_postgres '~> 2.13'
-    scripts/assert-dependency-version.sh --newest spark '~> 2.7.0'
+  """
+
+  @drift_refusal ~S"""
+  if [[ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ]]; then
+    echo 'Drift reports run only on the default branch.' >&2
+    exit 1
   fi
+  """
+
+  @drift_newest_checks [
+    "scripts/assert-dependency-version.sh --lock locks/latest-compatible.lock --newest ash '#{@ash_requirement}'",
+    "scripts/assert-dependency-version.sh --lock locks/latest-compatible.lock --newest replicant '#{@replicant_requirement}'",
+    "scripts/assert-dependency-version.sh --lock locks/latest-compatible.lock --newest ash_onetime '#{@onetime_requirement}'",
+    "scripts/assert-dependency-version.sh --lock locks/latest-compatible.lock --newest ash_postgres '~> 2.13'",
+    "scripts/assert-dependency-version.sh --lock locks/latest-compatible.lock --newest spark '~> 2.7.0'"
+  ]
+
+  @drift_resolution """
+  cp locks/latest-compatible.lock mix.lock
+  rm mix.lock
+  mix deps.get
+  """
+
+  @drift_versions ~S"""
+  mix run --no-mix-exs --no-start -e '
+  versions = fn path ->
+    unless File.regular?(path), do: raise("dependency resolution lock is missing")
+
+    Map.new(Mix.Dep.Lock.read(path), fn
+      {name, {:hex, _, version, _, _, _, _, _}} -> {name, version}
+    end)
+  end
+
+  locked = versions.("locks/latest-compatible.lock")
+  resolved = versions.("mix.lock")
+
+  (Map.keys(locked) ++ Map.keys(resolved))
+  |> Enum.uniq()
+  |> Enum.sort()
+  |> Enum.each(fn name ->
+    IO.puts("#{name}: committed=#{locked[name] || "absent"} resolved=#{resolved[name] || "absent"}")
+  end)
+  '
   """
 
   @create_database """
@@ -705,8 +742,7 @@ defmodule AshReplicant.ReleaseContract do
            "LOCKFILE" => "${{ matrix.lockfile }}",
            "ASH_REQUIREMENT" => "${{ matrix.ash_requirement }}",
            "REPLICANT_REQUIREMENT" => "${{ matrix.replicant_requirement }}",
-           "ONETIME_REQUIREMENT" => "${{ matrix.onetime_requirement }}",
-           "DEPENDENCY_LANE" => "${{ matrix.label }}"
+           "ONETIME_REQUIREMENT" => "${{ matrix.onetime_requirement }}"
          }
        }},
       {:run, "mix deps.compile"},
@@ -779,7 +815,7 @@ defmodule AshReplicant.ReleaseContract do
      [
        "- Elixir 1.20.3 on Erlang/OTP 29;",
        "- Ash `#{@ash_requirement}` (current lock 3.37.3);",
-       "- AshPostgres `~> 2.13` (current lock 2.15.2 with AshSql 0.8.8; the latest-compatible cell tests the newest 2.x);",
+       "- AshPostgres `~> 2.13` (current lock 2.15.2 with AshSql 0.8.8; qualification tests the reviewed compatibility lock);",
        "- Spark `~> 2.7.0` (effective floor 2.7.6 through Ash; current lock 2.7.9);",
        "- Replicant `#{@replicant_requirement}` (current lock 1.5.1)",
        "- AshOnetime `#{@onetime_requirement}` (current lock 1.5.0)",
@@ -935,12 +971,14 @@ defmodule AshReplicant.ReleaseContract do
   def run(root) do
     workflow = YamlElixir.read_from_file!(Path.join(root, ".github/workflows/qualification.yml"))
     landing = YamlElixir.read_from_file!(Path.join(root, ".github/workflows/ci.yml"))
+    drift = YamlElixir.read_from_file!(Path.join(root, ".github/workflows/drift-report.yml"))
 
     publish = YamlElixir.read_from_file!(Path.join(root, ".github/workflows/publish.yml"))
 
     assert_landing(landing)
     assert_publish(publish, root)
-    assert_qualification(workflow)
+    assert_qualification(workflow, root)
+    assert_drift_report(drift, root)
     assert_workflow_runners(root)
     assert_ci_sources(root)
     assert_qualification_inventory(root, workflow)
@@ -1111,7 +1149,6 @@ defmodule AshReplicant.ReleaseContract do
 
     assert(
       jobs["qualified"] == %{
-        "name" => "qualified",
         "if" => "always()",
         "needs" => ["qualification"],
         "runs-on" => "ubuntu-24.04",
@@ -1132,7 +1169,7 @@ defmodule AshReplicant.ReleaseContract do
     )
   end
 
-  defp assert_qualification(workflow) do
+  defp assert_qualification(workflow, root) do
     assert(
       Enum.sort(Map.keys(workflow)) == ~w(jobs name on permissions) and
         workflow["name"] == "Qualification" and
@@ -1144,6 +1181,76 @@ defmodule AshReplicant.ReleaseContract do
       workflow["on"] == %{"workflow_call" => nil},
       "qualification trigger must be workflow_call only"
     )
+
+    source = File.read!(Path.join(root, ".github/workflows/qualification.yml"))
+
+    assert(
+      not String.contains?(source, ["--newest", "hex.pm/api/packages", "hex-release-candidates"]) and
+        not Regex.match?(~r/\bmix\s+hex\.(?:outdated|info)\b/, source),
+      "qualification must not query newest upstream releases"
+    )
+  end
+
+  defp assert_drift_report(workflow, root) do
+    assert(
+      Enum.sort(Map.keys(workflow)) == ~w(jobs name on permissions) and
+        workflow["name"] == "Dependency drift report" and
+        workflow["permissions"] == %{"contents" => "read"} and
+        workflow["on"] == %{
+          "schedule" => [%{"cron" => "23 6 * * *"}],
+          "workflow_dispatch" => nil
+        },
+      "drift report must be read-only and scheduled or dispatched only"
+    )
+
+    jobs = workflow["jobs"] || %{}
+    assert(Map.keys(jobs) == ["report"], "drift report cannot supply a qualification verdict")
+    job = jobs["report"]
+
+    assert(
+      Enum.sort(Map.keys(job)) == ~w(env name runs-on steps timeout-minutes) and
+        job["name"] == "Upstream dependencies" and
+        job["runs-on"] == "ubuntu-24.04" and job["timeout-minutes"] == 90 and
+        job["env"] == %{
+          "MIX_ENV" => "test",
+          "ASH_REPLICANT_TEST_URL" => "postgres://postgres@localhost:5432/postgres"
+        },
+      "drift report job cannot hold secrets, an environment, a cache, or write permissions"
+    )
+
+    admission = [
+      {:run, String.trim(@drift_refusal),
+       %{"env" => %{"DEFAULT_BRANCH" => "${{ github.event.repository.default_branch }}"}}},
+      {:uses, @checkout, %{"persist-credentials" => false}},
+      {:uses, @setup_beam, @setup_beam_inputs},
+      {:run, "scripts/assert-runtime-version.sh", %{"id" => "runtime"}}
+    ]
+
+    reports =
+      @drift_newest_checks ++
+        [
+          String.trim(@drift_resolution),
+          String.trim(@drift_versions),
+          "mix hex.audit",
+          "mix deps.audit",
+          "mix deps.compile",
+          String.trim(@performance_postgres_run),
+          String.trim(@create_database),
+          "mix compile --warnings-as-errors",
+          "scripts/run-structural-tests.sh --include integration",
+          "scripts/run-structural-tests.sh test/integration --include integration"
+        ]
+
+    expected = admission ++ Enum.map(reports, &{:run, &1, %{"if" => @report_if}})
+
+    assert(
+      Enum.map(Map.get(job, "steps", []), &step_signature/1) == expected,
+      "drift report must refuse other refs first and report every upstream check independently"
+    )
+
+    source = File.read!(Path.join(root, ".github/workflows/drift-report.yml"))
+    assert(not String.contains?(source, "secrets."), "drift report must not read any secret")
+    assert_runtime(workflow, root, %{"id" => "runtime"})
   end
 
   defp assert_publish(workflow, root) do
@@ -1234,7 +1341,7 @@ defmodule AshReplicant.ReleaseContract do
     |> Enum.each(fn path ->
       workflow = YamlElixir.read_from_file!(path)
       assert_actions(workflow)
-      assert_workflow_controls(workflow)
+      assert_workflow_controls(workflow, Path.basename(path) == "drift-report.yml")
 
       Enum.each(Map.get(workflow, "jobs", %{}), fn {name, job} ->
         if Map.has_key?(job, "uses") do
@@ -1260,11 +1367,11 @@ defmodule AshReplicant.ReleaseContract do
     pattern = ~r/^  #{Regex.escape(name)}:\n.*?(?=^  [a-z][a-z0-9-]+:\n|\z)/ms
     [block] = Regex.run(pattern, File.read!(path)) || fail("CI job source is missing")
 
-    if Path.basename(path) == "publish.yml" and name == "publish" do
+    if Path.basename(path) in ["publish.yml", "drift-report.yml"] do
       assert(
         timeout == 90 and
           String.contains?(block, "    timeout-minutes: 90 # no green run yet\n"),
-        "publish timeout must be 90 # no green run yet"
+        "unmeasured job timeout must be 90 # no green run yet"
       )
     else
       assert_measured_timeout(block, timeout)
@@ -1391,7 +1498,7 @@ defmodule AshReplicant.ReleaseContract do
   end
 
   # Runtime installation reads .tool-versions directly; no workflow version copies.
-  defp assert_runtime(workflow, root) do
+  defp assert_runtime(workflow, root, controls \\ %{}) do
     pinned_runtime(root)
     assert(not Map.has_key?(workflow, "env"), "CI runtime must come only from .tool-versions")
 
@@ -1401,7 +1508,8 @@ defmodule AshReplicant.ReleaseContract do
       assert(step["with"] == @setup_beam_inputs, "CI runtime must read strict .tool-versions")
 
       assert(
-        Enum.at(job["steps"], index + 1) == %{"run" => "scripts/assert-runtime-version.sh"},
+        Enum.at(job["steps"], index + 1) ==
+          Map.merge(%{"run" => "scripts/assert-runtime-version.sh"}, controls),
         "CI runtime installation must immediately refuse a version mismatch"
       )
     end
@@ -1464,7 +1572,7 @@ defmodule AshReplicant.ReleaseContract do
     end)
   end
 
-  defp assert_workflow_controls(workflow) do
+  defp assert_workflow_controls(workflow, drift_report?) do
     triggers = workflow["on"]
     events = if is_map(triggers), do: Map.keys(triggers), else: List.wrap(triggers)
 
@@ -1482,10 +1590,11 @@ defmodule AshReplicant.ReleaseContract do
       )
 
       assert(
-        not Regex.match?(~r/\bmix\s+deps\.(?:unlock|update)\b/, run) and
-          Enum.all?(Regex.scan(~r/\bmix\s+deps\.get\b([^\n;&|]*)/, run), fn [_command, args] ->
-            String.contains?(args, "--check-locked")
-          end),
+        drift_report? or
+          (not Regex.match?(~r/\bmix\s+deps\.(?:unlock|update)\b/, run) and
+             Enum.all?(Regex.scan(~r/\bmix\s+deps\.get\b([^\n;&|]*)/, run), fn [_command, args] ->
+               String.contains?(args, "--check-locked")
+             end)),
         "upstream resolution belongs only in a drift report, never qualification or publication"
       )
     end

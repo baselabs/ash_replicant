@@ -29,8 +29,10 @@ Release evidence is separated by what it proves:
    after-suite assertion prove that `AshReplicant.TestRepo` was never started.
 2. The live compatibility jobs start PostgreSQL with logical replication,
    create and migrate the isolated test database, and exercise the exact Ash
-   floor, the checked-in lock, and the newest compatible Ash 3 release. They
-   run the full suite and run `test/integration/` explicitly.
+   floor, the checked-in lock, and the reviewed latest-compatible lock. They
+   run the full suite and run `test/integration/` explicitly. Newest-release
+   queries and fresh upstream resolution belong to the separate daily or
+   dispatched drift report, which supplies no qualification verdict.
 3. `scripts/run-structural-tests.sh` captures raw ExUnit output without
    publishing it, rejects uncontrolled process errors, and exposes only the
    value-free structural result. `scripts/assert-exunit-output.sh` requires

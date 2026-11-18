@@ -1,0 +1,113 @@
+name: Dependency drift report
+
+on:
+  schedule:
+    - cron: '23 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    name: Upstream dependencies
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90 # no green run yet
+    env:
+      MIX_ENV: test
+      ASH_REPLICANT_TEST_URL: postgres://postgres@localhost:5432/postgres
+
+    steps:
+      - name: Refuse any ref but the default branch
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if [[ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ]]; then
+            echo 'Drift reports run only on the default branch.' >&2
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          version-file: .tool-versions
+          version-type: strict
+      - run: scripts/assert-runtime-version.sh
+        id: runtime
+
+      # Report failures independently, only after ref and runtime admission succeeded.
+      - name: Report Ash lock lag
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: scripts/assert-dependency-version.sh --lock locks/latest-compatible.lock --newest ash '>= 3.37.3 and < 4.0.0-0'
+      - name: Report Replicant lock lag
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: scripts/assert-dependency-version.sh --lock locks/latest-compatible.lock --newest replicant '>= 1.4.0 and < 2.0.0-0'
+      - name: Report AshOnetime lock lag
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: scripts/assert-dependency-version.sh --lock locks/latest-compatible.lock --newest ash_onetime '>= 1.3.2 and < 2.0.0-0'
+      - name: Report AshPostgres lock lag
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: scripts/assert-dependency-version.sh --lock locks/latest-compatible.lock --newest ash_postgres '~> 2.13'
+      - name: Report Spark lock lag
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: scripts/assert-dependency-version.sh --lock locks/latest-compatible.lock --newest spark '~> 2.7.0'
+
+      - name: Resolve upstream within public dependency requirements
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: |
+          cp locks/latest-compatible.lock mix.lock
+          rm mix.lock
+          mix deps.get
+      - name: Report all resolved versions against the compatibility lock
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: |
+          mix run --no-mix-exs --no-start -e '
+          versions = fn path ->
+            unless File.regular?(path), do: raise("dependency resolution lock is missing")
+
+            Map.new(Mix.Dep.Lock.read(path), fn
+              {name, {:hex, _, version, _, _, _, _, _}} -> {name, version}
+            end)
+          end
+
+          locked = versions.("locks/latest-compatible.lock")
+          resolved = versions.("mix.lock")
+
+          (Map.keys(locked) ++ Map.keys(resolved))
+          |> Enum.uniq()
+          |> Enum.sort()
+          |> Enum.each(fn name ->
+            IO.puts("#{name}: committed=#{locked[name] || "absent"} resolved=#{resolved[name] || "absent"}")
+          end)
+          '
+      - name: Audit upstream retirements and Hex advisories
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: mix hex.audit
+      - name: Audit upstream dependencies
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: mix deps.audit
+      - run: mix deps.compile
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+      - name: Start PostgreSQL 16 with logical replication
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: |
+          docker run -d --name pg \
+            -e POSTGRES_HOST_AUTH_METHOD=trust \
+            -p 5432:5432 \
+            postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b \
+            -c wal_level=logical -c max_replication_slots=20 -c max_wal_senders=20
+          scripts/wait-for-postgres.sh pg
+      - name: Create and migrate the integration database
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: |
+          mix ecto.create
+          mix ecto.migrate
+      - run: mix compile --warnings-as-errors
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+      - name: Full live suite against upstream
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: scripts/run-structural-tests.sh --include integration
+      - name: Explicit integration discovery against upstream
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: scripts/run-structural-tests.sh test/integration --include integration

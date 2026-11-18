@@ -15,10 +15,12 @@ defmodule AshReplicant.ReleaseContractSelfTest do
                 )
   @workflow ".github/workflows/qualification.yml"
   @landing ".github/workflows/ci.yml"
+  @drift ".github/workflows/drift-report.yml"
   @pull_request ".github/workflows/pull-request.yml"
   @publish ".github/workflows/publish.yml"
   @inventory "scripts/qualification-jobs.json"
   @fail_late "${{ !cancelled() && steps.compile.outcome == 'success' }}"
+  @report_if "${{ !cancelled() && steps.runtime.outcome == 'success' }}"
   @publish_owner_condition "contains(fromJSON('[\"corepay\",\"palermo-git\"]'), github.actor) && contains(fromJSON('[\"corepay\",\"palermo-git\"]'), github.triggering_actor)"
 
   @postgres_run """
@@ -181,7 +183,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
      [
        "- Elixir 1.20.3 on Erlang/OTP 29;",
        "- Ash `>= 3.37.3 and < 4.0.0-0` (current lock 3.37.3);",
-       "- AshPostgres `~> 2.13` (current lock 2.15.2 with AshSql 0.8.8; the latest-compatible cell tests the newest 2.x);",
+       "- AshPostgres `~> 2.13` (current lock 2.15.2 with AshSql 0.8.8; qualification tests the reviewed compatibility lock);",
        "- Spark `~> 2.7.0` (effective floor 2.7.6 through Ash; current lock 2.7.9);",
        "- Replicant `>= 1.4.0 and < 2.0.0-0` (current lock 1.5.1)",
        "- AshOnetime `>= 1.3.2 and < 2.0.0-0` (current lock 1.5.0)",
@@ -350,6 +352,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       action_input_probes()
       landing_and_fail_late_probes()
       qualification_probes()
+      drift_report_probes()
       publish_probes()
       ci_requirement_probes()
       github_lookup_probes()
@@ -567,7 +570,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       {@workflow, "performance"},
       {@workflow, "decoder-old-majors"},
       {@workflow, "release-artifact"},
-      {@publish, "publish"}
+      {@publish, "publish"},
+      {@drift, "report"}
     ]
 
     for {workflow, job} <- runtimes,
@@ -741,6 +745,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     assert_invalid!()
 
     for {old, replacement} <- [
+          {"  qualified:\n", "  qualified:\n    name: qualified\n"},
           {"    if: always()\n", ""},
           {"    needs: [qualification]\n", "    needs: []\n"},
           {"    needs: [qualification]\n", ""},
@@ -798,6 +803,98 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     prepare_fixture()
     replace_once!(@workflow, "  workflow_call:\n", "  push:\n")
     assert_invalid!()
+  end
+
+  defp drift_report_probes do
+    for trigger <- ["push", "pull_request", "pull_request_target", "workflow_call"] do
+      prepare_fixture()
+      replace_once!(@drift, "  workflow_dispatch:\n", "  workflow_dispatch:\n  #{trigger}:\n")
+      assert_invalid!()
+    end
+
+    for {old, replacement} <- [
+          {"  schedule:\n    - cron: '23 6 * * *'\n", ""},
+          {"  workflow_dispatch:\n", ""},
+          {"  contents: read\n", "  contents: write\n"},
+          {"  contents: read\n", "  contents: read\n  actions: read\n"},
+          {"  report:\n", "  qualified:\n"},
+          {"    name: Upstream dependencies\n", "    name: qualified\n"},
+          {"    runs-on: ubuntu-24.04\n", "    runs-on: self-hosted\n"},
+          {"    env:\n", "    environment: publish\n    env:\n"},
+          {"    env:\n", "    permissions:\n      contents: write\n    env:\n"},
+          {"      MIX_ENV: test\n", "      MIX_ENV: test\n      KEY: ${{ secrets.KEY }}\n"},
+          {"jobs:\n", "env:\n  KEY: ${{ secrets.KEY }}\njobs:\n"},
+          {"          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}\n",
+           "          DEFAULT_BRANCH: main\n"},
+          {~s|if [[ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ]]; then|,
+           ~s|if [[ "$GITHUB_REF" == "refs/heads/$DEFAULT_BRANCH" ]]; then|},
+          {"            exit 1\n", "            true\n"},
+          {"          persist-credentials: false\n", "          persist-credentials: true\n"},
+          {"          version-type: strict\n",
+           "          version-type: strict\n          cache: true\n"},
+          {"        id: runtime\n", ""},
+          {"    timeout-minutes: 90 # no green run yet\n", "    timeout-minutes: 90\n"},
+          {"          rm mix.lock\n", "          true\n"},
+          {"          mix deps.get\n", "          mix deps.get --check-locked\n"}
+        ] do
+      prepare_fixture()
+      replace_once!(@drift, old, replacement)
+      assert_invalid!()
+    end
+
+    for action <- ["actions/cache", "actions/cache/restore", "actions/cache/save"] do
+      prepare_fixture()
+
+      replace_once!(
+        @drift,
+        "      - name: Report Ash lock lag\n",
+        "      - uses: #{action}@#{String.duplicate("a", 40)} # v5.0.0\n" <>
+          "      - name: Report Ash lock lag\n"
+      )
+
+      assert_invalid!()
+    end
+
+    prepare_fixture()
+    source = File.read!(fixture_path(@drift))
+    [refusal] = Regex.run(~r/^      - name: Refuse.*?(?=^      - uses:)/ms, source)
+    replace_once!(@drift, refusal, "")
+
+    replace_once!(
+      @drift,
+      "          persist-credentials: false\n",
+      "          persist-credentials: false\n" <> refusal
+    )
+
+    assert_invalid!()
+
+    # Each check must remain independently reportable after another check fails.
+    prepare_fixture()
+    workflow = YamlElixir.read_from_file!(fixture_path(@drift))
+    reports = workflow["jobs"]["report"]["steps"] |> Enum.drop(4)
+
+    for step <- reports do
+      prepare_fixture()
+
+      command =
+        step["run"]
+        |> String.trim_trailing()
+        |> String.split("\n")
+        |> Enum.map_join("\n", fn
+          "" -> ""
+          line -> "          " <> line
+        end)
+        |> String.trim_leading()
+
+      replace_once!(@drift, command, "true")
+      assert_invalid!()
+    end
+
+    for replacement <- ["", "success()", "always()", "${{ !cancelled() }}"] do
+      prepare_fixture()
+      replace_once!(@drift, "        if: #{@report_if}\n", "        if: #{replacement}\n")
+      assert_invalid!()
+    end
   end
 
   defp publish_probes do
@@ -1373,10 +1470,19 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           "scripts/assert-dependency-version.sh --newest replicant \"$REPLICANT_REQUIREMENT\"",
           "scripts/assert-dependency-version.sh --newest ash_onetime \"$ONETIME_REQUIREMENT\"",
           "scripts/assert-dependency-version.sh --newest ash_postgres '~> 2.13'",
-          "scripts/assert-dependency-version.sh --newest spark '~> 2.7.0'"
+          "scripts/assert-dependency-version.sh --newest spark '~> 2.7.0'",
+          "curl https://hex.pm/api/packages/ash",
+          "mix hex.outdated",
+          "python3 scripts/hex-release-candidates.py"
         ] do
       prepare_fixture()
-      mutate_job!("compatibility", "            #{command}\n", "            :\n")
+
+      mutate_job!(
+        "compatibility",
+        "          mix deps ash\n",
+        "          mix deps ash\n          #{command}\n"
+      )
+
       assert_invalid!()
     end
 
@@ -2217,7 +2323,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     File.rm_rf!(@fixture_root)
     File.mkdir_p!(Path.join(@fixture_root, ".github/workflows"))
 
-    for path <- [@workflow, @landing, @publish] do
+    for path <- [@workflow, @landing, @publish, @drift] do
       File.cp!(Path.join(@source_root, path), fixture_path(path))
     end
 
@@ -2392,7 +2498,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   defp assert_invalid! do
     Process.put({__MODULE__, :checks}, Process.get({__MODULE__, :checks}, 0) + 1)
 
-    for path <- [@workflow, @landing, @publish] do
+    for path <- [@workflow, @landing, @publish, @drift] do
       YamlElixir.read_from_file!(fixture_path(path))
     end
 

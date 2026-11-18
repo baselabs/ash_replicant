@@ -45,7 +45,7 @@ bound does not mean “Ash 3 only.”
   `latest` publishes the public Ash range; an exact selector must be a semantic
   version inside that range. Invalid, vulnerable, and Ash 4 prerelease values
   fail while loading the Mix project.
-- CI tests the exact floor and latest compatible Ash 3.x from committed,
+- CI tests the exact floor and reviewed latest-compatible Ash 3.x lock from committed,
   reviewed locks, while a separate selector-free job proves the dependency
   requirement shipped in the package. Upstream-resolution workflows follow
   infra's binding [dependency requirements](https://github.com/baselabs/infra/blob/main/baselabs/docs/ci.md#what-infra-requires-of-every-product).
@@ -172,7 +172,7 @@ Four facts, all observed on 2026-09-28/29, move the floors:
 - **Replicant lock moves to 1.5.1** (November 17, 2026; requirement
   unchanged at `>= 1.4.0 and < 2.0.0-0`; tar checksum `a09c0a7b…bc869`
   matched against the Hex release API before locking; Telemetry 1.4.2 →
-  1.4.3 moved with it). The newest-dependency gate requires the lock to be
+  1.4.3 moved with it). The drift report compares the reviewed lock with
   the newest compatible, non-retired release. 1.5.0 makes snapshots respect
   publication column lists and server row filters, so a snapshot delivers
   the same columns and rows the stream does; the adapter passes snapshot
@@ -229,14 +229,26 @@ diff is:
 | req | 0.7.4 | 0.7.5 |
 | sourceror | 1.12.3 | 1.12.4 |
 
-Qualification now fetches both exact-floors and latest-compatible from their
-committed, reviewed locks with `mix deps.get --check-locked`. The
-latest-compatible cell checks Ash, Replicant, AshOnetime, AshPostgres, and Spark
-against the newest non-retired stable Hex release matching each public
-requirement. It does not treat a compatible older lock as evidence of the newest
-release. The read-only Hex API is the source for that comparison. Only a drift
-report may resolve upstream in a workflow, as infra's dependency requirements
-specify; qualification never does.
+Qualification fetches both exact-floors and latest-compatible from their
+committed, reviewed locks with `mix deps.get --check-locked`. Version assertions
+check those locks against their requirements without querying newest releases.
+An upstream release alone cannot turn an unchanged qualification red.
+
+The separate `drift-report.yml` runs daily or by dispatch on the default branch,
+refusing every other ref before checkout. Five independent newest-release checks
+compare the latest-compatible lock with non-retired stable Ash, Replicant,
+AshOnetime, AshPostgres, and Spark releases within their public requirements.
+The report also removes the runner's copied lock and resolves fresh within
+`mix.exs` requirements, prints every resolved version against the committed lock,
+runs both audits, compiles with warnings as errors, and exercises the full live
+suite and explicit integration discovery on qualification's pinned PostgreSQL 16.
+Report steps continue after earlier report failures, after ref and runtime
+admission. Only this workflow may resolve the repository upstream. It has only
+`contents: read`, no secret or environment, no cache, and no `qualified` job.
+It reports what upstream releases do and decides nothing: a reviewed lock refresh
+must still pass qualification before admission. Qualification's contract checks
+and mutations enforce this separation, including the unnamed `qualified` verdict
+job whose id alone supplies the landing check name.
 
 ### Ash-bump contract inspection
 

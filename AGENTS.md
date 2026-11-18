@@ -156,9 +156,14 @@ scripts/prepush.sh          # runs CI's checks locally, except mutation gates,
 
 CI fetches only committed locks: `mix.lock` for current-lock cells,
 `locks/exact-floors.lock` and `locks/latest-compatible.lock` for those cells.
-The latest-compatible cell still asserts the newest admitted Hex versions; an upstream
-release makes it red until a reviewed lock refresh lands. Upstream resolution in a workflow
-belongs only in a drift report under infra's dependency requirements, never qualification.
+Qualification asserts compatible versions without querying newest upstream releases.
+`drift-report.yml` runs daily or by dispatch, refuses non-default refs first, and compares
+the latest-compatible lock with the newest admitted Ash, Replicant, AshOnetime, AshPostgres,
+and Spark releases. It also resolves fresh within the public requirements, reports all
+version changes, runs both audits, compiles, and runs the live PostgreSQL suite. Its checks
+continue independently after report failures, after ref and runtime admission. It holds only
+`contents: read`, uses no secret, environment or cache, and supplies no `qualified` verdict;
+only a reviewed, committed lock refresh changes qualification's admitted dependencies.
 Nothing compiles or tests on the owner's Mac, and this public repository uses GitHub-hosted
 CI rather than the build box.
 

@@ -165,7 +165,6 @@ jobs:
           ASH_REQUIREMENT: ${{ matrix.ash_requirement }}
           REPLICANT_REQUIREMENT: ${{ matrix.replicant_requirement }}
           ONETIME_REQUIREMENT: ${{ matrix.onetime_requirement }}
-          DEPENDENCY_LANE: ${{ matrix.label }}
         run: |
           if [[ "$LOCKFILE" != 'mix.lock' ]]; then
             cp "$LOCKFILE" mix.lock
@@ -177,13 +176,6 @@ jobs:
           scripts/assert-dependency-version.sh ash "$ASH_REQUIREMENT"
           scripts/assert-dependency-version.sh replicant "$REPLICANT_REQUIREMENT"
           scripts/assert-dependency-version.sh ash_onetime "$ONETIME_REQUIREMENT"
-          if [[ "$DEPENDENCY_LANE" == 'latest-compatible' ]]; then
-            scripts/assert-dependency-version.sh --newest ash "$ASH_REQUIREMENT"
-            scripts/assert-dependency-version.sh --newest replicant "$REPLICANT_REQUIREMENT"
-            scripts/assert-dependency-version.sh --newest ash_onetime "$ONETIME_REQUIREMENT"
-            scripts/assert-dependency-version.sh --newest ash_postgres '~> 2.13'
-            scripts/assert-dependency-version.sh --newest spark '~> 2.7.0'
-          fi
 
       - run: mix deps.compile
 

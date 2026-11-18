@@ -200,9 +200,9 @@ affected tests in the same change, and record the Ash version contract delta in 
   latest-compatible cell from `locks/latest-compatible.lock`, and current-lock
   cells from `mix.lock`. It copies the selected committed lock to `mix.lock`
   before `mix deps.get --check-locked`; no qualification step resolves unlocked
-  dependencies. All version assertions remain, including `--newest`: an
-  upstream release makes latest-compatible red until a reviewed refresh commit
-  updates its lock. Upstream code enters qualification through that review.
+  dependencies. Version assertions check the committed versions against their
+  requirements; newest-release comparisons run only in the drift report.
+  Upstream code enters qualification through a reviewed lock refresh.
 
   Live release guards run once in the no-database job, separately from the
   dependency-sensitive checker tests that also run in every compatibility cell.
@@ -233,10 +233,30 @@ affected tests in the same change, and record the Ash version contract delta in 
 
 ## Compatibility locks
 
-Qualification fetches the committed, reviewed locks and keeps its newest-version
-assertions. Upstream resolution in a workflow belongs only in a drift report,
-under infra's [dependency requirements](https://github.com/baselabs/infra/blob/main/baselabs/docs/ci.md#what-infra-requires-of-every-product);
-it never decides qualification. This repository has no drift-report workflow.
+Qualification fetches only the committed, reviewed locks: `mix.lock`,
+`locks/exact-floors.lock`, and `locks/latest-compatible.lock`. Its version
+assertions check compatibility without asking which upstream release is newest.
+An upstream release cannot change that qualification result by itself.
+
+`drift-report.yml` runs daily at 06:23 UTC or by `workflow_dispatch`, on the
+default branch only. Its first step refuses every other ref. Five independent
+`--newest` assertions compare `locks/latest-compatible.lock` with the newest
+non-retired stable Ash, Replicant, AshOnetime, AshPostgres, and Spark releases
+within their requirements. The report then removes the runner's copied lock,
+resolves fresh within `mix.exs` requirements, prints every resolved version
+against the committed compatibility lock, runs `mix hex.audit` and
+`mix deps.audit`, compiles with warnings as errors, and runs the full live suite
+and explicit integration discovery against the same pinned PostgreSQL 16
+substrate as qualification. Each report check runs even if an earlier report
+check fails, after ref and runtime admission succeed.
+
+Under infra's [dependency requirements](https://github.com/baselabs/infra/blob/main/baselabs/docs/ci.md#what-infra-requires-of-every-product),
+this is the only workflow allowed to resolve the repository fresh. It holds only
+`contents: read`, has no secret or environment, reads and writes no cache, and
+has no `qualified` job. It reports upstream behavior and decides nothing;
+admitting dependencies still requires a reviewed, committed lock refresh and
+qualification. Qualification mutation-tests the report's contract; a `kci/`
+push cannot exercise the report itself because its ref refusal is deliberate.
 
 ## Shipping a release
 

@@ -18,7 +18,6 @@ jobs:
     uses: ./.github/workflows/qualification.yml
 
   qualified:
-    name: qualified
     if: always()
     needs: [qualification]
     runs-on: ubuntu-24.04

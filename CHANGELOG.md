@@ -11,9 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Run Erlang/OTP 29.0.5, the same exact runtime as Replicant, whose example
   image exists for Elixir 1.20.3 only on that OTP patch.
-- Refresh the latest-compatible lock to Ash 3.37.7, the newest release, so the
-  newest-version qualification check passes. The entry is Hex's registry
+- Refresh the reviewed latest-compatible lock to Ash 3.37.7. The entry is Hex's registry
   record; CI verifies both checksums when it fetches.
+- Move newest-release checks out of qualification into a daily or dispatched,
+  default-branch-only drift report. It compares five upstream releases with
+  the compatibility lock, resolves fresh, reports all version changes, audits,
+  compiles, and runs the live PostgreSQL suite without deciding qualification.
+  Mutation-test its read-only, secret-free, cache-free contract and keep the
+  `qualified` verdict's check name solely in its job id.
 
 ### Fixed
 
@@ -38,8 +43,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cannot emit arbitrary line values; locations must exist in checked-out source.
 - Bound every CI job by its measured green duration, disable persisted checkout
   credentials, and fetch only committed dependency locks. Exact-floor and
-  latest-compatible cells carry separate reviewed locks; new upstream releases
-  fail the newest-version assertions until the latest lock is refreshed.
+  latest-compatible cells carry separate reviewed locks; newest-release
+  assertions run only in the drift report.
 - Audit the materialized upgrade fixture with both feeds in CI. Its fetch
   refuses lock changes.
 - Refuse publishing outside `main`, creating a new Hex package name, or reusing
@@ -52,8 +57,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   archives before uploading either; only the upload step receives the key.
   Qualify the archive guards against real docs, altered archives, and live Hex.
 - Remove the temporary workflow procedure for unlocked upstream resolution and
-  its stale documentation. Qualification keeps the reviewed locks and newest
-  assertions; upstream-resolution workflows belong only in a drift report.
+  its stale documentation. Qualification keeps the reviewed locks;
+  upstream-resolution workflows belong only in the separate drift report.
 
 ## [1.6.4] - 2026-11-17
 
