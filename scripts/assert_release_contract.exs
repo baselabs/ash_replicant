@@ -25,6 +25,38 @@ defmodule AshReplicant.ReleaseContract do
     "version-type" => "strict"
   }
 
+  @publish_owner_condition "contains(fromJSON('[\"corepay\",\"palermo-git\"]'), github.actor) && contains(fromJSON('[\"corepay\",\"palermo-git\"]'), github.triggering_actor)"
+
+  @publish_unreleased_check ~S"""
+  test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+  test "$(git ls-remote --exit-code origin refs/heads/main | cut -f1)" = "$GITHUB_SHA"
+  version="$(sed -n 's/^  @version "\(.*\)"$/\1/p' mix.exs)"
+  scripts/assert-release-tree.sh "$version" "v$version" --unreleased
+  printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+  """
+
+  @publish_package_inspection ~S"""
+  scripts/build-release-docs.sh "$RUNNER_TEMP/hex-docs.tar.gz"
+  env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION scripts/with-release-runtime.sh mix hex.build --output "$RUNNER_TEMP/package.tar"
+  scripts/inspect-release-package.sh "$RUNNER_TEMP/package.tar"
+  test "$(git ls-remote --exit-code origin refs/heads/main | cut -f1)" = "$GITHUB_SHA"
+  scripts/assert-release-tree.sh "$VERSION" "v$VERSION" --unreleased "$RUNNER_TEMP/package.tar" "$RUNNER_TEMP/hex-docs.tar.gz"
+  assets="$RUNNER_TEMP/release-assets"
+  mkdir "$assets"
+  cp "$RUNNER_TEMP/package.tar" "$assets/ash_replicant-$VERSION.tar"
+  cp "$RUNNER_TEMP/hex-docs.tar.gz" "$assets/ash_replicant-$VERSION-docs.tar.gz"
+  (cd "$assets" && sha256sum -- *.tar *.tar.gz > SHA256SUMS)
+  chmod a-w "$RUNNER_TEMP/package.tar" "$RUNNER_TEMP/hex-docs.tar.gz"
+  """
+
+  @published_postgres_run ~S"""
+  docker run -d --name pg \
+    -e POSTGRES_HOST_AUTH_METHOD=trust -p 5432:5432 \
+    postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b \
+    -c wal_level=logical -c max_replication_slots=20 -c max_wal_senders=20
+  scripts/wait-for-postgres.sh pg
+  """
+
   @publish_hex_artifacts_script ~S"""
   # Runs with --no-mix-exs: only Hex and the already inspected archives are loaded.
   # No dependency fetch, build, project code, credential persistence, or response logging.
@@ -173,7 +205,7 @@ defmodule AshReplicant.ReleaseContract do
   PublishHexArtifacts.main(System.argv())
   """
 
-  @docs_inspection_script ~S"""
+  @docs_inspection_script ~S'''
   #!/usr/bin/env python3
   """Inspect a Hex docs archive against every regular file in its source tree."""
 
@@ -198,6 +230,8 @@ defmodule AshReplicant.ReleaseContract do
       # file or directory whose name starts with a dot.
       source = {}
       for path in directory.rglob("*"):
+          if path.is_symlink() or not (path.is_file() or path.is_dir()):
+              raise ValueError("Documentation contains a link or special entry.")
           relative = path.relative_to(directory)
           if path.is_file() and not any(part.startswith(".") for part in relative.parts):
               source[relative.as_posix()] = path
@@ -255,7 +289,7 @@ defmodule AshReplicant.ReleaseContract do
 
   if __name__ == "__main__":
       raise SystemExit(main())
-  """
+  '''
 
   @publish_hex_artifacts_tests ~S"""
   # Load the real uploader module, without executing its publication entrypoint.
@@ -325,6 +359,7 @@ defmodule AshReplicant.ReleaseContract do
   #!/usr/bin/env python3
   # Exercise the inspector against actual ExDoc output and mutated archive bytes.
 
+  import gzip
   import importlib.util
   import io
   import sys
@@ -341,9 +376,18 @@ defmodule AshReplicant.ReleaseContract do
   inspector.check(Path(archive), Path(directory))
 
   with tempfile.TemporaryDirectory(prefix="ash-replicant-docs-check-") as work:
-      for mutation in ["missing", "changed", "extra", "duplicate", "traversal", "symlink"]:
+      reasons = {
+          "missing": "requires top-level",
+          "changed": "bytes differ from source",
+          "extra": "has no source",
+          "duplicate": "Duplicate docs archive member",
+          "traversal": "Unsafe docs archive member",
+          "symlink": "Unsafe docs archive member",
+      }
+      for mutation in ["clean", *reasons]:
           candidate = Path(work) / "docs.tar.gz"
-          with tarfile.open(archive, "r:gz") as original, tarfile.open(candidate, "w:gz") as output:
+          packed = io.BytesIO()
+          with tarfile.open(archive, "r:gz") as original, tarfile.open(fileobj=packed, mode="w") as output:
               for entry in original:
                   if entry.isfile():
                       payload = original.extractfile(entry).read()
@@ -364,14 +408,22 @@ defmodule AshReplicant.ReleaseContract do
                       "symlink": "linked.html",
                   }[mutation]
                   entry = tarfile.TarInfo(name)
+                  entry.mtime = 946684800
                   if mutation == "symlink":
                       entry.type = tarfile.SYMTYPE
                       entry.linkname = "index.html"
                   output.addfile(entry, io.BytesIO(b""))
+          # Preserve the fixed gzip header so each negative reaches its intended guard.
+          compressed = gzip.compress(packed.getvalue(), mtime=0)
+          candidate.write_bytes(bytes((31, 139, 8, 0, 0, 0, 0, 0, 0, 0)) + compressed[10:])
+          if mutation == "clean":
+              inspector.check(candidate, Path(directory))
+              continue
           try:
               inspector.check(candidate, Path(directory))
-          except ValueError:
-              pass
+          except ValueError as error:
+              if reasons[mutation] not in str(error):
+                  raise AssertionError(f"wrong rejection for {mutation}: {error}") from error
           else:
               raise AssertionError(f"docs inspector accepted {mutation}")
 
@@ -448,7 +500,13 @@ defmodule AshReplicant.ReleaseContract do
     |> Path.join("**")
     |> Path.wildcard()
     |> Enum.sort()
-    |> Enum.filter(&File.regular?/1)
+    |> Enum.filter(fn path ->
+      case File.lstat!(path).type do
+        :regular -> true
+        :directory -> false
+        _other -> Mix.raise("Documentation must contain only regular files and directories")
+      end
+    end)
     |> Enum.map(fn path ->
       name = Path.relative_to(path, directory)
       top_level = name |> Path.split() |> List.first()
@@ -472,7 +530,7 @@ defmodule AshReplicant.ReleaseContract do
   defmodule AshReplicant.ReleaseIdentity do
     @moduledoc false
 
-    def main(args) do
+    def main(args, runner \\ &run/2) do
       {version, package_digest, docs_digest} =
         case args do
           [version] -> {version, nil, nil}
@@ -480,7 +538,7 @@ defmodule AshReplicant.ReleaseContract do
           _ -> raise "usage: release_identity.exs VERSION [PACKAGE DOCS]"
         end
 
-      case check_archive(version, package_digest, docs_digest) do
+      case check_archive(version, package_digest, docs_digest, runner) do
         {:ok, _state} -> IO.puts("Hex release identity: accepted")
         {:error, message} -> raise message
       end
@@ -1150,7 +1208,7 @@ defmodule AshReplicant.ReleaseContract do
       {:run, String.trim(@public_dependency_check)},
       {:run, ~s(scripts/build-release-docs.sh "$RUNNER_TEMP/hex-docs.tar.gz")},
       {:run, String.trim(@upload_archive_checks)},
-      {:run, String.trim(@package_inspection)}
+      {:run, String.trim(@package_inspection), %{"shell" => "bash"}}
     ]
   }
 
@@ -1622,8 +1680,7 @@ defmodule AshReplicant.ReleaseContract do
       "jobs" => %{
         "publish" => %{
           "name" => "Publish",
-          "if" =>
-            "contains(fromJSON('[\"corepay\",\"palermo-git\"]'), github.actor) && contains(fromJSON('[\"corepay\",\"palermo-git\"]'), github.triggering_actor)",
+          "if" => @publish_owner_condition,
           "environment" => "publish",
           "runs-on" => "ubuntu-24.04",
           "timeout-minutes" => 90,
@@ -1651,8 +1708,7 @@ defmodule AshReplicant.ReleaseContract do
               "id" => "release",
               "env" => %{"GH_TOKEN" => "${{ github.token }}"},
               "shell" => "bash",
-              "run" =>
-                "test \"$(git rev-parse HEAD)\" = \"$GITHUB_SHA\"\ntest \"$(git ls-remote --exit-code origin refs/heads/main | cut -f1)\" = \"$GITHUB_SHA\"\nversion=\"$(sed -n 's/^  @version \"\\(.*\\)\"$/\\1/p' mix.exs)\"\nscripts/assert-release-tree.sh \"$version\" \"v$version\" --unreleased\nprintf 'version=%s\\n' \"$version\" >> \"$GITHUB_OUTPUT\"\n"
+              "run" => @publish_unreleased_check
             },
             %{"name" => "Fetch dependencies", "run" => "mix deps.get --check-locked"},
             %{
@@ -1662,8 +1718,7 @@ defmodule AshReplicant.ReleaseContract do
                 "GH_TOKEN" => "${{ github.token }}"
               },
               "shell" => "bash",
-              "run" =>
-                "scripts/build-release-docs.sh \"$RUNNER_TEMP/hex-docs.tar.gz\"\nenv -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION scripts/with-release-runtime.sh mix hex.build --output \"$RUNNER_TEMP/package.tar\"\nscripts/inspect-release-package.sh \"$RUNNER_TEMP/package.tar\"\ntest \"$(git ls-remote --exit-code origin refs/heads/main | cut -f1)\" = \"$GITHUB_SHA\"\nscripts/assert-release-tree.sh \"$VERSION\" \"v$VERSION\" --unreleased \"$RUNNER_TEMP/package.tar\" \"$RUNNER_TEMP/hex-docs.tar.gz\"\nassets=\"$RUNNER_TEMP/release-assets\"\nmkdir \"$assets\"\ncp \"$RUNNER_TEMP/package.tar\" \"$assets/ash_replicant-$VERSION.tar\"\ncp \"$RUNNER_TEMP/hex-docs.tar.gz\" \"$assets/ash_replicant-$VERSION-docs.tar.gz\"\n(cd \"$assets\" && sha256sum -- *.tar *.tar.gz > SHA256SUMS)\nchmod a-w \"$RUNNER_TEMP/package.tar\" \"$RUNNER_TEMP/hex-docs.tar.gz\"\n"
+              "run" => @publish_package_inspection
             },
             %{
               "name" => "Upload inspected archives to hex.pm",
@@ -1695,8 +1750,7 @@ defmodule AshReplicant.ReleaseContract do
         "published-package" => %{
           "name" => "Verify published package",
           "needs" => "publish",
-          "if" =>
-            "contains(fromJSON('[\"corepay\",\"palermo-git\"]'), github.actor) && contains(fromJSON('[\"corepay\",\"palermo-git\"]'), github.triggering_actor)",
+          "if" => @publish_owner_condition,
           "runs-on" => "ubuntu-24.04",
           "timeout-minutes" => 90,
           "permissions" => %{"contents" => "read"},
@@ -1724,8 +1778,7 @@ defmodule AshReplicant.ReleaseContract do
             %{"run" => "mix deps.compile"},
             %{
               "name" => "Start the published consumer's real PostgreSQL",
-              "run" =>
-                "docker run -d --name pg \\\n  -e POSTGRES_HOST_AUTH_METHOD=trust -p 5432:5432 \\\n  postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b \\\n  -c wal_level=logical -c max_replication_slots=20 -c max_wal_senders=20\nscripts/wait-for-postgres.sh pg\n"
+              "run" => @published_postgres_run
             },
             %{
               "name" => "Audit and exercise the published package as a fresh consumer",
@@ -2064,13 +2117,13 @@ defmodule AshReplicant.ReleaseContract do
 
   defp step_signature(%{"run" => run} = step) when is_binary(run) do
     assert(
-      Map.keys(step) -- ["name", "run", "id", "if", "env", "working-directory"] == [],
+      Map.keys(step) -- ["name", "run", "id", "if", "env", "working-directory", "shell"] == [],
       "CI release run step control is invalid"
     )
 
     # Controls participate in the exact per-job signature, including the token
     # environment admitted only for the dedicated live release-guard step.
-    case Map.take(step, ["id", "if", "env", "working-directory"]) do
+    case Map.take(step, ["id", "if", "env", "working-directory", "shell"]) do
       controls when map_size(controls) == 0 -> {:run, String.trim(run)}
       controls -> {:run, String.trim(run), controls}
     end

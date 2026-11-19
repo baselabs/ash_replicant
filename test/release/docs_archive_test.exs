@@ -42,6 +42,25 @@ defmodule AshReplicant.DocsArchiveTest do
     assert output =~ "omits source files"
   end
 
+  test "generated source links refuse before their bytes are archived", %{scratch: dir} do
+    tree = Path.join(dir, "linked-docs")
+    File.mkdir_p!(tree)
+    File.write!(Path.join(tree, "index.html"), "index")
+    File.write!(Path.join(tree, "readme.html"), "readme")
+    archive = build!(tree, dir)
+    File.ln_s!("readme.html", Path.join(tree, "linked.html"))
+    assert {output, 1} = inspect_archive(archive, tree)
+    assert output =~ "link or special entry"
+
+    assert {output, 1} =
+             System.cmd("mix", ["run", "--no-mix-exs", @builder, tree, tree <> ".refused.tar.gz"],
+               cd: dir,
+               stderr_to_stdout: true
+             )
+
+    assert output =~ "only regular files and directories"
+  end
+
   test "EPUB is refused even when its bytes match the rendered tree", %{scratch: dir} do
     tree = Path.join(dir, "docs")
     File.mkdir_p!(tree)

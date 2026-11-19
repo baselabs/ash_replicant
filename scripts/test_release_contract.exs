@@ -903,6 +903,18 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   end
 
   defp publish_probes do
+    for shell <- ["", "        shell: sh\n", "        shell: bash {0}\n"] do
+      prepare_fixture()
+
+      mutate_job!(
+        "release-artifact",
+        "        shell: bash\n",
+        shell
+      )
+
+      assert_invalid!()
+    end
+
     for trigger <- ["push", "pull_request"] do
       prepare_fixture()
 

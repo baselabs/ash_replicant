@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # Exercise the inspector against actual ExDoc output and mutated archive bytes.
 
+import gzip
 import importlib.util
 import io
 import sys
@@ -17,9 +18,18 @@ archive, directory = sys.argv[1:]
 inspector.check(Path(archive), Path(directory))
 
 with tempfile.TemporaryDirectory(prefix="ash-replicant-docs-check-") as work:
-    for mutation in ["missing", "changed", "extra", "duplicate", "traversal", "symlink"]:
+    reasons = {
+        "missing": "requires top-level",
+        "changed": "bytes differ from source",
+        "extra": "has no source",
+        "duplicate": "Duplicate docs archive member",
+        "traversal": "Unsafe docs archive member",
+        "symlink": "Unsafe docs archive member",
+    }
+    for mutation in ["clean", *reasons]:
         candidate = Path(work) / "docs.tar.gz"
-        with tarfile.open(archive, "r:gz") as original, tarfile.open(candidate, "w:gz") as output:
+        packed = io.BytesIO()
+        with tarfile.open(archive, "r:gz") as original, tarfile.open(fileobj=packed, mode="w") as output:
             for entry in original:
                 if entry.isfile():
                     payload = original.extractfile(entry).read()
@@ -40,14 +50,22 @@ with tempfile.TemporaryDirectory(prefix="ash-replicant-docs-check-") as work:
                     "symlink": "linked.html",
                 }[mutation]
                 entry = tarfile.TarInfo(name)
+                entry.mtime = 946684800
                 if mutation == "symlink":
                     entry.type = tarfile.SYMTYPE
                     entry.linkname = "index.html"
                 output.addfile(entry, io.BytesIO(b""))
+        # Preserve the fixed gzip header so each negative reaches its intended guard.
+        compressed = gzip.compress(packed.getvalue(), mtime=0)
+        candidate.write_bytes(bytes((31, 139, 8, 0, 0, 0, 0, 0, 0, 0)) + compressed[10:])
+        if mutation == "clean":
+            inspector.check(candidate, Path(directory))
+            continue
         try:
             inspector.check(candidate, Path(directory))
-        except ValueError:
-            pass
+        except ValueError as error:
+            if reasons[mutation] not in str(error):
+                raise AssertionError(f"wrong rejection for {mutation}: {error}") from error
         else:
             raise AssertionError(f"docs inspector accepted {mutation}")
 

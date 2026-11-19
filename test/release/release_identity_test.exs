@@ -70,6 +70,37 @@ defmodule AshReplicant.ReleaseIdentityTest do
     assert message =~ "checksum differs"
   end
 
+  test "post-build preflight hashes both inspected file paths" do
+    dir = Path.join(System.tmp_dir!(), "ash-release-identity-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    on_exit(fn -> File.rm_rf!(dir) end)
+    package = Path.join(dir, "package.tar")
+    docs = Path.join(dir, "docs.tar.gz")
+    bytes = "inspected package bytes"
+    digest = :crypto.hash(:sha256, bytes) |> Base.encode16(case: :lower)
+    File.write!(package, bytes)
+    File.write!(docs, @docs)
+    metadata = Map.put(metadata(true), "checksum", digest)
+    runner = runner(response(metadata), {@docs <> "\n200", 0})
+
+    assert ExUnit.CaptureIO.capture_io(fn ->
+             assert :ok == ReleaseIdentity.main([@version, package, docs], runner)
+           end) =~ "accepted"
+
+    File.write!(package, "changed package bytes")
+
+    assert_raise RuntimeError, ~r/checksum differs from the built package/, fn ->
+      ReleaseIdentity.main([@version, package, docs], runner)
+    end
+
+    File.write!(package, bytes)
+    File.write!(docs, :zlib.gzip("changed docs bytes"))
+
+    assert_raise RuntimeError, ~r/docs checksum differs/, fn ->
+      ReleaseIdentity.main([@version, package, docs], runner)
+    end
+  end
+
   test "ambiguous lookups and missing advertised docs refuse without response values" do
     failures = [
       {"private-response-value\n200", 0},

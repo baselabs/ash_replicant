@@ -5,7 +5,7 @@ Thank you for your interest in contributing to AshReplicant!
 ## Prerequisites
 
 - **Elixir 1.20.3** and **Erlang/OTP 29** support; exact checkout releases come only
-  from `.tool-versions` (run `asdf install` from the repository root). Every CI
+  from `.tool-versions`. Every CI
   install uses setup-beam's `version-file: .tool-versions` and `version-type: strict`,
   then refuses unless installed Elixir and the full OTP release match that file.
 - Ash `>= 3.37.3 and < 4.0.0-0`; selector-free development uses this public range
@@ -20,34 +20,31 @@ Thank you for your interest in contributing to AshReplicant!
   and publication. CI runs pinned PostgreSQL 16, 17, and 18 cells plus the
   `decoder-old-majors` cells (PostgreSQL 12 and 9.6 with the plugin substrate —
   `test/support/pg_old.dockerfile`, the commit-pinned pglogical 2.4.8 +
-  wal2json build); the local gate runs whatever instance
-  `ASH_REPLICANT_TEST_URL` points at (derive the live version with
-  `SELECT version();` — never assume it from this doc). The support matrix:
-  pgoutput on PG12 and 15–18, pglogical/wal2json on PG9.6 and 12; locally
-  the decoder lane runs against a cluster-hosted old-major source via
-  `ASH_REPLICANT_PGOLD_URL` (skipped when unset)
+  wal2json build). Each CI job owns its disposable PostgreSQL and supplies
+  `ASH_REPLICANT_TEST_URL` and, for the plugin lane, `ASH_REPLICANT_PGOLD_URL`.
+  The support matrix is pgoutput on PG12 and 15–18, pglogical/wal2json on
+  PG9.6 and 12; derive the live major rather than assuming it from this doc.
 
 ## Getting Started
 
 ```bash
 git clone https://github.com/baselabs/ash_replicant.git
 cd ash_replicant
-asdf install
-scripts/with-release-runtime.sh scripts/assert-runtime-version.sh
-scripts/with-release-runtime.sh mix deps.get --check-locked
-env -u ASH_REPLICANT_TEST_URL \
-  scripts/with-release-runtime.sh scripts/run-structural-tests.sh \
-    --allow-excluded --exclude integration
 ```
+
+All builds and tests run in GitHub CI on GitHub-hosted runners. Nothing compiles or tests
+on the owner's Mac or the build box. Follow `AGENTS.md` under "Build and test": qualify a
+covering-test commit on a topic `kci/` ref, read that run once, then create a fresh landing
+head and use `kimosabe-land`. Never send the landing SHA to a `kci/` ref beforehand.
 
 ## Development Workflow
 
 1. Create a feature branch from `main`.
 2. Make your changes with clear, descriptive commit messages.
-3. Run the database-free and static checks before opening a PR —
-   `scripts/prepush.sh` compiles first, then runs the remaining independent
-   checks and prints a pass/fail table. It exits non-zero if any check fails
-   and adds the live-database lane when `ASH_REPLICANT_TEST_URL` is set:
+3. Commit and qualify the covering checks through the CI-only route above. The commands
+   below describe the gates; they do not authorize a local build or test. The convenience
+   `scripts/prepush.sh` compiles first and reports independent checks, with a live-database
+   lane when `ASH_REPLICANT_TEST_URL` is set:
 
 ```bash
 scripts/prepush.sh
@@ -74,18 +71,16 @@ raw messages remain in the runner's private capture.
 
 Database migration and its dependent live checks run only after successful
 database creation and migration. The other checks continue after a failure.
-For a fresh consumer's throwaway database in the cluster's `ephemeral`
-namespace, set `ASH_REPLICANT_CONSUMER_TEST_URL` to that run's endpoint; the
-main test database still uses `ASH_REPLICANT_TEST_URL` from `.env`.
+Each CI job owns its PostgreSQL container. A fresh consumer creates and removes its own
+throwaway database on that server; it never borrows another project's machine or service.
 
 The last command is the data-boundary guard-mutation gate (ADR-0003): it
 removes one production guard or reorders one notifier guard after its first
 effect at a time in an isolated temporary copy of the project, and requires
 the named no-database focused test to go red for the property-specific reason.
 It compiles the project once per mutant, so a full run is long; cells run
-in parallel shard workspaces by default (`--jobs`, 1 = the legacy serial
-path) and the LOCAL developer battery always runs the full matrix.
-Run it in a QUIESCENT tree — the shards snapshot the live tree and copy
+in parallel shard workspaces by default (`--jobs`, 1 = the serial path).
+The runner requires a QUIESCENT tree — the shards snapshot the live tree and copy
 the live `_build` as their warm cache, so a concurrent `mix compile`,
 `mix format`, or open editor save in the same checkout fails the run with
 `live_tree_mutated` or `baseline` classes that say more about the

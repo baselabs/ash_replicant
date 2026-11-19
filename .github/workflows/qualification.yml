@@ -383,6 +383,7 @@ jobs:
           mix run --no-mix-exs "$GITHUB_WORKSPACE/scripts/test_publish_hex_artifacts.exs"
 
       - name: Build and inspect unpacked Hex package
+        shell: bash
         run: |
           package_dir=$(mktemp -d)
           trap 'rm -rf "$package_dir"' EXIT

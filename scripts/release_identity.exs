@@ -2,7 +2,7 @@
 defmodule AshReplicant.ReleaseIdentity do
   @moduledoc false
 
-  def main(args) do
+  def main(args, runner \\ &run/2) do
     {version, package_digest, docs_digest} =
       case args do
         [version] -> {version, nil, nil}
@@ -10,7 +10,7 @@ defmodule AshReplicant.ReleaseIdentity do
         _ -> raise "usage: release_identity.exs VERSION [PACKAGE DOCS]"
       end
 
-    case check_archive(version, package_digest, docs_digest) do
+    case check_archive(version, package_digest, docs_digest, runner) do
       {:ok, _state} -> IO.puts("Hex release identity: accepted")
       {:error, message} -> raise message
     end

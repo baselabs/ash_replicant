@@ -22,6 +22,8 @@ def check(archive, directory):
     # file or directory whose name starts with a dot.
     source = {}
     for path in directory.rglob("*"):
+        if path.is_symlink() or not (path.is_file() or path.is_dir()):
+            raise ValueError("Documentation contains a link or special entry.")
         relative = path.relative_to(directory)
         if path.is_file() and not any(part.startswith(".") for part in relative.parts):
             source[relative.as_posix()] = path

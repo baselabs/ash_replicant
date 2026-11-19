@@ -19,7 +19,13 @@ files =
   |> Path.join("**")
   |> Path.wildcard()
   |> Enum.sort()
-  |> Enum.filter(&File.regular?/1)
+  |> Enum.filter(fn path ->
+    case File.lstat!(path).type do
+      :regular -> true
+      :directory -> false
+      _other -> Mix.raise("Documentation must contain only regular files and directories")
+    end
+  end)
   |> Enum.map(fn path ->
     name = Path.relative_to(path, directory)
     top_level = name |> Path.split() |> List.first()
