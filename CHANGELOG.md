@@ -12,7 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Resume held or interrupted Hex publication on a second dispatch of the same commit only
   when the inspected package and served docs match exactly and the release is not retired.
   Upload only missing archives, read both back by SHA-256, retain one `release-assets` artifact
-  for infra, and keep the published-package consumer outside the publish environment.
+  for infra's permanent GitHub release, and keep the published-package consumer outside
+  the publish environment.
 - Render docs twice from independent source trees with locked ExDoc 0.40.4, HTML and Markdown
   only, then compare deterministic Hex archives byte for byte and inspect every rendered file.
   Document the CI-only covering-test and landing route and immutable published-digest ledger.
