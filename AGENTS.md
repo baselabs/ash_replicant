@@ -147,6 +147,8 @@ and fixing failures forward. Use the commands declared in `.github/workflows/qua
 never fall back to a local build or test.
 
 Every workflow declares `defaults: run: shell: bash`, so command pipelines preserve failures.
+Jobs inherit that default. Job-level `defaults` are refused because even a working-directory
+override replaces the workflow's run defaults and drops its shell.
 Shell scripts use bash and `set -euo pipefail`. Checks capture command output in a standalone
 assignment before testing it; listings never reach a comparison through process substitution.
 Only grep's no-match status is allowed for optional counts; command errors fail the check.
