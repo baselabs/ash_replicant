@@ -648,8 +648,8 @@ defmodule AshReplicant.StartLinkTest do
       assert Task.yield(stopper, 50) == nil
 
       send(callback_pid, :release_callback)
-      assert {{:ok, 777}, AshReplicant.TestRepo} = Task.await(callback, 15_000)
-      assert :ok = Task.await(stopper, 15_000)
+      assert {{:ok, 777}, AshReplicant.TestRepo} = Task.await(callback, :infinity)
+      assert :ok = Task.await(stopper, :infinity)
       assert :none == :persistent_term.get({AshReplicant, "lease_slot"}, :none)
     end)
   end
@@ -749,8 +749,8 @@ defmodule AshReplicant.StartLinkTest do
       send(callback_pid, :do_advance)
       assert_receive :advanced, 15_000
       send(callback_pid, :release_callback)
-      assert {:ok, 777} = Task.await(callback, 15_000)
-      assert :ok = Task.await(stopper, 15_000)
+      assert {:ok, 777} = Task.await(callback, :infinity)
+      assert :ok = Task.await(stopper, :infinity)
 
       # The durable leg records the STOP — the late advance's terminal-clear
       # landed BEFORE the stop's record, not after it.

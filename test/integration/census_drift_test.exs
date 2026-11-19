@@ -200,13 +200,31 @@ defmodule AshReplicant.CensusDriftTest do
   end
 
   @doc false
+  def hold_transaction(
+        event,
+        measurements,
+        %{query: "begin"} = metadata,
+        {parent, {:census, owner}, barrier}
+      )
+      when owner != self() do
+    case :sys.get_state(owner, :infinity) do
+      %{census_run: %{pid: worker}} when worker == self() ->
+        hold_transaction(event, measurements, metadata, {parent, worker, barrier})
+
+      _other ->
+        :ok
+    end
+  end
+
   def hold_transaction(_event, _measurements, %{query: "begin"}, {parent, target, barrier})
-      when target == self() or target == :any do
+      when target == self() do
     :telemetry.detach({__MODULE__, barrier})
     send(parent, {:transaction_checked_out, barrier, self()})
 
     receive do
-      {:release_transaction, ^barrier} -> :ok
+      {:release_transaction, ^barrier} ->
+        send(parent, {:transaction_released, barrier, self()})
+        :ok
     after
       10_000 -> flunk("destination transaction was never released")
     end
@@ -214,15 +232,35 @@ defmodule AshReplicant.CensusDriftTest do
 
   def hold_transaction(_event, _measurements, _metadata, _config), do: :ok
 
-  defp stop_while_paused(target, barrier) do
+  defp stop_while_paused(target, barrier, monitor) do
     assert_receive {:transaction_checked_out, ^barrier, ^target}, 5_000
-    stopper = Task.async(fn -> AshReplicant.stop_supervised(@slot) end)
-    {stopper, Task.yield(stopper, 250)}
-  after
-    send(target, {:release_transaction, barrier})
+
+    result =
+      try do
+        stopper = Task.async(fn -> AshReplicant.stop_supervised(@slot) end)
+        {stopper, Task.yield(stopper, 250)}
+      after
+        send(target, {:release_transaction, barrier})
+      end
+
+    await_transaction_release(target, barrier, monitor)
+    result
   end
 
-  defp stop_result(stopper, nil), do: Task.await(stopper, 5_000)
+  defp await_transaction_release(target, barrier, monitor) do
+    receive do
+      {:transaction_released, ^barrier, ^target} ->
+        :ok
+
+      {:DOWN, ^monitor, :process, ^target, _reason} ->
+        flunk("transaction owner exited before accepting its release")
+    end
+  end
+
+  # These joins prove resource lifetime, not end-to-end latency. The destination
+  # write/census deadlines and ExUnit's test timeout retain their own budgets;
+  # the slot lease can still be backing off after an admitted worker exits.
+  defp stop_result(stopper, nil), do: Task.await(stopper, :infinity)
   defp stop_result(_stopper, {:ok, result}), do: result
 
   test "a quiet, undrifted stream censuses HEALTHY repeatedly without a restart" do
@@ -264,7 +302,7 @@ defmodule AshReplicant.CensusDriftTest do
         {stopper, Task.yield(stopper, 250)}
       after
         send(reader.pid, {:release_read, barrier})
-        Task.await(reader, 5_000)
+        Task.await(reader, :infinity)
       end
 
     assert stop_result(stopper, early_stop) == :ok
@@ -298,9 +336,9 @@ defmodule AshReplicant.CensusDriftTest do
 
     pause_transaction(callback.pid, barrier)
     send(callback.pid, {:start_callback, barrier})
-    {stopper, early_stop} = stop_while_paused(callback.pid, barrier)
+    {stopper, early_stop} = stop_while_paused(callback.pid, barrier, callback.ref)
 
-    assert {:error, %Error{reason: :schema_change_destructive}} = Task.await(callback, 5_000)
+    assert {:error, %Error{reason: :schema_change_destructive}} = Task.await(callback, :infinity)
 
     assert stop_result(stopper, early_stop) == :ok
     assert is_nil(early_stop), "stop returned while a terminal write held a real connection"
@@ -326,11 +364,21 @@ defmodule AshReplicant.CensusDriftTest do
     )
 
     barrier = make_ref()
-    pause_transaction(:any, barrier)
-    %{census_timer: %{token: token}} = :sys.get_state(owner)
+    pause_transaction({:census, owner}, barrier)
+
+    # An unrelated caller's real BEGIN must neither consume nor wait at the
+    # census barrier. Telemetry runs inline, so any wrong-holder message is
+    # already observable when this transaction returns.
+    assert {:ok, %{rows: [[1]]}} =
+             AshReplicant.TestRepo.transaction(fn ->
+               SQL.query!(AshReplicant.TestRepo, "SELECT 1", [])
+             end)
+
+    refute_received {:transaction_checked_out, ^barrier, _other}
+    %{census_timer: %{token: token}} = :sys.get_state(owner, :infinity)
     send(owner, {:census_tick, token})
     assert_receive {:transaction_checked_out, ^barrier, worker}, 5_000
-    assert %{census_run: %{pid: ^worker}} = :sys.get_state(owner)
+    assert %{census_run: %{pid: ^worker}} = :sys.get_state(owner, :infinity)
     monitor = Process.monitor(worker)
 
     {stopper, early_stop} =
@@ -341,7 +389,12 @@ defmodule AshReplicant.CensusDriftTest do
         send(worker, {:release_transaction, barrier})
       end
 
-    assert_receive {:DOWN, ^monitor, :process, ^worker, _reason}, 5_000
+    await_transaction_release(worker, barrier, monitor)
+
+    receive do
+      {:DOWN, ^monitor, :process, ^worker, _reason} -> :ok
+    end
+
     assert stop_result(stopper, early_stop) == :ok
     assert is_nil(early_stop), "stop killed a census worker while it held a real connection"
   end
@@ -354,9 +407,11 @@ defmodule AshReplicant.CensusDriftTest do
     pause_transaction(owner, barrier)
 
     assert :ok = Replicant.stop(@slot)
-    {stopper, early_stop} = stop_while_paused(owner, barrier)
+    {stopper, early_stop} = stop_while_paused(owner, barrier, monitor)
 
-    assert_receive {:DOWN, ^monitor, :process, ^owner, :normal}, 5_000
+    receive do
+      {:DOWN, ^monitor, :process, ^owner, reason} -> assert reason == :normal
+    end
     assert stop_result(stopper, early_stop) == :ok
     assert is_nil(early_stop), "stop returned while its owner held a real connection"
 

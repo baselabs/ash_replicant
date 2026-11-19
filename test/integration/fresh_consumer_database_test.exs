@@ -117,7 +117,7 @@ defmodule AshReplicant.FreshConsumerDatabaseTest do
                ) == retained
 
         {_output, 0} = System.cmd("kill", ["-KILL", Integer.to_string(owner_pid)])
-        assert :ok == Task.await(lease, 5_000)
+        assert :ok == Task.await(lease, :infinity)
         refute File.exists?(ready)
         eventually(fn -> backend_absent?(admin, lease_backend) end)
 

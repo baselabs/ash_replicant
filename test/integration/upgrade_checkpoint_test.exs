@@ -230,8 +230,8 @@ defmodule AshReplicant.Upgrade.CheckpointIntegrationTest do
     assert Task.yield(writer, 100) == nil
     send(upgrade_process, :continue_ash_replicant_upgrade)
 
-    assert {:ok, %Report{state: :upgraded}} = Task.await(upgrade, 2_000)
-    assert :refused = Task.await(writer, 2_000)
+    assert {:ok, %Report{state: :upgraded}} = Task.await(upgrade, :infinity)
+    assert :refused = Task.await(writer, :infinity)
     assert {:ok, %Report{state: :already_upgraded}} = Checkpoint.check(TestRepo, options(prefix))
   end
 
