@@ -20,8 +20,8 @@ defmodule AshReplicant.PublishHexArtifactsTest do
   @digest String.duplicate("a", 64)
   @docs_bytes <<0x1F, 0x8B, 0xFF, "inspected docs">>
   @docs_digest :crypto.hash(:sha256, @docs_bytes) |> Base.encode16(case: :lower)
-  @docs_read ~s|docs_read_back!(Hex.API.ReleaseDocs.get(nil, name, version), docs_digest)|
-  @docs_action ~s|docs_action!(Hex.API.ReleaseDocs.get(nil, name, version), docs_digest, docs?)|
+  @docs_read ~s|docs_read_back!(Hex.Repo.get_docs("hexpm", name, version), docs_digest)|
+  @docs_action ~s|docs_action!(Hex.Repo.get_docs("hexpm", name, version), docs_digest, docs?)|
   @read ~s|release_state!(Hex.API.Release.get(nil, name, version), version, digest)|
   @package ~s|Hex.API.Release.publish(nil, package_bytes, auth)|
   @docs ~s|Hex.API.ReleaseDocs.publish(nil, name, version, docs_bytes, auth)|
@@ -150,9 +150,14 @@ defmodule AshReplicant.PublishHexArtifactsTest do
     assert :upload == PublishHexArtifacts.docs_action!(response(404, %{}), @docs_digest, false)
     assert :ok == PublishHexArtifacts.docs_read_back!(response(200, @docs_bytes), @docs_digest)
 
-    missing = [response(404, %{}), response(200, ""), response(200, "not gzip") | failures()]
+    missing = [
+      response(404, %{}),
+      response(200, nil),
+      response(200, ""),
+      response(200, "not gzip")
+    ]
 
-    for result <- missing do
+    for result <- missing ++ failures() do
       error =
         assert_raise RuntimeError, fn ->
           PublishHexArtifacts.docs_read_back!(result, @docs_digest)

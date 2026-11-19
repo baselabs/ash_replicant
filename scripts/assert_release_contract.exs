@@ -92,7 +92,7 @@ defmodule AshReplicant.ReleaseContract do
       # Re-read after the package decision: docs may have appeared in the meantime.
       case release_state!(Hex.API.Release.get(nil, name, version), version, digest) do
         {:held, docs?} ->
-          case docs_action!(Hex.API.ReleaseDocs.get(nil, name, version), docs_digest, docs?) do
+          case docs_action!(Hex.Repo.get_docs("hexpm", name, version), docs_digest, docs?) do
             :upload ->
               Hex.API.ReleaseDocs.publish(nil, name, version, docs_bytes, auth)
               |> accepted!("Hex docs")
@@ -108,7 +108,7 @@ defmodule AshReplicant.ReleaseContract do
 
       read_back!(Hex.API.Release.get(nil, name, version), version, digest)
       package_read_back!(Hex.Repo.get_tarball("hexpm", name, version), digest)
-      docs_read_back!(Hex.API.ReleaseDocs.get(nil, name, version), docs_digest)
+      docs_read_back!(Hex.Repo.get_docs("hexpm", name, version), docs_digest)
     end
 
     def main(_argv),
@@ -181,8 +181,8 @@ defmodule AshReplicant.ReleaseContract do
     def package_read_back!(_response, _digest),
       do: raise("Hex package archive is unavailable; inspect public state before retrying")
 
-    # Hex follows the docs API redirect to the anonymously served archive. Check
-    # its bytes even if metadata says docs are absent; never replace served docs.
+    # Read raw bytes from the repository API. ReleaseDocs.get decodes API responses
+    # and can return nil for a successful binary response. Never replace served docs.
     def docs_action!(
           {:ok, {200, _headers, <<0x1F, 0x8B, _rest::binary>> = bytes}},
           digest,
@@ -348,9 +348,17 @@ defmodule AshReplicant.ReleaseContract do
       metadata["checksum"]
     )
 
-  docs_response = Hex.API.ReleaseDocs.get(nil, "ash_replicant", "1.6.3")
-  {:ok, {200, _, <<0x1F, 0x8B, _rest::binary>> = docs_bytes}} = docs_response
-  docs_digest = :crypto.hash(:sha256, docs_bytes) |> Base.encode16(case: :lower)
+  docs_response = Hex.Repo.get_docs("hexpm", "ash_replicant", "1.6.3")
+
+  docs_digest =
+    case docs_response do
+      {:ok, {200, _, <<0x1F, 0x8B, _rest::binary>> = docs_bytes}} ->
+        :crypto.hash(:sha256, docs_bytes) |> Base.encode16(case: :lower)
+
+      _other ->
+        raise "live Hex docs archive lookup failed"
+    end
+
   :ok = PublishHexArtifacts.docs_read_back!(docs_response, docs_digest)
 
   PublishHexArtifactsSelfTest.reject(

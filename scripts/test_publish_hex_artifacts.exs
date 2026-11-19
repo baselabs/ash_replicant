@@ -50,9 +50,17 @@ PublishHexArtifactsSelfTest.reject(
     metadata["checksum"]
   )
 
-docs_response = Hex.API.ReleaseDocs.get(nil, "ash_replicant", "1.6.3")
-{:ok, {200, _, <<0x1F, 0x8B, _rest::binary>> = docs_bytes}} = docs_response
-docs_digest = :crypto.hash(:sha256, docs_bytes) |> Base.encode16(case: :lower)
+docs_response = Hex.Repo.get_docs("hexpm", "ash_replicant", "1.6.3")
+
+docs_digest =
+  case docs_response do
+    {:ok, {200, _, <<0x1F, 0x8B, _rest::binary>> = docs_bytes}} ->
+      :crypto.hash(:sha256, docs_bytes) |> Base.encode16(case: :lower)
+
+    _other ->
+      raise "live Hex docs archive lookup failed"
+  end
+
 :ok = PublishHexArtifacts.docs_read_back!(docs_response, docs_digest)
 
 PublishHexArtifactsSelfTest.reject(

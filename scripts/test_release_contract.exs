@@ -1048,7 +1048,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           {"scripts/publish_hex_artifacts.exs",
            "Hex.API.ReleaseDocs.publish(nil, name, version, docs_bytes, auth)"},
           {"scripts/publish_hex_artifacts.exs", "package_read_back!(Hex.Repo.get_tarball"},
-          {"scripts/publish_hex_artifacts.exs", "docs_read_back!(Hex.API.ReleaseDocs.get"},
+          {"scripts/publish_hex_artifacts.exs", "docs_read_back!(Hex.Repo.get_docs"},
           {"scripts/publish_hex_artifacts.exs", "|> approved!()"},
           {"scripts/release_identity.exs", "checksum != digest"},
           {"scripts/release_identity.exs", "retirement != :null"},
