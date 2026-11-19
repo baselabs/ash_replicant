@@ -1,0 +1,4 @@
+# Public Hex package digests. One immutable entry per published version.
+# After infra reports read-back and the tag, this repository records the verified digest
+# through normal landing. Held versions never add or change entries speculatively.
+ecd015527b5a62e46f934775d0660531307085d92f3c9f7d214d4e61a1e47c1f  ash_replicant-1.6.3.tar

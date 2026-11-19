@@ -138,6 +138,21 @@ with `message_routes` MUST declare `recovery_horizon:`; digest-key state fails c
 at-risk retention and crossed horizons alert or refuse; `AshReplicant.Horizon` is the one
 classification body.
 
+## Build and test
+
+This public repository runs all checks on GitHub-hosted CI runners. Nothing that compiles
+or tests runs on the owner's Mac or on the build box. Covering tests for changed files and
+their direct dependents run by pushing a topic commit to `kci/<topic>`, reading that run once,
+and fixing failures forward. Use the commands declared in `.github/workflows/qualification.yml`;
+never fall back to a local build or test.
+
+Land only with `python3 /Users/rp/Developer/kimosabe/bin/kimosabe-land --repo . --sha <full sha>`.
+It submits a fresh `kci/<commit>` candidate and moves `main` only after `qualified` succeeds.
+The landing SHA must never have been pushed to any `kci/` ref: two `qualified` checks on one
+SHA make landing ambiguous. After a green topic check, make a final docs-only commit, use
+that new SHA for landing, and remove the topic refs created for the check. Never push `main`
+directly. Workflow and release-script changes require infra-1's review before landing.
+
 ## Development workflow
 
 The supported release foundation is Elixir 1.20.3 on Erlang/OTP 29 with Ash
@@ -148,14 +163,10 @@ AshOnetime `>= 1.3.2 and < 2.0.0-0` (current lock 1.5.0) and AshCloak
 CVE-2026-81319 and CVE-2026-81322 and are not admitted). Replicant 1.4's
 decoder options pass through with FULL decoder admission (ADR-0026).
 
-```bash
-asdf install
-scripts/with-release-runtime.sh scripts/assert-runtime-version.sh
-scripts/with-release-runtime.sh mix deps.get --check-locked
-set -a; . ./.env; set +a    # loads ASH_REPLICANT_TEST_URL from the gitignored .env (live lane)
-scripts/prepush.sh          # runs CI's checks locally, except mutation gates,
-                            # integration discovery and the performance lane
-```
+The CI gates install the exact runtime, fetch with `mix deps.get --check-locked`, and run
+format, compile with warnings as errors, Credo, both dependency audits, the covering tests,
+Dialyzer, and docs/package checks through the route above. Local convenience scripts do not
+authorize builds or tests on the owner's Mac or on the build box.
 
 CI fetches only committed locks: `mix.lock` for current-lock cells,
 `locks/exact-floors.lock` and `locks/latest-compatible.lock` for those cells.
@@ -189,8 +200,26 @@ Publication first requires an anonymous HTTP 200 for the existing Hex package
 name. A missing name refuses: first publication is the owner's decision. Keyless
 steps build and inspect package and docs archives. Only the upload step receives
 the publish key; it runs from the runner's temporary directory, loads no project,
-rechecks package existence and version absence, and uploads those exact files
-with Hex's API.
+rechecks package existence and permits an untagged held version only when its checksum
+matches the freshly built package and it is not retired. Local or remote version tags and
+GitHub releases always refuse. Docs served by Hex must match the freshly built docs archive,
+even if release metadata has not reported them yet. Only missing uploads run; neither archive
+is replaced. A second owner dispatch on the same commit finishes an approved hold or an
+interrupted upload. The uploader reads both served archives back and compares their SHA-256s.
+
+Qualification and publication render docs twice from independent extracted source trees with
+locked dependencies, warnings as errors, ExDoc 0.40.4 and Makeup Elixir 1.0.1. Only HTML and
+Markdown ship; EPUB embeds build time. Hex 2.7.0 creates a sorted, fixed-metadata docs archive,
+inspected against every visible rendered byte. The two archives must compare byte for byte.
+After read-back, one keyless `release-assets` workflow artifact retains the versioned package,
+docs archive and `SHA256SUMS`. Infra creates the version tag, compares the artifact package
+with Hex, and creates the GitHub release from those assets. Consumer verification names that
+permanent GitHub release, never the expiring workflow artifact. After infra reports read-back
+and the tag, this repository records the verified package digest in
+`scripts/release/published_packages.sha256` through normal landing. Held versions never change
+that ledger speculatively. A release is complete only with its tag, Hex package, docs and
+GitHub release. The published-package consumer runs only after upload in `publish.yml`, in
+no environment and with no key; only the upload job belongs to environment `publish`.
 The release checker fixtures are recorded data, never fetched or executed as
 an Elixir project: `recorded.lock` is replayed with `assert-dependency-version.sh
 --lock PATH`, whose default is the repository root's `mix.lock`. There is no
@@ -210,8 +239,8 @@ artifact checksums name the exact tree they were built from.
 
 ## Workflow
 
-Make the change, commit with named paths, and land it through `kci/<commit>`; `main` moves only
-on that commit's `qualified` check. If it goes red, fix forward in the next commit. A version
+Make the change, commit with named paths, and use the route in [Build and test](#build-and-test).
+`main` moves only on that commit's `qualified` check. If it goes red, fix forward in the next commit. A version
 bump (`scripts/bump-version.sh`) is an ordinary commit and lands the same way.
 
 - A test that fails on every run is a defect: fix it, or quarantine it with a reason, in the
@@ -246,9 +275,8 @@ and reread them whenever you touch a workflow, a Dockerfile, a release script or
   a release script or anything that touches a secret, it sends infra-1 the branch and head and
   waits for infra-1's review. Any CI/CD, runner, box or key problem goes to infra-1, not around
   it.
-- On the build box, gate work on `kimosabe-remote where` and your own routed run, never on
-  `doctor`. Never list process arguments: no `ps` with `args` or `-f`, no `/proc/*/cmdline`;
-  use `ps -eo pid,etimes,pcpu,comm`. Nothing that compiles or tests runs on the owner's Mac.
+- This public repository never builds on the build box. Never list process arguments:
+  no `ps` with `args` or `-f`, no `/proc/*/cmdline`; use `ps -eo pid,etimes,pcpu,comm`.
 - A secret never appears on a command line, in a log or in a message. If you see one exposed,
   tell infra-1 where it sits without copying the value.
 - Messages to infra-1 carry one result each and are complete enough to act on without a reply.

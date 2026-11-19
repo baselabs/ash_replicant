@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Resume held or interrupted Hex publication on a second dispatch of the same commit only
+  when the inspected package and served docs match exactly and the release is not retired.
+  Upload only missing archives, read both back by SHA-256, retain one `release-assets` artifact
+  for infra, and keep the published-package consumer outside the publish environment.
+- Render docs twice from independent source trees with locked ExDoc 0.40.4, HTML and Markdown
+  only, then compare deterministic Hex archives byte for byte and inspect every rendered file.
+  Document the CI-only covering-test and landing route and immutable published-digest ledger.
+
 - Run Erlang/OTP 29.0.5, the same exact runtime as Replicant, whose example
   image exists for Elixir 1.20.3 only on that OTP patch.
 - Refresh the reviewed latest-compatible lock to Ash 3.37.7. The entry is Hex's registry
@@ -48,8 +56,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Audit the materialized upgrade fixture with both feeds in CI. Its fetch
   refuses lock changes.
 - Refuse publishing outside `main`, creating a new Hex package name, or reusing
-  a local tag, remote tag, GitHub release, or Hex version. Anonymous package
-  existence and version absence are rechecked through Hex's API before upload;
+  a local tag, remote tag, or GitHub release. Anonymous package
+  existence and held-version identity are rechecked through Hex's API before upload;
   failed or unexpected lookups refuse publication.
 - Build and inspect package and docs archives without a key, then upload those
   exact bytes through Hex 2.7.0's API from the runner's temporary directory,

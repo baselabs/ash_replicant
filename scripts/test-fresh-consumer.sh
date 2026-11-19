@@ -172,7 +172,10 @@ defmodule FreshConsumer.MixProject do
       version: "0.1.0",
       elixir: "~> 1.20",
       deps: deps(),
-      docs: []
+      docs: [],
+      # This consumer configures no Cloak cipher. The package permits GCM only;
+      # EEF-CVE-2026-95105 affects AES-CTR and has no fixed release yet.
+      hex: [ignore_advisories: ["EEF-CVE-2026-95105"]]
     ]
   end
 
@@ -418,6 +421,8 @@ echo "== consumer: deps resolve + compile with warnings-as-errors =="
 # WAE applies to the CONSUMER's code; dependency-internal warnings are
 # upstream's and compile in their own pass without the flag.
 consumer_mix deps.get >/dev/null
+consumer_mix hex.audit
+consumer_mix deps.audit
 consumer_mix deps.compile >/dev/null
 consumer_mix compile --warnings-as-errors >/dev/null
 echo "fresh-consumer: compile-WAE ok"

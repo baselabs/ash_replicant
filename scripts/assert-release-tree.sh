@@ -44,10 +44,10 @@ assert_github_release_absent() {
 }
 
 release_tree_main() {
-  local version="${1:?usage: assert-release-tree.sh VERSION TAG [--unreleased]}"
-  local tag="${2:?usage: assert-release-tree.sh VERSION TAG [--unreleased]}"
+  local version="${1:?usage: assert-release-tree.sh VERSION TAG [--unreleased [PACKAGE DOCS]]}"
+  local tag="${2:?usage: assert-release-tree.sh VERSION TAG [--unreleased [PACKAGE DOCS]]}"
   local mode="${3:-}" tag_sha result
-  [[ "$#" -eq 2 || ( "$#" -eq 3 && "$mode" == --unreleased ) ]] || exit 2
+  [[ "$#" -eq 2 || ( ( "$#" -eq 3 || "$#" -eq 5 ) && "$mode" == --unreleased ) ]] || exit 2
   [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || release_tree_fail 'invalid release version'
   [[ "$tag" == "v$version" ]] || release_tree_fail 'tag must match version'
   [[ -z "$(git status --porcelain --untracked-files=all)" ]] || release_tree_fail 'dirty tree'
@@ -71,8 +71,8 @@ release_tree_main() {
       *) release_tree_fail 'remote tag lookup failed' ;;
     esac
     assert_github_release_absent "repos/baselabs/ash_replicant/releases/tags/$tag"
-    assert_release_absent 'Hex release' "https://hex.pm/api/packages/ash_replicant/releases/$version"
-    echo 'release tree: version is unpublished and untagged'
+    elixir "$(dirname "${BASH_SOURCE[0]}")/release_identity.exs" "$version" "${@:4}"
+    echo 'release tree: version is untagged and its Hex identity is admissible'
     return
   fi
 

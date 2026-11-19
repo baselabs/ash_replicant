@@ -16,17 +16,46 @@ defmodule PublishHexArtifactsSelfTest do
   end
 end
 
-PublishHexArtifacts.available!("ash_replicant", "999999.0.0")
+PublishHexArtifacts.existing_package!(
+  Hex.API.Package.get_anonymous(nil, "ash_replicant"),
+  "ash_replicant"
+)
+:fresh =
+  PublishHexArtifacts.release_state!(
+    Hex.API.Release.get(nil, "ash_replicant", "999999.0.0"),
+    "999999.0.0",
+    String.duplicate("0", 64)
+  )
 
 # A dot cannot occur in a Hex package name, so this real lookup cannot name a package.
 PublishHexArtifactsSelfTest.reject(
-  "ash_replicant.invalid is not on Hex; first publication is the owner's decision",
-  fn -> PublishHexArtifacts.available!("ash_replicant.invalid", "999999.0.0") end
+  "the name ash_replicant.invalid is not on Hex; a first publication is the owner's decision",
+  fn ->
+    PublishHexArtifacts.existing_package!(
+      Hex.API.Package.get_anonymous(nil, "ash_replicant.invalid"),
+      "ash_replicant.invalid"
+    )
+  end
 )
 
+{:ok, {200, _, metadata}} = Hex.API.Release.get(nil, "ash_replicant", "1.6.3")
+{:held, true} =
+  PublishHexArtifacts.release_state!({:ok, {200, [], metadata}}, "1.6.3", metadata["checksum"])
+:ok =
+  PublishHexArtifacts.package_read_back!(
+    Hex.Repo.get_tarball("hexpm", "ash_replicant", "1.6.3"),
+    metadata["checksum"]
+  )
+
 PublishHexArtifactsSelfTest.reject(
-  "Hex already has ash_replicant 1.6.3; publication refused",
-  fn -> PublishHexArtifacts.available!("ash_replicant", "1.6.3") end
+  "Hex release identity does not match the built package; publication refused",
+  fn ->
+    PublishHexArtifacts.release_state!(
+      {:ok, {200, [], metadata}},
+      "1.6.3",
+      String.duplicate("0", 64)
+    )
+  end
 )
 
 IO.puts("upload preconditions: live Hex self-tests PASS (no upload or key)")

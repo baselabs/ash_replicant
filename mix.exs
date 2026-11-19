@@ -67,7 +67,7 @@ defmodule AshReplicant.MixProject do
       {:postgrex, "~> 0.22.4"},
       {:ymlr, "~> 5.1.6"},
       {:simple_sat, "~> 0.1"},
-      {:ex_doc, "~> 0.31", only: :dev, runtime: false},
+      {:ex_doc, "== 0.40.4", only: :dev, runtime: false},
       {:cloak, "~> 1.1", only: [:dev, :test], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
@@ -142,6 +142,8 @@ defmodule AshReplicant.MixProject do
   defp docs do
     [
       main: "readme",
+      # EPUB embeds build time; HTML and Markdown are reproducible.
+      formatters: ["html", "markdown"],
       source_ref: "v#{@version}",
       extras: ["README.md", "usage-rules.md", "CHANGELOG.md", "CONTRIBUTING.md", "LICENSE"]
     ]

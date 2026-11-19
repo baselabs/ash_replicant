@@ -1,28 +1,29 @@
 name: Publish to Hex
 
-# An owner dispatches this once the version commit has landed on main and its qualified run
-# is green; the v<version> tag goes on that same commit after the Hex read-back.
-# ash_replicant is a public package on hex.pm, so there is no organization step.
+# Owner dispatch on main; infra tags and creates the GitHub release after read-back.
 on:
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
 jobs:
   publish:
     name: Publish
-    # The Hex key belongs only to the protected publish environment. Its deployment branch
-    # policy must admit only main; only an owner's dispatch or re-run may use it.
     if: contains(fromJSON('["corepay","palermo-git"]'), github.actor) && contains(fromJSON('["corepay","palermo-git"]'), github.triggering_actor)
     environment: publish
-    # A public repository never uses the build box or its runners.
     runs-on: ubuntu-24.04
     timeout-minutes: 90 # no green run yet
     permissions:
       contents: read
     env:
       MIX_ENV: dev
+    outputs:
+      version: ${{ steps.release.outputs.version }}
     steps:
       - name: Refuse publishing outside the default branch
         run: test "$GITHUB_REF" = "refs/heads/main"
@@ -36,30 +37,87 @@ jobs:
       - run: scripts/assert-runtime-version.sh
       - run: mix local.hex 2.7.0 --force
       - run: mix local.rebar --force
-      - name: Refuse an already released version
+      - name: Refuse a tagged release or inadmissible Hex identity
         id: release
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git ls-remote --exit-code origin refs/heads/main | cut -f1)" = "$GITHUB_SHA"
           version="$(sed -n 's/^  @version "\(.*\)"$/\1/p' mix.exs)"
           scripts/assert-release-tree.sh "$version" "v$version" --unreleased
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
       - name: Fetch dependencies
         run: mix deps.get --check-locked
-      - run: mix docs --warnings-as-errors
-      # The selectors are cleared while building; the upload loads no project.
       - name: Build and inspect package and docs archives
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
-          tar -czf "$RUNNER_TEMP/hex-docs.tar.gz" -C doc .
-          python3 -B scripts/inspect-release-docs.py "$RUNNER_TEMP/hex-docs.tar.gz" doc
+          scripts/build-release-docs.sh "$RUNNER_TEMP/hex-docs.tar.gz"
           env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION scripts/with-release-runtime.sh mix hex.build --output "$RUNNER_TEMP/package.tar"
           scripts/inspect-release-package.sh "$RUNNER_TEMP/package.tar"
+          test "$(git ls-remote --exit-code origin refs/heads/main | cut -f1)" = "$GITHUB_SHA"
+          scripts/assert-release-tree.sh "$VERSION" "v$VERSION" --unreleased "$RUNNER_TEMP/package.tar" "$RUNNER_TEMP/hex-docs.tar.gz"
+          assets="$RUNNER_TEMP/release-assets"
+          mkdir "$assets"
+          cp "$RUNNER_TEMP/package.tar" "$assets/ash_replicant-$VERSION.tar"
+          cp "$RUNNER_TEMP/hex-docs.tar.gz" "$assets/ash_replicant-$VERSION-docs.tar.gz"
+          (cd "$assets" && sha256sum -- *.tar *.tar.gz > SHA256SUMS)
+          chmod a-w "$RUNNER_TEMP/package.tar" "$RUNNER_TEMP/hex-docs.tar.gz"
       - name: Upload inspected archives to hex.pm
         working-directory: ${{ runner.temp }}
         env:
           VERSION: ${{ steps.release.outputs.version }}
           HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
         run: mix run --no-mix-exs "$GITHUB_WORKSPACE/scripts/publish_hex_artifacts.exs" ash_replicant "$VERSION" "$RUNNER_TEMP/package.tar" "$RUNNER_TEMP/hex-docs.tar.gz"
+      - name: Retain verified release assets for infra
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-assets
+          path: ${{ runner.temp }}/release-assets/
+          if-no-files-found: error
       - name: Remove release archives
         if: always()
-        run: rm -f "$RUNNER_TEMP/package.tar" "$RUNNER_TEMP/hex-docs.tar.gz"
+        run: rm -rf "$RUNNER_TEMP/package.tar" "$RUNNER_TEMP/hex-docs.tar.gz" "$RUNNER_TEMP/hex-docs.tar.gz.rendered" "$RUNNER_TEMP/release-assets"
+
+  published-package:
+    name: Verify published package
+    needs: publish
+    if: contains(fromJSON('["corepay","palermo-git"]'), github.actor) && contains(fromJSON('["corepay","palermo-git"]'), github.triggering_actor)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90 # no green run yet
+    permissions:
+      contents: read
+    env:
+      MIX_ENV: dev
+      VERSION: ${{ needs.publish.outputs.version }}
+      ASH_REPLICANT_TEST_URL: postgres://postgres@localhost:5432/ash_replicant_test
+    steps:
+      - name: Refuse publishing outside the default branch
+        run: test "$GITHUB_REF" = "refs/heads/main"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          version-file: .tool-versions
+          version-type: strict
+      - run: scripts/assert-runtime-version.sh
+      - run: mix local.hex 2.7.0 --force
+      - run: mix deps.get --check-locked
+      - run: mix deps.compile
+      - name: Start the published consumer's real PostgreSQL
+        run: |
+          docker run -d --name pg \
+            -e POSTGRES_HOST_AUTH_METHOD=trust -p 5432:5432 \
+            postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b \
+            -c wal_level=logical -c max_replication_slots=20 -c max_wal_senders=20
+          scripts/wait-for-postgres.sh pg
+      - name: Audit and exercise the published package as a fresh consumer
+        run: scripts/test-fresh-consumer.sh --from-hex "$VERSION"
+      - name: Remove the published consumer's PostgreSQL
+        if: always()
+        run: docker rm -fv pg

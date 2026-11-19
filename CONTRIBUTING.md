@@ -260,61 +260,73 @@ push cannot exercise the report itself because its ref refusal is deliberate.
 
 ## Shipping a release
 
-Steps 1 to 3 make the version commit, which any contributor or agent lands
-like every other commit. Steps 4 to 8 belong to the maintainers' release
-operator alone. An agent's work ends with the qualified commit on `main`;
-agents never tag, release, publish, or handle publish credentials.
+Contributors prepare the version commit; infra owns every publication action and credential.
+Agents finish at `main` through the route in `AGENTS.md` under "Build and test". All builds and
+tests run on GitHub-hosted CI, never on the owner's Mac or the build box.
 
-Follow these steps in order:
+1. Run `scripts/bump-version.sh NEW_VERSION` to update the version-bearing anchors and
+   changelog. Commit with named paths and qualify through a topic `kci/` ref. After green,
+   make a final docs-only commit with a fresh SHA for `kimosabe-land`; never push that landing
+   SHA to any `kci/` ref beforehand. Infra reviews workflow and release-script changes before
+   landing. The landing tool alone moves `main` after its `qualified` check.
+2. Infra asks an owner (`corepay` or `palermo-git`, including the triggering actor on reruns)
+   to dispatch `publish.yml` on `main`, with no inputs. Its first step refuses every other
+   ref; the default-branch ruleset is the qualification guarantee. No job rechecks
+   qualification or downloads qualification artifacts.
+3. An anonymous Hex read requires an existing `ash_replicant` package name. A missing name
+   refuses: first publication is the owner's decision. A local tag, remote tag or GitHub
+   release for the version refuses. GitHub REST reads use `gh api -i` with `GH_TOKEN` scoped
+   to the reading step; only HTTP 404 proves absence. Lookup failures refuse.
+4. Keyless steps fetch locked dependencies and build and inspect the package with all three
+   dependency selectors cleared. Docs render from two independent extracted source trees,
+   each fetching `mix deps.get --check-locked` and using warnings as errors. ExDoc 0.40.4 and
+   Makeup Elixir 1.0.1 produce HTML and Markdown only; EPUB embeds build time. Hex 2.7.0
+   creates sorted archives with fixed times, uid/gid zero, empty owner/group names, and a
+   gzip header without a filename or mtime. The checker verifies every visible rendered file;
+   the two docs archives must compare byte for byte in qualification and publication.
+5. An untagged version already on Hex is a held or partial release. Before the keyed step,
+   its package checksum must equal the inspected archive, it must not be retired, and any
+   served docs must have the inspected docs SHA-256. Malformed metadata, mismatches and
+   lookup failures refuse. The isolated uploader repeats the checks, uploads only missing
+   package or docs, and never replaces either. Served docs must match even when metadata has
+   not yet reported them. A second owner dispatch on the same commit finishes an approved
+   hold or interrupted upload; ambiguous results require infra to inspect public state first.
+6. Only the upload job belongs to environment `publish`. Only the upload step receives
+   `HEX_API_KEY`, in its environment, and runs `mix run --no-mix-exs` from the runner's
+   temporary directory with no `mix.exs`. It reads the two inspected archives, loads no project,
+   builds nothing, checks package existence again, and reads both served archives back,
+   comparing their SHA-256s. Read-back also requires no retirement and `has_docs: true`.
+7. After successful read-back, one keyless workflow artifact named `release-assets` retains
+   `ash_replicant-<version>.tar`, `ash_replicant-<version>-docs.tar.gz`, and `SHA256SUMS`.
+   Temporary archives are removed even on failure. A published-package check needs the upload
+   job, holds no key or environment, and audits and exercises a fresh registry consumer against
+   real PostgreSQL. Qualification consumes the candidate tarball rather than its unpublished
+   version from Hex.
+8. Infra tags `v<version>` at that full source SHA, compares the artifact's package with Hex,
+   and creates the GitHub release from those assets. No workflow creates a GitHub release or
+   runs on a tag. After infra reports read-back and the tag, this repository records the
+   verified package digest in `scripts/release/published_packages.sha256` through normal
+   landing. Held versions never add or alter ledger entries speculatively. A release is
+   complete only when its tag, Hex package, docs and GitHub release all exist.
 
-1. `scripts/bump-version.sh NEW_VERSION` — bumps the six version-bearing
-   anchors (mix.exs, CHANGELOG fold + fresh `[Unreleased]`, README, notebook,
-   CHARTER stamp) and prints the steps below.
-2. Commit the bump with named paths. A contributor may run
-   `scripts/prepush.sh` on the bumped tree first, on their own machine.
-3. Land the bump commit through `kci/<commit>` qualification. `main` moves
-   only on that commit's `qualified` check. The qualified release head is the
-   battery of record; the operator's tag, release, and publish bind to it.
-4. An owner dispatches `Publish to Hex` on `main` after the version
-   commit's `qualified` run is green. Publishing runs only through this
-   workflow on a GitHub-hosted runner, never from a workstation. Its first
-   step refuses every other ref. An anonymous Hex read must first prove that
-   `ash_replicant` already exists. A missing package name refuses publication;
-   first publication is the owner's decision. Before upload it also refuses an
-   existing local tag, remote tag, GitHub release, or Hex release. A failed lookup
-   refuses publication, and only a clean HTTP 404 proves an absent version. The GitHub
-   lookup uses `gh api -i` with the job's read-only token scoped to that
-   refusal step. The
-   `HEX_API_KEY` secret belongs only to the protected `publish` environment,
-   whose deployment branch policy must admit only `main`; only the upload
-   step receives it. Keyless steps fetch locked dependencies, build docs, and
-   build and inspect both archives, clearing all three dependency selectors for
-   the package build. The upload runs `mix run --no-mix-exs` with Hex 2.7.0's API,
-   from the runner's temporary directory with the script's absolute path,
-   loading no project and uploading those exact files. It reads both archives and
-   rechecks package existence and version absence before either upload.
-5. After the Hex read-back, tag that same qualified version commit:
-   `git tag vNEW_VERSION <sha> && git push origin vNEW_VERSION`.
-6. `gh release create vNEW_VERSION --verify-tag --target <sha>` with the
-   tag's commit SHA as `<sha>`. Check that the release's `target_commitish`
-   equals that SHA. If it names a branch, PATCH it
-   (`gh api -X PATCH repos/baselabs/ash_replicant/releases/<id> -f
-   target_commitish=<sha>`).
-7. `scripts/verify-release.sh NEW_VERSION vNEW_VERSION` — requires a clean
-   tree and HEAD equal to the tag. Checks the served Hex checksum against a
-   fresh selector-free build, `has_docs: true`, HexDocs HTTP 200, and the
-   GitHub release's `target_commitish` against the tag's commit.
-8. `scripts/test-fresh-consumer.sh --from-hex NEW_VERSION` — resolves the
-   published package, compiles, generates and runs migrations, builds docs,
-   and drives the default CDC path against `ASH_REPLICANT_TEST_URL`.
-   Before publication, `prepush.sh`'s live lane runs this check from the local
-   tarball when `ASH_REPLICANT_TEST_URL` is set.
+Consumers verify the permanent [GitHub release](https://github.com/baselabs/ash_replicant/releases)
+for `v<version>`, rather than the expiring workflow artifact:
 
-`verify-release.sh VERSION TAG --check` checks local preconditions only;
-it does not verify public release state. The publish workflow's package
-inspection compares the unpacked files with `scripts/release-package-files.txt`;
-review an allowlist change whenever the package gains or drops a file.
-`bump-version.sh VERSION --check` validates the next bump's anchors without writing files.
+```bash
+gh release download vX.Y.Z --repo baselabs/ash_replicant --pattern 'ash_replicant-*' --pattern SHA256SUMS
+sha256sum --check SHA256SUMS
+curl --fail --silent --show-error https://repo.hex.pm/tarballs/ash_replicant-X.Y.Z.tar -o hex.tar
+cmp ash_replicant-X.Y.Z.tar hex.tar
+curl --fail --silent --show-error https://repo.hex.pm/docs/ash_replicant-X.Y.Z.tar.gz -o hex-docs.tar.gz
+cmp ash_replicant-X.Y.Z-docs.tar.gz hex-docs.tar.gz
+rm hex.tar hex-docs.tar.gz
+```
+
+`scripts/verify-release.sh VERSION TAG --check` checks local tree/tag preconditions only.
+Its full mode verifies public state from the exact tagged tree. The publish workflow's package
+inspection compares unpacked files with `scripts/release-package-files.txt`; review the allowlist
+whenever package contents change. `bump-version.sh VERSION --check` checks bump anchors without
+writing files. These builds and tests follow the CI-only route above.
 
 ## Critical rules (binding)
 

@@ -8,6 +8,7 @@ mkdir -p "$work/scripts"
 cp "$root/scripts/verify-release.sh" "$root/scripts/assert-release-tree.sh" \
   "$root/scripts/with-release-runtime.sh" "$root/scripts/assert-runtime-version.sh" \
   "$root/scripts/inspect-release-package.sh" "$root/scripts/release-package-files.txt" \
+  "$root/scripts/release_identity.exs" \
   "$work/scripts/"
 cd "$work"
 git init -q

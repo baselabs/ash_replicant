@@ -1,13 +1,12 @@
-# Upload inspected archives with Hex 2.7.0, without loading a Mix project.
-# Usage: mix run --no-mix-exs scripts/publish_hex_artifacts.exs NAME VERSION ARCHIVE DOCS
-# No builds, tasks, persisted authentication, response bodies, or credentials in output.
+# Runs with --no-mix-exs: only Hex and the already inspected archives are loaded.
+# No dependency fetch, build, project code, credential persistence, or response logging.
 defmodule PublishHexArtifacts do
   @moduledoc false
 
   def main([name, version, archive, docs]) do
     if Mix.Project.get(), do: raise("publication must run without a Mix project")
 
-    # Read BOTH inspected files before either upload can begin.
+    # Read both files before uploading anything. The keyless build inspected these paths.
     package_bytes = File.read!(archive)
     docs_bytes = File.read!(docs)
     key = System.fetch_env!("HEX_API_KEY")
@@ -15,55 +14,131 @@ defmodule PublishHexArtifacts do
     Hex.start()
     auth = [key: key]
 
-    available!(name, version)
-    package_state = accepted!(Hex.API.Release.publish(nil, package_bytes, auth), "Hex package")
+    # A missing release alone cannot prove the package name already exists.
+    existing_package!(Hex.API.Package.get_anonymous(nil, name), name)
+    digest = :crypto.hash(:sha256, package_bytes) |> Base.encode16(case: :lower)
+    docs_digest = :crypto.hash(:sha256, docs_bytes) |> Base.encode16(case: :lower)
 
-    docs_state =
-      accepted!(
-        Hex.API.ReleaseDocs.publish(nil, name, version, docs_bytes, auth),
-        "Hex docs"
-      )
+    case release_state!(Hex.API.Release.get(nil, name, version), version, digest) do
+      :fresh ->
+        Hex.API.Release.publish(nil, package_bytes, auth)
+        |> accepted!("Hex package")
+        |> approved!()
 
-    if :staged in [package_state, docs_state] do
-      raise "Hex approval pending; recover by hand with the inspected archives, do not redispatch"
+      {:held, _docs?} ->
+        :ok
+    end
+
+    # Re-read after the package decision: docs may have appeared in the meantime.
+    case release_state!(Hex.API.Release.get(nil, name, version), version, digest) do
+      {:held, docs?} ->
+        case docs_action!(Hex.API.ReleaseDocs.get(nil, name, version), docs_digest, docs?) do
+          :upload ->
+            Hex.API.ReleaseDocs.publish(nil, name, version, docs_bytes, auth)
+            |> accepted!("Hex docs")
+            |> approved!()
+
+          :skip ->
+            :ok
+        end
+
+      :fresh ->
+        raise "Hex package is not served yet; inspect public state before retrying"
+    end
+
+    read_back!(Hex.API.Release.get(nil, name, version), version, digest)
+    package_read_back!(Hex.Repo.get_tarball("hexpm", name, version), digest)
+    docs_read_back!(Hex.API.ReleaseDocs.get(nil, name, version), docs_digest)
+  end
+
+  def main(_argv),
+    do: raise("usage: publish_hex_artifacts.exs NAME VERSION PACKAGE_ARCHIVE DOCS_ARCHIVE")
+
+  def existing_package!({:ok, {200, _headers, _body}}, _name), do: :ok
+
+  def existing_package!({:ok, {404, _headers, _body}}, name),
+    do: raise("the name #{name} is not on Hex; a first publication is the owner's decision")
+
+  def existing_package!(_result, _name),
+    do: raise("Hex package lookup failed; publication refused")
+
+  def release_state!({:ok, {404, _headers, _body}}, _version, _digest), do: :fresh
+
+  def release_state!({:ok, {200, _headers, metadata}}, version, digest) do
+    case metadata do
+      %{
+        "version" => ^version,
+        "checksum" => ^digest,
+        "retirement" => nil,
+        "has_docs" => docs?
+      }
+      when is_boolean(docs?) ->
+        if is_binary(digest) and Regex.match?(~r/\A[0-9a-f]{64}\z/, digest) do
+          {:held, docs?}
+        else
+          raise "Hex release checksum is invalid; publication refused"
+        end
+
+      %{"retirement" => retirement} when not is_nil(retirement) ->
+        raise "Hex release is retired; publication refused"
+
+      _other ->
+        raise "Hex release identity does not match the built package; publication refused"
     end
   end
 
-  def main(_argv), do: raise("usage: publish_hex_artifacts.exs NAME VERSION ARCHIVE DOCS")
+  def release_state!(_result, _version, _digest),
+    do: raise("Hex release lookup failed; publication refused")
 
-  # Public only so the keyless live self-test exercises the actual upload preconditions.
-  def available!(name, version) do
-    exists!(Hex.API.Package.get_anonymous(nil, name), name)
-    absent!(Hex.API.Release.get(nil, name, version), name, version)
-  end
-
-  defp exists!({:ok, {200, _headers, _body}}, _name), do: :ok
-
-  defp exists!({:ok, {404, _headers, _body}}, name) do
-    raise "#{name} is not on Hex; first publication is the owner's decision"
-  end
-
-  defp exists!(_result, name) do
-    raise "could not confirm #{name} exists on Hex; publication refused"
-  end
-
-  defp absent!({:ok, {404, _headers, _body}}, _name, _version), do: :ok
-
-  defp absent!({:ok, {200, _headers, _body}}, name, version) do
-    raise "Hex already has #{name} #{version}; publication refused"
-  end
-
-  defp absent!(_result, name, version) do
-    raise "could not confirm #{name} #{version} is absent from Hex; publication refused"
-  end
-
-  defp accepted!({:ok, {code, _headers, body}}, label) when code in 200..299 do
+  def accepted!({:ok, {code, _headers, body}}, label) when code in 200..299 do
     IO.puts("#{label}: archive accepted")
     if is_map(body) and body["status"] == "staged", do: :staged, else: :published
   end
 
-  defp accepted!(_result, label) do
-    raise "#{label} upload failed or occupied; manual recovery required, do not redispatch"
+  def accepted!(_result, label),
+    do: raise("#{label} upload failed or ambiguous; inspect public state before retrying")
+
+  def approved!(:published), do: :ok
+
+  def approved!(:staged),
+    do: raise("Hex approval pending; inspect public state before retrying the same commit")
+
+  def read_back!(response, version, digest) do
+    case release_state!(response, version, digest) do
+      {:held, true} -> :ok
+      _other -> raise "Hex package or docs are not served; inspect public state before retrying"
+    end
+  end
+
+  def package_read_back!({:ok, {200, _headers, bytes}}, digest) when is_binary(bytes) do
+    if Base.encode16(:crypto.hash(:sha256, bytes), case: :lower) != digest do
+      raise "Hex package archive checksum differs from the built package; publication refused"
+    end
+
+    :ok
+  end
+
+  def package_read_back!(_response, _digest),
+    do: raise("Hex package archive is unavailable; inspect public state before retrying")
+
+  # Hex follows the docs API redirect to the anonymously served archive. Check
+  # its bytes even if metadata says docs are absent; never replace served docs.
+  def docs_action!({:ok, {200, _headers, <<0x1F, 0x8B, _rest::binary>> = bytes}}, digest, _required?) do
+    if Base.encode16(:crypto.hash(:sha256, bytes), case: :lower) == digest do
+      :skip
+    else
+      raise "Hex docs checksum differs from the built archive; publication refused"
+    end
+  end
+
+  def docs_action!({:ok, {404, _headers, _body}}, _digest, false), do: :upload
+
+  def docs_action!(_response, _digest, _required?),
+    do: raise("Hex docs archive is unavailable; inspect public state before retrying")
+
+  def docs_read_back!(response, digest) do
+    :skip = docs_action!(response, digest, true)
+    :ok
   end
 end
 

@@ -9,12 +9,12 @@ import tempfile
 from pathlib import Path
 
 spec = importlib.util.spec_from_file_location(
-    "release_docs", Path(__file__).with_name("inspect-release-docs.py")
+    "release_docs", Path(__file__).with_name("check-docs-archive.py")
 )
 inspector = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(inspector)
 archive, directory = sys.argv[1:]
-inspector.inspect(archive, directory)
+inspector.check(Path(archive), Path(directory))
 
 with tempfile.TemporaryDirectory(prefix="ash-replicant-docs-check-") as work:
     for mutation in ["missing", "changed", "extra", "duplicate", "traversal", "symlink"]:
@@ -45,7 +45,7 @@ with tempfile.TemporaryDirectory(prefix="ash-replicant-docs-check-") as work:
                     entry.linkname = "index.html"
                 output.addfile(entry, io.BytesIO(b""))
         try:
-            inspector.inspect(candidate, directory)
+            inspector.check(candidate, Path(directory))
         except ValueError:
             pass
         else:
