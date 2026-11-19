@@ -5,6 +5,10 @@ on:
     - cron: '23 6 * * *'
   workflow_dispatch:
 
+defaults:
+  run:
+    shell: bash
+
 permissions:
   contents: read
 

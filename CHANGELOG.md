@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Preserve command failures throughout CI with a workflow-wide bash default and strict shell
+  scripts. Capture package scans, listings, repository status and release anchors before
+  comparison; distinguish grep errors from no matches and run package inspection with pipefail.
+
 - Resume held or interrupted Hex publication on a second dispatch of the same commit only
   when the inspected package and served docs match exactly and the release is not retired.
   Upload only missing archives, read both back by SHA-256, retain one `release-assets` artifact

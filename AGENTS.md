@@ -146,6 +146,12 @@ their direct dependents run by pushing a topic commit to `kci/<topic>`, reading 
 and fixing failures forward. Use the commands declared in `.github/workflows/qualification.yml`;
 never fall back to a local build or test.
 
+Every workflow declares `defaults: run: shell: bash`, so command pipelines preserve failures.
+Shell scripts use bash and `set -euo pipefail`. Checks capture command output in a standalone
+assignment before testing it; listings never reach a comparison through process substitution.
+Only grep's no-match status is allowed for optional counts; command errors fail the check.
+Diagnostic output on an already-failing path and cleanup remain best effort.
+
 Land only with `python3 /Users/rp/Developer/kimosabe/bin/kimosabe-land --repo . --sha <full sha>`.
 It submits a fresh `kci/<commit>` candidate and moves `main` only after `qualified` succeeds.
 The landing SHA must never have been pushed to any `kci/` ref: two `qualified` checks on one

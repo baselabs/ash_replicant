@@ -39,11 +39,12 @@ current="$(sed -n 's/^  @version "\(.*\)"$/\1/p' mix.exs)"
 [[ "$new_version" != "$current" ]] || { echo "bump-version: already at $current" >&2; exit 1; }
 
 today="$(date +%Y-%m-%d)"
+charter_updated="$(grep -o '\*\*Updated:\*\* [0-9-]*' docs/CHARTER.md | cut -d' ' -f2)"
 
 replace_once() {
   local file="$1" old="$2"
   local count
-  count="$(grep -cF "$old" "$file" || true)"
+  count="$(grep -cF "$old" "$file")" || [[ $? -eq 1 ]]
   [[ "$count" -eq 1 ]] || {
     echo "bump-version: anchor in $file is not unique (found $count): $old" >&2
     exit 1
@@ -79,7 +80,7 @@ replace_once notebooks/ash_replicant_tour.livemd "# => \"$current\"" "# => \"$ne
 # its Updated field (the stamp line is the anchor, dated today).
 replace_once docs/CHARTER.md "latest published package $current" \
   "latest published package $new_version"
-replace_once docs/CHARTER.md "**Updated:** $(grep -o '\*\*Updated:\*\* [0-9-]*' docs/CHARTER.md | cut -d' ' -f2)" \
+replace_once docs/CHARTER.md "**Updated:** $charter_updated" \
   "**Updated:** $today"
 # Bind the CHANGELOG link references: the [Unreleased] compare base moves to the
 # new tag and the new version gains its tree link ahead of its predecessor's.

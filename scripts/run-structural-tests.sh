@@ -142,8 +142,8 @@ mix test "${mix_args[@]}" --formatter AshReplicant.StructuralFormatter >"$raw_ou
 result_exit=0
 scripts/assert-exunit-output.sh "$raw_output" ${allow_excluded:+"$allow_excluded"} || result_exit=$?
 
-logger_error_count="$(grep -Ec '(^|[[:space:]])\[error\]' "$raw_output" || true)"
-exception_banner_count="$(grep -Ec '\*\* \(' "$raw_output" || true)"
+logger_error_count="$(grep -Ec '(^|[[:space:]])\[error\]' "$raw_output")" || [[ $? -eq 1 ]]
+exception_banner_count="$(grep -Ec '\*\* \(' "$raw_output")" || [[ $? -eq 1 ]]
 
 if [[ "$logger_error_count" -gt 0 || "$exception_banner_count" -gt 0 ]]; then
   echo "test process emitted uncontrolled structural errors: logger=$logger_error_count exception=$exception_banner_count" >&2

@@ -48,7 +48,9 @@ if ! run_probe; then
   exit 1
 fi
 
-if [[ "$(grep -c '^exec$' "$calls_file")" -ne 4 ]] || grep -q '^logs$' "$calls_file"; then
+exec_count="$(grep -c '^exec$' "$calls_file")" || [[ $? -eq 1 ]]
+logs_count="$(grep -c '^logs$' "$calls_file")" || [[ $? -eq 1 ]]
+if [[ "$exec_count" -ne 4 || "$logs_count" -ne 0 ]]; then
   echo "PostgreSQL readiness checker did not wait through the bootstrap restart" >&2
   exit 1
 fi

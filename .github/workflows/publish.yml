@@ -4,6 +4,10 @@ name: Publish to Hex
 on:
   workflow_dispatch:
 
+defaults:
+  run:
+    shell: bash
+
 permissions:
   contents: read
 
@@ -41,7 +45,6 @@ jobs:
         id: release
         env:
           GH_TOKEN: ${{ github.token }}
-        shell: bash
         run: |
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$(git ls-remote --exit-code origin refs/heads/main | cut -f1)" = "$GITHUB_SHA"
@@ -54,7 +57,6 @@ jobs:
         env:
           VERSION: ${{ steps.release.outputs.version }}
           GH_TOKEN: ${{ github.token }}
-        shell: bash
         run: |
           scripts/build-release-docs.sh "$RUNNER_TEMP/hex-docs.tar.gz"
           env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION scripts/with-release-runtime.sh mix hex.build --output "$RUNNER_TEMP/package.tar"

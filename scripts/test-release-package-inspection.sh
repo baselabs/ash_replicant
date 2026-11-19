@@ -23,18 +23,20 @@ inspection="$(MIX_ENV=test mix run --no-start --no-compile --no-deps-check -e '
 # with the shipped predicate or the check goes red.
 selector_free_build='env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix hex.build --unpack --output "$package_dir"'
 
-printf '%s\n' "$inspection" | grep -qF "$selector_free_build" || {
+grep -qF "$selector_free_build" <<<"$inspection" || {
   echo "package inspection self-test: the shipped hex.build selector clearing changed shape" >&2
   exit 1
 }
 
 rebind_staging() {
-  local staged
+  local staged build_status
   staged="$(printf '%s\n' "$inspection" \
     | sed -e 's|^package_dir=\$(mktemp -d)$|package_dir="$ASH_REPLICANT_PACKAGE_FIXTURE"|' \
-          -e "s|^${selector_free_build}\$|: # self-test staged fixture|")"
+          -e "s|^${selector_free_build}\$|: # self-test staged fixture|")" || return
 
-  if printf '%s\n' "$staged" | grep -q 'mix hex.build'; then
+  build_status=0
+  grep -q 'mix hex.build' <<<"$staged" || build_status=$?
+  if [[ "$build_status" -ne 1 ]]; then
     echo "package inspection self-test: the staging rebind did not replace the hex.build line" >&2
     exit 1
   fi
@@ -43,7 +45,9 @@ rebind_staging() {
 }
 
 run_inspection() {
-  ASH_REPLICANT_PACKAGE_FIXTURE="$1" bash -c "$(rebind_staging)"
+  local inspection_script
+  inspection_script="$(rebind_staging)" || return
+  ASH_REPLICANT_PACKAGE_FIXTURE="$1" bash -euo pipefail -c "$inspection_script"
 }
 
 # Inspect the real selector-free package, then mutate its actual unpacked files.

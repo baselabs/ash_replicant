@@ -9,8 +9,8 @@ tar -xf "$tarball" -C "$work/outer"
 tar -xzf "$work/outer/contents.tar.gz" -C "$work/package"
 # Match Hex's --unpack file set, including its wrapper metadata file.
 cp "$work/outer/metadata.config" "$work/package/hex_metadata.config"
-if ! diff -u "$root/scripts/release-package-files.txt" \
-  <(cd "$work/package" && find . \( -type f -o -type l \) | sed 's|^./||' | LC_ALL=C sort); then
+package_files="$(cd "$work/package" && find . \( -type f -o -type l \) | sed 's|^./||' | LC_ALL=C sort)"
+if ! diff -u "$root/scripts/release-package-files.txt" - <<<"$package_files"; then
   echo 'inspect-release-package: package files differ from the release allowlist' >&2
   exit 1
 fi

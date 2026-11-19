@@ -4,6 +4,10 @@ name: Qualification
 on:
   workflow_call:
 
+defaults:
+  run:
+    shell: bash
+
 permissions:
   contents: read
 
@@ -383,7 +387,6 @@ jobs:
           mix run --no-mix-exs "$GITHUB_WORKSPACE/scripts/test_publish_hex_artifacts.exs"
 
       - name: Build and inspect unpacked Hex package
-        shell: bash
         run: |
           package_dir=$(mktemp -d)
           trap 'rm -rf "$package_dir"' EXIT
@@ -398,7 +401,8 @@ jobs:
             }
           done
 
-          if find "$package_dir" -type d \( -name test -o -name .forge -o -name _build \) -print -quit | grep -q .; then
+          residue="$(find "$package_dir" -type d \( -name test -o -name .forge -o -name _build \) -print -quit)"
+          if [[ -n "$residue" ]]; then
             echo "::error::Package contains test, Forge, or build residue"
             exit 1
           fi
@@ -408,12 +412,14 @@ jobs:
             exit 1
           fi
 
-          if find "$package_dir" -type f \( -name '.env*' -o -name '*.pem' -o -name '*.key' \) -print -quit | grep -q .; then
+          credentials="$(find "$package_dir" -type f \( -name '.env*' -o -name '*.pem' -o -name '*.key' \) -print -quit)"
+          if [[ -n "$credentials" ]]; then
             echo "::error::Package contains a credential-shaped file"
             exit 1
           fi
 
-          if ! diff -u scripts/release-package-files.txt <(cd "$package_dir" && find . \( -type f -o -type l \) | sed 's|^./||' | LC_ALL=C sort); then
+          package_files="$(cd "$package_dir" && find . \( -type f -o -type l \) | sed 's|^./||' | LC_ALL=C sort)"
+          if ! diff -u scripts/release-package-files.txt - <<<"$package_files"; then
             echo "::error::Package files differ from the release allowlist"
             exit 1
           fi

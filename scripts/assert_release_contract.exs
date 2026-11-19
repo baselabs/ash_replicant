@@ -758,11 +758,12 @@ defmodule AshReplicant.ReleaseContract do
   release_tree_main() {
     local version="${1:?usage: assert-release-tree.sh VERSION TAG [--unreleased [PACKAGE DOCS]]}"
     local tag="${2:?usage: assert-release-tree.sh VERSION TAG [--unreleased [PACKAGE DOCS]]}"
-    local mode="${3:-}" tag_sha result
+    local mode="${3:-}" tag_sha result tree_status
     [[ "$#" -eq 2 || ( ( "$#" -eq 3 || "$#" -eq 5 ) && "$mode" == --unreleased ) ]] || exit 2
     [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || release_tree_fail 'invalid release version'
     [[ "$tag" == "v$version" ]] || release_tree_fail 'tag must match version'
-    [[ -z "$(git status --porcelain --untracked-files=all)" ]] || release_tree_fail 'dirty tree'
+    tree_status="$(git status --porcelain --untracked-files=all)" || release_tree_fail 'git status failed'
+    [[ -z "$tree_status" ]] || release_tree_fail 'dirty tree'
 
     if [[ "$mode" == --unreleased ]]; then
       assert_hex_package_exists ash_replicant https://hex.pm/api/packages/ash_replicant
@@ -974,13 +975,70 @@ defmodule AshReplicant.ReleaseContract do
   '
   """
 
-  @package_inspection """
+  @command_status_guards [
+    {"scripts/assert-release-tree.sh",
+     ~S"""
+       tree_status="$(git status --porcelain --untracked-files=all)" || release_tree_fail 'git status failed'
+       [[ -z "$tree_status" ]] || release_tree_fail 'dirty tree'
+     """},
+    {"scripts/inspect-release-package.sh",
+     ~S"""
+     package_files="$(cd "$work/package" && find . \( -type f -o -type l \) | sed 's|^./||' | LC_ALL=C sort)"
+     if ! diff -u "$root/scripts/release-package-files.txt" - <<<"$package_files"; then
+     """},
+    {"scripts/run-structural-tests.sh",
+     ~S"""
+     logger_error_count="$(grep -Ec '(^|[[:space:]])\[error\]' "$raw_output")" || [[ $? -eq 1 ]]
+     exception_banner_count="$(grep -Ec '\*\* \(' "$raw_output")" || [[ $? -eq 1 ]]
+     """},
+    {"scripts/assert-exunit-output.sh",
+     ~S"""
+     result_count="$(grep -c '^Result: ' "$output_file")" || [[ $? -eq 1 ]]
+     """},
+    {"scripts/bump-version.sh",
+     ~S"""
+     charter_updated="$(grep -o '\*\*Updated:\*\* [0-9-]*' docs/CHARTER.md | cut -d' ' -f2)"
+     """},
+    {"scripts/bump-version.sh",
+     ~S"""
+       count="$(grep -cF "$old" "$file")" || [[ $? -eq 1 ]]
+     """},
+    {"scripts/test-release-package-inspection.sh",
+     ~S"""
+     grep -qF "$selector_free_build" <<<"$inspection" || {
+     """},
+    {"scripts/test-release-package-inspection.sh",
+     ~S"""
+       build_status=0
+       grep -q 'mix hex.build' <<<"$staged" || build_status=$?
+       if [[ "$build_status" -ne 1 ]]; then
+     """},
+    {"scripts/test-release-package-inspection.sh",
+     ~S"""
+       inspection_script="$(rebind_staging)" || return
+       ASH_REPLICANT_PACKAGE_FIXTURE="$1" bash -euo pipefail -c "$inspection_script"
+     """},
+    {"scripts/test-release-package-inspection.sh",
+     ~S"""
+       staged="$(printf '%s\n' "$inspection" \
+         | sed -e 's|^package_dir=\$(mktemp -d)$|package_dir="$ASH_REPLICANT_PACKAGE_FIXTURE"|' \
+               -e "s|^${selector_free_build}\$|: # self-test staged fixture|")" || return
+     """},
+    {"scripts/test-postgres-readiness.sh",
+     ~S"""
+     exec_count="$(grep -c '^exec$' "$calls_file")" || [[ $? -eq 1 ]]
+     logs_count="$(grep -c '^logs$' "$calls_file")" || [[ $? -eq 1 ]]
+     if [[ "$exec_count" -ne 4 || "$logs_count" -ne 0 ]]; then
+     """}
+  ]
+
+  @package_inspection ~S"""
   package_dir=$(mktemp -d)
   trap 'rm -rf "$package_dir"' EXIT
   env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix hex.build --unpack --output "$package_dir"
 
-  for required in lib .formatter.exs mix.exs README.md LICENSE NOTICE CHANGELOG.md usage-rules.md \\
-    lib/ash_replicant/upgrade.ex lib/ash_replicant/upgrade/checkpoint.ex \\
+  for required in lib .formatter.exs mix.exs README.md LICENSE NOTICE CHANGELOG.md usage-rules.md \
+    lib/ash_replicant/upgrade.ex lib/ash_replicant/upgrade/checkpoint.ex \
     lib/mix/tasks/ash_replicant.upgrade.ex; do
     test -e "$package_dir/$required" || {
       echo "::error::Missing package path: $required"
@@ -988,7 +1046,8 @@ defmodule AshReplicant.ReleaseContract do
     }
   done
 
-  if find "$package_dir" -type d \\( -name test -o -name .forge -o -name _build \\) -print -quit | grep -q .; then
+  residue="$(find "$package_dir" -type d \( -name test -o -name .forge -o -name _build \) -print -quit)"
+  if [[ -n "$residue" ]]; then
     echo "::error::Package contains test, Forge, or build residue"
     exit 1
   fi
@@ -998,12 +1057,14 @@ defmodule AshReplicant.ReleaseContract do
     exit 1
   fi
 
-  if find "$package_dir" -type f \\( -name '.env*' -o -name '*.pem' -o -name '*.key' \\) -print -quit | grep -q .; then
+  credentials="$(find "$package_dir" -type f \( -name '.env*' -o -name '*.pem' -o -name '*.key' \) -print -quit)"
+  if [[ -n "$credentials" ]]; then
     echo "::error::Package contains a credential-shaped file"
     exit 1
   fi
 
-  if ! diff -u scripts/release-package-files.txt <(cd "$package_dir" && find . \\( -type f -o -type l \\) | sed 's|^./||' | LC_ALL=C sort); then
+  package_files="$(cd "$package_dir" && find . \( -type f -o -type l \) | sed 's|^./||' | LC_ALL=C sort)"
+  if ! diff -u scripts/release-package-files.txt - <<<"$package_files"; then
     echo "::error::Package files differ from the release allowlist"
     exit 1
   fi
@@ -1229,7 +1290,7 @@ defmodule AshReplicant.ReleaseContract do
       {:run, String.trim(@public_dependency_check)},
       {:run, ~s(scripts/build-release-docs.sh "$RUNNER_TEMP/hex-docs.tar.gz")},
       {:run, String.trim(@upload_archive_checks)},
-      {:run, String.trim(@package_inspection), %{"shell" => "bash"}}
+      {:run, String.trim(@package_inspection)}
     ]
   }
 
@@ -1553,7 +1614,7 @@ defmodule AshReplicant.ReleaseContract do
 
   defp assert_landing(workflow) do
     assert(
-      Enum.sort(Map.keys(workflow)) == ~w(concurrency jobs name on permissions) and
+      Enum.sort(Map.keys(workflow)) == ~w(concurrency defaults jobs name on permissions) and
         workflow["name"] == "CI" and workflow["permissions"] == %{"contents" => "read"} and
         workflow["concurrency"] ==
           %{"group" => "ci-${{ github.ref }}", "cancel-in-progress" => true},
@@ -1601,7 +1662,7 @@ defmodule AshReplicant.ReleaseContract do
 
   defp assert_qualification(workflow, root) do
     assert(
-      Enum.sort(Map.keys(workflow)) == ~w(jobs name on permissions) and
+      Enum.sort(Map.keys(workflow)) == ~w(defaults jobs name on permissions) and
         workflow["name"] == "Qualification" and
         workflow["permissions"] == %{"contents" => "read"},
       "qualification workflow control is invalid"
@@ -1624,7 +1685,7 @@ defmodule AshReplicant.ReleaseContract do
 
   defp assert_drift_report(workflow, root) do
     assert(
-      Enum.sort(Map.keys(workflow)) == ~w(jobs name on permissions) and
+      Enum.sort(Map.keys(workflow)) == ~w(defaults jobs name on permissions) and
         workflow["name"] == "Dependency drift report" and
         workflow["permissions"] == %{"contents" => "read"} and
         workflow["on"] == %{
@@ -1696,6 +1757,7 @@ defmodule AshReplicant.ReleaseContract do
     # and keep the published consumer outside every environment.
     expected = %{
       "name" => "Publish to Hex",
+      "defaults" => %{"run" => %{"shell" => "bash"}},
       "permissions" => %{"contents" => "read"},
       "concurrency" => %{"group" => "publish", "cancel-in-progress" => false},
       "jobs" => %{
@@ -1728,7 +1790,6 @@ defmodule AshReplicant.ReleaseContract do
               "name" => "Refuse a tagged release or inadmissible Hex identity",
               "id" => "release",
               "env" => %{"GH_TOKEN" => "${{ github.token }}"},
-              "shell" => "bash",
               "run" => @publish_unreleased_check
             },
             %{"name" => "Fetch dependencies", "run" => "mix deps.get --check-locked"},
@@ -1738,7 +1799,6 @@ defmodule AshReplicant.ReleaseContract do
                 "VERSION" => "${{ steps.release.outputs.version }}",
                 "GH_TOKEN" => "${{ github.token }}"
               },
-              "shell" => "bash",
               "run" => @publish_package_inspection
             },
             %{
@@ -1884,6 +1944,26 @@ defmodule AshReplicant.ReleaseContract do
   end
 
   defp assert_ci_sources(root) do
+    shell_scripts = Path.wildcard(Path.join(root, "scripts/*.sh"))
+    assert(shell_scripts != [], "CI shell script inventory is missing")
+
+    Enum.each(shell_scripts, fn path ->
+      source = File.read!(path)
+
+      assert(
+        String.starts_with?(source, "#!/usr/bin/env bash\n") and
+          String.contains?(source, "\nset -euo pipefail\n"),
+        "CI shell scripts must use bash with errexit, nounset and pipefail"
+      )
+    end)
+
+    Enum.each(@command_status_guards, fn {path, expected} ->
+      assert(
+        String.contains?(File.read!(Path.join(root, path)), expected),
+        "CI command status must reach its check"
+      )
+    end)
+
     for {path, expected} <- [
           {"scripts/audit-fixtures.sh", @fixture_audit_script},
           {"scripts/assert-release-tree.sh", @release_tree_script},
@@ -2092,7 +2172,18 @@ defmodule AshReplicant.ReleaseContract do
       end
     end
 
-    assert(not Map.has_key?(workflow, "defaults"), "CI workflow can override release shells")
+    assert(
+      workflow["defaults"] == %{"run" => %{"shell" => "bash"}},
+      "every workflow must default to bash with pipefail"
+    )
+
+    Enum.each(Map.get(workflow, "jobs", %{}), fn {_name, job} ->
+      assert(not Map.has_key?(job, "defaults"), "CI jobs must inherit the workflow shell")
+
+      Enum.each(Map.get(job, "steps", []), fn step ->
+        assert(Map.get(step, "shell", "bash") == "bash", "CI steps must use bash with pipefail")
+      end)
+    end)
 
     assert(
       Enum.all?(Map.get(workflow, "jobs", %{}), fn {_name, job} ->

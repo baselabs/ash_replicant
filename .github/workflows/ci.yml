@@ -6,6 +6,10 @@ on:
   push:
     branches: ['kci/**']
 
+defaults:
+  run:
+    shell: bash
+
 permissions:
   contents: read
 

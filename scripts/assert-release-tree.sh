@@ -46,11 +46,12 @@ assert_github_release_absent() {
 release_tree_main() {
   local version="${1:?usage: assert-release-tree.sh VERSION TAG [--unreleased [PACKAGE DOCS]]}"
   local tag="${2:?usage: assert-release-tree.sh VERSION TAG [--unreleased [PACKAGE DOCS]]}"
-  local mode="${3:-}" tag_sha result
+  local mode="${3:-}" tag_sha result tree_status
   [[ "$#" -eq 2 || ( ( "$#" -eq 3 || "$#" -eq 5 ) && "$mode" == --unreleased ) ]] || exit 2
   [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || release_tree_fail 'invalid release version'
   [[ "$tag" == "v$version" ]] || release_tree_fail 'tag must match version'
-  [[ -z "$(git status --porcelain --untracked-files=all)" ]] || release_tree_fail 'dirty tree'
+  tree_status="$(git status --porcelain --untracked-files=all)" || release_tree_fail 'git status failed'
+  [[ -z "$tree_status" ]] || release_tree_fail 'dirty tree'
 
   if [[ "$mode" == --unreleased ]]; then
     assert_hex_package_exists ash_replicant https://hex.pm/api/packages/ash_replicant

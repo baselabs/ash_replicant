@@ -76,13 +76,70 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   '
   """
 
-  @package_inspection """
+  @command_status_guards [
+    {"scripts/assert-release-tree.sh",
+     ~S"""
+       tree_status="$(git status --porcelain --untracked-files=all)" || release_tree_fail 'git status failed'
+       [[ -z "$tree_status" ]] || release_tree_fail 'dirty tree'
+     """},
+    {"scripts/inspect-release-package.sh",
+     ~S"""
+     package_files="$(cd "$work/package" && find . \( -type f -o -type l \) | sed 's|^./||' | LC_ALL=C sort)"
+     if ! diff -u "$root/scripts/release-package-files.txt" - <<<"$package_files"; then
+     """},
+    {"scripts/run-structural-tests.sh",
+     ~S"""
+     logger_error_count="$(grep -Ec '(^|[[:space:]])\[error\]' "$raw_output")" || [[ $? -eq 1 ]]
+     exception_banner_count="$(grep -Ec '\*\* \(' "$raw_output")" || [[ $? -eq 1 ]]
+     """},
+    {"scripts/assert-exunit-output.sh",
+     ~S"""
+     result_count="$(grep -c '^Result: ' "$output_file")" || [[ $? -eq 1 ]]
+     """},
+    {"scripts/bump-version.sh",
+     ~S"""
+     charter_updated="$(grep -o '\*\*Updated:\*\* [0-9-]*' docs/CHARTER.md | cut -d' ' -f2)"
+     """},
+    {"scripts/bump-version.sh",
+     ~S"""
+       count="$(grep -cF "$old" "$file")" || [[ $? -eq 1 ]]
+     """},
+    {"scripts/test-release-package-inspection.sh",
+     ~S"""
+     grep -qF "$selector_free_build" <<<"$inspection" || {
+     """},
+    {"scripts/test-release-package-inspection.sh",
+     ~S"""
+       build_status=0
+       grep -q 'mix hex.build' <<<"$staged" || build_status=$?
+       if [[ "$build_status" -ne 1 ]]; then
+     """},
+    {"scripts/test-release-package-inspection.sh",
+     ~S"""
+       inspection_script="$(rebind_staging)" || return
+       ASH_REPLICANT_PACKAGE_FIXTURE="$1" bash -euo pipefail -c "$inspection_script"
+     """},
+    {"scripts/test-release-package-inspection.sh",
+     ~S"""
+       staged="$(printf '%s\n' "$inspection" \
+         | sed -e 's|^package_dir=\$(mktemp -d)$|package_dir="$ASH_REPLICANT_PACKAGE_FIXTURE"|' \
+               -e "s|^${selector_free_build}\$|: # self-test staged fixture|")" || return
+     """},
+    {"scripts/test-postgres-readiness.sh",
+     ~S"""
+     exec_count="$(grep -c '^exec$' "$calls_file")" || [[ $? -eq 1 ]]
+     logs_count="$(grep -c '^logs$' "$calls_file")" || [[ $? -eq 1 ]]
+     if [[ "$exec_count" -ne 4 || "$logs_count" -ne 0 ]]; then
+     """}
+  ]
+
+  @package_inspection ~S"""
   package_dir=$(mktemp -d)
   trap 'rm -rf "$package_dir"' EXIT
   env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix hex.build --unpack --output "$package_dir"
 
-  for required in lib .formatter.exs mix.exs README.md LICENSE NOTICE CHANGELOG.md usage-rules.md \\
-    lib/ash_replicant/upgrade.ex lib/ash_replicant/upgrade/checkpoint.ex \\
+  for required in lib .formatter.exs mix.exs README.md LICENSE NOTICE CHANGELOG.md usage-rules.md \
+    lib/ash_replicant/upgrade.ex lib/ash_replicant/upgrade/checkpoint.ex \
     lib/mix/tasks/ash_replicant.upgrade.ex; do
     test -e "$package_dir/$required" || {
       echo "::error::Missing package path: $required"
@@ -90,7 +147,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     }
   done
 
-  if find "$package_dir" -type d \\( -name test -o -name .forge -o -name _build \\) -print -quit | grep -q .; then
+  residue="$(find "$package_dir" -type d \( -name test -o -name .forge -o -name _build \) -print -quit)"
+  if [[ -n "$residue" ]]; then
     echo "::error::Package contains test, Forge, or build residue"
     exit 1
   fi
@@ -100,12 +158,14 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     exit 1
   fi
 
-  if find "$package_dir" -type f \\( -name '.env*' -o -name '*.pem' -o -name '*.key' \\) -print -quit | grep -q .; then
+  credentials="$(find "$package_dir" -type f \( -name '.env*' -o -name '*.pem' -o -name '*.key' \) -print -quit)"
+  if [[ -n "$credentials" ]]; then
     echo "::error::Package contains a credential-shaped file"
     exit 1
   fi
 
-  if ! diff -u scripts/release-package-files.txt <(cd "$package_dir" && find . \\( -type f -o -type l \\) | sed 's|^./||' | LC_ALL=C sort); then
+  package_files="$(cd "$package_dir" && find . \( -type f -o -type l \) | sed 's|^./||' | LC_ALL=C sort)"
+  if ! diff -u scripts/release-package-files.txt - <<<"$package_files"; then
     echo "::error::Package files differ from the release allowlist"
     exit 1
   fi
@@ -355,6 +415,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       qualification_probes()
       drift_report_probes()
       publish_probes()
+      command_status_probes()
       ci_requirement_probes()
       github_lookup_probes()
       decoder_job_probes()
@@ -902,19 +963,58 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     end
   end
 
-  defp publish_probes do
-    for shell <- ["", "        shell: sh\n", "        shell: bash {0}\n"] do
+  defp command_status_probes do
+    defaults = "defaults:\n  run:\n    shell: bash\n\n"
+
+    for workflow <- [@workflow, @landing, @publish, @drift] do
+      for replacement <- ["", "defaults:\n  run:\n    shell: sh\n\n"] do
+        prepare_fixture()
+        replace_once!(workflow, defaults, replacement)
+        assert_invalid!()
+      end
+
+      for shell <- ["sh", "bash {0}", "python3", "echo {0}"] do
+        prepare_fixture()
+
+        replace_once!(
+          workflow,
+          "      - run:",
+          "      - shell: #{shell}\n        run:"
+        )
+
+        assert_invalid!()
+      end
+    end
+
+    for {path, guard} <- @command_status_guards do
       prepare_fixture()
-
-      mutate_job!(
-        "release-artifact",
-        "        shell: bash\n",
-        shell
-      )
-
+      replace_once!(path, guard, "removed_command_status_guard\n")
       assert_invalid!()
     end
 
+    for command <- ["residue=", "credentials=", "package_files="] do
+      prepare_fixture()
+      source = File.read!(fixture_path(@workflow))
+      [line] = Regex.run(~r/^          #{Regex.escape(command)}[^\n]*\n/m, source)
+      replace_once!(@workflow, line, "")
+      assert_invalid!()
+    end
+
+    for path <- Path.wildcard(Path.join(@source_root, "scripts/*.sh")) do
+      relative = Path.relative_to(path, @source_root)
+
+      for {old, replacement} <- [
+            {"#!/usr/bin/env bash\n", "#!/bin/sh\n"},
+            {"set -euo pipefail\n", "set -eu\n"}
+          ] do
+        prepare_fixture()
+        replace_once!(relative, old, replacement)
+        assert_invalid!()
+      end
+    end
+  end
+
+  defp publish_probes do
     for trigger <- ["push", "pull_request"] do
       prepare_fixture()
 
@@ -1145,6 +1245,9 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     name: Expression guard probe
     on:
       workflow_call:
+    defaults:
+      run:
+        shell: bash
     jobs:
       check:
         runs-on: ubuntu-24.04
@@ -1703,7 +1806,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     mutate_job!(
       "release-artifact",
       """
-                if ! diff -u scripts/release-package-files.txt <(cd "$package_dir" && find . \\( -type f -o -type l \\) | sed 's|^./||' | LC_ALL=C sort); then
+                if ! diff -u scripts/release-package-files.txt - <<<"$package_files"; then
                   echo "::error::Package files differ from the release allowlist"
                   exit 1
                 fi
@@ -1719,8 +1822,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       @workflow,
-      "permissions:\n",
-      "defaults:\n  run:\n    shell: echo {0}\n\npermissions:\n"
+      "    shell: bash\n",
+      "    shell: echo {0}\n"
     )
 
     assert_invalid!()
@@ -2412,6 +2515,12 @@ defmodule AshReplicant.ReleaseContractSelfTest do
         ] do
       File.mkdir_p!(Path.dirname(fixture_path(path)))
       File.cp!(Path.join(@source_root, path), fixture_path(path))
+    end
+
+    for source <- Path.wildcard(Path.join(@source_root, "scripts/*.sh")) do
+      destination = fixture_path(Path.relative_to(source, @source_root))
+      File.mkdir_p!(Path.dirname(destination))
+      File.cp!(source, destination)
     end
 
     for path <- [

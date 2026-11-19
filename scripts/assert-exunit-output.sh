@@ -19,7 +19,7 @@ if [[ ! -f "$output_file" ]]; then
   exit 2
 fi
 
-result_count="$(grep -c '^Result: ' "$output_file" || true)"
+result_count="$(grep -c '^Result: ' "$output_file")" || [[ $? -eq 1 ]]
 
 if [[ "$result_count" -ne 1 ]]; then
   echo "ExUnit evidence must contain exactly one Result line" >&2

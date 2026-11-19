@@ -255,6 +255,13 @@ push cannot exercise the report itself because its ref refusal is deliberate.
 
 ## Shipping a release
 
+All workflows declare `defaults: run: shell: bash`, and shell scripts use bash with
+`set -euo pipefail`. A failing test, build, audit, scan, publication or compared listing fails
+its check. Capture output with a standalone assignment before a comparison; never hide its
+status in process substitution or another command's argument. Optional grep counts permit
+status 1 (no match), while read errors fail. Only diagnostics after a known failure and
+cleanup use best-effort commands.
+
 Contributors prepare the version commit; infra owns every publication action and credential.
 Agents finish at `main` through the route in `AGENTS.md` under "Build and test". All builds and
 tests run on GitHub-hosted CI, never on the owner's Mac or the build box.
