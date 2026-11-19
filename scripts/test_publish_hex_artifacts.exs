@@ -20,6 +20,7 @@ PublishHexArtifacts.existing_package!(
   Hex.API.Package.get_anonymous(nil, "ash_replicant"),
   "ash_replicant"
 )
+
 :fresh =
   PublishHexArtifacts.release_state!(
     Hex.API.Release.get(nil, "ash_replicant", "999999.0.0"),
@@ -39,13 +40,20 @@ PublishHexArtifactsSelfTest.reject(
 )
 
 {:ok, {200, _, metadata}} = Hex.API.Release.get(nil, "ash_replicant", "1.6.3")
+
 {:held, true} =
   PublishHexArtifacts.release_state!({:ok, {200, [], metadata}}, "1.6.3", metadata["checksum"])
+
 :ok =
   PublishHexArtifacts.package_read_back!(
     Hex.Repo.get_tarball("hexpm", "ash_replicant", "1.6.3"),
     metadata["checksum"]
   )
+
+docs_response = Hex.API.ReleaseDocs.get(nil, "ash_replicant", "1.6.3")
+{:ok, {200, _, <<0x1F, 0x8B, _rest::binary>> = docs_bytes}} = docs_response
+docs_digest = :crypto.hash(:sha256, docs_bytes) |> Base.encode16(case: :lower)
+:ok = PublishHexArtifacts.docs_read_back!(docs_response, docs_digest)
 
 PublishHexArtifactsSelfTest.reject(
   "Hex release identity does not match the built package; publication refused",

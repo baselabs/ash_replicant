@@ -331,8 +331,8 @@ jobs:
   release-artifact:
     name: Selector-free docs and package
     runs-on: ubuntu-24.04
-    # Green run 44208487858: Selector-free docs and package 2m17s; 5-minute floor.
-    timeout-minutes: 5
+    # Green run 44554148819: Selector-free docs and package 4m39s, no cache restored.
+    timeout-minutes: 10
     env:
       MIX_ENV: dev
 

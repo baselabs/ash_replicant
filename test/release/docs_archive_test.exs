@@ -5,7 +5,9 @@ defmodule AshReplicant.DocsArchiveTest do
   @checker Path.expand("../../scripts/check-docs-archive.py", __DIR__)
 
   setup do
-    scratch = Path.join(System.tmp_dir!(), "ash-replicant-docs-#{System.unique_integer([:positive])}")
+    scratch =
+      Path.join(System.tmp_dir!(), "ash-replicant-docs-#{System.unique_integer([:positive])}")
+
     File.mkdir_p!(scratch)
     on_exit(fn -> File.rm_rf!(scratch) end)
     %{scratch: scratch}

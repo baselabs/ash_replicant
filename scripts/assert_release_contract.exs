@@ -183,7 +183,11 @@ defmodule AshReplicant.ReleaseContract do
 
     # Hex follows the docs API redirect to the anonymously served archive. Check
     # its bytes even if metadata says docs are absent; never replace served docs.
-    def docs_action!({:ok, {200, _headers, <<0x1F, 0x8B, _rest::binary>> = bytes}}, digest, _required?) do
+    def docs_action!(
+          {:ok, {200, _headers, <<0x1F, 0x8B, _rest::binary>> = bytes}},
+          digest,
+          _required?
+        ) do
       if Base.encode16(:crypto.hash(:sha256, bytes), case: :lower) == digest do
         :skip
       else
@@ -314,6 +318,7 @@ defmodule AshReplicant.ReleaseContract do
     Hex.API.Package.get_anonymous(nil, "ash_replicant"),
     "ash_replicant"
   )
+
   :fresh =
     PublishHexArtifacts.release_state!(
       Hex.API.Release.get(nil, "ash_replicant", "999999.0.0"),
@@ -333,13 +338,20 @@ defmodule AshReplicant.ReleaseContract do
   )
 
   {:ok, {200, _, metadata}} = Hex.API.Release.get(nil, "ash_replicant", "1.6.3")
+
   {:held, true} =
     PublishHexArtifacts.release_state!({:ok, {200, [], metadata}}, "1.6.3", metadata["checksum"])
+
   :ok =
     PublishHexArtifacts.package_read_back!(
       Hex.Repo.get_tarball("hexpm", "ash_replicant", "1.6.3"),
       metadata["checksum"]
     )
+
+  docs_response = Hex.API.ReleaseDocs.get(nil, "ash_replicant", "1.6.3")
+  {:ok, {200, _, <<0x1F, 0x8B, _rest::binary>> = docs_bytes}} = docs_response
+  docs_digest = :crypto.hash(:sha256, docs_bytes) |> Base.encode16(case: :lower)
+  :ok = PublishHexArtifacts.docs_read_back!(docs_response, docs_digest)
 
   PublishHexArtifactsSelfTest.reject(
     "Hex release identity does not match the built package; publication refused",
@@ -572,7 +584,8 @@ defmodule AshReplicant.ReleaseContract do
                 matching_docs(version, state, docs_digest, runner)
               end
 
-            _other -> {:error, "Hex release lookup failed; publication refused"}
+            _other ->
+              {:error, "Hex release lookup failed; publication refused"}
           end
 
         _other ->
@@ -1851,7 +1864,7 @@ defmodule AshReplicant.ReleaseContract do
         expected = if measured < 150, do: 5, else: div(2 * measured + 59, 60)
 
         assert(
-          run in ~w(44208487858 44214414813 44224060553 44227674373) and
+          run in ~w(44208487858 44214414813 44224060553 44227674373 44554148819) and
             measured > 0 and measured <= 2700 and is_integer(timeout) and timeout <= 90 and
             timeout == expected,
           "CI timeout must follow its slowest measured green run and infra's 5-minute floor"

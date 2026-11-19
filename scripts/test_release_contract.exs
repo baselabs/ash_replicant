@@ -998,7 +998,10 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     # Every other step, including actions and cleanup, must reject the publish key.
     source = File.read!(Path.join(@source_root, @publish))
-    steps = Regex.scan(~r/^      - .*?(?=^      - |^  [a-z][a-z0-9-]+:\n|\z)/ms, source) |> List.flatten()
+
+    steps =
+      Regex.scan(~r/^      - .*?(?=^      - |^  [a-z][a-z0-9-]+:\n|\z)/ms, source)
+      |> List.flatten()
 
     for step <- steps, not String.contains?(step, "name: Upload inspected archives") do
       prepare_fixture()
@@ -1055,7 +1058,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           {"scripts/build-docs-archive.exs", ":mix_hex_tarball.create_docs(files)"},
           {"scripts/check-docs-archive.py", "if names != source.keys():"},
           {"scripts/test_release_docs.py", "inspector.check(candidate, Path(directory))"},
-          {"scripts/test_publish_hex_artifacts.exs", "PublishHexArtifacts.package_read_back!"}
+          {"scripts/test_publish_hex_artifacts.exs", "PublishHexArtifacts.package_read_back!"},
+          {"scripts/test_publish_hex_artifacts.exs", "PublishHexArtifacts.docs_read_back!"}
         ] do
       prepare_fixture()
       replace_once!(path, old, "removed_guard")
@@ -1093,7 +1097,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       {@workflow, "compatibility", 37},
       {@workflow, "performance", 7},
       {@workflow, "decoder-old-majors", 7},
-      {@workflow, "release-artifact", 5},
+      {@workflow, "release-artifact", 10},
       {@landing, "qualified", 5},
       {@publish, "publish", 90},
       {@publish, "published-package", 90}
@@ -2050,8 +2054,6 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     replace_once!(
       "mix.exs",
       ~s(elixir: "~> 1.20.3"),
-    ~s(formatters: ["html", "markdown"]),
-    ~s({:ex_doc, "== 0.40.4", only: :dev, runtime: false}),
       ~s(elixir: "~> 1.18", release_contract_decoy: [elixir: "~> 1.20.3"])
     )
 

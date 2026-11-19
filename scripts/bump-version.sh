@@ -13,11 +13,13 @@
 #
 # Dependency-foundation lines (Ash / Replicant / AshOnetime ranges and locks)
 # are NEVER touched: the anchors below are exact strings, not a version sed.
-# Next steps after this script: commit the bump with named paths and land it
-# through kci/<commit> qualification. An owner dispatches Publish to Hex on
-# main after that commit's qualified run is green. After the Hex read-back,
-# the release operator tags that commit, creates the GitHub release, verifies
-# the public state, and runs the fresh consumer from Hex.
+# Next steps use AGENTS.md's CI-only Build and test route: qualify a topic
+# commit, then give kimosabe-land a fresh SHA never pushed to kci beforehand.
+# Infra asks an owner to dispatch Publish to Hex on main. A second dispatch
+# of that commit finishes a held release only with identical archive bytes.
+# After read-back, infra tags the commit and creates the GitHub release from
+# release-assets. The published consumer runs in CI after upload, without a
+# key or environment. This repository then records the verified package digest.
 set -euo pipefail
 
 new_version="${1:?usage: bump-version.sh NEW_VERSION [--check] (e.g. 1.2.0)}"
@@ -91,11 +93,11 @@ if [[ "$check" == true ]]; then
   echo 'bump-version: anchors PASS (no files changed)'
   exit 0
 fi
-echo 'bump-version: next: commit the bump with named paths and land it through kci/<commit>'
-echo "bump-version: qualification; main moves only on that commit's qualified check."
-echo "bump-version: an owner dispatches Publish to Hex on main after that qualified run is green."
-echo "bump-version: after the Hex read-back, the release operator tags v$new_version at that commit,"
-echo "bump-version:   then creates the GitHub release with target_commitish = the tag's sha."
-echo "bump-version:   scripts/verify-release.sh $new_version v$new_version checks the public state"
-echo "bump-version:   (served checksum, has_docs + hexdocs 200, GH target), then run"
-echo "bump-version:   scripts/test-fresh-consumer.sh --from-hex $new_version."
+echo 'bump-version: next: commit with named paths; use AGENTS.md, Build and test (CI only).'
+echo 'bump-version: kimosabe-land alone moves main; its head must never have been pushed to kci.'
+echo 'bump-version: infra asks an owner to dispatch Publish to Hex on the landed main commit.'
+echo 'bump-version: retry that same commit only after infra inspects an approved hold or interruption.'
+echo "bump-version: after read-back, infra tags v$new_version and creates the GitHub release"
+echo 'bump-version:   from release-assets (both archives and SHA256SUMS), after comparing Hex bytes.'
+echo 'bump-version:   publish.yml exercises the published consumer without a key or environment.'
+echo 'bump-version:   this repository records the verified digest through normal landing.'

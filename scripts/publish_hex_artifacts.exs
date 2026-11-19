@@ -123,7 +123,11 @@ defmodule PublishHexArtifacts do
 
   # Hex follows the docs API redirect to the anonymously served archive. Check
   # its bytes even if metadata says docs are absent; never replace served docs.
-  def docs_action!({:ok, {200, _headers, <<0x1F, 0x8B, _rest::binary>> = bytes}}, digest, _required?) do
+  def docs_action!(
+        {:ok, {200, _headers, <<0x1F, 0x8B, _rest::binary>> = bytes}},
+        digest,
+        _required?
+      ) do
     if Base.encode16(:crypto.hash(:sha256, bytes), case: :lower) == digest do
       :skip
     else

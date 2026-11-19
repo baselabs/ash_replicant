@@ -44,7 +44,8 @@ defmodule AshReplicant.ReleaseIdentity do
               matching_docs(version, state, docs_digest, runner)
             end
 
-          _other -> {:error, "Hex release lookup failed; publication refused"}
+          _other ->
+            {:error, "Hex release lookup failed; publication refused"}
         end
 
       _other ->

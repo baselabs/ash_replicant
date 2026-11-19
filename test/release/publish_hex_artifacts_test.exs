@@ -39,6 +39,7 @@ defmodule AshReplicant.PublishHexArtifactsTest do
         assert_raise RuntimeError, fn ->
           PublishHexArtifacts.existing_package!(result, "ash_replicant")
         end
+
       refute Exception.message(error) =~ "private-response-value"
     end
   end
@@ -92,7 +93,12 @@ defmodule AshReplicant.PublishHexArtifactsTest do
     assert Mix.Project.get()
 
     assert_raise RuntimeError, ~r/without a Mix project/, fn ->
-      PublishHexArtifacts.main(["ash_replicant", "0.0.0", "missing-package.tar", "missing-docs.tar.gz"])
+      PublishHexArtifacts.main([
+        "ash_replicant",
+        "0.0.0",
+        "missing-package.tar",
+        "missing-docs.tar.gz"
+      ])
     end
   end
 
@@ -200,8 +206,7 @@ defmodule AshReplicant.PublishHexArtifactsTest do
            "docs_digest = :crypto.hash(:sha256, package_bytes)"},
           {"== digest", "!= digest"},
           {"|> approved!()", "|> then(fn _ -> :ok end)"},
-          {~s|read_back!(Hex.API.Release.get(nil, name, version), version, digest)|,
-           ":ok"},
+          {~s|read_back!(Hex.API.Release.get(nil, name, version), version, digest)|, ":ok"},
           {@docs_read, ":ok"},
           {~s|package_read_back!(Hex.Repo.get_tarball("hexpm", name, version), digest)|, ":ok"},
           {~s|"checksum" => ^digest|, ~s|"checksum" => _checksum|},
@@ -245,7 +250,10 @@ defmodule AshReplicant.PublishHexArtifactsTest do
              ~s|read_back!(Hex.API.Release.get(nil, name, version), version, digest)|
 
     assert docs_case =~ @docs_read
-    assert docs_case =~ ~s|package_read_back!(Hex.Repo.get_tarball("hexpm", name, version), digest)|
+
+    assert docs_case =~
+             ~s|package_read_back!(Hex.Repo.get_tarball("hexpm", name, version), digest)|
+
     assert source =~ "docs_digest = :crypto.hash(:sha256, docs_bytes)"
     assert source =~ "Base.encode16(:crypto.hash(:sha256, bytes), case: :lower) == digest"
     assert source =~ ":skip = docs_action!(response, digest, true)"
