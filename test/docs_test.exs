@@ -9,9 +9,11 @@ defmodule AshReplicant.DocsTest do
 
   test "the tracked family docs exist and carry the binding rules" do
     for f <-
-          ~w(CLAUDE.md AGENTS.md README.md CHANGELOG.md usage-rules.md CONTRIBUTING.md LICENSE NOTICE) do
+          ~w(AGENTS.md README.md CHANGELOG.md usage-rules.md CONTRIBUTING.md LICENSE NOTICE) do
       assert File.exists?(f), "missing tracked doc: #{f}"
     end
+
+    refute File.exists?("CLAUDE.md"), "CLAUDE.md hides AGENTS.md from hosts that read it first"
 
     assert File.read!("AGENTS.md") =~ "tenant-blind"
     assert File.read!("AGENTS.md") =~ "value-free"

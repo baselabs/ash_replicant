@@ -8,6 +8,9 @@ full pre-October 28, 2026 wording is in `docs/reference/agent-history.md`.
 An Ash `Replicant.Sink` adapter (`replicant do ... end` Spark section) owning per-row multitenancy
 via `tenant:`, sensitive-attribute verification and resource resolution over the tenant-blind
 `replicant` CDC framework; it re-implements neither transport nor Ash's `multitenancy` DSL.
+Read `docs/CHARTER.md` next for mission, layering, scope and the effect-once model. Design work
+reads the sibling `../replicant` checkout, whose `AGENTS.md` holds the logical replication
+contract; `ash_postgres` comes from Hex.
 
 ## Architecture (realized)
 
@@ -173,6 +176,14 @@ bump (`scripts/bump-version.sh`) is an ordinary commit and lands the same way.
   a contract changes.
 - Tracked docs: root docs, `docs/` (charter, roadmap, ADRs, historical handoffs, instruction
   history) and the tour notebook. Local-only: `.kimosabe/`, `graphify-out/`.
+
+## graphify (code knowledge graph)
+
+`graphify-out/graph.json` maps this repo (tree-sitter AST; rebuilt by the git post-commit hook when
+installed; gitignored). Prefer `graphify query`, `graphify explain` and `graphify path` for orientation.
+Graph output is navigation, never evidence: Elixir edges are file-local only, so verify
+load-bearing claims against live code. `graphify update .` refreshes it after large uncommitted
+changes.
 
 ## CI/CD and releases
 
