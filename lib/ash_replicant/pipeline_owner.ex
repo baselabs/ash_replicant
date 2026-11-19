@@ -228,10 +228,11 @@ defmodule AshReplicant.PipelineOwner do
   def handle_info(
         {:census_result, token, %{state: _state, checks: _checks} = report},
         %{
-          census_run: %{
-            token: token,
-            timed_out?: false
-          } = run
+          census_run:
+            %{
+              token: token,
+              timed_out?: false
+            } = run
         } = state
       ) do
     cancel_census_run(run)
