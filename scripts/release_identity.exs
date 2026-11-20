@@ -3,14 +3,20 @@ defmodule AshReplicant.ReleaseIdentity do
   @moduledoc false
 
   def main(args, runner \\ &run/2) do
-    {version, package_digest, docs_digest} =
+    {version, package_digest, inspect_docs?} =
       case args do
-        [version] -> {version, nil, nil}
-        [version, package, docs] -> {version, digest(package), digest(docs)}
-        _ -> raise "usage: release_identity.exs VERSION [PACKAGE DOCS]"
+        [version] ->
+          {version, nil, false}
+
+        [version, package, docs] ->
+          unless docs_archive?(File.read!(docs)), do: raise("Built docs archive is invalid")
+          {version, digest(package), true}
+
+        _ ->
+          raise "usage: release_identity.exs VERSION [PACKAGE DOCS]"
       end
 
-    case check_archive(version, package_digest, docs_digest, runner) do
+    case check_archive(version, package_digest, inspect_docs?, runner) do
       {:ok, _state} -> IO.puts("Hex release identity: accepted")
       {:error, message} -> raise message
     end
@@ -19,8 +25,8 @@ defmodule AshReplicant.ReleaseIdentity do
   defp digest(path), do: :crypto.hash(:sha256, File.read!(path)) |> Base.encode16(case: :lower)
 
   # A nil digest is only the pre-build identity check. Publication always repeats
-  # this decision with both inspected SHA256s, before exposing a key.
-  def check_archive(version, digest, docs_digest, runner \\ &run/2) do
+  # this decision with the inspected package checksum and docs presence, before exposing a key.
+  def check_archive(version, digest, inspect_docs?, runner \\ &run/2) do
     args = [
       "--silent",
       "--show-error",
@@ -37,11 +43,11 @@ defmodule AshReplicant.ReleaseIdentity do
       {response, 0} ->
         case String.split(response, "\n") |> Enum.reverse() do
           ["404" | _body] ->
-            matching_docs(version, :fresh, docs_digest, runner)
+            present_docs(version, :fresh, inspect_docs?, runner)
 
           ["200" | body] ->
             with {:ok, state} <- held_release(Enum.reverse(body), version, digest) do
-              matching_docs(version, state, docs_digest, runner)
+              present_docs(version, state, inspect_docs?, runner)
             end
 
           _other ->
@@ -53,9 +59,9 @@ defmodule AshReplicant.ReleaseIdentity do
     end
   end
 
-  defp matching_docs(_version, state, nil, _runner), do: {:ok, state}
+  defp present_docs(_version, state, false, _runner), do: {:ok, state}
 
-  defp matching_docs(version, state, digest, runner) do
+  defp present_docs(version, state, true, runner) do
     args = [
       "--silent",
       "--show-error",
@@ -68,24 +74,23 @@ defmodule AshReplicant.ReleaseIdentity do
       "https://repo.hex.pm/docs/ash_replicant-" <> version <> ".tar.gz"
     ]
 
-    with :ok <- docs_match(runner.("curl", args), digest, state == {:held, true}) do
+    with :ok <- docs_present(runner.("curl", args)) do
       {:ok, state}
     end
   end
 
   # Split the HTTP status by byte offset: the archive is binary, not UTF-8 text.
-  def docs_match({response, 0}, digest, required?) when byte_size(response) >= 4 do
+  def docs_present({response, 0}) when is_binary(response) and byte_size(response) >= 4 do
     size = byte_size(response) - 4
-
     <<bytes::binary-size(size), status::binary>> = response
 
-    case {status, bytes} do
-      {"\n200", <<0x1F, 0x8B, _rest::binary>>} ->
-        if Base.encode16(:crypto.hash(:sha256, bytes), case: :lower) == digest,
+    case status do
+      "\n200" ->
+        if docs_archive?(bytes),
           do: :ok,
-          else: {:error, "Hex docs checksum differs from the built archive; publication refused"}
+          else: {:error, "Hex docs archive is malformed; publication refused"}
 
-      {"\n404", _body} when not required? ->
+      "\n404" ->
         :ok
 
       _other ->
@@ -93,8 +98,21 @@ defmodule AshReplicant.ReleaseIdentity do
     end
   end
 
-  def docs_match(_response, _digest, _required?),
+  def docs_present(_response),
     do: {:error, "Hex docs archive lookup failed; publication refused"}
+
+  def docs_archive?(<<0x1F, 0x8B, _rest::binary>> = bytes) do
+    case :erl_tar.extract({:binary, bytes}, [:compressed, :memory]) do
+      {:ok, entries} -> Enum.any?(entries, &match?({~c"index.html", _bytes}, &1))
+      _other -> false
+    end
+  rescue
+    _error -> false
+  catch
+    _kind, _reason -> false
+  end
+
+  def docs_archive?(_bytes), do: false
 
   defp held_release(body, version, digest) do
     # OTP's JSON decoder uses :null; Hex's Erlang API uses nil in the uploader.

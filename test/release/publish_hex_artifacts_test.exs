@@ -18,10 +18,8 @@ defmodule AshReplicant.PublishHexArtifactsTest do
   @script Path.expand("../../scripts/publish_hex_artifacts.exs", __DIR__)
   @version "1.2.0"
   @digest String.duplicate("a", 64)
-  @docs_bytes <<0x1F, 0x8B, 0xFF, "inspected docs">>
-  @docs_digest :crypto.hash(:sha256, @docs_bytes) |> Base.encode16(case: :lower)
-  @docs_read ~s|docs_read_back!(Hex.Repo.get_docs("hexpm", name, version), docs_digest)|
-  @docs_action ~s|docs_action!(Hex.Repo.get_docs("hexpm", name, version), docs_digest, docs?)|
+  @docs_read ~s|docs_read_back!(Hex.Repo.get_docs("hexpm", name, version))|
+  @docs_action ~s|docs_action!(Hex.Repo.get_docs("hexpm", name, version))|
   @read ~s|release_state!(Hex.API.Release.get(nil, name, version), version, digest)|
   @package ~s|Hex.API.Release.publish(nil, package_bytes, auth)|
   @docs ~s|Hex.API.ReleaseDocs.publish(nil, name, version, docs_bytes, auth)|
@@ -102,12 +100,13 @@ defmodule AshReplicant.PublishHexArtifactsTest do
     end
   end
 
-  test "read-back requires the exact live package, no retirement and served docs" do
-    assert :ok == PublishHexArtifacts.read_back!(response(200, metadata(true)), @version, @digest)
+  test "metadata read-back requires the exact package and no retirement" do
+    for docs? <- [false, true] do
+      assert :ok == PublishHexArtifacts.read_back!(response(200, metadata(docs?)), @version, @digest)
+    end
 
     incomplete = [
       response(404, %{}),
-      response(200, metadata(false)),
       response(200, Map.put(metadata(true), "checksum", String.duplicate("b", 64))),
       response(200, Map.put(metadata(true), "retirement", %{"reason" => "other"}))
     ]
@@ -129,48 +128,25 @@ defmodule AshReplicant.PublishHexArtifactsTest do
     end
   end
 
-  test "served docs skip only on byte identity, while authoritative absence uploads" do
-    for required? <- [false, true] do
-      assert :skip ==
-               PublishHexArtifacts.docs_action!(
-                 response(200, @docs_bytes),
-                 @docs_digest,
-                 required?
-               )
-
-      assert_raise RuntimeError, ~r/docs checksum differs/, fn ->
-        PublishHexArtifacts.docs_action!(
-          response(200, <<0x1F, 0x8B, "different">>),
-          @docs_digest,
-          required?
-        )
-      end
-    end
-
-    assert :upload == PublishHexArtifacts.docs_action!(response(404, %{}), @docs_digest, false)
-    assert :ok == PublishHexArtifacts.docs_read_back!(response(200, @docs_bytes), @docs_digest)
+  test "readable served docs are kept, absence uploads, and malformed read-back refuses" do
+    path = Path.join(System.tmp_dir!(), "publish-docs-#{System.unique_integer([:positive])}.tar.gz")
+    on_exit(fn -> File.rm(path) end)
+    :ok = :erl_tar.create(path, [{~c"index.html", "served docs"}], [:compressed])
+    bytes = File.read!(path)
+    assert :skip == PublishHexArtifacts.docs_action!(response(200, bytes))
+    assert :upload == PublishHexArtifacts.docs_action!(response(404, %{}))
+    assert :ok == PublishHexArtifacts.docs_read_back!(response(200, bytes))
 
     missing = [
       response(404, %{}),
       response(200, nil),
       response(200, ""),
-      response(200, "not gzip")
+      response(200, :zlib.gzip("not a tarball"))
     ]
 
     for result <- missing ++ failures() do
-      error =
-        assert_raise RuntimeError, fn ->
-          PublishHexArtifacts.docs_read_back!(result, @docs_digest)
-        end
-
+      error = assert_raise RuntimeError, fn -> PublishHexArtifacts.docs_read_back!(result) end
       refute Exception.message(error) =~ "private-response-value"
-    end
-
-    assert_raise RuntimeError, ~r/docs checksum differs/, fn ->
-      PublishHexArtifacts.docs_read_back!(
-        response(200, <<0x1F, 0x8B, "different">>),
-        @docs_digest
-      )
     end
   end
 
@@ -207,9 +183,7 @@ defmodule AshReplicant.PublishHexArtifactsTest do
           {"{:held, _docs?} ->", ":fresh ->"},
           {":upload ->", ":skip ->"},
           {@docs_action, ":skip"},
-          {"docs_digest = :crypto.hash(:sha256, docs_bytes)",
-           "docs_digest = :crypto.hash(:sha256, package_bytes)"},
-          {"== digest", "!= digest"},
+          {"if docs_archive?(bytes)", "if true"},
           {"|> approved!()", "|> then(fn _ -> :ok end)"},
           {~s|read_back!(Hex.API.Release.get(nil, name, version), version, digest)|, ":ok"},
           {@docs_read, ":ok"},
@@ -245,7 +219,7 @@ defmodule AshReplicant.PublishHexArtifactsTest do
     assert package_case =~ ":fresh ->\n        " <> @package
     assert package_case =~ "{:held, _docs?} ->\n        :ok"
     assert package_case =~ "|> accepted!(\"Hex package\")\n        |> approved!()"
-    assert docs_case =~ "{:held, docs?} ->"
+    assert docs_case =~ "{:held, _docs?} ->"
     assert docs_case =~ "case " <> @docs_action <> " do"
     assert docs_case =~ ":upload ->\n            " <> @docs
     assert docs_case =~ ":skip ->\n            :ok"
@@ -259,9 +233,10 @@ defmodule AshReplicant.PublishHexArtifactsTest do
     assert docs_case =~
              ~s|package_read_back!(Hex.Repo.get_tarball("hexpm", name, version), digest)|
 
-    assert source =~ "docs_digest = :crypto.hash(:sha256, docs_bytes)"
-    assert source =~ "Base.encode16(:crypto.hash(:sha256, bytes), case: :lower) == digest"
-    assert source =~ ":skip = docs_action!(response, digest, true)"
+    assert source =~ "if docs_archive?(bytes)"
+    assert source =~ ":erl_tar.extract({:binary, bytes}, [:compressed, :memory])"
+    assert source =~ "case docs_action!(response) do"
+    refute source =~ "docs_digest"
   end
 
   defp metadata(docs?) do

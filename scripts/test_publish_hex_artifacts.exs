@@ -52,16 +52,41 @@ PublishHexArtifactsSelfTest.reject(
 
 docs_response = Hex.Repo.get_docs("hexpm", "ash_replicant", "1.6.3")
 
-docs_digest =
-  case docs_response do
-    {:ok, {200, _, <<0x1F, 0x8B, _rest::binary>> = docs_bytes}} ->
-      :crypto.hash(:sha256, docs_bytes) |> Base.encode16(case: :lower)
+:skip = PublishHexArtifacts.docs_action!(docs_response)
+:ok = PublishHexArtifacts.docs_read_back!(docs_response)
+:upload =
+  PublishHexArtifacts.docs_action!(Hex.Repo.get_docs("hexpm", "ash_replicant", "999999.0.0"))
 
-    _other ->
-      raise "live Hex docs archive lookup failed"
-  end
+# These real published docs predate release.json: presence is sufficient for
+# upload planning, but provenance read-back must refuse them without an upload.
+{:ok, {200, _, docs_bytes}} = docs_response
+work = Path.join(System.tmp_dir!(), "ash-docs-live-#{System.unique_integer([:positive])}")
+File.mkdir!(work)
 
-:ok = PublishHexArtifacts.docs_read_back!(docs_response, docs_digest)
+try do
+  archive = Path.join(work, "docs.tar.gz")
+  File.write!(archive, docs_bytes)
+
+  {output, 1} =
+    System.cmd(
+      "python3",
+      [
+        "-I",
+        Path.join(__DIR__, "check-docs-archive.py"),
+        archive,
+        "--version",
+        "1.6.3",
+        "--commit",
+        System.fetch_env!("GITHUB_SHA")
+      ],
+      stderr_to_stdout: true
+    )
+
+  unless output =~ "requires top-level release.json",
+    do: raise("legacy docs refused for wrong reason")
+after
+  File.rm_rf!(work)
+end
 
 PublishHexArtifactsSelfTest.reject(
   "Hex release identity does not match the built package; publication refused",

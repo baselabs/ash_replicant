@@ -41,12 +41,37 @@ defmodule AshReplicant.ReleaseContract do
   scripts/inspect-release-package.sh "$RUNNER_TEMP/package.tar"
   test "$(git ls-remote --exit-code origin refs/heads/main | cut -f1)" = "$GITHUB_SHA"
   scripts/assert-release-tree.sh "$VERSION" "v$VERSION" --unreleased "$RUNNER_TEMP/package.tar" "$RUNNER_TEMP/hex-docs.tar.gz"
-  assets="$RUNNER_TEMP/release-assets"
-  mkdir "$assets"
-  cp "$RUNNER_TEMP/package.tar" "$assets/ash_replicant-$VERSION.tar"
-  cp "$RUNNER_TEMP/hex-docs.tar.gz" "$assets/ash_replicant-$VERSION-docs.tar.gz"
-  (cd "$assets" && sha256sum -- *.tar *.tar.gz > SHA256SUMS)
   chmod a-w "$RUNNER_TEMP/package.tar" "$RUNNER_TEMP/hex-docs.tar.gz"
+  """
+
+  @read_release_assets_script ~S"""
+  #!/usr/bin/env bash
+  # Keyless registry read-back: retain served docs and report their published commit.
+  set -euo pipefail
+  root="$(cd "$(dirname "$0")/.." && pwd)"
+  version="${1:?usage: read-release-assets.sh VERSION PACKAGE_ARCHIVE ASSET_DIRECTORY}"
+  package="${2:?}"
+  assets="${3:?}"
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && ! -e "$assets" ]] || exit 2
+  work="$(mktemp -d "${RUNNER_TEMP:?}/ash-replicant-readback.XXXXXX")"
+  trap 'rm -rf "$work"' EXIT
+  # Refresh the actual default branch; missing or shallow history fails inspection.
+  git -C "$root" fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
+  fetch_archive() {
+    local url="$1" output="$2" status
+    status="$(curl --silent --show-error --connect-timeout 10 --max-time 60 \
+      --output "$output" --write-out '%{http_code}' "$url")"
+    [[ "$status" == 200 ]] || { echo 'Hex archive read-back is unavailable' >&2; exit 1; }
+  }
+  fetch_archive "https://repo.hex.pm/tarballs/ash_replicant-$version.tar" "$work/package.tar"
+  cmp "$package" "$work/package.tar"
+  fetch_archive "https://repo.hex.pm/docs/ash_replicant-$version.tar.gz" "$work/docs.tar.gz"
+  python3 -I "$root/scripts/check-docs-archive.py" "$work/docs.tar.gz" \
+    --version "$version" --commit "${GITHUB_SHA:?}" --repository "$root" \
+    --commit-output "$work/published-commit" --assets "$assets" --package-archive "$work/package.tar"
+  published_commit="$(cat "$work/published-commit")"
+  printf 'published_commit=%s\n' "$published_commit" >> "${GITHUB_OUTPUT:?}"
+  echo "Release read-back: published commit $published_commit"
   """
 
   @published_postgres_run ~S"""
@@ -77,7 +102,6 @@ defmodule AshReplicant.ReleaseContract do
       # A missing release alone cannot prove the package name already exists.
       existing_package!(Hex.API.Package.get_anonymous(nil, name), name)
       digest = :crypto.hash(:sha256, package_bytes) |> Base.encode16(case: :lower)
-      docs_digest = :crypto.hash(:sha256, docs_bytes) |> Base.encode16(case: :lower)
 
       case release_state!(Hex.API.Release.get(nil, name, version), version, digest) do
         :fresh ->
@@ -91,8 +115,8 @@ defmodule AshReplicant.ReleaseContract do
 
       # Re-read after the package decision: docs may have appeared in the meantime.
       case release_state!(Hex.API.Release.get(nil, name, version), version, digest) do
-        {:held, docs?} ->
-          case docs_action!(Hex.Repo.get_docs("hexpm", name, version), docs_digest, docs?) do
+        {:held, _docs?} ->
+          case docs_action!(Hex.Repo.get_docs("hexpm", name, version)) do
             :upload ->
               Hex.API.ReleaseDocs.publish(nil, name, version, docs_bytes, auth)
               |> accepted!("Hex docs")
@@ -108,7 +132,7 @@ defmodule AshReplicant.ReleaseContract do
 
       read_back!(Hex.API.Release.get(nil, name, version), version, digest)
       package_read_back!(Hex.Repo.get_tarball("hexpm", name, version), digest)
-      docs_read_back!(Hex.Repo.get_docs("hexpm", name, version), docs_digest)
+      docs_read_back!(Hex.Repo.get_docs("hexpm", name, version))
     end
 
     def main(_argv),
@@ -165,8 +189,8 @@ defmodule AshReplicant.ReleaseContract do
 
     def read_back!(response, version, digest) do
       case release_state!(response, version, digest) do
-        {:held, true} -> :ok
-        _other -> raise "Hex package or docs are not served; inspect public state before retrying"
+        {:held, _docs?} -> :ok
+        _other -> raise "Hex package is not served; inspect public state before retrying"
       end
     end
 
@@ -183,27 +207,36 @@ defmodule AshReplicant.ReleaseContract do
 
     # Read raw bytes from the repository API. ReleaseDocs.get decodes API responses
     # and can return nil for a successful binary response. Never replace served docs.
-    def docs_action!(
-          {:ok, {200, _headers, <<0x1F, 0x8B, _rest::binary>> = bytes}},
-          digest,
-          _required?
-        ) do
-      if Base.encode16(:crypto.hash(:sha256, bytes), case: :lower) == digest do
-        :skip
-      else
-        raise "Hex docs checksum differs from the built archive; publication refused"
+    def docs_action!({:ok, {200, _headers, bytes}}) do
+      if docs_archive?(bytes),
+        do: :skip,
+        else: raise("Hex docs archive is malformed; publication refused")
+    end
+
+    def docs_action!({:ok, {404, _headers, _body}}), do: :upload
+
+    def docs_action!(_response),
+      do: raise("Hex docs archive is unavailable; inspect public state before retrying")
+
+    def docs_read_back!(response) do
+      case docs_action!(response) do
+        :skip -> :ok
+        :upload -> raise "Hex docs archive is unavailable; inspect public state before retrying"
       end
     end
 
-    def docs_action!({:ok, {404, _headers, _body}}, _digest, false), do: :upload
-
-    def docs_action!(_response, _digest, _required?),
-      do: raise("Hex docs archive is unavailable; inspect public state before retrying")
-
-    def docs_read_back!(response, digest) do
-      :skip = docs_action!(response, digest, true)
-      :ok
+    def docs_archive?(<<0x1F, 0x8B, _rest::binary>> = bytes) do
+      case :erl_tar.extract({:binary, bytes}, [:compressed, :memory]) do
+        {:ok, entries} -> Enum.any?(entries, &match?({~c"index.html", _bytes}, &1))
+        _other -> false
+      end
+    rescue
+      _error -> false
+    catch
+      _kind, _reason -> false
     end
+
+    def docs_archive?(_bytes), do: false
   end
 
   PublishHexArtifacts.main(System.argv())
@@ -211,14 +244,18 @@ defmodule AshReplicant.ReleaseContract do
 
   @docs_inspection_script ~S'''
   #!/usr/bin/env python3
-  """Inspect a Hex docs archive against every regular file in its source tree."""
+  """Inspect rendered or served Hex docs and their release provenance."""
 
   import argparse
   import hashlib
+  import json
   from pathlib import Path, PurePosixPath
   import re
+  import shutil
+  import subprocess
   import sys
   import tarfile
+  import zlib
 
 
   SEMVER = re.compile(
@@ -227,24 +264,66 @@ defmodule AshReplicant.ReleaseContract do
   )
 
 
-  def check(archive, directory):
-      if not directory.is_dir():
-          raise ValueError("Documentation source directory is missing.")
-      # mix hex.publish lists the tree with Path.wildcard/1, which matches no
-      # file or directory whose name starts with a dot.
-      source = {}
-      for path in directory.rglob("*"):
-          if path.is_symlink() or not (path.is_file() or path.is_dir()):
-              raise ValueError("Documentation contains a link or special entry.")
-          relative = path.relative_to(directory)
-          if path.is_file() and not any(part.startswith(".") for part in relative.parts):
-              source[relative.as_posix()] = path
+  def provenance(payload, package, version, commit, repository):
+      def unique_fields(pairs):
+          result = {}
+          for key, value in pairs:
+              if key in result:
+                  raise ValueError("Duplicate release.json field.")
+              result[key] = value
+          return result
+
+      try:
+          release = json.loads(payload, object_pairs_hook=unique_fields)
+      except (UnicodeError, json.JSONDecodeError) as error:
+          raise ValueError("Invalid release.json JSON.") from error
+      if (not isinstance(release, dict) or set(release) != {"package", "version", "commit"}
+              or release["package"] != package or release["version"] != version
+              or not isinstance(release["commit"], str)
+              or not re.fullmatch(r"[0-9a-f]{40}", release["commit"])):
+          raise ValueError("Invalid release.json identity.")
+      published = release["commit"]
+      if repository is None:
+          if published != commit:
+              raise ValueError("Built docs commit differs from the dispatched commit.")
+      else:
+          def git(*args):
+              result = subprocess.run(["git", "-C", str(repository), *args],
+                                      capture_output=True, check=False)
+              if result.returncode:
+                  raise ValueError("Docs provenance is outside available default-branch history.")
+              return result.stdout.strip()
+
+          if git("rev-parse", "--is-shallow-repository") != b"false":
+              raise ValueError("Complete default-branch history is required.")
+          git("show-ref", "--verify", "refs/remotes/origin/main")
+          git("merge-base", "--is-ancestor", commit, "refs/remotes/origin/main")
+          git("merge-base", "--is-ancestor", published, commit)
+      return published
+
+
+  def check(archive, directory=None, *, package="ash_replicant", version, commit, repository=None):
+      if not SEMVER.fullmatch(version) or not re.fullmatch(r"[0-9a-f]{40}", commit):
+          raise ValueError("Expected release identity is invalid.")
+      source = None
+      if directory is not None:
+          if not directory.is_dir():
+              raise ValueError("Documentation source directory is missing.")
+          # Hex excludes dot-prefixed files and directories, including ExDoc's manifests.
+          source = {}
+          for path in directory.rglob("*"):
+              if path.is_symlink() or not (path.is_file() or path.is_dir()):
+                  raise ValueError("Documentation contains a link or special entry.")
+              relative = path.relative_to(directory)
+              if path.is_file() and not any(part.startswith(".") for part in relative.parts):
+                  source[relative.as_posix()] = path
       names = set()
       # Hex emits a fixed gzip header: no original filename, timestamp, or OS.
       with archive.open("rb") as stream:
           if stream.read(10) != bytes((31, 139, 8, 0, 0, 0, 0, 0, 0, 0)):
               raise ValueError("Docs gzip header must have no name or mtime.")
       ordered = []
+      release = None
       with tarfile.open(archive, "r:gz") as packed:
           for member in packed:
               path = PurePosixPath(member.name)
@@ -262,30 +341,74 @@ defmodule AshReplicant.ReleaseContract do
                   raise ValueError(f"Duplicate docs archive member: {member.name!r}")
               names.add(member.name)
               ordered.append(member.name)
-              if member.name not in source:
-                  raise ValueError(f"Docs archive member has no source: {member.name!r}")
-              if packed.extractfile(member).read() != source[member.name].read_bytes():
-                  raise ValueError(f"Docs archive bytes differ from source: {member.name!r}")
+              payload = packed.extractfile(member).read()
+              if len(payload) != member.size:
+                  raise ValueError("Truncated docs archive member.")
+              if member.name == "release.json":
+                  release = payload
+              if source is not None:
+                  if member.name not in source:
+                      raise ValueError(f"Docs archive member has no source: {member.name!r}")
+                  if payload != source[member.name].read_bytes():
+                      raise ValueError(f"Docs archive bytes differ from source: {member.name!r}")
       if not {"index.html", "readme.html"} <= names:
           raise ValueError("Docs archive requires top-level index.html and readme.html.")
-      if names != source.keys():
+      if release is None:
+          raise ValueError("Docs archive requires top-level release.json.")
+      published = provenance(release, package, version, commit, repository)
+      if source is not None and names != source.keys():
           raise ValueError(f"Docs archive omits source files: {sorted(source.keys() - names)!r}")
       if ordered != sorted(ordered):
           raise ValueError("Docs archive entries must be sorted.")
       with archive.open("rb") as stream:
           digest = hashlib.file_digest(stream, "sha256").hexdigest()
-      print(f"DOCS OK: {len(names)} regular files; all bytes match the source tree")
+      print(f"DOCS OK: {len(names)} regular files; contents and release provenance inspected")
       print(f"SHA256: {digest}")
+      print(f"Published commit: {published}")
+      return published
+
+
+  def retain_assets(archive, package_archive, assets, version, published):
+      # The caller passes the downloaded docs, never the local rendering.
+      assets.mkdir()
+      try:
+          paths = [assets / f"ash_replicant-{version}.tar", assets / f"ash_replicant-{version}-docs.tar.gz"]
+          shutil.copyfile(package_archive, paths[0])
+          shutil.copyfile(archive, paths[1])
+          sums = ""
+          for path in paths:
+              with path.open("rb") as stream:
+                  digest = hashlib.file_digest(stream, "sha256").hexdigest()
+              sums += f"{digest}  {path.name}\n"
+          (assets / "SHA256SUMS").write_text(sums)
+          (assets / "published-commit.txt").write_text(published + "\n")
+      except BaseException:
+          shutil.rmtree(assets)
+          raise
 
 
   def main():
       parser = argparse.ArgumentParser(description=__doc__)
       parser.add_argument("archive", type=Path)
-      parser.add_argument("directory", type=Path)
+      parser.add_argument("directory", type=Path, nargs="?")
+      parser.add_argument("--package", default="ash_replicant")
+      parser.add_argument("--version", required=True)
+      parser.add_argument("--commit", required=True)
+      parser.add_argument("--repository", type=Path)
+      parser.add_argument("--commit-output", type=Path)
+      parser.add_argument("--assets", type=Path)
+      parser.add_argument("--package-archive", type=Path)
       args = parser.parse_args()
       try:
-          check(args.archive, args.directory)
-      except (OSError, ValueError, tarfile.TarError) as error:
+          published = check(args.archive, args.directory, package=args.package, version=args.version,
+                            commit=args.commit, repository=args.repository)
+          if args.assets:
+              if args.repository is None or args.package_archive is None:
+                  raise ValueError("Release assets require served docs and default-branch history.")
+              retain_assets(args.archive, args.package_archive, args.assets, args.version, published)
+          if args.commit_output:
+              args.commit_output.write_text(published + "\n")
+      except (OSError, ValueError, tarfile.TarError, EOFError, zlib.error) as error:
           print(f"Docs archive refused: {error}", file=sys.stderr)
           return 1
       return 0
@@ -350,16 +473,41 @@ defmodule AshReplicant.ReleaseContract do
 
   docs_response = Hex.Repo.get_docs("hexpm", "ash_replicant", "1.6.3")
 
-  docs_digest =
-    case docs_response do
-      {:ok, {200, _, <<0x1F, 0x8B, _rest::binary>> = docs_bytes}} ->
-        :crypto.hash(:sha256, docs_bytes) |> Base.encode16(case: :lower)
+  :skip = PublishHexArtifacts.docs_action!(docs_response)
+  :ok = PublishHexArtifacts.docs_read_back!(docs_response)
+  :upload =
+    PublishHexArtifacts.docs_action!(Hex.Repo.get_docs("hexpm", "ash_replicant", "999999.0.0"))
 
-      _other ->
-        raise "live Hex docs archive lookup failed"
-    end
+  # These real published docs predate release.json: presence is sufficient for
+  # upload planning, but provenance read-back must refuse them without an upload.
+  {:ok, {200, _, docs_bytes}} = docs_response
+  work = Path.join(System.tmp_dir!(), "ash-docs-live-#{System.unique_integer([:positive])}")
+  File.mkdir!(work)
 
-  :ok = PublishHexArtifacts.docs_read_back!(docs_response, docs_digest)
+  try do
+    archive = Path.join(work, "docs.tar.gz")
+    File.write!(archive, docs_bytes)
+
+    {output, 1} =
+      System.cmd(
+        "python3",
+        [
+          "-I",
+          Path.join(__DIR__, "check-docs-archive.py"),
+          archive,
+          "--version",
+          "1.6.3",
+          "--commit",
+          System.fetch_env!("GITHUB_SHA")
+        ],
+        stderr_to_stdout: true
+      )
+
+    unless output =~ "requires top-level release.json",
+      do: raise("legacy docs refused for wrong reason")
+  after
+    File.rm_rf!(work)
+  end
 
   PublishHexArtifactsSelfTest.reject(
     "Hex release identity does not match the built package; publication refused",
@@ -382,6 +530,9 @@ defmodule AshReplicant.ReleaseContract do
   import gzip
   import importlib.util
   import io
+  import hashlib
+  import json
+  import subprocess
   import sys
   import tarfile
   import tempfile
@@ -393,7 +544,15 @@ defmodule AshReplicant.ReleaseContract do
   inspector = importlib.util.module_from_spec(spec)
   spec.loader.exec_module(inspector)
   archive, directory = sys.argv[1:]
-  inspector.check(Path(archive), Path(directory))
+  identity = json.loads((Path(directory) / "release.json").read_text())
+  version, commit = identity["version"], identity["commit"]
+
+
+  def check(candidate, tree=None, **kwargs):
+      return inspector.check(Path(candidate), tree, version=version, commit=commit, **kwargs)
+
+
+  check(archive, Path(directory))
 
   with tempfile.TemporaryDirectory(prefix="ash-replicant-docs-check-") as work:
       reasons = {
@@ -437,22 +596,121 @@ defmodule AshReplicant.ReleaseContract do
           compressed = gzip.compress(packed.getvalue(), mtime=0)
           candidate.write_bytes(bytes((31, 139, 8, 0, 0, 0, 0, 0, 0, 0)) + compressed[10:])
           if mutation == "clean":
-              inspector.check(candidate, Path(directory))
+              check(candidate, Path(directory))
               continue
           try:
-              inspector.check(candidate, Path(directory))
+              check(candidate, Path(directory))
           except ValueError as error:
               if reasons[mutation] not in str(error):
                   raise AssertionError(f"wrong rejection for {mutation}: {error}") from error
           else:
               raise AssertionError(f"docs inspector accepted {mutation}")
 
-  print("docs archive inspection: real docs and six negative archives PASS")
+  # Build real archive variants from rendered output, and exercise actual Git ancestry.
+  with tempfile.TemporaryDirectory(prefix="ash-replicant-docs-provenance-") as scratch:
+      work = Path(scratch)
+      repo = work / "repo"
+      repo.mkdir()
+
+      def git(*args):
+          return subprocess.run(["git", "-C", str(repo), *args], check=True,
+                                capture_output=True).stdout.decode().strip()
+
+      git("init", "--initial-branch=main")
+      git("config", "user.name", "Docs provenance test")
+      git("config", "user.email", "docs@example.invalid")
+      git("commit", "--allow-empty", "-m", "Ancestor")
+      ancestor = git("rev-parse", "HEAD")
+      git("commit", "--allow-empty", "-m", "Dispatch")
+      dispatched = git("rev-parse", "HEAD")
+      git("commit", "--allow-empty", "-m", "Descendant")
+      descendant = git("rev-parse", "HEAD")
+      git("update-ref", "refs/remotes/origin/main", dispatched)
+      git("checkout", "--orphan", "unrelated")
+      git("commit", "--allow-empty", "-m", "Outside default history")
+      unrelated = git("rev-parse", "HEAD")
+
+      def variant(release, *, omit=False):
+          candidate = work / "served.tar.gz"
+          packed = io.BytesIO()
+          with tarfile.open(archive, "r:gz") as original, tarfile.open(fileobj=packed, mode="w") as output:
+              for entry in original:
+                  payload = original.extractfile(entry).read()
+                  if entry.name == "release.json":
+                      if omit:
+                          continue
+                      payload = release if isinstance(release, bytes) else json.dumps(release).encode()
+                      entry.size = len(payload)
+                  output.addfile(entry, io.BytesIO(payload))
+          compressed = gzip.compress(packed.getvalue(), mtime=0)
+          candidate.write_bytes(bytes((31, 139, 8, 0, 0, 0, 0, 0, 0, 0)) + compressed[10:])
+          return candidate
+
+      def served(candidate, **kwargs):
+          return inspector.check(candidate, version=version, commit=dispatched, repository=repo, **kwargs)
+
+      for accepted in [ancestor, dispatched]:
+          assert served(variant({**identity, "commit": accepted})) == accepted
+
+      negatives = [
+          ({**identity, "package": "other"}, "identity"),
+          ({**identity, "version": "0.0.0"}, "identity"),
+          ({**identity, "commit": 1}, "identity"),
+          ({**identity, "commit": "bad"}, "identity"),
+          ({**identity, "extra": True}, "identity"),
+          ({"package": "ash_replicant", "version": version}, "identity"),
+          ({**identity, "commit": descendant}, "outside available"),
+          ({**identity, "commit": unrelated}, "outside available"),
+          ({**identity, "commit": "0" * 40}, "outside available"),
+          (b"not JSON", "JSON"),
+          (b'{"package": "ash_replicant", "package": "other"}', "Duplicate"),
+          ([], "identity"),
+      ]
+      for release, reason in negatives:
+          try:
+              served(variant(release))
+          except ValueError as error:
+              assert reason in str(error), (reason, error)
+          else:
+              raise AssertionError("served docs accepted invalid release provenance")
+
+      for mode, reason in [("missing", "requires top-level release.json"),
+                           ("history", "outside available"), ("shallow", "Complete default-branch")]:
+          candidate = variant({**identity, "commit": ancestor}, omit=mode == "missing")
+          if mode == "history":
+              git("update-ref", "-d", "refs/remotes/origin/main")
+          if mode == "shallow":
+              git("update-ref", "refs/remotes/origin/main", dispatched)
+              (repo / ".git/shallow").write_text(ancestor + "\n")
+          try:
+              served(candidate)
+          except ValueError as error:
+              assert reason in str(error), (reason, error)
+          else:
+              raise AssertionError("served docs accepted missing provenance or history")
+      (repo / ".git/shallow").unlink()
+
+      # The ancestor archive differs from this job's rendering. Retention uses its bytes.
+      candidate = variant({**identity, "commit": ancestor})
+      published = served(candidate)
+      package = work / "package.tar"
+      package.write_bytes(b"inspected package")
+      assets = work / "release-assets"
+      inspector.retain_assets(candidate, package, assets, version, published)
+      retained = assets / f"ash_replicant-{version}-docs.tar.gz"
+      assert retained.read_bytes() == candidate.read_bytes()
+      assert retained.read_bytes() != Path(archive).read_bytes()
+      sums = (assets / "SHA256SUMS").read_text()
+      assert hashlib.sha256(candidate.read_bytes()).hexdigest() + "  " + retained.name in sums
+      assert (assets / "published-commit.txt").read_text().strip() == ancestor
+
+  print("docs inspection: real renders, negative archives, provenance, ancestry and served assets PASS")
   """
 
   @upload_archive_checks ~S"""
   trap 'rm -rf "$RUNNER_TEMP/package.tar" "$RUNNER_TEMP/hex-docs.tar.gz" "$RUNNER_TEMP/hex-docs.tar.gz.rendered"' EXIT
-  python3 -I scripts/check-docs-archive.py "$RUNNER_TEMP/hex-docs.tar.gz" "$RUNNER_TEMP/hex-docs.tar.gz.rendered"
+  version="$(sed -n 's/^  @version "\(.*\)"$/\1/p' mix.exs)"
+  python3 -I scripts/check-docs-archive.py "$RUNNER_TEMP/hex-docs.tar.gz" "$RUNNER_TEMP/hex-docs.tar.gz.rendered" --version "$version" --commit "$GITHUB_SHA"
   env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION scripts/with-release-runtime.sh mix hex.build --output "$RUNNER_TEMP/package.tar"
   scripts/inspect-release-package.sh "$RUNNER_TEMP/package.tar"
   python3 -B scripts/test_release_docs.py "$RUNNER_TEMP/hex-docs.tar.gz" "$RUNNER_TEMP/hex-docs.tar.gz.rendered"
@@ -462,7 +720,7 @@ defmodule AshReplicant.ReleaseContract do
 
   @docs_build_script ~S"""
   #!/usr/bin/env bash
-  # Two independent source trees, locked dependencies, and byte-identical rendered docs.
+  # Render once with locked dependencies; inspect the archive and its release provenance.
   set -euo pipefail
   root="$(cd "$(dirname "$0")/.." && pwd)"
   output="${1:?usage: build-release-docs.sh ABSOLUTE_ARCHIVE_PATH}"
@@ -478,24 +736,32 @@ defmodule AshReplicant.ReleaseContract do
   trap cleanup EXIT
   unset ASH_REPLICANT_ASH_VERSION ASH_REPLICANT_REPLICANT_VERSION ASH_REPLICANT_ONETIME_VERSION
   export MIX_ENV=dev
-  for build in first second; do
-    tree="$work/$build"
-    mkdir "$tree"
-    git -C "$root" archive HEAD | tar -x -C "$tree"
-    (
-      cd "$tree"
-      mix deps.get --check-locked
-      mix docs --warnings-as-errors
-    )
-    (cd "$work" && mix run --no-mix-exs "$root/scripts/build-docs-archive.exs" \
-      "$tree/doc" "$work/$build.tar.gz")
-    python3 -I "$root/scripts/check-docs-archive.py" "$work/$build.tar.gz" "$tree/doc"
-  done
-  cmp "$work/first.tar.gz" "$work/second.tar.gz"
-  cp "$work/first.tar.gz" "$output"
-  cp -R "$work/first/doc" "$output.rendered"
+  tree="$work/source"
+  mkdir "$tree"
+  git -C "$root" archive HEAD | tar -x -C "$tree"
+  (
+    cd "$tree"
+    mix deps.get --check-locked
+    mix docs --warnings-as-errors
+  )
+  version="$(sed -n 's/^  @version "\(.*\)"$/\1/p' "$tree/mix.exs")"
+  commit="$(git -C "$root" rev-parse HEAD)"
+  [[ "$commit" == "${GITHUB_SHA:?}" ]] || exit 1
+  python3 - "$tree/doc/release.json" "$version" "$commit" <<'PROVENANCE'
+  import json
+  from pathlib import Path
+  import sys
+  path, version, commit = sys.argv[1:]
+  Path(path).write_text(json.dumps({"package": "ash_replicant", "version": version, "commit": commit}) + "\n")
+  PROVENANCE
+  (cd "$work" && mix run --no-mix-exs "$root/scripts/build-docs-archive.exs" \
+    "$tree/doc" "$work/docs.tar.gz")
+  python3 -I "$root/scripts/check-docs-archive.py" "$work/docs.tar.gz" "$tree/doc" \
+    --version "$version" --commit "$commit"
+  cp "$work/docs.tar.gz" "$output"
+  cp -R "$tree/doc" "$output.rendered"
   complete=true
-  echo 'release docs: independent renders and archives are byte-identical'
+  echo 'release docs: rendered once; archive contents and release provenance inspected'
   """
 
   @docs_archive_builder ~S"""
@@ -551,14 +817,20 @@ defmodule AshReplicant.ReleaseContract do
     @moduledoc false
 
     def main(args, runner \\ &run/2) do
-      {version, package_digest, docs_digest} =
+      {version, package_digest, inspect_docs?} =
         case args do
-          [version] -> {version, nil, nil}
-          [version, package, docs] -> {version, digest(package), digest(docs)}
-          _ -> raise "usage: release_identity.exs VERSION [PACKAGE DOCS]"
+          [version] ->
+            {version, nil, false}
+
+          [version, package, docs] ->
+            unless docs_archive?(File.read!(docs)), do: raise("Built docs archive is invalid")
+            {version, digest(package), true}
+
+          _ ->
+            raise "usage: release_identity.exs VERSION [PACKAGE DOCS]"
         end
 
-      case check_archive(version, package_digest, docs_digest, runner) do
+      case check_archive(version, package_digest, inspect_docs?, runner) do
         {:ok, _state} -> IO.puts("Hex release identity: accepted")
         {:error, message} -> raise message
       end
@@ -567,8 +839,8 @@ defmodule AshReplicant.ReleaseContract do
     defp digest(path), do: :crypto.hash(:sha256, File.read!(path)) |> Base.encode16(case: :lower)
 
     # A nil digest is only the pre-build identity check. Publication always repeats
-    # this decision with both inspected SHA256s, before exposing a key.
-    def check_archive(version, digest, docs_digest, runner \\ &run/2) do
+    # this decision with the inspected package checksum and docs presence, before exposing a key.
+    def check_archive(version, digest, inspect_docs?, runner \\ &run/2) do
       args = [
         "--silent",
         "--show-error",
@@ -585,11 +857,11 @@ defmodule AshReplicant.ReleaseContract do
         {response, 0} ->
           case String.split(response, "\n") |> Enum.reverse() do
             ["404" | _body] ->
-              matching_docs(version, :fresh, docs_digest, runner)
+              present_docs(version, :fresh, inspect_docs?, runner)
 
             ["200" | body] ->
               with {:ok, state} <- held_release(Enum.reverse(body), version, digest) do
-                matching_docs(version, state, docs_digest, runner)
+                present_docs(version, state, inspect_docs?, runner)
               end
 
             _other ->
@@ -601,9 +873,9 @@ defmodule AshReplicant.ReleaseContract do
       end
     end
 
-    defp matching_docs(_version, state, nil, _runner), do: {:ok, state}
+    defp present_docs(_version, state, false, _runner), do: {:ok, state}
 
-    defp matching_docs(version, state, digest, runner) do
+    defp present_docs(version, state, true, runner) do
       args = [
         "--silent",
         "--show-error",
@@ -616,24 +888,23 @@ defmodule AshReplicant.ReleaseContract do
         "https://repo.hex.pm/docs/ash_replicant-" <> version <> ".tar.gz"
       ]
 
-      with :ok <- docs_match(runner.("curl", args), digest, state == {:held, true}) do
+      with :ok <- docs_present(runner.("curl", args)) do
         {:ok, state}
       end
     end
 
     # Split the HTTP status by byte offset: the archive is binary, not UTF-8 text.
-    def docs_match({response, 0}, digest, required?) when byte_size(response) >= 4 do
+    def docs_present({response, 0}) when is_binary(response) and byte_size(response) >= 4 do
       size = byte_size(response) - 4
-
       <<bytes::binary-size(size), status::binary>> = response
 
-      case {status, bytes} do
-        {"\n200", <<0x1F, 0x8B, _rest::binary>>} ->
-          if Base.encode16(:crypto.hash(:sha256, bytes), case: :lower) == digest,
+      case status do
+        "\n200" ->
+          if docs_archive?(bytes),
             do: :ok,
-            else: {:error, "Hex docs checksum differs from the built archive; publication refused"}
+            else: {:error, "Hex docs archive is malformed; publication refused"}
 
-        {"\n404", _body} when not required? ->
+        "\n404" ->
           :ok
 
         _other ->
@@ -641,8 +912,21 @@ defmodule AshReplicant.ReleaseContract do
       end
     end
 
-    def docs_match(_response, _digest, _required?),
+    def docs_present(_response),
       do: {:error, "Hex docs archive lookup failed; publication refused"}
+
+    def docs_archive?(<<0x1F, 0x8B, _rest::binary>> = bytes) do
+      case :erl_tar.extract({:binary, bytes}, [:compressed, :memory]) do
+        {:ok, entries} -> Enum.any?(entries, &match?({~c"index.html", _bytes}, &1))
+        _other -> false
+      end
+    rescue
+      _error -> false
+    catch
+      _kind, _reason -> false
+    end
+
+    def docs_archive?(_bytes), do: false
 
     defp held_release(body, version, digest) do
       # OTP's JSON decoder uses :null; Hex's Erlang API uses nil in the uploader.
@@ -1769,7 +2053,10 @@ defmodule AshReplicant.ReleaseContract do
           "timeout-minutes" => 90,
           "permissions" => %{"contents" => "read"},
           "env" => %{"MIX_ENV" => "dev"},
-          "outputs" => %{"version" => "${{ steps.release.outputs.version }}"},
+          "outputs" => %{
+            "version" => "${{ steps.release.outputs.version }}",
+            "published_commit" => "${{ steps.readback.outputs.published_commit }}"
+          },
           "steps" => [
             %{
               "name" => "Refuse publishing outside the default branch",
@@ -1777,7 +2064,7 @@ defmodule AshReplicant.ReleaseContract do
             },
             %{
               "uses" => "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-              "with" => %{"persist-credentials" => false}
+              "with" => %{"persist-credentials" => false, "fetch-depth" => 0}
             },
             %{
               "uses" => "erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124",
@@ -1810,6 +2097,13 @@ defmodule AshReplicant.ReleaseContract do
               },
               "run" =>
                 "mix run --no-mix-exs \"$GITHUB_WORKSPACE/scripts/publish_hex_artifacts.exs\" ash_replicant \"$VERSION\" \"$RUNNER_TEMP/package.tar\" \"$RUNNER_TEMP/hex-docs.tar.gz\""
+            },
+            %{
+              "name" => "Read back served docs and prepare release assets without a key",
+              "id" => "readback",
+              "env" => %{"VERSION" => "${{ steps.release.outputs.version }}"},
+              "run" =>
+                "scripts/read-release-assets.sh \"$VERSION\" \"$RUNNER_TEMP/package.tar\" \"$RUNNER_TEMP/release-assets\""
             },
             %{
               "name" => "Retain verified release assets for infra",
@@ -1970,6 +2264,7 @@ defmodule AshReplicant.ReleaseContract do
           {"scripts/publish_hex_artifacts.exs", @publish_hex_artifacts_script},
           {"scripts/check-docs-archive.py", @docs_inspection_script},
           {"scripts/build-release-docs.sh", @docs_build_script},
+          {"scripts/read-release-assets.sh", @read_release_assets_script},
           {"scripts/build-docs-archive.exs", @docs_archive_builder},
           {"scripts/release_identity.exs", @release_identity_script},
           {"scripts/test_publish_hex_artifacts.exs", @publish_hex_artifacts_tests},

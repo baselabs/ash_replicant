@@ -17,7 +17,6 @@ defmodule PublishHexArtifacts do
     # A missing release alone cannot prove the package name already exists.
     existing_package!(Hex.API.Package.get_anonymous(nil, name), name)
     digest = :crypto.hash(:sha256, package_bytes) |> Base.encode16(case: :lower)
-    docs_digest = :crypto.hash(:sha256, docs_bytes) |> Base.encode16(case: :lower)
 
     case release_state!(Hex.API.Release.get(nil, name, version), version, digest) do
       :fresh ->
@@ -31,8 +30,8 @@ defmodule PublishHexArtifacts do
 
     # Re-read after the package decision: docs may have appeared in the meantime.
     case release_state!(Hex.API.Release.get(nil, name, version), version, digest) do
-      {:held, docs?} ->
-        case docs_action!(Hex.Repo.get_docs("hexpm", name, version), docs_digest, docs?) do
+      {:held, _docs?} ->
+        case docs_action!(Hex.Repo.get_docs("hexpm", name, version)) do
           :upload ->
             Hex.API.ReleaseDocs.publish(nil, name, version, docs_bytes, auth)
             |> accepted!("Hex docs")
@@ -48,7 +47,7 @@ defmodule PublishHexArtifacts do
 
     read_back!(Hex.API.Release.get(nil, name, version), version, digest)
     package_read_back!(Hex.Repo.get_tarball("hexpm", name, version), digest)
-    docs_read_back!(Hex.Repo.get_docs("hexpm", name, version), docs_digest)
+    docs_read_back!(Hex.Repo.get_docs("hexpm", name, version))
   end
 
   def main(_argv),
@@ -105,8 +104,8 @@ defmodule PublishHexArtifacts do
 
   def read_back!(response, version, digest) do
     case release_state!(response, version, digest) do
-      {:held, true} -> :ok
-      _other -> raise "Hex package or docs are not served; inspect public state before retrying"
+      {:held, _docs?} -> :ok
+      _other -> raise "Hex package is not served; inspect public state before retrying"
     end
   end
 
@@ -123,27 +122,36 @@ defmodule PublishHexArtifacts do
 
   # Read raw bytes from the repository API. ReleaseDocs.get decodes API responses
   # and can return nil for a successful binary response. Never replace served docs.
-  def docs_action!(
-        {:ok, {200, _headers, <<0x1F, 0x8B, _rest::binary>> = bytes}},
-        digest,
-        _required?
-      ) do
-    if Base.encode16(:crypto.hash(:sha256, bytes), case: :lower) == digest do
-      :skip
-    else
-      raise "Hex docs checksum differs from the built archive; publication refused"
+  def docs_action!({:ok, {200, _headers, bytes}}) do
+    if docs_archive?(bytes),
+      do: :skip,
+      else: raise("Hex docs archive is malformed; publication refused")
+  end
+
+  def docs_action!({:ok, {404, _headers, _body}}), do: :upload
+
+  def docs_action!(_response),
+    do: raise("Hex docs archive is unavailable; inspect public state before retrying")
+
+  def docs_read_back!(response) do
+    case docs_action!(response) do
+      :skip -> :ok
+      :upload -> raise "Hex docs archive is unavailable; inspect public state before retrying"
     end
   end
 
-  def docs_action!({:ok, {404, _headers, _body}}, _digest, false), do: :upload
-
-  def docs_action!(_response, _digest, _required?),
-    do: raise("Hex docs archive is unavailable; inspect public state before retrying")
-
-  def docs_read_back!(response, digest) do
-    :skip = docs_action!(response, digest, true)
-    :ok
+  def docs_archive?(<<0x1F, 0x8B, _rest::binary>> = bytes) do
+    case :erl_tar.extract({:binary, bytes}, [:compressed, :memory]) do
+      {:ok, entries} -> Enum.any?(entries, &match?({~c"index.html", _bytes}, &1))
+      _other -> false
+    end
+  rescue
+    _error -> false
+  catch
+    _kind, _reason -> false
   end
+
+  def docs_archive?(_bytes), do: false
 end
 
 PublishHexArtifacts.main(System.argv())

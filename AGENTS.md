@@ -211,18 +211,28 @@ steps build and inspect package and docs archives. Only the upload step receives
 the publish key; it runs from the runner's temporary directory, loads no project,
 rechecks package existence and permits an untagged held version only when its checksum
 matches the freshly built package and it is not retired. Local or remote version tags and
-GitHub releases always refuse. Docs served by Hex must match the freshly built docs archive,
-even if release metadata has not reported them yet. Only missing uploads run; neither archive
-is replaced. A second owner dispatch on the same commit finishes an approved hold or an
-interrupted upload. The uploader reads both served archives back and compares their SHA-256s.
+GitHub releases always refuse. Preflight and upload planning keep readable served docs;
+only an authoritative HTTP 404 permits a docs upload. Other responses and malformed archives
+refuse. Neither package nor served docs is replaced. A second owner dispatch finishes an
+approved hold or interrupted upload. Requiring a rebuilt docs digest would strand a held
+release because served docs cannot be replaced.
 
-Qualification and publication render docs twice from independent extracted source trees with
-locked dependencies, warnings as errors, ExDoc 0.40.4 and Makeup Elixir 1.0.1. Only HTML and
-Markdown ship; EPUB embeds build time. Hex 2.7.0 creates a sorted, fixed-metadata docs archive,
-inspected against every visible rendered byte. The two archives must compare byte for byte.
-After read-back, one keyless `release-assets` workflow artifact retains the versioned package,
-docs archive and `SHA256SUMS`. Infra creates the version tag, compares the artifact package
-with Hex, and creates the GitHub release from those assets. Consumer verification names that
+Qualification and publication render docs once from an extracted source tree with locked
+dependencies, warnings as errors, ExDoc 0.40.4 and Makeup Elixir 1.0.1. Only HTML and Markdown
+ship; EPUB embeds build time. After rendering, top-level `release.json` records exactly
+`package`, `version` and the run's full `GITHUB_SHA`. Hex 2.7.0 creates a sorted, fixed-metadata
+archive inspected against every visible rendered byte and that provenance. Docs builds are
+never compared with each other or with served docs. Equal package bytes cannot identify the
+docs source: docs also render files and dependency locks absent from the package.
+
+After upload, keyless read-back compares the served package with the inspected package and
+inspects the served docs archive, including `index.html` and `release.json`. The provenance
+must name this package and version, and the dispatched commit or an ancestor of it in fetched,
+complete default-branch history; unavailable history refuses. Legacy docs without provenance
+refuse read-back. The `published_commit` job output and `published-commit.txt` asset report that
+commit for infra's tag. One `release-assets` artifact retains the versioned package, the docs
+bytes downloaded from Hex, and their `SHA256SUMS`. Infra tags the published commit, compares
+the artifact package with Hex, and creates the GitHub release from those assets. Consumer verification names that
 permanent GitHub release, never the expiring workflow artifact. After infra reports read-back
 and the tag, this repository records the verified package digest in
 `scripts/release/published_packages.sha256` through normal landing. Held versions never change

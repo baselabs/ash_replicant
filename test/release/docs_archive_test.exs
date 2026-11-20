@@ -31,9 +31,8 @@ defmodule AshReplicant.DocsArchiveTest do
 
     one = build!(first, dir)
     two = build!(second, dir)
-    assert File.read!(one) == File.read!(two)
     assert {output, 0} = inspect_archive(one, first)
-    assert output =~ "4 regular files; all bytes match the source tree"
+    assert output =~ "5 regular files; contents and release provenance inspected"
 
     File.write!(Path.join(first, "readme.html"), "mutated rendered bytes")
     assert {output, 1} = inspect_archive(one, first)
@@ -79,10 +78,29 @@ defmodule AshReplicant.DocsArchiveTest do
 
     # This exact mutation must admit the otherwise valid EPUB archive.
     assert {_output, 0} =
-             System.cmd("python3", ["-I", "-c", mutated, archive, tree], stderr_to_stdout: true)
+             System.cmd(
+               "python3",
+               [
+                 "-I",
+                 "-c",
+                 mutated,
+                 archive,
+                 tree,
+                 "--version",
+                 "1.6.4",
+                 "--commit",
+                 String.duplicate("a", 40)
+               ],
+               stderr_to_stdout: true
+             )
   end
 
   defp build!(tree, scratch) do
+    File.write!(
+      Path.join(tree, "release.json"),
+      Jason.encode!(%{package: "ash_replicant", version: "1.6.4", commit: String.duplicate("a", 40)})
+    )
+
     archive = tree <> ".tar.gz"
 
     assert {_output, 0} =
@@ -95,6 +113,10 @@ defmodule AshReplicant.DocsArchiveTest do
   end
 
   defp inspect_archive(archive, tree) do
-    System.cmd("python3", ["-I", @checker, archive, tree], stderr_to_stdout: true)
+    System.cmd(
+      "python3",
+      ["-I", @checker, archive, tree, "--version", "1.6.4", "--commit", String.duplicate("a", 40)],
+      stderr_to_stdout: true
+    )
   end
 end

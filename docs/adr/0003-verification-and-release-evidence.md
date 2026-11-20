@@ -111,6 +111,28 @@ Every new gate needs a red-capable probe against the exact checked-in command or
 script used by CI. A separately implemented “test of the idea” is not evidence
 for the production gate.
 
+## Docs presence and provenance (1.6.4)
+
+Docs render once per job with locked dependencies and warnings as errors. The fixed-metadata
+Hex archive builder and every-file inspection remain; no check compares two builds or requires
+served docs to equal a rebuild. The package remains the byte identity: a mismatch or retirement
+refuses publication. Served docs cannot be replaced, so a rebuilt-docs digest requirement could
+strand a held release. Preflight and upload planning keep readable served docs, upload only on
+authoritative HTTP 404, and refuse other responses or malformed archives.
+
+Equal package bytes cannot identify the docs source: `CONTRIBUTING.md` is an ExDoc extra but
+is absent from the package, as is the docs toolchain lock. After rendering, every built archive
+therefore carries top-level `release.json` with exactly `package`, `version` and the run's full
+`GITHUB_SHA`. Keyless read-back inspects the served archive and requires `index.html`, matching
+package/version provenance and a commit equal to or ancestral to the dispatched commit in fetched,
+complete default-branch history. Missing provenance or history and unrelated commits refuse.
+The published commit is the served provenance commit, reported as `published_commit` for infra's
+tag. `release-assets` retains the served docs bytes, their checksum and `published-commit.txt`.
+
+The real-Hex keyless self-test proves readable published docs are kept for planning and legacy
+docs without provenance refuse read-back. Actual archives and real Git histories exercise field,
+ancestry and retained-asset checks. Publication and keys remain infra's work.
+
 ## Consequences
 
 - No-database and live-database failures are independently attributable.

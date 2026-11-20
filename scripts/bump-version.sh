@@ -16,8 +16,9 @@
 # Next steps use AGENTS.md's CI-only Build and test route: qualify a topic
 # commit, then give kimosabe-land a fresh SHA never pushed to kci beforehand.
 # Infra asks an owner to dispatch Publish to Hex on main. A second dispatch
-# of that commit finishes a held release only with identical archive bytes.
-# After read-back, infra tags the commit and creates the GitHub release from
+# finishes a held release only with identical package bytes, keeping served docs.
+# Read-back validates served release.json against default-branch ancestry.
+# Infra tags its published commit and creates the GitHub release from
 # release-assets. The published consumer runs in CI after upload, without a
 # key or environment. This repository then records the verified package digest.
 set -euo pipefail
@@ -98,7 +99,8 @@ echo 'bump-version: next: commit with named paths; use AGENTS.md, Build and test
 echo 'bump-version: kimosabe-land alone moves main; its head must never have been pushed to kci.'
 echo 'bump-version: infra asks an owner to dispatch Publish to Hex on the landed main commit.'
 echo 'bump-version: retry that same commit only after infra inspects an approved hold or interruption.'
-echo "bump-version: after read-back, infra tags v$new_version and creates the GitHub release"
-echo 'bump-version:   from release-assets (both archives and SHA256SUMS), after comparing Hex bytes.'
+echo "bump-version: after read-back, infra tags v$new_version at the served published_commit"
+echo 'bump-version:   and creates the GitHub release from the downloaded served docs and package.'
+echo 'bump-version:   from release-assets (served archives, SHA256SUMS and published-commit.txt).'
 echo 'bump-version:   publish.yml exercises the published consumer without a key or environment.'
 echo 'bump-version:   this repository records the verified digest through normal landing.'

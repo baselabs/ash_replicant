@@ -22,14 +22,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scripts. Capture package scans, listings, repository status and release anchors before
   comparison; distinguish grep errors from no matches and run package inspection with pipefail.
 
-- Resume held or interrupted Hex publication on a second dispatch of the same commit only
-  when the inspected package and served docs match exactly and the release is not retired.
-  Upload only missing archives, read both back by SHA-256, retain one `release-assets` artifact
-  for infra's permanent GitHub release, and keep the published-package consumer outside
-  the publish environment.
-- Render docs twice from independent source trees with locked ExDoc 0.40.4, HTML and Markdown
-  only, then compare deterministic Hex archives byte for byte and inspect every rendered file.
-  Document the CI-only covering-test and landing route and immutable published-digest ledger.
+- Resume held or interrupted Hex publication on a second dispatch when the inspected package
+  matches the served package and the release is not retired. Keep readable served docs;
+  upload docs only on authoritative HTTP 404, refusing malformed archives and lookup errors.
+  Never compare served docs with a rebuild or replace them: that could strand a held release.
+- Render docs once with locked ExDoc 0.40.4, HTML and Markdown only, retaining the deterministic
+  Hex archive builder and inspection of every rendered file. Add top-level `release.json`
+  with exactly the package, version and full dispatched commit after rendering. Keyless
+  read-back validates the served archive and provenance against fetched default-branch history,
+  accepting the dispatched commit or an ancestor and refusing missing provenance or history.
+  Report that published commit for infra's tag; retain the SERVED docs bytes and their checksum
+  in `release-assets` for the permanent GitHub release. Keep the published-package consumer
+  outside the publish environment, the CI-only covering-test and landing route, and the
+  immutable published-package digest ledger.
 
 - Run Erlang/OTP 29.0.5, the same exact runtime as Replicant, whose example
   image exists for Elixir 1.20.3 only on that OTP patch.

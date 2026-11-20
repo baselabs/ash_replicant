@@ -280,35 +280,38 @@ tests run on GitHub-hosted CI, never on the owner's Mac or the build box.
    release for the version refuses. GitHub REST reads use `gh api -i` with `GH_TOKEN` scoped
    to the reading step; only HTTP 404 proves absence. Lookup failures refuse.
 4. Keyless steps fetch locked dependencies and build and inspect the package with all three
-   dependency selectors cleared. Docs render from two independent extracted source trees,
-   each fetching `mix deps.get --check-locked` and using warnings as errors. ExDoc 0.40.4 and
-   Makeup Elixir 1.0.1 produce HTML and Markdown only; EPUB embeds build time. Hex 2.7.0
-   creates sorted archives with fixed times, uid/gid zero, empty owner/group names, and a
-   gzip header without a filename or mtime. The checker verifies every visible rendered file;
-   the two docs archives must compare byte for byte in qualification and publication.
-5. An untagged version already on Hex is a held or partial release. Before the keyed step,
-   its package checksum must equal the inspected archive, it must not be retired, and any
-   served docs must have the inspected docs SHA-256. Malformed metadata, mismatches and
-   lookup failures refuse. The isolated uploader repeats the checks, uploads only missing
-   package or docs, and never replaces either. Served docs must match even when metadata has
-   not yet reported them. A second owner dispatch on the same commit finishes an approved
-   hold or interrupted upload; ambiguous results require infra to inspect public state first.
+   dependency selectors cleared. Docs render once from an extracted source tree with locked
+   ExDoc 0.40.4, Makeup Elixir 1.0.1 and warnings as errors. HTML and Markdown ship; EPUB
+   embeds build time. After rendering, `release.json` records exactly `package: ash_replicant`,
+   the version and the run's full `GITHUB_SHA`. Hex 2.7.0 creates a sorted, fixed-metadata archive;
+   the checker inspects every visible rendered file and validates the provenance.
+5. An untagged version already on Hex is a held or partial release. Its package checksum must
+   equal the inspected archive and it must not be retired. Docs planning uses presence:
+   readable served docs are kept, authoritative HTTP 404 permits upload, and other responses
+   or malformed archives refuse. Neither archive is replaced. Requiring a rebuilt docs digest
+   would strand held releases because Hex never replaces served docs. A second owner dispatch
+   finishes an approved hold or interrupted upload; ambiguous results require infra to inspect
+   public state first.
 6. Only the upload job belongs to environment `publish`. Only the upload step receives
    `HEX_API_KEY`, in its environment, and runs `mix run --no-mix-exs` from the runner's
-   temporary directory with no `mix.exs`. It reads the two inspected archives, loads no project,
-   builds nothing, checks package existence again, and reads both served archives back,
-   comparing their SHA-256s. Read-back also requires no retirement and `has_docs: true`.
-7. After successful read-back, one keyless workflow artifact named `release-assets` retains
-   `ash_replicant-<version>.tar`, `ash_replicant-<version>-docs.tar.gz`, and `SHA256SUMS`.
-   Temporary archives are removed even on failure. A published-package check needs the upload
-   job, holds no key or environment, and audits and exercises a fresh registry consumer against
-   real PostgreSQL. Qualification consumes the candidate tarball rather than its unpublished
-   version from Hex.
-8. Infra tags `v<version>` at that full source SHA, compares the artifact's package with Hex,
-   and creates the GitHub release from those assets. No workflow creates a GitHub release or
-   runs on a tag. After infra reports read-back and the tag, this repository records the
-   verified package digest in `scripts/release/published_packages.sha256` through normal
-   landing. Held versions never add or alter ledger entries speculatively. A release is
+   temporary directory with no `mix.exs`. It reads inspected archives, loads no project, builds
+   nothing, checks package existence again and compares the served package checksum. Its docs
+   check requires a readable gzip tarball; no served-docs digest is compared with a rebuild.
+7. A separate keyless read-back downloads and inspects the served docs. It requires `index.html`
+   and exactly the `release.json` fields above, naming this package/version and the dispatched
+   commit or an ancestor in fetched, complete default-branch history. Missing provenance,
+   invalid identity, unrelated commits and unavailable history refuse. Equal package bytes
+   alone cannot identify docs rendered from unpackaged guides or the docs dependency lock.
+   The published commit is reported as the `published_commit` job output and retained in
+   `published-commit.txt`. The `release-assets` artifact carries the downloaded package and
+   SERVED docs, with `SHA256SUMS` for those bytes. Temporary archives are removed even on failure.
+   A published-package check needs the upload job, holds no key or environment, and exercises
+   a fresh registry consumer against real PostgreSQL. Qualification consumes the candidate tarball.
+8. Infra tags `v<version>` at the published commit from the served provenance, compares the
+   artifact package with Hex, and creates the GitHub release from those assets. No workflow
+   creates a GitHub release or runs on a tag. After infra reports read-back and the tag, this
+   repository records the verified package digest in `scripts/release/published_packages.sha256`
+   through normal landing. Held versions never change the ledger speculatively. A release is
    complete only when its tag, Hex package, docs and GitHub release all exist.
 
 Consumers verify the permanent [GitHub release](https://github.com/baselabs/ash_replicant/releases)
@@ -320,9 +323,12 @@ sha256sum --check SHA256SUMS
 curl --fail --silent --show-error https://repo.hex.pm/tarballs/ash_replicant-X.Y.Z.tar -o hex.tar
 cmp ash_replicant-X.Y.Z.tar hex.tar
 curl --fail --silent --show-error https://repo.hex.pm/docs/ash_replicant-X.Y.Z.tar.gz -o hex-docs.tar.gz
-cmp ash_replicant-X.Y.Z-docs.tar.gz hex-docs.tar.gz
+tar -xOf hex-docs.tar.gz release.json
 rm hex.tar hex-docs.tar.gz
 ```
+
+Check that the served provenance names `ash_replicant`, `X.Y.Z`, and the release tag's full commit.
+The asset checksum verifies the retained served docs; it does not compare a new docs build.
 
 `scripts/verify-release.sh VERSION TAG --check` checks local tree/tag preconditions only.
 Its full mode verifies public state from the exact tagged tree. The publish workflow's package

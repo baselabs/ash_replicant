@@ -28,12 +28,14 @@ jobs:
       MIX_ENV: dev
     outputs:
       version: ${{ steps.release.outputs.version }}
+      published_commit: ${{ steps.readback.outputs.published_commit }}
     steps:
       - name: Refuse publishing outside the default branch
         run: test "$GITHUB_REF" = "refs/heads/main"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
         with:
           version-file: .tool-versions
@@ -63,11 +65,6 @@ jobs:
           scripts/inspect-release-package.sh "$RUNNER_TEMP/package.tar"
           test "$(git ls-remote --exit-code origin refs/heads/main | cut -f1)" = "$GITHUB_SHA"
           scripts/assert-release-tree.sh "$VERSION" "v$VERSION" --unreleased "$RUNNER_TEMP/package.tar" "$RUNNER_TEMP/hex-docs.tar.gz"
-          assets="$RUNNER_TEMP/release-assets"
-          mkdir "$assets"
-          cp "$RUNNER_TEMP/package.tar" "$assets/ash_replicant-$VERSION.tar"
-          cp "$RUNNER_TEMP/hex-docs.tar.gz" "$assets/ash_replicant-$VERSION-docs.tar.gz"
-          (cd "$assets" && sha256sum -- *.tar *.tar.gz > SHA256SUMS)
           chmod a-w "$RUNNER_TEMP/package.tar" "$RUNNER_TEMP/hex-docs.tar.gz"
       - name: Upload inspected archives to hex.pm
         working-directory: ${{ runner.temp }}
@@ -75,6 +72,11 @@ jobs:
           VERSION: ${{ steps.release.outputs.version }}
           HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
         run: mix run --no-mix-exs "$GITHUB_WORKSPACE/scripts/publish_hex_artifacts.exs" ash_replicant "$VERSION" "$RUNNER_TEMP/package.tar" "$RUNNER_TEMP/hex-docs.tar.gz"
+      - name: Read back served docs and prepare release assets without a key
+        id: readback
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: scripts/read-release-assets.sh "$VERSION" "$RUNNER_TEMP/package.tar" "$RUNNER_TEMP/release-assets"
       - name: Retain verified release assets for infra
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

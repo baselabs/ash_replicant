@@ -10,8 +10,15 @@ defmodule AshReplicant.ReleaseIdentityTest do
 
   @version "1.6.4"
   @digest String.duplicate("a", 64)
-  @docs :zlib.gzip("inspected documentation")
-  @docs_digest :crypto.hash(:sha256, @docs) |> Base.encode16(case: :lower)
+
+  setup_all do
+    path =
+      Path.join(System.tmp_dir!(), "release-docs-#{System.unique_integer([:positive])}.tar.gz")
+    :ok = :erl_tar.create(path, [{~c"index.html", "rendered docs"}], [:compressed])
+    bytes = File.read!(path)
+    File.rm!(path)
+    %{docs: bytes}
+  end
 
   test "pre-build admits only an absent release or valid unretired held metadata" do
     assert {:ok, :fresh} == check({"{}\n404", 0})
@@ -38,39 +45,33 @@ defmodule AshReplicant.ReleaseIdentityTest do
     end
   end
 
-  test "inspected package checksum and served docs must match before exposing a key" do
+  test "package checksum matches while readable served docs are kept", %{docs: docs} do
     for docs? <- [false, true] do
-      runner = runner(response(metadata(docs?)), {@docs <> "\n200", 0})
+      runner = runner(response(metadata(docs?)), {docs <> "\n200", 0})
 
       assert {:ok, {:held, docs?}} ==
-               ReleaseIdentity.check_archive(@version, @digest, @docs_digest, runner)
+               ReleaseIdentity.check_archive(@version, @digest, true, runner)
     end
 
     runner = runner(response(metadata(false)), {"{}\n404", 0})
 
     assert {:ok, {:held, false}} ==
-             ReleaseIdentity.check_archive(@version, @digest, @docs_digest, runner)
+             ReleaseIdentity.check_archive(@version, @digest, true, runner)
 
-    # Metadata claiming absence does not permit replacing docs that are already served.
-    for docs? <- [false, true] do
-      runner = runner(response(metadata(docs?)), {:zlib.gzip("different") <> "\n200", 0})
-
-      assert {:error, message} =
-               ReleaseIdentity.check_archive(@version, @digest, @docs_digest, runner)
-
-      assert message =~ "docs checksum differs"
-    end
+    # The docs lookup is authoritative even when release metadata lags.
+    runner = runner(response(metadata(true)), {"{}\n404", 0})
+    assert {:ok, {:held, true}} == ReleaseIdentity.check_archive(@version, @digest, true, runner)
 
     mismatch = Map.put(metadata(false), "checksum", String.duplicate("b", 64))
-    runner = runner(response(mismatch), {@docs <> "\n200", 0})
+    runner = runner(response(mismatch), {docs <> "\n200", 0})
 
     assert {:error, message} =
-             ReleaseIdentity.check_archive(@version, @digest, @docs_digest, runner)
+             ReleaseIdentity.check_archive(@version, @digest, true, runner)
 
     assert message =~ "checksum differs"
   end
 
-  test "post-build preflight hashes both inspected file paths" do
+  test "post-build preflight hashes the package and checks docs presence", %{docs: docs_bytes} do
     dir =
       Path.join(System.tmp_dir!(), "ash-release-identity-#{System.unique_integer([:positive])}")
 
@@ -81,9 +82,9 @@ defmodule AshReplicant.ReleaseIdentityTest do
     bytes = "inspected package bytes"
     digest = :crypto.hash(:sha256, bytes) |> Base.encode16(case: :lower)
     File.write!(package, bytes)
-    File.write!(docs, @docs)
+    File.write!(docs, docs_bytes)
     metadata = Map.put(metadata(true), "checksum", digest)
-    runner = runner(response(metadata), {@docs <> "\n200", 0})
+    runner = runner(response(metadata), {docs_bytes <> "\n200", 0})
 
     assert ExUnit.CaptureIO.capture_io(fn ->
              assert :ok == ReleaseIdentity.main([@version, package, docs], runner)
@@ -96,14 +97,14 @@ defmodule AshReplicant.ReleaseIdentityTest do
     end
 
     File.write!(package, bytes)
-    File.write!(docs, :zlib.gzip("changed docs bytes"))
+    File.write!(docs, :zlib.gzip("not a tarball"))
 
-    assert_raise RuntimeError, ~r/docs checksum differs/, fn ->
+    assert_raise RuntimeError, ~r/Built docs archive is invalid/, fn ->
       ReleaseIdentity.main([@version, package, docs], runner)
     end
   end
 
-  test "ambiguous lookups and missing advertised docs refuse without response values" do
+  test "ambiguous lookups and malformed served docs refuse without response values" do
     failures = [
       {"private-response-value\n200", 0},
       {"{}\n301", 0},
@@ -120,18 +121,18 @@ defmodule AshReplicant.ReleaseIdentityTest do
       refute message =~ "private-response-value"
     end
 
-    for docs_response <- [{"{}\n404", 0} | failures] do
+    for docs_response <- [{:zlib.gzip("not a tarball") <> "\n200", 0} | failures] do
       runner = runner(response(metadata(true)), docs_response)
 
       assert {:error, message} =
-               ReleaseIdentity.check_archive(@version, @digest, @docs_digest, runner)
+               ReleaseIdentity.check_archive(@version, @digest, true, runner)
 
       refute message =~ "private-response-value"
     end
   end
 
   defp check(response) do
-    ReleaseIdentity.check_archive(@version, nil, nil, runner(response, :unreachable))
+    ReleaseIdentity.check_archive(@version, nil, false, runner(response, :unreachable))
   end
 
   defp runner(release, docs) do

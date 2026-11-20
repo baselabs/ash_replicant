@@ -1096,6 +1096,9 @@ violates one of these rules.
 
 ## Development
 
+All checks run on GitHub-hosted CI through `kci/` and the landing route in `AGENTS.md`.
+The commands below describe those gates; they do not authorize local builds or tests.
+
 ```bash
 asdf install
 scripts/with-release-runtime.sh scripts/assert-runtime-version.sh
@@ -1124,7 +1127,15 @@ scripts/with-release-runtime.sh mix docs --warnings-as-errors
 scripts/with-release-runtime.sh mix hex.build
 ```
 
-All gates pass before commit. Update `CHANGELOG.md` under `[Unreleased]`.
+Qualify the commit through CI before landing. Update `CHANGELOG.md` for the version being prepared.
+
+The release path renders docs once, writes `release.json` with this package, version and full
+source commit, and inspects the archive. Held releases require identical package bytes and no
+retirement; served docs are kept, and only absent docs are uploaded. Keyless read-back requires
+readable served docs and valid provenance from the dispatched commit or an ancestor in fetched
+default-branch history. Infra tags that published commit. The permanent release assets retain
+the docs Hex serves and their checksum, never a subsequent rendering. See
+[the release procedure](CONTRIBUTING.md#releasing).
 
 ## License
 

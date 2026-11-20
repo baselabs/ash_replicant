@@ -173,7 +173,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
   @upload_archive_checks ~S"""
   trap 'rm -rf "$RUNNER_TEMP/package.tar" "$RUNNER_TEMP/hex-docs.tar.gz" "$RUNNER_TEMP/hex-docs.tar.gz.rendered"' EXIT
-  python3 -I scripts/check-docs-archive.py "$RUNNER_TEMP/hex-docs.tar.gz" "$RUNNER_TEMP/hex-docs.tar.gz.rendered"
+  version="$(sed -n 's/^  @version "\(.*\)"$/\1/p' mix.exs)"
+  python3 -I scripts/check-docs-archive.py "$RUNNER_TEMP/hex-docs.tar.gz" "$RUNNER_TEMP/hex-docs.tar.gz.rendered" --version "$version" --commit "$GITHUB_SHA"
   env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION scripts/with-release-runtime.sh mix hex.build --output "$RUNNER_TEMP/package.tar"
   scripts/inspect-release-package.sh "$RUNNER_TEMP/package.tar"
   python3 -B scripts/test_release_docs.py "$RUNNER_TEMP/hex-docs.tar.gz" "$RUNNER_TEMP/hex-docs.tar.gz.rendered"
@@ -1152,14 +1153,19 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           {"scripts/publish_hex_artifacts.exs", "|> approved!()"},
           {"scripts/release_identity.exs", "checksum != digest"},
           {"scripts/release_identity.exs", "retirement != :null"},
-          {"scripts/build-release-docs.sh", "for build in first second"},
-          {"scripts/build-release-docs.sh", "cmp \"$work/first.tar.gz\" \"$work/second.tar.gz\""},
+          {"scripts/build-release-docs.sh", "mix docs --warnings-as-errors"},
+          {"scripts/build-release-docs.sh", "release.json"},
           {"scripts/build-release-docs.sh", "mix deps.get --check-locked"},
           {"scripts/build-docs-archive.exs", ":mix_hex_tarball.create_docs(files)"},
-          {"scripts/check-docs-archive.py", "if names != source.keys():"},
-          {"scripts/test_release_docs.py", "inspector.check(candidate, Path(directory))"},
+          {"scripts/check-docs-archive.py", "if source is not None and names != source.keys():"},
+          {"scripts/test_release_docs.py", "check(candidate, Path(directory))"},
           {"scripts/test_publish_hex_artifacts.exs", "PublishHexArtifacts.package_read_back!"},
-          {"scripts/test_publish_hex_artifacts.exs", "PublishHexArtifacts.docs_read_back!"}
+          {"scripts/test_publish_hex_artifacts.exs", "PublishHexArtifacts.docs_read_back!"},
+          {"scripts/read-release-assets.sh", "fetch_archive"},
+          {"scripts/read-release-assets.sh", "--assets"},
+          {"scripts/check-docs-archive.py", "if release is None:"},
+          {"scripts/check-docs-archive.py", ~s|git("merge-base", "--is-ancestor", published, commit)|},
+          {"scripts/check-docs-archive.py", "shutil.copyfile(archive, paths[1])"}
         ] do
       prepare_fixture()
       replace_once!(path, old, "removed_guard")
@@ -1183,7 +1189,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           {"    name: Verify published package",
            "    environment: publish\n    name: Verify published package"},
           {"scripts/test-fresh-consumer.sh --from-hex", "true --from-hex"},
-          {"(cd \"$assets\" && sha256sum -- *.tar *.tar.gz > SHA256SUMS)", ":"}
+          {"scripts/read-release-assets.sh", ":"}
         ] do
       prepare_fixture()
       replace_once!(@publish, old, replacement)
