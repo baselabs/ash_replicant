@@ -325,7 +325,6 @@ defmodule AshReplicant.PipelineOwner do
     Lease.with(state.slot_name, :exclusive, fn ->
       if owns_generation?(state) do
         _ = safe_stop(state)
-        record_terminal(state)
         cleanup(state)
       end
     end)
@@ -338,7 +337,6 @@ defmodule AshReplicant.PipelineOwner do
       Lease.with(state.slot_name, :exclusive, fn ->
         if owns_generation?(state) do
           _ = safe_stop(state)
-          record_terminal(state)
         end
 
         cleanup(state)

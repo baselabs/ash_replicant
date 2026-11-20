@@ -292,6 +292,7 @@ defmodule AshReplicant.CensusDriftTest do
   defp assert_busy_stream_census do
     ref = attach()
     assert {:ok, owner} = start(interval_ms: 50, jitter_ratio: 0.0, timeout_ms: 10_000)
+    assert_receive {:census, ^ref, [:replicant, :connection, :slot_active], %{}}, 15_000
     await_bound()
     [{stream, _}] = Registry.lookup(Replicant.Registry, {@slot, :assembler})
     handler = {__MODULE__, make_ref()}
@@ -607,7 +608,9 @@ defmodule AshReplicant.CensusDriftTest do
 
   test "a busy stream cannot starve stop or admit a late reader ahead of it" do
     LeaseEvents.attach()
+    ref = attach()
     assert {:ok, owner} = start(enabled?: false)
+    assert_receive {:census, ^ref, [:replicant, :connection, :slot_active], %{}}, 15_000
     await_bound()
     [{stream, _}] = Registry.lookup(Replicant.Registry, {@slot, :assembler})
     parent = self()
