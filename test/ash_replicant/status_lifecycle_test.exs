@@ -66,12 +66,10 @@ defmodule AshReplicant.StatusLifecycleTest do
 
   defp tombstone, do: :persistent_term.get(@tombstone_key, nil)
 
-  # start_link links the owner to this test, so an abnormal owner exit would
-  # kill the test with a link exit that names no assertion. Unlinked with the
-  # monitor kept, the same exit fails at the assertion below with its reason.
+  # The owner is deliberately unlinked from its caller. A monitor makes an
+  # abnormal termination fail at the assertion below with its reason.
   defp start_owner!(opts) do
     assert {:ok, owner} = AshReplicant.start_link(opts)
-    Process.unlink(owner)
     {owner, Process.monitor(owner)}
   end
 
