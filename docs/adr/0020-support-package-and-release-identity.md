@@ -18,6 +18,17 @@ Decision 5's canonical per-release SBOM/license-report/attestation artifact is
 still produced per-release by hand (receipts for 1.0.0–1.2.0; the 1.3.0
 receipt is missing) rather than wired into the release pipeline.
 
+## Amendment (2026-11-20)
+
+Decision 5's fresh-consumer pass runs in qualification, on every candidate before
+publication: the `fresh-consumer` job unpacks the candidate tarball into a new
+project, audits its resolved lock from the repository root (where `mix_audit` is
+declared), and runs compilation with warnings as errors, docs, migrations and the
+live CDC smoke against its own PostgreSQL 16. It replaces the retired local
+`prepush.sh` lane. The 1.6.4 post-publish check failed because no pre-publication
+run existed after that lane was retired; Decision 6's post-publish consumer now
+uses the same root-level audit.
+
 ## Context
 
 The current package is 0.4.0, its Elixir requirement is patch-minor narrow, CI
