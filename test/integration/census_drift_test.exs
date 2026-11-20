@@ -525,6 +525,85 @@ defmodule AshReplicant.CensusDriftTest do
              ).rows
   end
 
+  test "owner cleanup reasserts its terminal fact after a late admitted checkpoint clear" do
+    assert {:ok, owner} = start(enabled?: false)
+    await_bound()
+    parent = self()
+    barrier = make_ref()
+    monitor = Process.monitor(owner)
+    handler = {__MODULE__, barrier}
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:ash_replicant, :test_repo, :query],
+        &__MODULE__.observe_owner_commit/4,
+        {parent, owner, barrier}
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    callback =
+      Task.async(fn ->
+        AshReplicant.run_callback(@slot, Sink, fn config ->
+          send(parent, {:advance_admitted, barrier})
+
+          receive do
+            {:advance, ^barrier} -> clear_terminal(config)
+          end
+        end)
+      end)
+
+    try do
+      assert_receive {:advance_admitted, ^barrier}, 5_000
+      assert :ok = Replicant.stop(@slot)
+      assert_receive {:owner_committed, ^barrier}, 5_000
+      send(callback.pid, {:advance, barrier})
+      assert :ok = Task.await(callback, :infinity)
+      assert_receive {:DOWN, ^monitor, :process, ^owner, :normal}, 15_000
+
+      assert [["pipeline_terminated"]] =
+               Marquee.q!(
+                 "SELECT terminal_cause FROM ash_replicant_checkpoints WHERE slot_name = $1",
+                 [@slot]
+               ).rows
+    after
+      send(callback.pid, {:advance, barrier})
+    end
+  end
+
+  @doc false
+  def observe_owner_commit(_event, _measurements, %{query: "commit"}, {parent, owner, barrier})
+      when owner == self(),
+      do: send(parent, {:owner_committed, barrier})
+
+  def observe_owner_commit(_event, _measurements, _metadata, _config), do: :ok
+
+  defp clear_terminal(config) do
+    Destination.with_repo_binding(config, fn ->
+      Ash.create!(
+        config.checkpoint_resource,
+        %{
+          source_system_id: config.source_identity.system_identifier,
+          source_database: config.source_identity.database,
+          slot_name: @slot,
+          terminal_cause: nil,
+          terminal_class: nil,
+          terminal_at: nil
+        },
+        action: :upsert,
+        upsert?: true,
+        upsert_identity: :source_slot,
+        upsert_fields: [:terminal_cause, :terminal_class, :terminal_at],
+        authorize?: false,
+        context: Destination.action_context(config),
+        return_notifications?: true
+      )
+    end)
+
+    :ok
+  end
+
   test "a busy stream cannot starve stop or admit a late reader ahead of it" do
     LeaseEvents.attach()
     assert {:ok, owner} = start(enabled?: false)
