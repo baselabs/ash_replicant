@@ -280,6 +280,93 @@ defmodule AshReplicant.CensusDriftTest do
     assert :ok = AshReplicant.stop_supervised(@slot)
   end
 
+  @tag timeout: 120_000
+  test "a busy real stream keeps passing the census for fifty consecutive deliveries" do
+    ref = attach()
+    assert {:ok, owner} = start(interval_ms: 50, jitter_ratio: 0.0, timeout_ms: 10_000)
+    await_bound()
+    [{stream, _}] = Registry.lookup(Replicant.Registry, {@slot, :assembler})
+    handler = {__MODULE__, make_ref()}
+    parent = self()
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:ash_replicant, :test_repo, :query],
+        &__MODULE__.hold_stream/4,
+        {parent, stream}
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    try do
+      insert_stream_row(0)
+
+      for iteration <- 1..50 do
+        assert_receive {:stream_checked_out, ^stream, barrier}, 15_000
+
+        try do
+          # Keep another real transaction queued while this admitted delivery
+          # owns a connection. Two NEW passes must finish before it releases:
+          # serial leases deterministically fail this concurrency property.
+          discard_passes(ref)
+          insert_stream_row(iteration)
+          assert_receive {:census, ^ref, [:ash_replicant, :census, :passed], _}, 15_000
+          assert_receive {:census, ^ref, [:ash_replicant, :census, :passed], _}, 15_000
+          assert Process.alive?(owner)
+          refute_received {:census, ^ref, [:ash_replicant, :census, :faulted], _}
+          refute_received {:census, ^ref, [:ash_replicant, :census, :halted], _}
+        after
+          send(stream, {:release_stream, barrier})
+        end
+
+        assert_receive {:stream_committed, ^stream}, 15_000
+      end
+
+      assert_receive {:stream_checked_out, ^stream, barrier}, 15_000
+      send(stream, {:release_stream, barrier})
+      assert_receive {:stream_committed, ^stream}, 15_000
+      assert [[51]] = Marquee.q!("SELECT count(*) FROM c01_census_mirror_orders").rows
+      assert Process.alive?(owner)
+      assert :ok = AshReplicant.stop_supervised(@slot)
+    after
+      :telemetry.detach(handler)
+    end
+  end
+
+  @doc false
+  def hold_stream(_event, _measurements, %{query: "begin"}, {parent, stream})
+      when stream == self() do
+    barrier = make_ref()
+    send(parent, {:stream_checked_out, stream, barrier})
+
+    receive do
+      {:release_stream, ^barrier} -> :ok
+    end
+  end
+
+  def hold_stream(_event, _measurements, %{query: "commit"}, {parent, stream})
+      when stream == self(),
+      do: send(parent, {:stream_committed, stream})
+
+  def hold_stream(_event, _measurements, _metadata, _config), do: :ok
+
+  defp insert_stream_row(number) do
+    Marquee.q!("INSERT INTO #{@src} (id, org_id, note) VALUES ($1, $2, $3)", [
+      Integer.to_string(number),
+      "stream-org",
+      "stream-note"
+    ])
+  end
+
+  defp discard_passes(ref) do
+    receive do
+      {:census, ^ref, [:ash_replicant, :census, :passed], _} -> discard_passes(ref)
+    after
+      0 -> :ok
+    end
+  end
+
   test "stop drains admitted reads before their destination connection outlives the pipeline" do
     assert {:ok, _owner} = start(enabled?: false)
     await_bound()
