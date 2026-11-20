@@ -772,8 +772,10 @@ defmodule AshReplicant.CensusDriftTest do
     assert {:ok, owner} = start([interval_ms: 60_000, timeout_ms: 60_000], ClaimSink)
     {worker, _barrier} = paused_census(owner)
     %{pipeline_pid: pipeline, guard: guard} = :sys.get_state(owner, :infinity)
-    monitors = monitor_all([owner, worker, pipeline, guard])
+    worker_monitor = Process.monitor(worker)
+    monitors = monitor_all([owner, pipeline, guard])
     Process.exit(owner, :kill)
+    assert_receive {:DOWN, ^worker_monitor, :process, ^worker, :killed}, 15_000
     await_all(monitors)
     assert [] = Registry.lookup(Replicant.Registry, {@slot, :pipeline})
   end
@@ -786,10 +788,12 @@ defmodule AshReplicant.CensusDriftTest do
     {worker, barrier} = paused_census(owner)
     assert {:trap_exit, true} = Process.info(worker, :trap_exit)
     %{pipeline_pid: pipeline, guard: guard} = :sys.get_state(owner, :infinity)
-    monitors = monitor_all([owner, worker, pipeline, guard])
+    worker_monitor = Process.monitor(worker)
+    monitors = monitor_all([owner, pipeline, guard])
 
     try do
       Process.exit(guard, :kill)
+      assert_receive {:DOWN, ^worker_monitor, :process, ^worker, :killed}, 15_000
       await_all(monitors)
       assert :none == :persistent_term.get({AshReplicant, @slot}, :none)
       assert [] = Registry.lookup(Replicant.Registry, {@slot, :pipeline})
