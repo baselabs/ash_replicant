@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.4] - 2026-11-20
+
 ### Changed
 
 - Preserve command failures throughout CI with a workflow-wide bash default and strict shell
@@ -34,6 +36,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `qualified` verdict's check name solely in its job id.
 
 ### Fixed
+
+- `stop_supervised/1` returns only after every admitted database operation has
+  finished. Read callbacks and the census now run inside the slot lease that
+  stop drains, as mutations already did, and stop joins the pipeline owner, so
+  its terminal write and census teardown complete before destination ownership
+  returns to the caller. The stop fact is written through the generation's
+  admitted destination, not the stopping caller's repo binding.
 
 - Make database drain tests select the actual census worker and acknowledge transaction
   release before joining shutdown. Released callbacks, consumer leases, and upgrade work
@@ -75,10 +84,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Remove the temporary workflow procedure for unlocked upstream resolution and
   its stale documentation. Qualification keeps the reviewed locks;
   upstream-resolution workflows belong only in the separate drift report.
-
-## [1.6.4] - 2026-11-17
-
-### Fixed
 
 - Run qualification only for `kci/**` candidate pushes, with a strict `qualified`
   verdict that requires all ten proof checks. Pull requests run the same proofs
@@ -135,6 +140,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the kind, plus the exception module when there is one, never the reason's
   values.
 
+- Pin the decoder-old-majors job's exact release steps, job keys, and environment; reject skipped steps, shell overrides, and BASH_ENV injection in contract self-tests.
+- Collect independent prepush check results after compilation, print a pass/fail table, and exit non-zero on any failure; skip live checks whose database setup failed and allow the fresh consumer to use a separate cluster database.
+- Finish independent checks after successful setup in the no-database and compatibility jobs; keep release artifacts sequential and enforce the exact step controls in the release contract.
+- Reject retired releases and invalid Hex responses in the newest dependency checker; replay recorded inputs in its self-tests.
+- Keep the Hex credential out of publish arguments and inspect the built package against the release file allowlist before uploading.
+- Require a live database for fresh consumers from Hex and reclaim abandoned consumer databases and replication slots while preserving live runs.
+- Strengthen the SCD2 notification, terminal tombstone, and decoded Decimal key witnesses; check every newest-dependency and package-allowlist requirement in the release contract.
+
 ### Security
 
 - Lock Replicant 1.4.2 → 1.5.1 (tar sha256 `a09c0a7b…bc869`, matched against
@@ -161,16 +174,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   2.15.2 fixes `EEF-CVE-2026-115627` and `EEF-CVE-2026-115635`) and AshSql
   0.8.1 → 0.8.4. The public AshPostgres requirement stays `~> 2.13`; hosts
   should lock AshPostgres 2.15.2 or later.
-
-### Fixed
-
-- Pin the decoder-old-majors job's exact release steps, job keys, and environment; reject skipped steps, shell overrides, and BASH_ENV injection in contract self-tests.
-- Collect independent prepush check results after compilation, print a pass/fail table, and exit non-zero on any failure; skip live checks whose database setup failed and allow the fresh consumer to use a separate cluster database.
-- Finish independent checks after successful setup in the no-database and compatibility jobs; keep release artifacts sequential and enforce the exact step controls in the release contract.
-- Reject retired releases and invalid Hex responses in the newest dependency checker; replay recorded inputs in its self-tests.
-- Keep the Hex credential out of publish arguments and inspect the built package against the release file allowlist before uploading.
-- Require a live database for fresh consumers from Hex and reclaim abandoned consumer databases and replication slots while preserving live runs.
-- Strengthen the SCD2 notification, terminal tombstone, and decoded Decimal key witnesses; check every newest-dependency and package-allowlist requirement in the release contract.
 
 ## [1.6.3] - 2026-10-11
 
