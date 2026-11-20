@@ -19,7 +19,13 @@ defmodule AshReplicant.PipelineGuard do
   def start_census(guard, slot, sink, token, timeout),
     do: GenServer.call(guard, {:census, slot, sink, token, timeout}, :infinity)
 
-  def timed_out?(guard, token), do: GenServer.call(guard, {:timed_out?, token}, :infinity)
+  def timed_out?(guard, token) do
+    GenServer.call(guard, {:timed_out?, token}, :infinity)
+  catch
+    # The owner's guard monitor handles loss; a missing witness cannot
+    # certify a timeout or take down the owner inside its worker-DOWN path.
+    :exit, _reason -> false
+  end
 
   @impl true
   def init(opts) do

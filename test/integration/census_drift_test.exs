@@ -174,13 +174,16 @@ defmodule AshReplicant.CensusDriftTest do
     Destination.with_repo_binding(config, fn ->
       config.repo.transaction(fn ->
         assert %{rows: [[1]]} = SQL.query!(config.repo, "SELECT 1", [])
+        monitor = Process.monitor(parent)
         send(parent, {:read_checked_out, barrier})
 
         receive do
           {:release_read, ^barrier} -> :ok
-        after
-          10_000 -> flunk("admitted read was never released")
+          {:DOWN, ^monitor, :process, ^parent, _reason} -> :ok
         end
+
+        Process.demonitor(monitor, [:flush])
+        :ok
       end)
     end)
   end
@@ -220,15 +223,20 @@ defmodule AshReplicant.CensusDriftTest do
   def hold_transaction(_event, _measurements, %{query: "begin"}, {parent, target, barrier})
       when target == self() do
     :telemetry.detach({__MODULE__, barrier})
+    monitor = Process.monitor(parent)
     send(parent, {:transaction_checked_out, barrier, self()})
 
     receive do
       {:release_transaction, ^barrier} ->
         send(parent, {:transaction_released, barrier, self()})
         :ok
-    after
-      10_000 -> flunk("destination transaction was never released")
+
+      {:DOWN, ^monitor, :process, ^parent, _reason} ->
+        :ok
     end
+
+    Process.demonitor(monitor, [:flush])
+    :ok
   end
 
   def hold_transaction(_event, _measurements, _metadata, _config), do: :ok
@@ -794,6 +802,7 @@ defmodule AshReplicant.CensusDriftTest do
     try do
       Process.exit(guard, :kill)
       assert_receive {:DOWN, ^worker_monitor, :process, ^worker, :killed}, 15_000
+      refute AshReplicant.PipelineGuard.timed_out?(guard, make_ref())
       await_all(monitors)
       assert :none == :persistent_term.get({AshReplicant, @slot}, :none)
       assert [] = Registry.lookup(Replicant.Registry, {@slot, :pipeline})

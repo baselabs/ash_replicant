@@ -120,8 +120,9 @@ joining while holding it would deadlock. An owner's terminal write holds a
 shared lease and checks its generation, so stop drains it without a stale owner
 writing over a successor. Cleanup reasserts the final terminal fact exclusively
 after every admitted operation drains, preventing a late checkpoint advance from
-clearing its durable record. Host-tree shutdown and census halts drain exclusively
-before terminal recording and cleanup. Cleanup clears only its own generation.
+clearing its durable record. Census halts drain before terminal recording;
+host-tree shutdown drains without writing a tombstone. Both clean up exclusively
+and clear only their own generation.
 
 The child's shutdown budget is `:infinity`: the census has a 10-second default
 and 60-second maximum; a durable terminal write has a 5-second budget; sink
@@ -137,9 +138,11 @@ traps exits; the guard retains the expired token until the owner classifies it,
 so timeout classification does not depend on cross-process message ordering. Owner death cancels the deadline, kills
 and joins the census, then terminates the exact monitored transport pid, never a
 successor registered under the same slot. Normal cleanup cancels all schedules
-and joins the census; the guard exits when its owner does. No cluster lock is
-claimed: admission lives in node-local `:persistent_term`, local owner liveness
-is required, and the former global-lock resource key included `node()`.
+and joins the census; the guard exits when its owner does. If the guard dies,
+the owner kills and joins its worker before draining the remaining operations:
+the lost independent deadline can no longer bound an exit-trapping worker.
+No cluster lock is claimed: admission lives in node-local `:persistent_term`,
+local owner liveness is required, and the former lock key included `node()`.
 
 The application's `prep_stop/1` closes new activation, operator and callback
 admission and signals owners to stop, then drains every slot already known to

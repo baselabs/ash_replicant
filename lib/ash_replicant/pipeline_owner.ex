@@ -302,7 +302,9 @@ defmodule AshReplicant.PipelineOwner do
         {:DOWN, ref, :process, guard, _reason},
         %{guard_monitor: ref, guard: guard} = state
       ) do
-    shutdown(state)
+    # A lost guard also loses the independent deadline. Its linked worker
+    # can trap exits, so kill and join it before waiting for its shared hold.
+    state |> stop_census() |> shutdown()
   end
 
   # A `:normal` DIRECT exit signal (Process.exit(pid, :normal)) carries no
