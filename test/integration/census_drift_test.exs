@@ -412,6 +412,7 @@ defmodule AshReplicant.CensusDriftTest do
     receive do
       {:DOWN, ^monitor, :process, ^owner, reason} -> assert reason == :normal
     end
+
     assert stop_result(stopper, early_stop) == :ok
     assert is_nil(early_stop), "stop returned while its owner held a real connection"
 
