@@ -712,7 +712,7 @@ defmodule AshReplicant.CensusDriftTest do
       assert :ok = Task.await(shutdown, :infinity)
       await_all(monitors)
       assert :none == :persistent_term.get({AshReplicant, @slot}, :none)
-      assert [] = Registry.lookup(Replicant.Registry, {@slot, :pipeline})
+      assert_no_live_pipeline()
     after
       send(worker, {:release_transaction, barrier})
     end
@@ -791,7 +791,7 @@ defmodule AshReplicant.CensusDriftTest do
       send(guard, {:census_deadline, token})
       assert_receive {:DOWN, ^monitor, :process, ^worker, :killed}, 15_000
       AshReplicant.PipelineOwner.stop(owner)
-      assert [] = Registry.lookup(Replicant.Registry, {@slot, :pipeline})
+      assert_no_live_pipeline()
     after
       send(worker, {:release_transaction, barrier})
     end
@@ -809,7 +809,7 @@ defmodule AshReplicant.CensusDriftTest do
     Process.exit(owner, :kill)
     assert_receive {:DOWN, ^worker_monitor, :process, ^worker, :killed}, 15_000
     await_all(monitors)
-    assert [] = Registry.lookup(Replicant.Registry, {@slot, :pipeline})
+    assert_no_live_pipeline()
   end
 
   @tag capture_log: true
@@ -829,7 +829,7 @@ defmodule AshReplicant.CensusDriftTest do
       refute AshReplicant.PipelineGuard.timed_out?(guard, make_ref())
       await_all(monitors)
       assert :none == :persistent_term.get({AshReplicant, @slot}, :none)
-      assert [] = Registry.lookup(Replicant.Registry, {@slot, :pipeline})
+      assert_no_live_pipeline()
     after
       send(worker, {:release_transaction, barrier})
     end
@@ -856,6 +856,14 @@ defmodule AshReplicant.CensusDriftTest do
   defp await_all(monitors) do
     for {pid, monitor} <- monitors do
       assert_receive {:DOWN, ^monitor, :process, ^pid, _reason}, 15_000
+    end
+  end
+
+  defp assert_no_live_pipeline do
+    # Registry retires entries through its own monitor, independently of
+    # our process joins. Any registered process that is still alive fails.
+    for {pid, _value} <- Registry.lookup(Replicant.Registry, {@slot, :pipeline}) do
+      refute Process.alive?(pid)
     end
   end
 
