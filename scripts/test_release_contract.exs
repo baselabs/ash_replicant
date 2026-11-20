@@ -1288,6 +1288,17 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
       assert_invalid!()
 
+      unless workflow == @publish do
+        # A measured timeout must cite a recorded green run, not any number.
+        prepare_fixture()
+        path = fixture_path(workflow)
+        pattern = ~r/^  #{Regex.escape(job)}:\n.*?(?=^  [a-z][a-z0-9-]+:\n|\z)/ms
+        [block] = Regex.run(pattern, File.read!(path))
+        [comment] = Regex.run(~r/# Green run [0-9]+:/, block)
+        mutate_job!(job, comment, "# Green run 1:", workflow)
+        assert_invalid!()
+      end
+
       prepare_fixture()
       mutate_job!(job, "persist-credentials: false", "persist-credentials: true", workflow)
       assert_invalid!()
