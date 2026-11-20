@@ -14,11 +14,12 @@ defmodule AshReplicant.PipelineOwner do
       explicit `Process.exit/2`) — the trapped `:EXIT` handler stops the
       pipeline first, then the same cleanup runs.
 
-  The owner links to NOBODY (deliberately): a bare caller finishing — or
+  The owner is unlinked from its caller: a bare caller finishing — or
   being shut down by its own test runner — must not take a live pipeline
   down mid-transaction. A host supervisor needs no link either: it
   monitors the child and delivers tree shutdown as a direct `:shutdown`
-  exit signal, which the trapping owner receives and honors.
+  exit signal, which the trapping owner receives and honors. Membership in
+  the library's owner registry ties the owner to that registry's lifetime.
 
   A generation whose owner has died ADMITS nothing (callback entry checks
   owner liveness and fails closed) and blocks nothing (activation and the
@@ -57,7 +58,7 @@ defmodule AshReplicant.PipelineOwner do
 
   use GenServer
 
-  alias AshReplicant.{Census, Status, Telemetry}
+  alias AshReplicant.{Census, Lease, PipelineGuard, Status, Telemetry}
   alias AshReplicant.Sink.Impl
 
   @doc """
@@ -72,7 +73,10 @@ defmodule AshReplicant.PipelineOwner do
         :error -> __MODULE__
       end
 
-    %{id: id, start: {__MODULE__, :start_link, [opts]}, restart: :temporary}
+    # Census: 10s default / 60s maximum; durable terminal write: 5s;
+    # destination transactions: 120s. Host callback code and earlier lifecycle
+    # requests have no total deadline, so no finite sum bounds the drain.
+    %{id: id, start: {__MODULE__, :start_link, [opts]}, restart: :temporary, shutdown: :infinity}
   end
 
   @doc """
@@ -150,6 +154,7 @@ defmodule AshReplicant.PipelineOwner do
         :error -> nil
       end
 
+    {:ok, _partition} = Registry.register(AshReplicant.Owners, self(), nil)
     {:ok, %{pending: true, slot_name: slot_name}}
   end
 
@@ -164,6 +169,8 @@ defmodule AshReplicant.PipelineOwner do
       generation_ref: admitted.generation_ref,
       pipeline_pid: admitted.pipeline_pid,
       monitor: monitor,
+      guard: admitted.guard,
+      guard_monitor: Process.monitor(admitted.guard),
       census: admitted.census,
       census_timer: nil,
       census_run: nil,
@@ -253,7 +260,11 @@ defmodule AshReplicant.PipelineOwner do
       ) do
     cancel_timer(run.timeout)
 
-    reason = if timed_out?, do: :census_timeout, else: :census_checker_fault
+    reason =
+      if timed_out? or PipelineGuard.timed_out?(state.guard, run.token),
+        do: :census_timeout,
+        else: :census_checker_fault
+
     report = census_fault_report(reason)
     apply_census_report(report, %{state | census_run: nil})
   end
@@ -267,14 +278,33 @@ defmodule AshReplicant.PipelineOwner do
         {:DOWN, ref, :process, pid, _reason},
         %{monitor: ref, pipeline_pid: pid} = state
       ) do
-    Status.record_if_absent(
-      state.slot_name,
-      state.sink,
-      state.source_identity,
-      :pipeline_terminated
-    )
+    # A terminal write is admitted work too. Stop must drain it; keep the
+    # cleanup's exclusive request separate so a queued stop can run first.
+    Lease.with(state.slot_name, :shared, fn -> record_terminal(state) end)
 
-    {:stop, :normal, cleanup(state)}
+    state =
+      Lease.with(state.slot_name, :exclusive, fn ->
+        if owns_generation?(state) do
+          tombstone =
+            Status.snapshot_node_local(state.slot_name) ||
+              Status.record_node_local(state.slot_name, :pipeline_terminated)
+
+          Status.record_durable(state.slot_name, state.sink, state.source_identity, tombstone)
+        end
+
+        cleanup(state)
+      end)
+
+    {:stop, :normal, state}
+  end
+
+  def handle_info(
+        {:DOWN, ref, :process, guard, _reason},
+        %{guard_monitor: ref, guard: guard} = state
+      ) do
+    # A lost guard also loses the independent deadline. Its linked worker
+    # can trap exits, so kill and join it before waiting for its shared hold.
+    state |> stop_census() |> shutdown()
   end
 
   # A `:normal` DIRECT exit signal (Process.exit(pid, :normal)) carries no
@@ -284,19 +314,60 @@ defmodule AshReplicant.PipelineOwner do
 
   # Host-tree shutdown or an explicit kill signal: stop the pipeline first,
   # then the same cleanup the :DOWN path performs.
-  def handle_info({:EXIT, _pid, _reason}, state) do
-    _ = safe_stop(state)
-    {:stop, :normal, cleanup(state)}
-  end
+  def handle_info({:EXIT, _pid, _reason}, state), do: shutdown(state)
 
   def handle_info(_other, state), do: {:noreply, state}
+
+  @impl GenServer
+  def terminate(_reason, %{pending: true}), do: :ok
+
+  def terminate(_reason, state) do
+    # GenServer.stop/3 and callback failures bypass the EXIT handler. Normal
+    # teardown has already erased admission; a direct stop still owes drain.
+    Lease.with(state.slot_name, :exclusive, fn ->
+      if owns_generation?(state) do
+        _ = safe_stop(state)
+        cleanup(state)
+      end
+    end)
+
+    :ok
+  end
+
+  defp shutdown(state) do
+    state =
+      Lease.with(state.slot_name, :exclusive, fn ->
+        if owns_generation?(state) do
+          _ = safe_stop(state)
+        end
+
+        cleanup(state)
+      end)
+
+    {:stop, :normal, state}
+  end
+
+  defp record_terminal(state) do
+    if owns_generation?(state) do
+      Status.record_if_absent(
+        state.slot_name,
+        state.sink,
+        state.source_identity,
+        :pipeline_terminated
+      )
+    end
+  end
+
+  defp owns_generation?(state) do
+    case :persistent_term.get({AshReplicant, state.slot_name}, :none) do
+      %{reference: reference} -> reference == state.generation_ref
+      _absent -> false
+    end
+  end
 
   defp reap_pending(%{pending: true} = state) do
     if slot_name = state.slot_name do
       AshReplicant.reclaim_owned_generation(slot_name, self())
-      # The reaped pipeline ended by the handshake aborting — a teardown
-      # write hazard, so the node-local leg is the whole record.
-      Status.record_node_local(slot_name, :pipeline_terminated)
     end
 
     {:stop, :normal, state}
@@ -309,8 +380,13 @@ defmodule AshReplicant.PipelineOwner do
   defp cleanup(%{slot_name: slot_name, generation_ref: generation_ref, monitor: monitor} = state) do
     state = stop_census(state)
     Process.demonitor(monitor, [:flush])
-    Impl.clear_snapshot_ordinals(slot_name)
-    :ok = AshReplicant.erase_generation(slot_name, generation_ref)
+    Process.demonitor(state.guard_monitor, [:flush])
+
+    if owns_generation?(state) do
+      Impl.clear_snapshot_ordinals(slot_name)
+      :ok = AshReplicant.erase_generation(slot_name, generation_ref)
+    end
+
     state
   end
 
@@ -328,17 +404,14 @@ defmodule AshReplicant.PipelineOwner do
   defp start_census(%{census_run: run} = state) when not is_nil(run), do: state
 
   defp start_census(state) do
-    parent = self()
     token = make_ref()
     slot_name = state.slot_name
     sink = state.sink
 
-    {pid, monitor} =
-      spawn_monitor(fn ->
-        send(parent, {:census_result, token, Census.run(slot_name, sink)})
-      end)
+    {:ok, pid, timeout} =
+      PipelineGuard.start_census(state.guard, slot_name, sink, token, state.census.timeout_ms)
 
-    timeout = Process.send_after(self(), {:census_timeout, token}, state.census.timeout_ms)
+    monitor = Process.monitor(pid)
 
     %{
       state
@@ -352,7 +425,11 @@ defmodule AshReplicant.PipelineOwner do
     }
   end
 
-  defp apply_census_report(%{state: :healthy}, state) do
+  defp apply_census_report(report, state) do
+    if Lease.accepting?(), do: apply_running_report(report, state), else: shutdown(state)
+  end
+
+  defp apply_running_report(%{state: :healthy}, state) do
     Telemetry.event(
       [:ash_replicant, :census, :passed],
       %{count: 1},
@@ -362,7 +439,7 @@ defmodule AshReplicant.PipelineOwner do
     {:noreply, schedule_next_census(%{state | consecutive_faults: 0, last_census: :healthy})}
   end
 
-  defp apply_census_report(
+  defp apply_running_report(
          %{state: {:faulted, check, reason}},
          state
        ) do
@@ -383,7 +460,7 @@ defmodule AshReplicant.PipelineOwner do
     end
   end
 
-  defp apply_census_report(
+  defp apply_running_report(
          %{state: {:drifted, check, reason}},
          state
        ) do
@@ -397,14 +474,26 @@ defmodule AshReplicant.PipelineOwner do
       %{slot_name: state.slot_name, kind: check, reason: reason}
     )
 
-    # The node-local tombstone leg is written at the DECISION (always
-    # legible, even with the destination down); the durable leg waits for
-    # termination — after `safe_stop` no admitted delivery can still commit
-    # its terminal-clear (O02 design D3).
-    tombstone = Status.record_node_local(state.slot_name, reason)
-    _ = safe_stop(state)
-    Status.record_durable(state.slot_name, state.sink, state.source_identity, tombstone)
-    {:stop, :normal, cleanup(state)}
+    # Record the decision before waiting for exclusive drain, but never let
+    # an old owner touch a successor's tombstone. The durable write follows
+    # the final admitted commit so no checkpoint advance can clear it.
+    tombstone =
+      Lease.with(state.slot_name, :shared, fn ->
+        if owns_generation?(state), do: Status.record_node_local(state.slot_name, reason)
+      end)
+
+    state =
+      Lease.with(state.slot_name, :exclusive, fn ->
+        if owns_generation?(state) do
+          _ = safe_stop(state)
+          Status.restore_node_local(state.slot_name, tombstone)
+          Status.record_durable(state.slot_name, state.sink, state.source_identity, tombstone)
+        end
+
+        cleanup(state)
+      end)
+
+    {:stop, :normal, state}
   end
 
   defp census_fault_report(reason) do

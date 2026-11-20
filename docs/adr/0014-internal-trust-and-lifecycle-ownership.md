@@ -73,7 +73,7 @@ minimum transport-lifecycle touch needed to own it, and it observes only.
    clears the snapshot ordinals, and exits `:normal`. Replicant retains
    transport ownership: the owner never holds, restarts, or reconfigures
    the connection; it observes process death and cleans up admission
-   state. The owner links to NOBODY: a bare caller finishing — or being
+   state. The owner is unlinked from its caller: a bare caller finishing — or being
    shut down by its own test runner — must not take a live pipeline down
    mid-transaction (the pre-B7 pipeline likewise outlived its starter),
    while a host supervisor needs no link — it monitors the child and
@@ -82,8 +82,9 @@ minimum transport-lifecycle touch needed to own it, and it observes only.
 3. **A dead owner is fail-closed and replaceable.** Callback admission
    (`run_admitted_callback`) checks owner liveness at entry: a generation
    whose owner is dead fails closed (`:config_invalid`, op `:callback`),
-   and the pipeline's next callback therefore halts it fail-closed
-   (Replicant halts on any non-ok sink return — the sink contract read
+   and its lifetime guard stops the transport independently of further
+   callbacks. Any attempted callback still halts fail-closed (Replicant
+   halts on any non-ok sink return — the sink contract read
    first-hand in `deps/replicant/lib/replicant/sink.ex`). Activation and
    the offline operator functions treat a dead-owner entry as absent: the
    next `start_link/1` reaps any orphan pipeline and replaces the entry;
@@ -102,14 +103,61 @@ minimum transport-lifecycle touch needed to own it, and it observes only.
    (a fail-closed halt must not auto-resurrect under anyone): restarting
    is an explicit host/operator act that re-runs the full admission.
 
+### Operation drain and forced owner death
+
+The library application supervises a node-local owner registry, lease registry
+and per-owner lifetime guards. Lifecycle exclusivity covers activation, offline
+operators,
+`stop_supervised/1`, pending-owner reclamation and owner cleanup. Callbacks,
+reads, the census and an owner's terminal write hold shared operation leases;
+shared holders never wait on each other. Once a lifecycle writer queues, new
+operations wait behind it. Holder and waiter monitors remove abandoned requests.
+
+`stop_supervised/1` drains admitted operations, stops transport, reasserts its
+terminal fact and erases admission under an exclusive hold, then releases the
+hold before joining the owner. Owner cleanup takes the same exclusive hold;
+joining while holding it would deadlock. An owner's terminal write holds a
+shared lease and checks its generation, so stop drains it without a stale owner
+writing over a successor. Cleanup reasserts the final terminal fact exclusively
+after every admitted operation drains, preventing a late checkpoint advance from
+clearing its durable record. Census halts drain before terminal recording;
+host-tree shutdown drains without writing a tombstone. Both clean up exclusively
+and clear only their own generation.
+
+The child's shutdown budget is `:infinity`: the census has a 10-second default
+and 60-second maximum; a durable terminal write has a 5-second budget; sink
+transactions declare 120-second database timeouts. None bounds arbitrary host
+code inside an admitted callback, or time behind earlier lifecycle requests.
+Adding finite database deadlines cannot bound the stop drain. A finite host
+shutdown would therefore permit a brutal kill during an admitted operation.
+
+A supervised lifetime guard monitors the owner independently of its mailbox. It
+owns each monitored census worker and its deadline, so timeout still fires while
+the owner waits for the exclusive lease. A deadline kills the worker even if it
+traps exits; the guard retains the expired token until the owner classifies it,
+so timeout classification does not depend on cross-process message ordering. Owner death cancels the deadline, kills
+and joins the census, then terminates the exact monitored transport pid, never a
+successor registered under the same slot. Normal cleanup cancels all schedules
+and joins the census; the guard exits when its owner does. If the guard dies,
+the owner kills and joins its worker before draining the remaining operations:
+the lost independent deadline can no longer bound an exit-trapping worker.
+No cluster lock is claimed: admission lives in node-local `:persistent_term`,
+local owner liveness is required, and the former lock key included `node()`.
+
+The application's `prep_stop/1` closes new activation, operator and callback
+admission and signals owners to stop, then drains every slot already known to
+the lease registry. This joins activations that were already creating owners before closure. It joins
+all registered owners and lifetime guards before OTP terminates either
+registry, preserving the same drain during library-application shutdown.
+
 ## Consequences
 
 - A pipeline death of ANY origin (halt, crash, external stop) now frees
   the slot for re-activation and operator recovery immediately — the
   stale-generation wedge class is closed.
-- An owner crash stops mirroring promptly BY DESIGN (callbacks fail
-  closed, the pipeline halts itself): mirroring continues only under a
-  live owner. An operator or host restarts explicitly.
+- An owner crash stops mirroring promptly: the lifetime guard stops the
+  observed transport without waiting for another callback, and callback
+  admission still fails closed. Mirroring continues only under a live owner. An operator or host restarts explicitly.
 - A host-tree shutdown now stops pipelines owned by that tree (the
   supervisor's shutdown signal reaches the owner directly) — previously a
   pipeline outlived its starter process.

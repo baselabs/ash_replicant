@@ -24,6 +24,8 @@ defmodule AshReplicant do
   alias AshReplicant.Destination
   alias AshReplicant.Destination.Generation
   alias AshReplicant.Error
+  alias AshReplicant.Lease
+  alias AshReplicant.PipelineGuard
   alias AshReplicant.PipelineOwner
   alias AshReplicant.Resource.Info
   alias AshReplicant.Sink.Impl
@@ -108,31 +110,33 @@ defmodule AshReplicant do
   """
   @spec stop_supervised(String.t()) :: :ok | {:error, :pipeline_stop_failed}
   def stop_supervised(slot_name) do
-    activation_lock(slot_name, fn ->
-      # Record the stop fact BEFORE safe_stop — the owner's own death path
-      # records :pipeline_terminated only when NO tombstone is present, so a
-      # stop with no prior record races it into a mislabeled cause — and
-      # RE-ASSERT it AFTER: an admitted delivery that commits while the stop
-      # waits on the lease clears the durable terminal columns with its
-      # checkpoint advance (the census halt path's D3 hazard); the re-assert
-      # (idempotent, once the pipeline is down) supersedes that late clear.
-      stop_fact = capture_stop_fact(slot_name)
-      write_stop_fact(slot_name, stop_fact)
-      result = safe_stop(slot_name)
+    {result, stop_fact} =
+      Lease.with(slot_name, :exclusive, fn ->
+        # Record the stop fact BEFORE safe_stop — the owner's own death path
+        # records :pipeline_terminated only when NO tombstone is present, so a
+        # stop with no prior record races it into a mislabeled cause — and
+        # RE-ASSERT it AFTER: an admitted delivery that commits while the stop
+        # waits on the lease clears the durable terminal columns with its
+        # checkpoint advance (the census halt path's D3 hazard); the re-assert
+        # (idempotent, once the pipeline is down) supersedes that late clear.
+        stop_fact = capture_stop_fact(slot_name)
+        write_stop_fact(slot_name, stop_fact)
+        result = safe_stop(slot_name)
 
-      # The owner can still be writing a terminal cause or cancelling its
-      # census after the transport is gone. It never takes this lease, so
-      # join it here before releasing destination ownership to the caller.
-      case stop_fact do
-        %Generation{owner: owner} -> PipelineOwner.stop(owner)
-        :none -> :ok
-      end
+        write_stop_fact(slot_name, stop_fact)
+        :persistent_term.erase({AshReplicant, slot_name})
+        Impl.clear_snapshot_ordinals(slot_name)
+        {result, stop_fact}
+      end)
 
-      write_stop_fact(slot_name, stop_fact)
-      :persistent_term.erase({AshReplicant, slot_name})
-      Impl.clear_snapshot_ordinals(slot_name)
-      result
-    end)
+    # Owner cleanup drains the same exclusive lease. Join only after releasing
+    # it; admission is already erased and no old operation can reach the DB.
+    case stop_fact do
+      %Generation{owner: owner} -> PipelineOwner.stop(owner)
+      :none -> :ok
+    end
+
+    result
   end
 
   defp capture_stop_fact(slot_name) do
@@ -173,14 +177,17 @@ defmodule AshReplicant do
   # as its owner — erase it (and stop any pipeline it started). Owned by
   # PipelineOwner, not the public API.
   def reclaim_owned_generation(slot_name, owner_pid) do
-    case :persistent_term.get({AshReplicant, slot_name}, :none) do
-      %Generation{reference: reference, owner: ^owner_pid} ->
-        _ = safe_stop(slot_name)
-        erase_generation_key({AshReplicant, slot_name}, reference)
+    Lease.with(slot_name, :exclusive, fn ->
+      case :persistent_term.get({AshReplicant, slot_name}, :none) do
+        %Generation{reference: reference, owner: ^owner_pid} ->
+          _ = safe_stop(slot_name)
+          Status.record_node_local(slot_name, :pipeline_terminated)
+          erase_generation_key({AshReplicant, slot_name}, reference)
 
-      _other ->
-        :ok
-    end
+        _other ->
+          :ok
+      end
+    end)
   end
 
   @doc """
@@ -330,12 +337,16 @@ defmodule AshReplicant do
   # entry whose owner is gone is reaped — with any orphan pipeline — instead
   # of wedging recovery on a stale admission.
   defp offline_slot_operation(slot_name, operation) do
-    activation_lock(slot_name, fn ->
-      offline_slot_step(
-        slot_name,
-        :persistent_term.get({AshReplicant, slot_name}, :none),
-        operation
-      )
+    Lease.with(slot_name, :exclusive, fn ->
+      if Lease.accepting?() do
+        offline_slot_step(
+          slot_name,
+          :persistent_term.get({AshReplicant, slot_name}, :none),
+          operation
+        )
+      else
+        generation_error(:slot_already_active)
+      end
     end)
   end
 
@@ -566,18 +577,23 @@ defmodule AshReplicant do
   def run_callback(slot_name, sink, effect, opts \\ [])
       when is_binary(slot_name) and is_atom(sink) and is_function(effect, 1) and
              is_list(opts) do
-    activation_lock(slot_name, fn ->
-      result = run_admitted_callback(slot_name, sink, effect)
-
-      # Reads own destination connections too; the census can also rebind
-      # the durable key witness. Keep every admitted operation AND its
-      # terminal write inside the same lease that stop drains.
-      # The census opts out of terminal recording: its faults feed the
-      # consecutive-fault budget rather than a tombstone.
-      if Keyword.get(opts, :terminal?, true),
-        do: Status.record_callback_error(slot_name, result),
-        else: result
+    Lease.with(slot_name, :shared, fn ->
+      if Lease.accepting?(),
+        do: callback_effect(slot_name, sink, effect, opts),
+        else: generation_error(:callback)
     end)
+  end
+
+  defp callback_effect(slot_name, sink, effect, opts) do
+    result = run_admitted_callback(slot_name, sink, effect)
+    generation = :persistent_term.get({AshReplicant, slot_name}, :none)
+
+    # Reads and the census own destination connections too. Their effect and
+    # any terminal write remain inside the shared hold that lifecycle drains.
+    # Census faults feed its consecutive budget rather than a tombstone.
+    if Keyword.get(opts, :terminal?, true) and match?(%Generation{sink: ^sink}, generation),
+      do: Status.record_callback_error(slot_name, result),
+      else: result
   end
 
   @doc false
@@ -644,7 +660,7 @@ defmodule AshReplicant do
          {:ok, census} <- Census.options(opts),
          {:ok, source_identity} <- validate_source_identity(opts),
          {:ok, source_set} <- SourceSet.normalize(opts) do
-      activation_lock(sink_config.slot_name, fn ->
+      Lease.with(sink_config.slot_name, :exclusive, fn ->
         activate_slot(
           opts,
           sink,
@@ -667,9 +683,13 @@ defmodule AshReplicant do
          owner_pid,
          census
        ) do
-    with {:ok, admitted} <-
+    with true <- Lease.accepting?(),
+         {:ok, admitted} <-
            admit_slot(opts, sink, sink_config, source_identity, source_set, owner_pid) do
       {:ok, Map.merge(admitted, %{sink: sink, census: census})}
+    else
+      false -> {:error, :config_invalid}
+      error -> error
     end
   end
 
@@ -808,19 +828,25 @@ defmodule AshReplicant do
 
       :persistent_term.put(key, runtime)
 
-      result = safe_start(opts, sink_config.slot_name, sink)
+      result =
+        with {:ok, pipeline_pid} <- safe_start(opts, sink_config.slot_name, sink),
+             {:ok, guard} <- PipelineGuard.start(owner_pid, pipeline_pid) do
+          {:ok, pipeline_pid, guard}
+        end
 
       case result do
-        {:ok, pipeline_pid} ->
+        {:ok, pipeline_pid, guard} ->
           {:ok,
            %{
              slot_name: sink_config.slot_name,
              generation_ref: reference,
              pipeline_pid: pipeline_pid,
+             guard: guard,
              source_identity: source_identity
            }}
 
         _start_failed ->
+          _ = safe_stop(sink_config.slot_name)
           :ok = Status.restore_node_local(sink_config.slot_name, previous_tombstone)
           erase_generation_key(key, reference)
           result
@@ -1151,7 +1177,4 @@ defmodule AshReplicant do
   end
 
   defp owner_alive?(_other), do: false
-
-  defp activation_lock(slot_name, fun),
-    do: :global.trans({{__MODULE__, node(), slot_name}, self()}, fun)
 end

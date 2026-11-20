@@ -1389,10 +1389,10 @@ defmodule AshReplicant.ReleaseContract do
      ]},
     {"AGENTS.md", "## Architecture (realized)",
      [
-       "The same owner runs the C01 continuous invariant census through the admitted\n" <>
-         "callback guard (never a second Replicant callback or lifecycle process)",
+       "The same owner schedules the C01 continuous invariant census through the admitted\n" <>
+         "callback guard (never a second Replicant callback)",
        "The next run is scheduled only after the\n" <>
-         "current one settles, and pipeline/owner teardown kills any in-flight worker."
+         "current one settles. Graceful owner/application teardown drains admitted work;"
      ]}
   ]
 
@@ -1405,8 +1405,8 @@ defmodule AshReplicant.ReleaseContract do
     {"lib/ash_replicant/census.ex", "    max_consecutive_faults: 3\n"},
     {"lib/ash_replicant.ex", "{:ok, census} <- Census.options(opts),"},
     {"lib/ash_replicant.ex", "{:ok, Map.merge(admitted, %{sink: sink, census: census})}"},
-    {"lib/ash_replicant/pipeline_owner.ex",
-     "send(parent, {:census_result, token, Census.run(slot_name, sink)})"},
+    {"lib/ash_replicant/pipeline_guard.ex",
+     "send(owner, {:census_result, token, Census.run(slot, sink)})"},
     {"lib/ash_replicant/pipeline_owner.ex",
      "schedule_next_census(%{state | consecutive_faults: 0, last_census: :healthy})"},
     {"lib/ash_replicant/pipeline_owner.ex",

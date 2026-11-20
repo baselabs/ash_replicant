@@ -6,6 +6,7 @@ README.md
 hex_metadata.config
 lib/ash_replicant.ex
 lib/ash_replicant/append.ex
+lib/ash_replicant/application.ex
 lib/ash_replicant/apply.ex
 lib/ash_replicant/apply/context.ex
 lib/ash_replicant/apply/scd2.ex
@@ -24,9 +25,11 @@ lib/ash_replicant/error.ex
 lib/ash_replicant/horizon.ex
 lib/ash_replicant/horizon/key_state.ex
 lib/ash_replicant/install.ex
+lib/ash_replicant/lease.ex
 lib/ash_replicant/messages.ex
 lib/ash_replicant/notifier.ex
 lib/ash_replicant/pipeline.ex
+lib/ash_replicant/pipeline_guard.ex
 lib/ash_replicant/pipeline_owner.ex
 lib/ash_replicant/resolver.ex
 lib/ash_replicant/resource.ex

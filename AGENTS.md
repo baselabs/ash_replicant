@@ -20,13 +20,14 @@ slot; timeline recorded) and a contract manifest classified at every reconnect (
 `AshReplicant.PipelineOwner` owns each slot's generation (ADR-0014); a dead owner's generation
 fails closed. Generated internal resources (the checkpoint) are default-deny.
 
-The same owner runs the C01 continuous invariant census through the admitted
-callback guard (never a second Replicant callback or lifecycle process): one
+The same owner schedules the C01 continuous invariant census through the admitted
+callback guard (never a second Replicant callback): one
 jittered, bounded, monitored worker rechecks destination, live contract,
 checkpoint contract/fingerprint, and full source coverage. Drift halts
 immediately; timeout/unreachable/checker faults are typed non-pass results and
 halt at the exact consecutive budget. The next run is scheduled only after the
-current one settles, and pipeline/owner teardown kills any in-flight worker.
+current one settles. Graceful owner/application teardown drains admitted work;
+a supervised lifetime guard stops workers and transport left by owner death.
 
 ## Critical rules
 
