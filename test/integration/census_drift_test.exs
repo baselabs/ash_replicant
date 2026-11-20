@@ -728,6 +728,7 @@ defmodule AshReplicant.CensusDriftTest do
       refute_received {:census, ^ref, [:ash_replicant, :census, :halted], _}
     after
       send(worker, {:release_transaction, barrier})
+
       try do
         assert :ok = Task.await(stopper, :infinity)
       after

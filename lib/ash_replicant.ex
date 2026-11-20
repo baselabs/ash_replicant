@@ -338,11 +338,15 @@ defmodule AshReplicant do
   # of wedging recovery on a stale admission.
   defp offline_slot_operation(slot_name, operation) do
     Lease.with(slot_name, :exclusive, fn ->
-      offline_slot_step(
-        slot_name,
-        :persistent_term.get({AshReplicant, slot_name}, :none),
-        operation
-      )
+      if Lease.accepting?() do
+        offline_slot_step(
+          slot_name,
+          :persistent_term.get({AshReplicant, slot_name}, :none),
+          operation
+        )
+      else
+        generation_error(:slot_already_active)
+      end
     end)
   end
 
@@ -574,18 +578,22 @@ defmodule AshReplicant do
       when is_binary(slot_name) and is_atom(sink) and is_function(effect, 1) and
              is_list(opts) do
     Lease.with(slot_name, :shared, fn ->
-      result = run_admitted_callback(slot_name, sink, effect)
-
-      # Reads own destination connections too; the census can also rebind
-      # the durable key witness. Keep every admitted operation AND its
-      # terminal write inside the same lease that stop drains.
-      # The census opts out of terminal recording: its faults feed the
-      # consecutive-fault budget rather than a tombstone.
-      if Keyword.get(opts, :terminal?, true) and
-           match?(%Generation{sink: ^sink}, :persistent_term.get({AshReplicant, slot_name}, :none)),
-        do: Status.record_callback_error(slot_name, result),
-        else: result
+      if Lease.accepting?(),
+        do: callback_effect(slot_name, sink, effect, opts),
+        else: generation_error(:callback)
     end)
+  end
+
+  defp callback_effect(slot_name, sink, effect, opts) do
+    result = run_admitted_callback(slot_name, sink, effect)
+    generation = :persistent_term.get({AshReplicant, slot_name}, :none)
+
+    # Reads and the census own destination connections too. Their effect and
+    # any terminal write remain inside the shared hold that lifecycle drains.
+    # Census faults feed its consecutive budget rather than a tombstone.
+    if Keyword.get(opts, :terminal?, true) and match?(%Generation{sink: ^sink}, generation),
+      do: Status.record_callback_error(slot_name, result),
+      else: result
   end
 
   @doc false
@@ -653,15 +661,19 @@ defmodule AshReplicant do
          {:ok, source_identity} <- validate_source_identity(opts),
          {:ok, source_set} <- SourceSet.normalize(opts) do
       Lease.with(sink_config.slot_name, :exclusive, fn ->
-        activate_slot(
-          opts,
-          sink,
-          sink_config,
-          source_identity,
-          source_set,
-          owner_pid,
-          census
-        )
+        if Lease.accepting?() do
+          activate_slot(
+            opts,
+            sink,
+            sink_config,
+            source_identity,
+            source_set,
+            owner_pid,
+            census
+          )
+        else
+          {:error, :config_invalid}
+        end
       end)
     end
   end

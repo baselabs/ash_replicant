@@ -51,10 +51,18 @@ defmodule AshReplicant.Lease do
   def release({_status, {registry, reference}}),
     do: GenServer.call(registry, {:release, reference}, :infinity)
 
-  @impl true
-  def init(_opts), do: {:ok, %{slots: %{}, requests: %{}}}
+  def accepting?, do: GenServer.call(__MODULE__, :accepting?, :infinity)
+  def close, do: GenServer.call(__MODULE__, :close, :infinity)
 
   @impl true
+  def init(_opts), do: {:ok, %{slots: %{}, requests: %{}, accepting?: true}}
+
+  @impl true
+  def handle_call(:accepting?, _from, state), do: {:reply, state.accepting?, state}
+
+  def handle_call(:close, _from, state),
+    do: {:reply, Map.keys(state.slots), %{state | accepting?: false}}
+
   def handle_call({:request, slot, mode}, {pid, _tag}, state) do
     reference = Process.monitor(pid)
     request = %{slot: slot, mode: mode, pid: pid, status: :queued}

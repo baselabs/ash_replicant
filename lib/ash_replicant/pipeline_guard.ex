@@ -19,6 +19,8 @@ defmodule AshReplicant.PipelineGuard do
   def start_census(guard, slot, sink, token, timeout),
     do: GenServer.call(guard, {:census, slot, sink, token, timeout}, :infinity)
 
+  def timed_out?(guard, token), do: GenServer.call(guard, {:timed_out?, token}, :infinity)
+
   @impl true
   def init(opts) do
     Process.flag(:trap_exit, true)
@@ -34,7 +36,8 @@ defmodule AshReplicant.PipelineGuard do
        owner: owner,
        monitor: Process.monitor(owner),
        pipeline: Keyword.fetch!(opts, :pipeline),
-       census: nil
+       census: nil,
+       last_timeout: nil
      }}
   end
 
@@ -51,14 +54,17 @@ defmodule AshReplicant.PipelineGuard do
 
     timer = Process.send_after(self(), {:census_deadline, token}, timeout)
     run = %{pid: pid, monitor: monitor, token: token, timeout: timer}
-    {:reply, {:ok, pid, timer}, %{state | census: run}}
+    {:reply, {:ok, pid, timer}, %{state | census: run, last_timeout: nil}}
   end
+
+  def handle_call({:timed_out?, token}, _from, state),
+    do: {:reply, state.last_timeout == token, state}
 
   @impl true
   def handle_info({:census_deadline, token}, %{census: %{token: token, pid: pid}} = state) do
     send(state.owner, {:census_timeout, token})
-    Process.exit(pid, :census_timeout)
-    {:noreply, state}
+    Process.exit(pid, :kill)
+    {:noreply, %{state | last_timeout: token}}
   end
 
   def handle_info(

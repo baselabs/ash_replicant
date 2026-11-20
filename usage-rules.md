@@ -1015,7 +1015,7 @@ Rules for reading it:
   census has not run yet, is disabled, or is faulting below the halt budget
   reports `:catching_up` — owner liveness alone is insufficient.
 - **`{:halted, :owner_lost}` is a fault.** A dead owner means mirroring has
-  stopped (or stops at the next callback); restart explicitly. It is never
+  stopped or is being stopped by its lifetime guard; restart explicitly. It is never
   reported as `:not_started`.
 - **`{:misconfigured, reason}` names the config/contract drift** an operator
   fixes before a restart can succeed (identity rebinding, contract drift,
