@@ -35,6 +35,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Prevent busy streams from starving the invariant census with fair, node-local shared
+  operation leases and exclusive lifecycle drain. Queued lifecycle requests bar later
+  operations; release and monitored process death wake waiters directly.
+- Drain admitted database work during graceful owner and application shutdown. Enforce hard
+  census deadlines and close worker and transport lifetimes after forced owner or guard loss.
+  Preserve the final terminal cause after late admitted checkpoint writes, while graceful
+  host-tree teardown keeps its no-tombstone contract.
 - Make database drain tests select the actual census worker and acknowledge transaction
   release before joining shutdown. Released callbacks, consumer leases, and upgrade work
   join completion under ExUnit's existing test deadline.
