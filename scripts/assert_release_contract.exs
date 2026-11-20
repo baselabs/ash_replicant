@@ -2251,7 +2251,7 @@ defmodule AshReplicant.ReleaseContract do
     pattern = ~r/^  #{Regex.escape(name)}:\n.*?(?=^  [a-z][a-z0-9-]+:\n|\z)/ms
     [block] = Regex.run(pattern, File.read!(path)) || fail("CI job source is missing")
 
-    if Path.basename(path) in ["publish.yml", "drift-report.yml"] do
+    if {Path.basename(path), name} == {"publish.yml", "published-package"} do
       assert(
         timeout == 90 and
           String.contains?(block, "    timeout-minutes: 90 # no green run yet\n"),
@@ -2269,7 +2269,7 @@ defmodule AshReplicant.ReleaseContract do
         expected = if measured < 150, do: 5, else: div(2 * measured + 59, 60)
 
         assert(
-          run in ~w(44208487858 44214414813 44224060553 44227674373 44554148819 44572306314 44738538737) and
+          run in ~w(44208487858 44214414813 44224060553 44227674373 44554148819 44572306314 44736595182 44738538737 44765244702) and
             measured > 0 and measured <= 2700 and is_integer(timeout) and timeout <= 90 and
             timeout == expected,
           "CI timeout must follow its slowest measured green run and infra's 5-minute floor"

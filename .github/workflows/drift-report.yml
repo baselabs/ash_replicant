@@ -16,7 +16,8 @@ jobs:
   report:
     name: Upstream dependencies
     runs-on: ubuntu-24.04
-    timeout-minutes: 90 # no green run yet
+    # Green run 44765244702: Upstream dependencies 11m48s.
+    timeout-minutes: 24
     env:
       MIX_ENV: test
       ASH_REPLICANT_TEST_URL: postgres://postgres@localhost:5432/postgres

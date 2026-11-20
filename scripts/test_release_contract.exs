@@ -949,7 +949,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           {"          version-type: strict\n",
            "          version-type: strict\n          cache: true\n"},
           {"        id: runtime\n", ""},
-          {"    timeout-minutes: 90 # no green run yet\n", "    timeout-minutes: 90\n"},
+          {"    timeout-minutes: 24\n", "    timeout-minutes: 90 # no green run yet\n"},
           {"          rm mix.lock\n", "          true\n"},
           {"        working-directory: ${{ runner.temp }}\n", ""},
           {"        working-directory: ${{ runner.temp }}\n",
@@ -1260,12 +1260,13 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       {@workflow, "release-artifact", 12},
       {@workflow, "fresh-consumer", 9},
       {@landing, "qualified", 5},
-      {@publish, "publish", 90},
+      {@publish, "publish", 5},
+      {@drift, "report", 24},
       {@publish, "published-package", 90}
     ]
 
     for {workflow, job, timeout} <- jobs do
-      suffix = if workflow == @publish, do: " # no green run yet", else: ""
+      suffix = if job == "published-package", do: " # no green run yet", else: ""
 
       for replacement <- ["", "    timeout-minutes: 1\n"] do
         prepare_fixture()
@@ -1275,7 +1276,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
       prepare_fixture()
 
-      if workflow == @publish do
+      if job == "published-package" do
         mutate_job!(job, "# no green run yet", "# No measurement", workflow)
       else
         path = fixture_path(workflow)
@@ -1288,7 +1289,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
       assert_invalid!()
 
-      unless workflow == @publish do
+      unless job == "published-package" do
         # A measured timeout must cite a recorded green run, not any number.
         prepare_fixture()
         path = fixture_path(workflow)
@@ -1303,7 +1304,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       mutate_job!(job, "persist-credentials: false", "persist-credentials: true", workflow)
       assert_invalid!()
 
-      unless workflow == @landing do
+      unless workflow in [@landing, @drift] do
         prepare_fixture()
         mutate_job!(job, "mix deps.get --check-locked", "mix deps.get", workflow)
         assert_invalid!()

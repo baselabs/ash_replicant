@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Set the publish and drift-report timeouts from their first green runs, following
+  infra's measured timeout rule. Verifying the published package keeps its 90-minute
+  bound until its first green run.
 - Audit the fresh consumer's resolved lock from the repository, where `mix_audit`
   is declared; the post-publish check had invoked a task the consumer did not declare.
   Qualification now runs the full tarball consumer against its own PostgreSQL before
