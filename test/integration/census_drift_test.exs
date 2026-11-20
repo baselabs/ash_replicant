@@ -702,6 +702,31 @@ defmodule AshReplicant.CensusDriftTest do
   end
 
   @tag capture_log: true
+  test "application shutdown drains owners before terminating the lease registry" do
+    LeaseEvents.attach()
+    Messages.setup_schema!()
+    on_exit(fn -> Messages.teardown_schema!() end)
+    assert {:ok, owner} = start([interval_ms: 60_000, timeout_ms: 60_000], ClaimSink)
+    {worker, barrier} = paused_census(owner)
+    %{pipeline_pid: pipeline} = :sys.get_state(owner, :infinity)
+    monitors = monitor_all([owner, worker, pipeline])
+    stopper = Task.async(fn -> Application.stop(:ash_replicant) end)
+
+    try do
+      assert_receive {:lease_queued, ^owner}, 5_000
+      refute_received {:DOWN, _, :process, ^worker, _}
+      send(worker, {:release_transaction, barrier})
+      assert :ok = Task.await(stopper, :infinity)
+      await_all(monitors)
+      assert :none == :persistent_term.get({AshReplicant, @slot}, :none)
+    after
+      send(worker, {:release_transaction, barrier})
+      Task.await(stopper, :infinity)
+      {:ok, _apps} = Application.ensure_all_started(:ash_replicant)
+    end
+  end
+
+  @tag capture_log: true
   test "the census deadline fires independently while the owner waits to drain" do
     LeaseEvents.attach()
     Messages.setup_schema!()
