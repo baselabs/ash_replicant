@@ -35,6 +35,10 @@ defmodule AshReplicant.LeaseTest do
     task
   end
 
+  defp refute_holding(%Task{pid: pid}) do
+    refute_received {:holding, ^pid}
+  end
+
   defp release(task) do
     send(task.pid, :release)
     assert :ok = Task.await(task)
@@ -48,12 +52,13 @@ defmodule AshReplicant.LeaseTest do
 
     exclusive = holder(slot, :exclusive)
     late = holder(slot, :shared)
-    refute_received {:holding, pid} when pid in [exclusive.pid, late.pid]
+    refute_holding(exclusive)
+    refute_holding(late)
     release(first)
-    refute_received {:holding, pid} when pid == exclusive.pid, 5_000
+    refute_holding(exclusive)
     release(second)
     assert_receive {:holding, pid} when pid == exclusive.pid, 5_000
-    refute_received {:holding, pid} when pid == late.pid, 5_000
+    refute_holding(late)
     release(exclusive)
     assert_receive {:holding, pid} when pid == late.pid, 5_000
     release(late)

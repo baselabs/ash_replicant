@@ -171,8 +171,8 @@ defmodule AshReplicant.PipelineOwnerTest do
     capture_log(fn ->
       assert {:ok, owner} = AshReplicant.start_link(start_opts())
 
-      # The owner links to nobody, so an untrappable kill takes only the
-      # owner down — exactly the crash this test exercises.
+      # The owner is unlinked from this caller. An untrappable kill does
+      # not propagate here; its lifetime guard stops the transport.
       true = Process.exit(owner, :kill)
       eventually(fn -> not Process.alive?(owner) end)
 

@@ -209,6 +209,7 @@ defmodule AshReplicant.CensusDriftTest do
       when owner != self() do
     case :sys.get_state(owner, :infinity) do
       %{census_run: %{pid: worker}} when worker == self() ->
+        Process.flag(:trap_exit, true)
         hold_transaction(event, measurements, metadata, {parent, worker, barrier})
 
       _other ->
@@ -655,12 +656,14 @@ defmodule AshReplicant.CensusDriftTest do
 
     spec = AshReplicant.PipelineOwner.child_spec(opts)
     assert spec.shutdown == :infinity
+
     host =
       start_supervised!(%{
         id: :census_host,
         start: {Supervisor, :start_link, [[spec], [strategy: :one_for_one]]},
         type: :supervisor
       })
+
     [{_, owner, _, _}] = Supervisor.which_children(host)
     {worker, barrier} = paused_census(owner)
     %{pipeline_pid: pipeline} = :sys.get_state(owner, :infinity)
@@ -704,6 +707,7 @@ defmodule AshReplicant.CensusDriftTest do
   @tag capture_log: true
   test "application shutdown drains owners before terminating the lease registry" do
     LeaseEvents.attach()
+    ref = attach()
     Messages.setup_schema!()
     on_exit(fn -> Messages.teardown_schema!() end)
     assert {:ok, owner} = start([interval_ms: 60_000, timeout_ms: 60_000], ClaimSink)
@@ -713,16 +717,22 @@ defmodule AshReplicant.CensusDriftTest do
     stopper = Task.async(fn -> Application.stop(:ash_replicant) end)
 
     try do
-      assert_receive {:lease_queued, ^owner}, 5_000
+      assert_receive {:lease_queued, drainer}, 5_000
+      queued = :sys.get_state(AshReplicant.Lease).requests |> Map.values()
+      assert %{mode: :exclusive, slot: @slot} = Enum.find(queued, &(&1.pid == drainer))
       refute_received {:DOWN, _, :process, ^worker, _}
       send(worker, {:release_transaction, barrier})
-      assert :ok = Task.await(stopper, :infinity)
       await_all(monitors)
       assert :none == :persistent_term.get({AshReplicant, @slot}, :none)
+      refute_received {:census, ^ref, [:ash_replicant, :census, :faulted], _}
+      refute_received {:census, ^ref, [:ash_replicant, :census, :halted], _}
     after
       send(worker, {:release_transaction, barrier})
-      Task.await(stopper, :infinity)
-      {:ok, _apps} = Application.ensure_all_started(:ash_replicant)
+      try do
+        assert :ok = Task.await(stopper, :infinity)
+      after
+        {:ok, _apps} = Application.ensure_all_started(:ash_replicant)
+      end
     end
   end
 
@@ -735,6 +745,7 @@ defmodule AshReplicant.CensusDriftTest do
     {worker, barrier} = paused_census(owner)
     %{guard: guard, census_run: %{token: token}} = :sys.get_state(owner, :infinity)
     monitor = Process.monitor(worker)
+    assert {:trap_exit, true} = Process.info(worker, :trap_exit)
     Process.exit(owner, :shutdown)
 
     try do
@@ -742,7 +753,7 @@ defmodule AshReplicant.CensusDriftTest do
       # Deliver the real deadline event to its independent owner. This makes
       # the mailbox/lease interleaving deterministic without timing the test.
       send(guard, {:census_deadline, token})
-      assert_receive {:DOWN, ^monitor, :process, ^worker, :census_timeout}, 15_000
+      assert_receive {:DOWN, ^monitor, :process, ^worker, :killed}, 15_000
       AshReplicant.PipelineOwner.stop(owner)
       assert [] = Registry.lookup(Replicant.Registry, {@slot, :pipeline})
     after

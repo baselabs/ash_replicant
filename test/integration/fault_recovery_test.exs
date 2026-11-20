@@ -201,7 +201,7 @@ defmodule AshReplicant.FaultRecoveryTest do
     assert :ok = AshReplicant.stop_supervised(@slot)
   end
 
-  test "owner death fails the next delivery closed, halts, and re-activation resumes without dup or loss",
+  test "owner death stops transport and re-activation resumes without dup or loss",
        %{run_id: run_id} do
     ref = attach_delivery_events()
     assert {:ok, owner} = start(@fast_census)
@@ -213,19 +213,24 @@ defmodule AshReplicant.FaultRecoveryTest do
     Marquee.q!("INSERT INTO #{@src} (id, note) VALUES ('m', 'marker')")
     PG.wait_until(fn -> mirror_rows() == [["m", "marker"]] end, 600)
 
-    # The owner dies untrapped. A delivery is then ATTEMPTED (row p): its
-    # admission must fail closed, which halts the pipeline itself.
+    # The independent lifetime guard stops transport on owner death, even
+    # without another callback. Wait for actual teardown before writing p.
+    %{pipeline_pid: pipeline, guard: guard} = :sys.get_state(owner, :infinity)
+    monitors = Enum.map([owner, pipeline, guard], &{&1, Process.monitor(&1)})
     Process.exit(owner, :kill)
-    refute Process.alive?(owner)
+
+    for {pid, monitor} <- monitors do
+      assert_receive {:DOWN, ^monitor, :process, ^pid, _reason}, 15_000
+    end
 
     Marquee.q!("INSERT INTO #{@src} (id, note) VALUES ('p', 'post-kill')")
 
     wait_pipeline_down()
     PG.wait_until(fn -> mirror_rows() == [["m", "marker"]] end, 600)
 
-    # The failed admission funneled through the callback boundary: the
-    # tombstone carries the scrubbed reason (:config_invalid, class halt).
-    assert {:halted, :config_invalid} = AshReplicant.status(Sink)
+    # A dead generation is fail-closed without relying on a future callback
+    # to manufacture a terminal record.
+    assert {:halted, :owner_lost} = AshReplicant.status(Sink)
 
     # Generation replacement: the dead-owner entry does not wedge the slot.
     # Re-activation reaps it (and any orphan pipeline) and resumes from the
