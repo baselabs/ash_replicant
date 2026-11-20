@@ -9,8 +9,9 @@
 # Postgres (see README "Supported foundation"), also runs ecto
 # create/migrate, the migration drift gate, and the FULL live suite —
 # exactly the compatibility job's checks — followed by a fresh consumer.
-# Load ASH_REPLICANT_TEST_URL from this repo's gitignored .env. For this
-# BaseLabs project, the database runs in the BaseLabs cluster.
+# Export ASH_REPLICANT_TEST_URL yourself; the repository keeps no database
+# credential. Its own qualification runs only in CI, against each job's
+# service container.
 #
 # The dependency selectors (ASH_REPLICANT_ASH_VERSION,
 # ASH_REPLICANT_REPLICANT_VERSION, ASH_REPLICANT_ONETIME_VERSION) pass
