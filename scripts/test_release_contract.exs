@@ -190,6 +190,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       "mix compile --warnings-as-errors",
       "mix format --check-formatted",
       "elixir --version",
+      "scripts/test-prepush.sh",
       "scripts/test-release-checkers.sh",
       "scripts/test-release-guards.sh",
       "scripts/test-release-contract.sh",
@@ -222,6 +223,14 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       "mix compile --warnings-as-errors",
       String.trim(@create_database),
       "scripts/run-structural-tests.sh test/integration/performance_bounds_test.exs --include integration"
+    ],
+    "fresh-consumer" => [
+      "scripts/assert-runtime-version.sh",
+      "mix local.hex 2.7.0 --force",
+      "mix deps.get --check-locked",
+      "mix deps.compile",
+      "scripts/test-fresh-consumer.sh",
+      "docker rm -fv pg"
     ],
     "release-artifact" => [
       "scripts/assert-runtime-version.sh",
@@ -414,6 +423,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       action_input_probes()
       landing_and_fail_late_probes()
       qualification_probes()
+      fresh_consumer_probes()
       drift_report_probes()
       publish_probes()
       command_status_probes()
@@ -867,6 +877,48 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     prepare_fixture()
     replace_once!(@workflow, "  workflow_call:\n", "  push:\n")
     assert_invalid!()
+  end
+
+  defp fresh_consumer_probes do
+    prepare_fixture()
+    path = fixture_path(@workflow)
+    source = File.read!(path)
+
+    File.write!(
+      path,
+      Regex.replace(~r/^  fresh-consumer:\n.*?(?=^  [a-z][a-z0-9-]+:\n|\z)/ms, source, "")
+    )
+
+    assert_invalid!()
+
+    for {old, replacement} <- [
+          {"scripts/test-fresh-consumer.sh", "scripts/test-fresh-consumer.sh --check"},
+          {"    permissions:\n      contents: read", "    permissions:\n      contents: write"},
+          {"      MIX_ENV: dev", "      MIX_ENV: prod"},
+          {"      ASH_REPLICANT_TEST_URL:", "      UNUSED_DATABASE_URL:"},
+          {"mix deps.get --check-locked", "mix deps.get"},
+          {"mix deps.compile", "true"},
+          {"wal_level=logical", "wal_level=replica"},
+          {"scripts/wait-for-postgres.sh pg", "true"},
+          {"        if: always()", "        if: success()"},
+          {"docker rm -fv pg", "true"}
+        ] do
+      prepare_fixture()
+      mutate_job!("fresh-consumer", old, replacement)
+      assert_invalid!()
+    end
+
+    for {old, replacement} <- [
+          {~s|(cd "$root" && mix deps.audit --path "$consumer")|, "consumer_mix deps.audit"},
+          {~s|(cd "$root" && mix deps.audit --path "$consumer")|, "true"},
+          {~s|--path "$consumer"|, ~s|--path "$root"|},
+          {"consumer_mix hex.audit", "true"},
+          {"export MIX_ENV=dev", "export MIX_ENV=prod"}
+        ] do
+      prepare_fixture()
+      replace_once!("scripts/test-fresh-consumer.sh", old, replacement)
+      assert_invalid!()
+    end
   end
 
   defp drift_report_probes do

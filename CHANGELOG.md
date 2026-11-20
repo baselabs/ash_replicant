@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Audit the fresh consumer's resolved lock from the repository, where `mix_audit`
+  is declared; the post-publish check had invoked a task the consumer did not declare.
+  Qualification now runs the full tarball consumer against its own PostgreSQL before
+  publication, including compilation, docs, migrations, and the live CDC smoke.
+
 ## [1.6.4] - 2026-11-20
 
 ### Changed

@@ -42,6 +42,8 @@ jobs:
         if: ${{ !cancelled() && steps.compile.outcome == 'success' }}
       - run: elixir --version
         if: ${{ !cancelled() && steps.compile.outcome == 'success' }}
+      - run: scripts/test-prepush.sh
+        if: ${{ !cancelled() && steps.compile.outcome == 'success' }}
       - run: scripts/test-release-checkers.sh
         if: ${{ !cancelled() && steps.compile.outcome == 'success' }}
       - run: scripts/test-release-guards.sh
@@ -331,6 +333,40 @@ jobs:
 
       - name: Decoder admission lane (pglogical, wal2json, pgoutput-on-old)
         run: scripts/run-structural-tests.sh test/integration/decoder_admission_test.exs --include pgold
+
+  fresh-consumer:
+    name: Fresh tarball consumer
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90 # no green run yet
+    permissions:
+      contents: read
+    env:
+      MIX_ENV: dev
+      ASH_REPLICANT_TEST_URL: postgres://postgres@localhost:5432/ash_replicant_test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          version-file: .tool-versions
+          version-type: strict
+      - run: scripts/assert-runtime-version.sh
+      - run: mix local.hex 2.7.0 --force
+      - run: mix deps.get --check-locked
+      - run: mix deps.compile
+      - name: Start the candidate consumer's real PostgreSQL
+        run: |
+          docker run -d --name pg \
+            -e POSTGRES_HOST_AUTH_METHOD=trust -p 5432:5432 \
+            postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b \
+            -c wal_level=logical -c max_replication_slots=20 -c max_wal_senders=20
+          scripts/wait-for-postgres.sh pg
+      - name: Audit and exercise the candidate package as a fresh consumer
+        run: scripts/test-fresh-consumer.sh
+      - name: Remove the candidate consumer's PostgreSQL
+        if: always()
+        run: docker rm -fv pg
 
   release-artifact:
     name: Selector-free docs and package

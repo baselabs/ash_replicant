@@ -174,12 +174,17 @@ decoder options pass through with FULL decoder admission (ADR-0026).
 
 The CI gates install the exact runtime, fetch with `mix deps.get --check-locked`, and run
 format, compile with warnings as errors, Credo, both dependency audits, the covering tests,
-Dialyzer, and docs/package checks through the route above. Local convenience scripts do not
-authorize builds or tests on the owner's Mac or on the build box.
+Dialyzer, and docs/package checks through the route above. The `fresh-consumer` job
+builds the candidate tarball and runs fresh resolution, both audits, compile with warnings
+as errors, docs, migrations, and a live CDC smoke against its own logical-WAL PostgreSQL 16.
+The consumer's `deps.audit --path` runs from the dev repository root, where `mix_audit`
+is declared; Hex's audit runs inside the consumer. The retired local `prepush.sh` route
+authorizes no build or test on the owner's Mac or build box; CI runs its collector self-tests.
 
 CI fetches only committed locks: `mix.lock` for current-lock cells,
 `locks/exact-floors.lock` and `locks/latest-compatible.lock` for those cells.
 Qualification asserts compatible versions without querying newest upstream releases.
+The generated fresh tarball consumer starts without a lock and resolves its dependencies.
 `drift-report.yml` runs daily or by dispatch, refuses non-default refs first, and compares
 the latest-compatible lock with the newest admitted Ash, Replicant, AshOnetime, AshPostgres,
 and Spark releases. It also resolves fresh within the public requirements, reports all

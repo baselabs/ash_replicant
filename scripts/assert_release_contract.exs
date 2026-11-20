@@ -82,6 +82,13 @@ defmodule AshReplicant.ReleaseContract do
   scripts/wait-for-postgres.sh pg
   """
 
+  @fresh_consumer_audits ~S"""
+  consumer_mix deps.get >/dev/null
+  consumer_mix hex.audit
+  (cd "$root" && mix deps.audit --path "$consumer")
+  consumer_mix deps.compile >/dev/null
+  """
+
   @publish_hex_artifacts_script ~S"""
   # Runs with --no-mix-exs: only Hex and the already inspected archives are loaded.
   # No dependency fetch, build, project code, credential persistence, or response logging.
@@ -1372,6 +1379,10 @@ defmodule AshReplicant.ReleaseContract do
       "ASH_REPLICANT_TEST_URL" => "postgres://postgres@localhost:5432/postgres"
     },
     "release-artifact" => %{"MIX_ENV" => "dev"},
+    "fresh-consumer" => %{
+      "MIX_ENV" => "dev",
+      "ASH_REPLICANT_TEST_URL" => "postgres://postgres@localhost:5432/ash_replicant_test"
+    },
     "performance" => %{
       "MIX_ENV" => "test",
       "ASH_REPLICANT_TEST_URL" => "postgres://postgres@localhost:5432/postgres",
@@ -1486,6 +1497,7 @@ defmodule AshReplicant.ReleaseContract do
     "no-database" => ~w(env name permissions runs-on steps timeout-minutes),
     "compatibility" => ~w(env name runs-on steps strategy timeout-minutes),
     "release-artifact" => ~w(env name runs-on steps timeout-minutes),
+    "fresh-consumer" => ~w(env name permissions runs-on steps timeout-minutes),
     "performance" => ~w(env name runs-on steps timeout-minutes),
     "decoder-old-majors" => ~w(env name runs-on steps strategy timeout-minutes)
   }
@@ -1500,6 +1512,7 @@ defmodule AshReplicant.ReleaseContract do
       {:run, "mix compile --warnings-as-errors", %{"id" => "compile"}},
       {:run, "mix format --check-formatted", %{"if" => @fail_late}},
       {:run, "elixir --version", %{"if" => @fail_late}},
+      {:run, "scripts/test-prepush.sh", %{"if" => @fail_late}},
       {:run, "scripts/test-release-checkers.sh", %{"if" => @fail_late}},
       {:run, "scripts/test-release-guards.sh",
        %{"if" => @fail_late, "env" => %{"GH_TOKEN" => "${{ github.token }}"}}},
@@ -1567,6 +1580,17 @@ defmodule AshReplicant.ReleaseContract do
       {:run, String.trim(@create_database)},
       {:run,
        "scripts/run-structural-tests.sh test/integration/decoder_admission_test.exs --include pgold"}
+    ],
+    "fresh-consumer" => [
+      {:uses, @checkout, %{"persist-credentials" => false}},
+      {:uses, @setup_beam, @setup_beam_inputs},
+      {:run, "scripts/assert-runtime-version.sh"},
+      {:run, "mix local.hex 2.7.0 --force"},
+      {:run, "mix deps.get --check-locked"},
+      {:run, "mix deps.compile"},
+      {:run, String.trim(@published_postgres_run)},
+      {:run, "scripts/test-fresh-consumer.sh"},
+      {:run, "docker rm -fv pg", %{"if" => "always()"}}
     ],
     "release-artifact" => [
       {:uses, @checkout, %{"persist-credentials" => false}},
@@ -1771,6 +1795,7 @@ defmodule AshReplicant.ReleaseContract do
     assert_mix_contract(root)
     assert_replicant_contract(root)
     assert_checker_wiring(root)
+    assert_fresh_consumer(root)
     assert_docs(root)
     assert_b1_docs(root)
     assert_b1_examples(root)
@@ -1902,6 +1927,16 @@ defmodule AshReplicant.ReleaseContract do
     error in ReleaseContractError ->
       IO.puts(:stderr, error.message)
       System.halt(1)
+  end
+
+  defp assert_fresh_consumer(root) do
+    source = File.read!(Path.join(root, "scripts/test-fresh-consumer.sh"))
+
+    assert(
+      String.contains?(source, "export MIX_ENV=dev\n") and
+        String.contains?(source, @fresh_consumer_audits),
+      "fresh consumer must audit its resolved lock from the dev repository root"
+    )
   end
 
   defp assert_landing(workflow) do
@@ -2216,7 +2251,8 @@ defmodule AshReplicant.ReleaseContract do
     pattern = ~r/^  #{Regex.escape(name)}:\n.*?(?=^  [a-z][a-z0-9-]+:\n|\z)/ms
     [block] = Regex.run(pattern, File.read!(path)) || fail("CI job source is missing")
 
-    if Path.basename(path) in ["publish.yml", "drift-report.yml"] do
+    if Path.basename(path) in ["publish.yml", "drift-report.yml"] or
+         (Path.basename(path) == "qualification.yml" and name == "fresh-consumer") do
       assert(
         timeout == 90 and
           String.contains?(block, "    timeout-minutes: 90 # no green run yet\n"),
@@ -2516,7 +2552,7 @@ defmodule AshReplicant.ReleaseContract do
       assert(job["runs-on"] == "ubuntu-24.04", "CI release runner is invalid")
       assert(job["env"] == @job_env[name], "CI release job environment is invalid")
 
-      if name == "no-database" do
+      if name in ["no-database", "fresh-consumer"] do
         assert(
           job["permissions"] == %{"contents" => "read"},
           "release guards need read-only contents"

@@ -4,6 +4,7 @@
   "qualification / Dependencies current-lock-pg18 / PostgreSQL 18",
   "qualification / Dependencies exact-floors / PostgreSQL 16",
   "qualification / Dependencies latest-compatible / PostgreSQL 16",
+  "qualification / Fresh tarball consumer",
   "qualification / Measured performance bounds",
   "qualification / No-database tests",
   "qualification / Plugin decoders / PostgreSQL 12",

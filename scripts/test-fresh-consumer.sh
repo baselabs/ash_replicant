@@ -420,9 +420,11 @@ CLEANUP
 echo "== consumer: deps resolve + compile with warnings-as-errors =="
 # WAE applies to the CONSUMER's code; dependency-internal warnings are
 # upstream's and compile in their own pass without the flag.
+# mix_audit belongs to the repository, not the generated consumer. Audit
+# the fresh resolution from that task home in both tarball and Hex modes.
 consumer_mix deps.get >/dev/null
 consumer_mix hex.audit
-consumer_mix deps.audit
+(cd "$root" && mix deps.audit --path "$consumer")
 consumer_mix deps.compile >/dev/null
 consumer_mix compile --warnings-as-errors >/dev/null
 echo "fresh-consumer: compile-WAE ok"

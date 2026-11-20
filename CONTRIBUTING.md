@@ -42,14 +42,11 @@ head and use `kimosabe-land`. Never send the landing SHA to a `kci/` ref beforeh
 1. Create a feature branch from `main`.
 2. Make your changes with clear, descriptive commit messages.
 3. Commit and qualify the covering checks through the CI-only route above. The commands
-   below describe the gates; they do not authorize a local build or test. The convenience
-   `scripts/prepush.sh` compiles first and reports independent checks, with a live-database
-   lane when `ASH_REPLICANT_TEST_URL` is set:
+   below describe the CI gates; they do not authorize a local build or test.
+   The retired local `scripts/prepush.sh` route is not qualification; CI runs its
+   collector self-tests and every gate directly:
 
 ```bash
-scripts/prepush.sh
-
-# — or, gate by gate —
 scripts/with-release-runtime.sh mix format --check-formatted
 scripts/with-release-runtime.sh mix compile --warnings-as-errors
 scripts/with-release-runtime.sh mix credo --strict
@@ -73,6 +70,12 @@ Database migration and its dependent live checks run only after successful
 database creation and migration. The other checks continue after a failure.
 Each CI job owns its PostgreSQL container. A fresh consumer creates and removes its own
 throwaway database on that server; it never borrows another project's machine or service.
+The `fresh-consumer` qualification job builds the candidate tarball and runs the full
+consumer against its own logical-WAL PostgreSQL 16: fresh dependency resolution, both
+audits, compilation with warnings as errors, docs, migrations, and the live CDC smoke.
+The `deps.audit --path` call runs from the repository's dev environment, where
+`mix_audit` is declared; Hex's audit runs inside the consumer. The post-publish job
+uses the same script with `--from-hex VERSION` for the exact published release.
 
 The last command is the data-boundary guard-mutation gate (ADR-0003): it
 removes one production guard or reorders one notifier guard after its first
@@ -107,7 +110,7 @@ The proof jobs live in `.github/workflows/qualification.yml`, called only by
 or tag filters. No workflow runs repository code from a pull request. A fork's
 change is qualified when a maintainer lands it through a `kci/<commit>` branch.
 The final `qualified` check reads the run's complete job inventory and requires
-all ten expected proofs to finish successfully. `main` moves only on that
+all eleven expected proofs to finish successfully. `main` moves only on that
 commit's `qualified` check; a push to `main`, a tag, or a release starts no run.
 If qualification fails, fix forward in the next commit.
 
@@ -194,9 +197,9 @@ affected tests in the same change, and record the Ash version contract delta in 
   CI fetches the exact-floor cell from `locks/exact-floors.lock`, the
   latest-compatible cell from `locks/latest-compatible.lock`, and current-lock
   cells from `mix.lock`. It copies the selected committed lock to `mix.lock`
-  before `mix deps.get --check-locked`; no qualification step resolves unlocked
-  dependencies. Version assertions check the committed versions against their
-  requirements; newest-release comparisons run only in the drift report.
+  before `mix deps.get --check-locked`. The fresh tarball consumer starts without
+  a lock and resolves its own dependencies; other qualification projects fetch locked.
+  Version assertions check the committed versions against their requirements; newest-release comparisons run only in the drift report.
   Upstream code enters qualification through a reviewed lock refresh.
 
   Live release guards run once in the no-database job, separately from the
