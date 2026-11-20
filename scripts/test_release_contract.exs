@@ -1190,7 +1190,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           {"    name: Verify published package",
            "    environment: publish\n    name: Verify published package"},
           {"scripts/test-fresh-consumer.sh --from-hex", "true --from-hex"},
-          {"scripts/read-release-assets.sh", "true"}
+          {"scripts/read-release-assets.sh", "true"},
+          {"          fetch-depth: 0", "          fetch-depth: 1"}
         ] do
       prepare_fixture()
       replace_once!(@publish, old, replacement)
@@ -1347,8 +1348,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       @publish,
-      "          persist-credentials: false\n",
-      "          persist-credentials: false\n" <> ref_step
+      "      - uses: #{@setup_beam}",
+      ref_step <> "      - uses: #{@setup_beam}"
     )
 
     assert_invalid!()

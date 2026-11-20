@@ -136,6 +136,7 @@ defmodule AshReplicant.PublishHexArtifactsTest do
     on_exit(fn -> File.rm(path) end)
     :ok = :erl_tar.create(path, [{~c"index.html", "served docs"}], [:compressed])
     bytes = File.read!(path)
+
     for required? <- [false, true] do
       assert :skip == PublishHexArtifacts.docs_action!(response(200, bytes), required?)
     end

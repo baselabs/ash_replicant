@@ -15,6 +15,7 @@ defmodule AshReplicant.ReleaseIdentityTest do
     path =
       Path.join(System.tmp_dir!(), "release-docs-#{System.unique_integer([:positive])}.tar.gz")
 
+    on_exit(fn -> File.rm(path) end)
     :ok = :erl_tar.create(path, [{~c"index.html", "rendered docs"}], [:compressed])
     bytes = File.read!(path)
     File.rm!(path)
