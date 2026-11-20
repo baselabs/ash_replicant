@@ -578,7 +578,10 @@ AshReplicant.start_link(
   duplicate start cannot replace or erase the active generation, and when the
   pipeline exits (halt, crash, stop) the owner erases it — the slot is
   immediately re-activatable ([ADR-0014](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0014-internal-trust-and-lifecycle-ownership.md)).
-  Under your own supervision tree, start it as a `:temporary` child:
+  Under your own supervision tree, start it as a `:temporary` child. Its child
+  spec declares `shutdown: :infinity`, so your supervisor waits for admitted
+  database work to drain; override `shutdown:` only if you accept that the owner
+  may be killed before its drain and terminal record finish:
 
   ```elixir
   children = [
