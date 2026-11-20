@@ -13,7 +13,7 @@ defmodule AshReplicant.DocsArchiveTest do
     %{scratch: scratch}
   end
 
-  test "Hex archives ignore source times and inspect every rendered byte", %{scratch: dir} do
+  test "Hex archives inspect every rendered byte", %{scratch: dir} do
     first = Path.join(dir, "first")
     second = Path.join(dir, "second")
 
@@ -98,7 +98,11 @@ defmodule AshReplicant.DocsArchiveTest do
   defp build!(tree, scratch) do
     File.write!(
       Path.join(tree, "release.json"),
-      Jason.encode!(%{package: "ash_replicant", version: "1.6.4", commit: String.duplicate("a", 40)})
+      Jason.encode!(%{
+        package: "ash_replicant",
+        version: "1.6.4",
+        commit: String.duplicate("a", 40)
+      })
     )
 
     archive = tree <> ".tar.gz"
@@ -115,7 +119,16 @@ defmodule AshReplicant.DocsArchiveTest do
   defp inspect_archive(archive, tree) do
     System.cmd(
       "python3",
-      ["-I", @checker, archive, tree, "--version", "1.6.4", "--commit", String.duplicate("a", 40)],
+      [
+        "-I",
+        @checker,
+        archive,
+        tree,
+        "--version",
+        "1.6.4",
+        "--commit",
+        String.duplicate("a", 40)
+      ],
       stderr_to_stdout: true
     )
   end

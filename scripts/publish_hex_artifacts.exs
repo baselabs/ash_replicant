@@ -30,8 +30,8 @@ defmodule PublishHexArtifacts do
 
     # Re-read after the package decision: docs may have appeared in the meantime.
     case release_state!(Hex.API.Release.get(nil, name, version), version, digest) do
-      {:held, _docs?} ->
-        case docs_action!(Hex.Repo.get_docs("hexpm", name, version)) do
+      {:held, docs?} ->
+        case docs_action!(Hex.Repo.get_docs("hexpm", name, version), docs?) do
           :upload ->
             Hex.API.ReleaseDocs.publish(nil, name, version, docs_bytes, auth)
             |> accepted!("Hex docs")
@@ -122,22 +122,23 @@ defmodule PublishHexArtifacts do
 
   # Read raw bytes from the repository API. ReleaseDocs.get decodes API responses
   # and can return nil for a successful binary response. Never replace served docs.
-  def docs_action!({:ok, {200, _headers, bytes}}) do
+  def docs_action!({:ok, {200, _headers, bytes}}, _required?) do
     if docs_archive?(bytes),
       do: :skip,
       else: raise("Hex docs archive is malformed; publication refused")
   end
 
-  def docs_action!({:ok, {404, _headers, _body}}), do: :upload
+  def docs_action!({:ok, {404, _headers, _body}}, false), do: :upload
 
-  def docs_action!(_response),
+  def docs_action!({:ok, {404, _headers, _body}}, true),
+    do: raise("Hex docs metadata and repository disagree; inspect public state before retrying")
+
+  def docs_action!(_response, _required?),
     do: raise("Hex docs archive is unavailable; inspect public state before retrying")
 
   def docs_read_back!(response) do
-    case docs_action!(response) do
-      :skip -> :ok
-      :upload -> raise "Hex docs archive is unavailable; inspect public state before retrying"
-    end
+    :skip = docs_action!(response, true)
+    :ok
   end
 
   def docs_archive?(<<0x1F, 0x8B, _rest::binary>> = bytes) do

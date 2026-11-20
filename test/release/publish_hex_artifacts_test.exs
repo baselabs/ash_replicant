@@ -19,7 +19,7 @@ defmodule AshReplicant.PublishHexArtifactsTest do
   @version "1.2.0"
   @digest String.duplicate("a", 64)
   @docs_read ~s|docs_read_back!(Hex.Repo.get_docs("hexpm", name, version))|
-  @docs_action ~s|docs_action!(Hex.Repo.get_docs("hexpm", name, version))|
+  @docs_action ~s|docs_action!(Hex.Repo.get_docs("hexpm", name, version), docs?)|
   @read ~s|release_state!(Hex.API.Release.get(nil, name, version), version, digest)|
   @package ~s|Hex.API.Release.publish(nil, package_bytes, auth)|
   @docs ~s|Hex.API.ReleaseDocs.publish(nil, name, version, docs_bytes, auth)|
@@ -102,7 +102,8 @@ defmodule AshReplicant.PublishHexArtifactsTest do
 
   test "metadata read-back requires the exact package and no retirement" do
     for docs? <- [false, true] do
-      assert :ok == PublishHexArtifacts.read_back!(response(200, metadata(docs?)), @version, @digest)
+      assert :ok ==
+               PublishHexArtifacts.read_back!(response(200, metadata(docs?)), @version, @digest)
     end
 
     incomplete = [
@@ -129,12 +130,22 @@ defmodule AshReplicant.PublishHexArtifactsTest do
   end
 
   test "readable served docs are kept, absence uploads, and malformed read-back refuses" do
-    path = Path.join(System.tmp_dir!(), "publish-docs-#{System.unique_integer([:positive])}.tar.gz")
+    path =
+      Path.join(System.tmp_dir!(), "publish-docs-#{System.unique_integer([:positive])}.tar.gz")
+
     on_exit(fn -> File.rm(path) end)
     :ok = :erl_tar.create(path, [{~c"index.html", "served docs"}], [:compressed])
     bytes = File.read!(path)
-    assert :skip == PublishHexArtifacts.docs_action!(response(200, bytes))
-    assert :upload == PublishHexArtifacts.docs_action!(response(404, %{}))
+    for required? <- [false, true] do
+      assert :skip == PublishHexArtifacts.docs_action!(response(200, bytes), required?)
+    end
+
+    assert :upload == PublishHexArtifacts.docs_action!(response(404, %{}), false)
+
+    assert_raise RuntimeError, ~r/Hex docs metadata and repository disagree/, fn ->
+      PublishHexArtifacts.docs_action!(response(404, %{}), true)
+    end
+
     assert :ok == PublishHexArtifacts.docs_read_back!(response(200, bytes))
 
     missing = [
@@ -219,7 +230,7 @@ defmodule AshReplicant.PublishHexArtifactsTest do
     assert package_case =~ ":fresh ->\n        " <> @package
     assert package_case =~ "{:held, _docs?} ->\n        :ok"
     assert package_case =~ "|> accepted!(\"Hex package\")\n        |> approved!()"
-    assert docs_case =~ "{:held, _docs?} ->"
+    assert docs_case =~ "{:held, docs?} ->"
     assert docs_case =~ "case " <> @docs_action <> " do"
     assert docs_case =~ ":upload ->\n            " <> @docs
     assert docs_case =~ ":skip ->\n            :ok"
@@ -235,7 +246,7 @@ defmodule AshReplicant.PublishHexArtifactsTest do
 
     assert source =~ "if docs_archive?(bytes)"
     assert source =~ ":erl_tar.extract({:binary, bytes}, [:compressed, :memory])"
-    assert source =~ "case docs_action!(response) do"
+    assert source =~ ":skip = docs_action!(response, true)"
     refute source =~ "docs_digest"
   end
 

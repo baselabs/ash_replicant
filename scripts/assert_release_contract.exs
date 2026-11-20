@@ -115,8 +115,8 @@ defmodule AshReplicant.ReleaseContract do
 
       # Re-read after the package decision: docs may have appeared in the meantime.
       case release_state!(Hex.API.Release.get(nil, name, version), version, digest) do
-        {:held, _docs?} ->
-          case docs_action!(Hex.Repo.get_docs("hexpm", name, version)) do
+        {:held, docs?} ->
+          case docs_action!(Hex.Repo.get_docs("hexpm", name, version), docs?) do
             :upload ->
               Hex.API.ReleaseDocs.publish(nil, name, version, docs_bytes, auth)
               |> accepted!("Hex docs")
@@ -207,22 +207,23 @@ defmodule AshReplicant.ReleaseContract do
 
     # Read raw bytes from the repository API. ReleaseDocs.get decodes API responses
     # and can return nil for a successful binary response. Never replace served docs.
-    def docs_action!({:ok, {200, _headers, bytes}}) do
+    def docs_action!({:ok, {200, _headers, bytes}}, _required?) do
       if docs_archive?(bytes),
         do: :skip,
         else: raise("Hex docs archive is malformed; publication refused")
     end
 
-    def docs_action!({:ok, {404, _headers, _body}}), do: :upload
+    def docs_action!({:ok, {404, _headers, _body}}, false), do: :upload
 
-    def docs_action!(_response),
+    def docs_action!({:ok, {404, _headers, _body}}, true),
+      do: raise("Hex docs metadata and repository disagree; inspect public state before retrying")
+
+    def docs_action!(_response, _required?),
       do: raise("Hex docs archive is unavailable; inspect public state before retrying")
 
     def docs_read_back!(response) do
-      case docs_action!(response) do
-        :skip -> :ok
-        :upload -> raise "Hex docs archive is unavailable; inspect public state before retrying"
-      end
+      :skip = docs_action!(response, true)
+      :ok
     end
 
     def docs_archive?(<<0x1F, 0x8B, _rest::binary>> = bytes) do
@@ -318,13 +319,18 @@ defmodule AshReplicant.ReleaseContract do
               if path.is_file() and not any(part.startswith(".") for part in relative.parts):
                   source[relative.as_posix()] = path
       names = set()
-      # Hex emits a fixed gzip header: no original filename, timestamp, or OS.
-      with archive.open("rb") as stream:
-          if stream.read(10) != bytes((31, 139, 8, 0, 0, 0, 0, 0, 0, 0)):
-              raise ValueError("Docs gzip header must have no name or mtime.")
       ordered = []
       release = None
       with tarfile.open(archive, "r:gz") as packed:
+          # Legacy served archives must refuse for their missing release identity.
+          try:
+              packed.getmember("release.json")
+          except KeyError as error:
+              raise ValueError("Docs archive requires top-level release.json.") from error
+          # Hex emits a fixed gzip header: no original filename, timestamp, or OS.
+          with archive.open("rb") as stream:
+              if stream.read(10) != bytes((31, 139, 8, 0, 0, 0, 0, 0, 0, 0)):
+                  raise ValueError("Docs gzip header must have no name or mtime.")
           for member in packed:
               path = PurePosixPath(member.name)
               if (not member.isfile() or path.is_absolute() or "\\" in member.name
@@ -465,46 +471,43 @@ defmodule AshReplicant.ReleaseContract do
   {:held, true} =
     PublishHexArtifacts.release_state!({:ok, {200, [], metadata}}, "1.6.3", metadata["checksum"])
 
-  :ok =
-    PublishHexArtifacts.package_read_back!(
-      Hex.Repo.get_tarball("hexpm", "ash_replicant", "1.6.3"),
-      metadata["checksum"]
-    )
+  package_response = Hex.Repo.get_tarball("hexpm", "ash_replicant", "1.6.3")
+  :ok = PublishHexArtifacts.package_read_back!(package_response, metadata["checksum"])
 
   docs_response = Hex.Repo.get_docs("hexpm", "ash_replicant", "1.6.3")
 
-  :skip = PublishHexArtifacts.docs_action!(docs_response)
+  :skip = PublishHexArtifacts.docs_action!(docs_response, false)
+  :skip = PublishHexArtifacts.docs_action!(docs_response, true)
   :ok = PublishHexArtifacts.docs_read_back!(docs_response)
+
   :upload =
-    PublishHexArtifacts.docs_action!(Hex.Repo.get_docs("hexpm", "ash_replicant", "999999.0.0"))
+    PublishHexArtifacts.docs_action!(
+      Hex.Repo.get_docs("hexpm", "ash_replicant", "999999.0.0"),
+      false
+    )
 
   # These real published docs predate release.json: presence is sufficient for
   # upload planning, but provenance read-back must refuse them without an upload.
-  {:ok, {200, _, docs_bytes}} = docs_response
+  {:ok, {200, _, package_bytes}} = package_response
   work = Path.join(System.tmp_dir!(), "ash-docs-live-#{System.unique_integer([:positive])}")
   File.mkdir!(work)
 
   try do
-    archive = Path.join(work, "docs.tar.gz")
-    File.write!(archive, docs_bytes)
+    archive = Path.join(work, "package.tar")
+    assets = Path.join(work, "assets")
+    File.write!(archive, package_bytes)
 
     {output, 1} =
       System.cmd(
-        "python3",
-        [
-          "-I",
-          Path.join(__DIR__, "check-docs-archive.py"),
-          archive,
-          "--version",
-          "1.6.3",
-          "--commit",
-          System.fetch_env!("GITHUB_SHA")
-        ],
+        Path.join(__DIR__, "read-release-assets.sh"),
+        ["1.6.3", archive, assets],
         stderr_to_stdout: true
       )
 
     unless output =~ "requires top-level release.json",
       do: raise("legacy docs refused for wrong reason")
+
+    if File.exists?(assets), do: raise("legacy docs retained release assets")
   after
     File.rm_rf!(work)
   end
@@ -888,13 +891,14 @@ defmodule AshReplicant.ReleaseContract do
         "https://repo.hex.pm/docs/ash_replicant-" <> version <> ".tar.gz"
       ]
 
-      with :ok <- docs_present(runner.("curl", args)) do
+      with :ok <- docs_present(runner.("curl", args), state == {:held, true}) do
         {:ok, state}
       end
     end
 
     # Split the HTTP status by byte offset: the archive is binary, not UTF-8 text.
-    def docs_present({response, 0}) when is_binary(response) and byte_size(response) >= 4 do
+    def docs_present({response, 0}, required?)
+        when is_binary(response) and byte_size(response) >= 4 do
       size = byte_size(response) - 4
       <<bytes::binary-size(size), status::binary>> = response
 
@@ -904,15 +908,19 @@ defmodule AshReplicant.ReleaseContract do
             do: :ok,
             else: {:error, "Hex docs archive is malformed; publication refused"}
 
-        "\n404" ->
+        "\n404" when not required? ->
           :ok
+
+        "\n404" ->
+          {:error,
+           "Hex docs metadata and repository disagree; inspect public state before retrying"}
 
         _other ->
           {:error, "Hex docs archive is unavailable; publication refused"}
       end
     end
 
-    def docs_present(_response),
+    def docs_present(_response, _required?),
       do: {:error, "Hex docs archive lookup failed; publication refused"}
 
     def docs_archive?(<<0x1F, 0x8B, _rest::binary>> = bytes) do

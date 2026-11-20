@@ -14,6 +14,7 @@ defmodule AshReplicant.ReleaseIdentityTest do
   setup_all do
     path =
       Path.join(System.tmp_dir!(), "release-docs-#{System.unique_integer([:positive])}.tar.gz")
+
     :ok = :erl_tar.create(path, [{~c"index.html", "rendered docs"}], [:compressed])
     bytes = File.read!(path)
     File.rm!(path)
@@ -58,9 +59,10 @@ defmodule AshReplicant.ReleaseIdentityTest do
     assert {:ok, {:held, false}} ==
              ReleaseIdentity.check_archive(@version, @digest, true, runner)
 
-    # The docs lookup is authoritative even when release metadata lags.
+    # Advertised docs plus a repository 404 must never permit replacement.
     runner = runner(response(metadata(true)), {"{}\n404", 0})
-    assert {:ok, {:held, true}} == ReleaseIdentity.check_archive(@version, @digest, true, runner)
+    assert {:error, message} = ReleaseIdentity.check_archive(@version, @digest, true, runner)
+    assert message =~ "Hex docs metadata and repository disagree"
 
     mismatch = Map.put(metadata(false), "checksum", String.duplicate("b", 64))
     runner = runner(response(mismatch), {docs <> "\n200", 0})

@@ -74,13 +74,14 @@ defmodule AshReplicant.ReleaseIdentity do
       "https://repo.hex.pm/docs/ash_replicant-" <> version <> ".tar.gz"
     ]
 
-    with :ok <- docs_present(runner.("curl", args)) do
+    with :ok <- docs_present(runner.("curl", args), state == {:held, true}) do
       {:ok, state}
     end
   end
 
   # Split the HTTP status by byte offset: the archive is binary, not UTF-8 text.
-  def docs_present({response, 0}) when is_binary(response) and byte_size(response) >= 4 do
+  def docs_present({response, 0}, required?)
+      when is_binary(response) and byte_size(response) >= 4 do
     size = byte_size(response) - 4
     <<bytes::binary-size(size), status::binary>> = response
 
@@ -90,15 +91,19 @@ defmodule AshReplicant.ReleaseIdentity do
           do: :ok,
           else: {:error, "Hex docs archive is malformed; publication refused"}
 
-      "\n404" ->
+      "\n404" when not required? ->
         :ok
+
+      "\n404" ->
+        {:error,
+         "Hex docs metadata and repository disagree; inspect public state before retrying"}
 
       _other ->
         {:error, "Hex docs archive is unavailable; publication refused"}
     end
   end
 
-  def docs_present(_response),
+  def docs_present(_response, _required?),
     do: {:error, "Hex docs archive lookup failed; publication refused"}
 
   def docs_archive?(<<0x1F, 0x8B, _rest::binary>> = bytes) do

@@ -73,13 +73,18 @@ def check(archive, directory=None, *, package="ash_replicant", version, commit, 
             if path.is_file() and not any(part.startswith(".") for part in relative.parts):
                 source[relative.as_posix()] = path
     names = set()
-    # Hex emits a fixed gzip header: no original filename, timestamp, or OS.
-    with archive.open("rb") as stream:
-        if stream.read(10) != bytes((31, 139, 8, 0, 0, 0, 0, 0, 0, 0)):
-            raise ValueError("Docs gzip header must have no name or mtime.")
     ordered = []
     release = None
     with tarfile.open(archive, "r:gz") as packed:
+        # Legacy served archives must refuse for their missing release identity.
+        try:
+            packed.getmember("release.json")
+        except KeyError as error:
+            raise ValueError("Docs archive requires top-level release.json.") from error
+        # Hex emits a fixed gzip header: no original filename, timestamp, or OS.
+        with archive.open("rb") as stream:
+            if stream.read(10) != bytes((31, 139, 8, 0, 0, 0, 0, 0, 0, 0)):
+                raise ValueError("Docs gzip header must have no name or mtime.")
         for member in packed:
             path = PurePosixPath(member.name)
             if (not member.isfile() or path.is_absolute() or "\\" in member.name

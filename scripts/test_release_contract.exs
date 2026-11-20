@@ -1164,7 +1164,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           {"scripts/read-release-assets.sh", "fetch_archive"},
           {"scripts/read-release-assets.sh", "--assets"},
           {"scripts/check-docs-archive.py", "if release is None:"},
-          {"scripts/check-docs-archive.py", ~s|git("merge-base", "--is-ancestor", published, commit)|},
+          {"scripts/check-docs-archive.py",
+           ~s|git("merge-base", "--is-ancestor", published, commit)|},
           {"scripts/check-docs-archive.py", "shutil.copyfile(archive, paths[1])"}
         ] do
       prepare_fixture()
@@ -1189,7 +1190,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           {"    name: Verify published package",
            "    environment: publish\n    name: Verify published package"},
           {"scripts/test-fresh-consumer.sh --from-hex", "true --from-hex"},
-          {"scripts/read-release-assets.sh", ":"}
+          {"scripts/read-release-assets.sh", "true"}
         ] do
       prepare_fixture()
       replace_once!(@publish, old, replacement)
