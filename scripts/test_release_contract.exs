@@ -1258,6 +1258,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       {@workflow, "performance", 7},
       {@workflow, "decoder-old-majors", 7},
       {@workflow, "release-artifact", 12},
+      {@workflow, "fresh-consumer", 9},
       {@landing, "qualified", 5},
       {@publish, "publish", 90},
       {@publish, "published-package", 90}

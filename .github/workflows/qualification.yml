@@ -337,7 +337,8 @@ jobs:
   fresh-consumer:
     name: Fresh tarball consumer
     runs-on: ubuntu-24.04
-    timeout-minutes: 90 # no green run yet
+    # Green run 44738538737: Fresh tarball consumer 4m18s, no cache restored.
+    timeout-minutes: 9
     permissions:
       contents: read
     env:
