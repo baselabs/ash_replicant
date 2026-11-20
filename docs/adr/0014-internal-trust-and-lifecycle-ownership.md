@@ -102,6 +102,39 @@ minimum transport-lifecycle touch needed to own it, and it observes only.
    (a fail-closed halt must not auto-resurrect under anyone): restarting
    is an explicit host/operator act that re-runs the full admission.
 
+### Operation drain and forced owner death
+
+The library application supervises a node-local lease registry and per-owner
+lifetime guards. Lifecycle exclusivity covers activation, offline operators,
+`stop_supervised/1`, pending-owner reclamation and owner cleanup. Callbacks,
+reads, the census and an owner's terminal write hold shared operation leases;
+shared holders never wait on each other. Once a lifecycle writer queues, new
+operations wait behind it. Holder and waiter monitors remove abandoned requests.
+
+`stop_supervised/1` drains admitted operations, stops transport, reasserts its
+terminal fact and erases admission under an exclusive hold, then releases the
+hold before joining the owner. Owner cleanup takes the same exclusive hold;
+joining while holding it would deadlock. An owner's terminal write holds a
+shared lease and checks its generation, so stop drains it without a stale owner
+writing over a successor. Host-tree shutdown and census halts drain exclusively
+before terminal recording and cleanup. Cleanup clears only its own generation.
+
+The child's shutdown budget is `:infinity`: the census has a 10-second default
+and 60-second maximum; a durable terminal write has a 5-second budget; sink
+transactions declare 120-second database timeouts. None bounds arbitrary host
+code inside an admitted callback, or time behind earlier lifecycle requests.
+Adding finite database deadlines cannot bound the stop drain. A finite host
+shutdown would therefore permit a brutal kill during an admitted operation.
+
+A supervised lifetime guard monitors the owner independently of its mailbox. It
+owns each monitored census worker and its deadline, so timeout still fires while
+the owner waits for the exclusive lease. Owner death cancels the deadline, kills
+and joins the census, then terminates the exact monitored transport pid, never a
+successor registered under the same slot. Normal cleanup cancels all schedules
+and joins the census; the guard exits when its owner does. No cluster lock is
+claimed: admission lives in node-local `:persistent_term`, local owner liveness
+is required, and the former global-lock resource key included `node()`.
+
 ## Consequences
 
 - A pipeline death of ANY origin (halt, crash, external stop) now frees

@@ -44,7 +44,14 @@ also not unique when one transaction contains several effects.
   Repo, asynchronous work, or an external effect. This is a trust boundary: the
   manifest verifies the declaration and its closure, but cannot prove that an
   arbitrary function body told the truth.
-- Start, stop, and mutating callbacks share the per-slot destination lease. One
+- The node-local per-slot destination lease has shared operation holds and
+  exclusive lifecycle holds. Every admitted callback (including reads and the
+  census) holds a shared lease through its database work and terminal recording;
+  shared holders run concurrently. Activation, stop, offline operators and owner
+  cleanup take an exclusive lease. A queued exclusive request bars later shared
+  requests until existing holders drain; release and monitored holder death wake
+  waiters directly. Replicant serializes delivery, and checkpoint row locks retain
+  transaction ordering, including the census's digest-key witness update. One
   immutable admitted generation holds the sink config, manifest, code/config
   fingerprints, source-session expectation, publication, dynamic Repo identity,
   and generation reference. A mutating callback holds the lease through database

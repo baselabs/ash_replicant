@@ -39,7 +39,7 @@ defmodule AshReplicant.MixProject do
 
   def cli, do: [preferred_envs: [credo: :test, dialyzer: :test]]
 
-  def application, do: [extra_applications: [:logger]]
+  def application, do: [mod: {AshReplicant.Application, []}, extra_applications: [:logger]]
 
   defp elixirc_paths(:test), do: ["lib", "test/support"]
   defp elixirc_paths(_), do: ["lib"]
