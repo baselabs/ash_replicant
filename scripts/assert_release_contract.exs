@@ -2029,7 +2029,7 @@ defmodule AshReplicant.ReleaseContract do
     assert(
       Enum.sort(Map.keys(job)) == ~w(env name runs-on steps timeout-minutes) and
         job["name"] == "Upstream dependencies" and
-        job["runs-on"] == "ubuntu-24.04" and job["timeout-minutes"] == 90 and
+        job["runs-on"] == "ubuntu-24.04" and job["timeout-minutes"] == 24 and
         job["env"] == %{
           "MIX_ENV" => "test",
           "ASH_REPLICANT_TEST_URL" => "postgres://postgres@localhost:5432/postgres"
@@ -2093,7 +2093,7 @@ defmodule AshReplicant.ReleaseContract do
           "if" => @publish_owner_condition,
           "environment" => "publish",
           "runs-on" => "ubuntu-24.04",
-          "timeout-minutes" => 90,
+          "timeout-minutes" => 5,
           "permissions" => %{"contents" => "read"},
           "env" => %{"MIX_ENV" => "dev"},
           "outputs" => %{
