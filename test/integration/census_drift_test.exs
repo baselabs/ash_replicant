@@ -302,6 +302,9 @@ defmodule AshReplicant.CensusDriftTest do
     assert {:ok, owner} = start(interval_ms: 50, jitter_ratio: 0.0, timeout_ms: 10_000)
     assert_receive {:census, ^ref, [:replicant, :connection, :slot_active], %{}}, 15_000
     await_bound()
+    assert_receive {:census, ^ref, [:ash_replicant, :census, :passed], _}, 15_000
+    :telemetry.detach({__MODULE__, ref})
+    ref = attach()
     [{stream, _}] = Registry.lookup(Replicant.Registry, {@slot, :assembler})
     handler = {__MODULE__, make_ref()}
     parent = self()
@@ -331,7 +334,7 @@ defmodule AshReplicant.CensusDriftTest do
           assert_receive {:census, ^ref, [:ash_replicant, :census, :passed], _}, 15_000
           assert_receive {:census, ^ref, [:ash_replicant, :census, :passed], _}, 15_000
           assert Process.alive?(owner)
-          refute_received {:census, ^ref, [:ash_replicant, :census, :faulted], _}
+          assert_no_census_fault(ref)
           refute_received {:census, ^ref, [:ash_replicant, :census, :halted], _}
         after
           send(stream, {:release_stream, barrier})
@@ -385,6 +388,27 @@ defmodule AshReplicant.CensusDriftTest do
       {:census, ^ref, [:ash_replicant, :census, :passed], _} -> discard_passes(ref)
     after
       0 -> :ok
+    end
+  end
+
+  defp assert_no_census_fault(ref) do
+    reason =
+      receive do
+        {:census, ^ref, [:ash_replicant, :census, :faulted], metadata} ->
+          Map.get(metadata, :reason, :unknown)
+      after
+        0 -> :none
+      end
+
+    # Separate source sites retain the closed fault class in CI's value-free
+    # failure formatter, without printing metadata or captured database output.
+    case reason do
+      :none -> :ok
+      :checkpoint_unbound -> flunk("busy census checkpoint was unbound")
+      :census_timeout -> flunk("busy census timed out")
+      :census_source_unreachable -> flunk("busy census source was unreachable")
+      :census_checker_fault -> flunk("busy census checker faulted")
+      _other -> flunk("busy census emitted an unknown fault class")
     end
   end
 

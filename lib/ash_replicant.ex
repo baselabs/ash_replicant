@@ -661,19 +661,15 @@ defmodule AshReplicant do
          {:ok, source_identity} <- validate_source_identity(opts),
          {:ok, source_set} <- SourceSet.normalize(opts) do
       Lease.with(sink_config.slot_name, :exclusive, fn ->
-        if Lease.accepting?() do
-          activate_slot(
-            opts,
-            sink,
-            sink_config,
-            source_identity,
-            source_set,
-            owner_pid,
-            census
-          )
-        else
-          {:error, :config_invalid}
-        end
+        activate_slot(
+          opts,
+          sink,
+          sink_config,
+          source_identity,
+          source_set,
+          owner_pid,
+          census
+        )
       end)
     end
   end
@@ -687,9 +683,13 @@ defmodule AshReplicant do
          owner_pid,
          census
        ) do
-    with {:ok, admitted} <-
+    with true <- Lease.accepting?(),
+         {:ok, admitted} <-
            admit_slot(opts, sink, sink_config, source_identity, source_set, owner_pid) do
       {:ok, Map.merge(admitted, %{sink: sink, census: census})}
+    else
+      false -> {:error, :config_invalid}
+      error -> error
     end
   end
 
