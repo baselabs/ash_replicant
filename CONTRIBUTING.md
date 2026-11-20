@@ -287,11 +287,13 @@ tests run on GitHub-hosted CI, never on the owner's Mac or the build box.
    the checker inspects every visible rendered file and validates the provenance.
 5. An untagged version already on Hex is a held or partial release. Its package checksum must
    equal the inspected archive and it must not be retired. Docs planning uses presence:
-   readable served docs are kept, authoritative HTTP 404 permits upload, and other responses
-   or malformed archives refuse. Neither archive is replaced. Requiring a rebuilt docs digest
-   would strand held releases because Hex never replaces served docs. A second owner dispatch
-   finishes an approved hold or interrupted upload; ambiguous results require infra to inspect
-   public state first.
+   readable served docs are kept whatever `has_docs` says. HTTP 404 permits upload only with
+   `has_docs: false`; a 404 with `has_docs: true` refuses as metadata/repository disagreement.
+   Other responses or malformed archives refuse. Infra's release rule never replaces or compares
+   served docs. Hex itself permits republishing, but replacing them would bind the version's docs to a
+   different commit than the one infra tags. Comparing a rebuild could refuse a held release
+   whose package bytes match. A second owner dispatch finishes an approved hold or interrupted
+   upload; ambiguous results require infra to inspect public state first.
 6. Only the upload job belongs to environment `publish`. Only the upload step receives
    `HEX_API_KEY`, in its environment, and runs `mix run --no-mix-exs` from the runner's
    temporary directory with no `mix.exs`. It reads inspected archives, loads no project, builds

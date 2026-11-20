@@ -24,8 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Resume held or interrupted Hex publication on a second dispatch when the inspected package
   matches the served package and the release is not retired. Keep readable served docs;
-  upload docs only on authoritative HTTP 404, refusing malformed archives and lookup errors.
-  Never compare served docs with a rebuild or replace them: that could strand a held release.
+  upload docs only on HTTP 404 with `has_docs: false`. Refuse a 404 when metadata advertises
+  docs, malformed archives and lookup errors.
+  Follow infra's release rule: never replace or compare served docs. Hex permits republishing,
+  but replacing docs would bind the version to a different docs commit than infra's tag;
+  comparing a rebuild could refuse a held release whose package bytes match.
 - Render docs once with locked ExDoc 0.40.4, HTML and Markdown only, retaining the deterministic
   Hex archive builder and inspection of every rendered file. Add top-level `release.json`
   with exactly the package, version and full dispatched commit after rendering. Keyless

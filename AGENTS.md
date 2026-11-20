@@ -212,10 +212,13 @@ the publish key; it runs from the runner's temporary directory, loads no project
 rechecks package existence and permits an untagged held version only when its checksum
 matches the freshly built package and it is not retired. Local or remote version tags and
 GitHub releases always refuse. Preflight and upload planning keep readable served docs;
-only an authoritative HTTP 404 permits a docs upload. Other responses and malformed archives
+only HTTP 404 with `has_docs: false` permits a docs upload. A 404 with `has_docs: true`
+refuses because metadata and the repository disagree. Other responses and malformed archives
 refuse. Neither package nor served docs is replaced. A second owner dispatch finishes an
-approved hold or interrupted upload. Requiring a rebuilt docs digest would strand a held
-release because served docs cannot be replaced.
+approved hold or interrupted upload. This release path never replaces or compares served docs
+(infra's release rule). Hex allows republishing docs, but replacing them would bind this
+version's docs to a different commit than the one infra tags; comparing a rebuild could refuse
+a held release whose package bytes match.
 
 Qualification and publication render docs once from an extracted source tree with locked
 dependencies, warnings as errors, ExDoc 0.40.4 and Makeup Elixir 1.0.1. Only HTML and Markdown

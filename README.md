@@ -1131,11 +1131,12 @@ Qualify the commit through CI before landing. Update `CHANGELOG.md` for the vers
 
 The release path renders docs once, writes `release.json` with this package, version and full
 source commit, and inspects the archive. Held releases require identical package bytes and no
-retirement; served docs are kept, and only absent docs are uploaded. Keyless read-back requires
-readable served docs and valid provenance from the dispatched commit or an ancestor in fetched
+retirement; served docs are kept. A docs 404 permits upload only with `has_docs: false`;
+advertised docs plus a 404 refuse. Keyless read-back requires readable served docs and valid
+provenance from the dispatched commit or an ancestor in fetched
 default-branch history. Infra tags that published commit. The permanent release assets retain
 the docs Hex serves and their checksum, never a subsequent rendering. See
-[the release procedure](CONTRIBUTING.md#releasing).
+[the release procedure](CONTRIBUTING.md#shipping-a-release).
 
 ## License
 

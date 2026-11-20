@@ -116,9 +116,12 @@ for the production gate.
 Docs render once per job with locked dependencies and warnings as errors. The fixed-metadata
 Hex archive builder and every-file inspection remain; no check compares two builds or requires
 served docs to equal a rebuild. The package remains the byte identity: a mismatch or retirement
-refuses publication. Served docs cannot be replaced, so a rebuilt-docs digest requirement could
-strand a held release. Preflight and upload planning keep readable served docs, upload only on
-authoritative HTTP 404, and refuse other responses or malformed archives.
+refuses publication. Infra's release rule never replaces or compares served docs. Hex itself
+allows republishing, but replacing docs would bind the version to a different docs commit than
+the one infra tags; comparing a rebuild could refuse a held release whose package bytes match.
+Preflight and upload planning keep readable served docs whatever `has_docs` says. HTTP 404
+permits upload only with `has_docs: false`; advertised docs plus a 404 refuse as metadata/repository
+disagreement. Other responses or malformed archives refuse.
 
 Equal package bytes cannot identify the docs source: `CONTRIBUTING.md` is an ExDoc extra but
 is absent from the package, as is the docs toolchain lock. After rendering, every built archive
