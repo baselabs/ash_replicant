@@ -778,6 +778,26 @@ defmodule AshReplicant.CensusDriftTest do
     assert [] = Registry.lookup(Replicant.Registry, {@slot, :pipeline})
   end
 
+  @tag capture_log: true
+  test "a lost census guard cannot strand an exit-trapping worker or its owner" do
+    Messages.setup_schema!()
+    on_exit(fn -> Messages.teardown_schema!() end)
+    assert {:ok, owner} = start([interval_ms: 60_000, timeout_ms: 60_000], ClaimSink)
+    {worker, barrier} = paused_census(owner)
+    assert {:trap_exit, true} = Process.info(worker, :trap_exit)
+    %{pipeline_pid: pipeline, guard: guard} = :sys.get_state(owner, :infinity)
+    monitors = monitor_all([owner, worker, pipeline, guard])
+
+    try do
+      Process.exit(guard, :kill)
+      await_all(monitors)
+      assert :none == :persistent_term.get({AshReplicant, @slot}, :none)
+      assert [] = Registry.lookup(Replicant.Registry, {@slot, :pipeline})
+    after
+      send(worker, {:release_transaction, barrier})
+    end
+  end
+
   defp paused_census(owner) do
     await_bound()
 
