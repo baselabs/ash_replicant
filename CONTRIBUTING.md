@@ -17,8 +17,8 @@ Thank you for your interest in contributing to AshReplicant!
   vulnerable and the requirement refuses to resolve to one).
 - **PostgreSQL** with `wal_level=logical` for the live integration gate; the
   integration suite runs against a live Postgres with a logical replication slot
-  and publication. CI runs pinned PostgreSQL 16, 17, and 18 cells plus the
-  `decoder-old-majors` cells (PostgreSQL 12 and 9.6 with the plugin substrate —
+  and publication. CI runs the checked BaseLabs platform engine plus declared
+  upstream compatibility lanes and `decoder-old-majors` sources (with the plugin substrate —
   `test/support/pg_old.dockerfile`, the commit-pinned pglogical 2.4.8 +
   wal2json build). Each CI job owns its disposable PostgreSQL and supplies
   `ASH_REPLICANT_TEST_URL` and, for the plugin lane, `ASH_REPLICANT_PGOLD_URL`.
@@ -71,7 +71,7 @@ database creation and migration. The other checks continue after a failure.
 Each CI job owns its PostgreSQL container. A fresh consumer creates and removes its own
 throwaway database on that server; it never borrows another project's machine or service.
 The `fresh-consumer` qualification job builds the candidate tarball and runs the full
-consumer against its own logical-WAL PostgreSQL 16: fresh dependency resolution, both
+consumer against its own logical-WAL platform engine: fresh dependency resolution, both
 audits, compilation with warnings as errors, docs, migrations, and the live CDC smoke.
 The `deps.audit --path` call runs from the repository's dev environment, where
 `mix_audit` is declared; Hex's audit runs inside the consumer. The post-publish job
@@ -244,8 +244,8 @@ within their requirements. The report then removes the runner's copied lock,
 resolves fresh within `mix.exs` requirements, prints every resolved version
 against the committed compatibility lock, runs `mix hex.audit` and
 `mix deps.audit`, compiles with warnings as errors, and runs the full live suite
-and explicit integration discovery against the same pinned PostgreSQL 16
-substrate as qualification. Each report check runs even if an earlier report
+and explicit integration discovery against the same checked platform engine
+as qualification. Each report check runs even if an earlier report
 check fails, after ref and runtime admission succeed.
 
 Under infra's [dependency requirements](https://github.com/baselabs/infra/blob/main/baselabs/docs/ci.md#what-infra-requires-of-every-product),

@@ -1,7 +1,18 @@
 defmodule AshReplicant.Test.PG do
-  @moduledoc "Live-PG16 gating, the committing-sandbox switch, and a condition poller for the integration marquee."
+  @moduledoc "Live-PostgreSQL gating, the committing-sandbox switch, and a condition poller for the integration marquee."
 
   alias Ecto.Adapters.SQL.Sandbox
+
+  @doc "Verify that the real server is the declared lane, without exposing connection data."
+  def assert_major!(release, variable) do
+    actual =
+      if release >= 100_000,
+        do: Integer.to_string(div(release, 10_000)),
+        else: "#{div(release, 10_000)}.#{div(rem(release, 10_000), 100)}"
+
+    unless actual == System.fetch_env!(variable), do: raise("unexpected PostgreSQL major")
+    :ok
+  end
 
   @doc "True iff the live substrate URL is set (gates `:integration` tests)."
   @spec enabled?() :: boolean()

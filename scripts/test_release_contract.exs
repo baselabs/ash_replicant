@@ -23,29 +23,9 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   @report_if "${{ !cancelled() && steps.runtime.outcome == 'success' }}"
   @publish_owner_condition "contains(fromJSON('[\"corepay\",\"palermo-git\"]'), github.actor) && contains(fromJSON('[\"corepay\",\"palermo-git\"]'), github.triggering_actor)"
 
-  @postgres_run """
-  docker run -d --name pg \\
-    -e POSTGRES_HOST_AUTH_METHOD=trust \\
-    -p 5432:5432 \\
-    "$PG_IMAGE" \\
-    -c wal_level=logical -c max_replication_slots=20 -c max_wal_senders=20
-  scripts/wait-for-postgres.sh pg
-  """
-
   @create_database """
   mix ecto.create
   mix ecto.migrate
-  """
-
-  # Mirrors assert_release_contract.exs's @performance_postgres_run (the
-  # non-matrix performance job's literal pinned-digest PG16 step).
-  @performance_postgres_run """
-  docker run -d --name pg \\
-    -e POSTGRES_HOST_AUTH_METHOD=trust \\
-    -p 5432:5432 \\
-    postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b \\
-    -c wal_level=logical -c max_replication_slots=20 -c max_wal_senders=20
-  scripts/wait-for-postgres.sh pg
   """
 
   # Mirrors assert_release_contract.exs's @mutation_gates_run byte-for-byte;
@@ -124,12 +104,6 @@ defmodule AshReplicant.ReleaseContractSelfTest do
        staged="$(printf '%s\n' "$inspection" \
          | sed -e 's|^package_dir=\$(mktemp -d)$|package_dir="$ASH_REPLICANT_PACKAGE_FIXTURE"|' \
                -e "s|^${selector_free_build}\$|: # self-test staged fixture|")" || return
-     """},
-    {"scripts/test-postgres-readiness.sh",
-     ~S"""
-     exec_count="$(grep -c '^exec$' "$calls_file")" || [[ $? -eq 1 ]]
-     logs_count="$(grep -c '^logs$' "$calls_file")" || [[ $? -eq 1 ]]
-     if [[ "$exec_count" -ne 4 || "$logs_count" -ne 0 ]]; then
      """}
   ]
 
@@ -203,7 +177,6 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     ],
     "compatibility" => [
       "scripts/assert-runtime-version.sh",
-      String.trim(@postgres_run),
       "mix deps.compile",
       "mix compile --warnings-as-errors",
       "elixir --version",
@@ -218,7 +191,6 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     ],
     "performance" => [
       "scripts/assert-runtime-version.sh",
-      String.trim(@performance_postgres_run),
       "mix deps.compile",
       "mix compile --warnings-as-errors",
       String.trim(@create_database),
@@ -229,8 +201,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       "mix local.hex 2.7.0 --force",
       "mix deps.get --check-locked",
       "mix deps.compile",
-      "scripts/test-fresh-consumer.sh",
-      "docker rm -fv pg"
+      "scripts/test-fresh-consumer.sh"
     ],
     "release-artifact" => [
       "scripts/assert-runtime-version.sh",
@@ -429,6 +400,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       command_status_probes()
       ci_requirement_probes()
       github_lookup_probes()
+      postgres_probes()
       decoder_job_probes()
       command_probes()
       compatibility_probes()
@@ -473,7 +445,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       "scripts/test-release-checkers.sh",
-      "scripts/test-postgres-readiness.sh >/dev/null",
+      "python3 -B -m unittest discover -s scripts -p 'test_postgres_lanes.py' >/dev/null",
       "true"
     )
 
@@ -898,10 +870,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           {"      ASH_REPLICANT_TEST_URL:", "      UNUSED_DATABASE_URL:"},
           {"mix deps.get --check-locked", "mix deps.get"},
           {"mix deps.compile", "true"},
-          {"wal_level=logical", "wal_level=replica"},
-          {"scripts/wait-for-postgres.sh pg", "true"},
           {"        if: always()", "        if: success()"},
-          {"docker rm -fv pg", "true"}
+          {"          mode: stop", "          mode: start"}
         ] do
       prepare_fixture()
       mutate_job!("fresh-consumer", old, replacement)
@@ -990,7 +960,10 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     # Each check must remain independently reportable after another check fails.
     prepare_fixture()
     workflow = YamlElixir.read_from_file!(fixture_path(@drift))
-    reports = workflow["jobs"]["report"]["steps"] |> Enum.drop(4)
+    reports =
+      workflow["jobs"]["report"]["steps"]
+      |> Enum.drop(5)
+      |> Enum.filter(&Map.has_key?(&1, "run"))
 
     for step <- reports do
       prepare_fixture()
@@ -1501,6 +1474,23 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     end
   end
 
+  defp postgres_probes do
+    for {old, replacement} <- [
+          {"wal_level=logical", "wal_level=replica"},
+          {"pg_isready -h 127.0.0.1", "pg_isready"},
+          {"docker rm -f -v", "docker rm -f"},
+          {"docker logs \"$CONTAINER\" || cleanup_status=1", "true"},
+          {"--env TEST_PG_PASSWORD", "--env OMITTED_PASSWORD"},
+          {"--tmpfs /var/lib/pg:uid=26,gid=26,mode=0750", "--tmpfs /var/lib/pg"},
+          {"host replication all all md5", "host replication all all trust"},
+          {"docker pull \"$engine\"", "true"}
+        ] do
+      prepare_fixture()
+      replace_once!(".github/actions/postgres/action.yml", old, replacement)
+      assert_invalid!()
+    end
+  end
+
   defp decoder_job_probes do
     for control <- [
           "if: false",
@@ -1716,70 +1706,70 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     prepare_fixture()
 
-    mutate_job!(
-      "compatibility",
-      "          - label: current-lock\n",
-      "          - label: changed-lock\n"
+    replace_once!(
+      ".github/dependency-lanes.json",
+      "    \"label\": \"current-lock\",\n",
+      "    \"label\": \"changed-lock\",\n"
     )
 
     assert_invalid!()
 
     prepare_fixture()
 
-    mutate_job!(
-      "compatibility",
-      "            ash_selector: \"\"\n",
-      "            ash_selector: latest\n"
+    replace_once!(
+      ".github/dependency-lanes.json",
+      "    \"ash_selector\": \"\",\n",
+      "    \"ash_selector\": \"latest\",\n"
     )
 
     assert_invalid!()
 
     prepare_fixture()
 
-    mutate_job!(
-      "compatibility",
-      "            replicant_selector: \"\"\n",
-      "            replicant_selector: latest\n"
+    replace_once!(
+      ".github/dependency-lanes.json",
+      "    \"replicant_selector\": \"\",\n",
+      "    \"replicant_selector\": \"latest\",\n"
     )
 
     assert_invalid!()
 
     prepare_fixture()
 
-    mutate_job!(
-      "compatibility",
-      "            lockfile: mix.lock\n",
-      "            lockfile: locks/latest-compatible.lock\n"
+    replace_once!(
+      ".github/dependency-lanes.json",
+      "    \"lockfile\": \"mix.lock\",\n",
+      "    \"lockfile\": \"locks/latest-compatible.lock\",\n"
     )
 
     assert_invalid!()
 
     prepare_fixture()
 
-    mutate_job!(
-      "compatibility",
-      "            lockfile: locks/exact-floors.lock\n",
-      "            lockfile: mix.lock\n"
+    replace_once!(
+      ".github/dependency-lanes.json",
+      "    \"lockfile\": \"locks/exact-floors.lock\",\n",
+      "    \"lockfile\": \"mix.lock\",\n"
     )
 
     assert_invalid!()
 
     prepare_fixture()
 
-    mutate_job!(
-      "compatibility",
-      "            ash_requirement: \"== 3.37.3\"\n",
-      "            ash_requirement: \">= 3.37.3\"\n"
+    replace_once!(
+      ".github/dependency-lanes.json",
+      "    \"ash_requirement\": \"== 3.37.3\",\n",
+      "    \"ash_requirement\": \">= 3.37.3\",\n"
     )
 
     assert_invalid!()
 
     prepare_fixture()
 
-    mutate_job!(
-      "compatibility",
-      "            replicant_requirement: \"== 1.4.0\"\n",
-      "            replicant_requirement: \">= 1.4.0\"\n"
+    replace_once!(
+      ".github/dependency-lanes.json",
+      "    \"replicant_requirement\": \"== 1.4.0\",\n",
+      "    \"replicant_requirement\": \">= 1.4.0\",\n"
     )
 
     assert_invalid!()
@@ -1796,20 +1786,20 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     prepare_fixture()
 
-    mutate_job!(
-      "compatibility",
-      "            onetime_selector: \"1.3.2\"\n",
-      "            onetime_selector: \"1.1.0\"\n"
+    replace_once!(
+      ".github/dependency-lanes.json",
+      "    \"onetime_selector\": \"1.3.2\",\n",
+      "    \"onetime_selector\": \"1.1.0\",\n"
     )
 
     assert_invalid!()
 
     prepare_fixture()
 
-    mutate_job!(
-      "compatibility",
-      "            onetime_requirement: \"== 1.3.2\"\n",
-      "            onetime_requirement: \">= 1.3.2\"\n"
+    replace_once!(
+      ".github/dependency-lanes.json",
+      "    \"onetime_requirement\": \"== 1.3.2\"\n",
+      "    \"onetime_requirement\": \">= 1.3.2\"\n"
     )
 
     assert_invalid!()
@@ -1994,17 +1984,12 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     replace_once!(@workflow, "    runs-on: ubuntu-24.04\n", "    runs-on: self-hosted\n")
     assert_invalid!()
 
-    # The image digests now ride the matrix (pg_image); mutating one digest
-    # breaks the exact @matrix match — the pin's red direction. Anchored on
-    # the PG17 cell (unique in the workflow; the PG16 ref appears 3x).
     prepare_fixture()
-
     replace_once!(
       @workflow,
-      "pg_image: \"postgres:17@sha256:e38411452a464af89e5adadb8d223bf53b898d47d6ef918b2d58c08707350449\"",
-      "pg_image: \"postgres:17\""
+      "include: ${{ fromJSON(needs.postgres-lanes.outputs.compatibility) }}",
+      "include: []"
     )
-
     assert_invalid!()
 
     for workflow <- [@workflow, @publish],
@@ -2576,6 +2561,12 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           "locks/exact-floors.lock",
           "locks/latest-compatible.lock",
           @inventory,
+          ".github/postgres.ref",
+          ".github/postgres-lanes.json",
+          ".github/dependency-lanes.json",
+          ".github/actions/postgres/action.yml",
+          "scripts/ci/postgres-lanes.sh",
+          "scripts/test_postgres_lanes.py",
           "scripts/qualify.py",
           "lib/ash_replicant.ex",
           "lib/ash_replicant/sink.ex",

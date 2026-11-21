@@ -84,6 +84,7 @@ jobs:
           name: release-assets
           path: ${{ runner.temp }}/release-assets/
           if-no-files-found: error
+          retention-days: 7
       - name: Remove release archives
         if: always()
         run: rm -rf "$RUNNER_TEMP/package.tar" "$RUNNER_TEMP/hex-docs.tar.gz" "$RUNNER_TEMP/hex-docs.tar.gz.rendered" "$RUNNER_TEMP/release-assets"
@@ -99,7 +100,8 @@ jobs:
     env:
       MIX_ENV: dev
       VERSION: ${{ needs.publish.outputs.version }}
-      ASH_REPLICANT_TEST_URL: postgres://postgres@localhost:5432/ash_replicant_test
+      # Throwaway fixture password, never an external service credential.
+      ASH_REPLICANT_TEST_URL: postgres://postgres:postgres@127.0.0.1:5432/ash_replicant_test
     steps:
       - name: Refuse publishing outside the default branch
         run: test "$GITHUB_REF" = "refs/heads/main"
@@ -115,14 +117,11 @@ jobs:
       - run: mix deps.get --check-locked
       - run: mix deps.compile
       - name: Start the published consumer's real PostgreSQL
-        run: |
-          docker run -d --name pg \
-            -e POSTGRES_HOST_AUTH_METHOD=trust -p 5432:5432 \
-            postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b \
-            -c wal_level=logical -c max_replication_slots=20 -c max_wal_senders=20
-          scripts/wait-for-postgres.sh pg
+        uses: ./.github/actions/postgres
       - name: Audit and exercise the published package as a fresh consumer
         run: scripts/test-fresh-consumer.sh --from-hex "$VERSION"
       - name: Remove the published consumer's PostgreSQL
         if: always()
-        run: docker rm -fv pg
+        uses: ./.github/actions/postgres
+        with:
+          mode: stop

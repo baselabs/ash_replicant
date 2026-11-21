@@ -7,6 +7,15 @@ Date: 2026-08-13
 Accepted for the 1.0.0 release line. Amended September 29, October 11, and
 October 28, 2026 and November 5, 2026 (the Ash security floor is now `>= 3.37.3 and < 4.0.0-0`).
 
+> **Superseding CI substrate amendment (2026-11-21).** The historical database cell
+> lists below are superseded by the checked BaseLabs platform engine and
+> `.github/postgres-lanes.json`. Dependency-range checks, consumers, performance,
+> drift reporting, and decoder destinations run the engine; declared upstream
+> compatibility lanes cover every other supported major. One reader expands the
+> matrices and qualification inventory, and one composite action owns password
+> authentication, readiness, logs, and unconditional cleanup. Dependency selectors
+> and published source/destination support remain unchanged.
+
 ## Context
 
 The package previously declared Elixir `~> 1.15`, Ash `~> 3.11`, and

@@ -17,7 +17,9 @@ defmodule AshReplicant.TestRepo do
   def start_attempt_key, do: @start_attempt_key
 
   @impl true
-  def min_pg_version, do: %Version{major: 16, minor: 0, patch: 0}
+  def min_pg_version do
+    Version.parse!(System.fetch_env!("EXPECTED_PG_MAJOR") <> ".0.0")
+  end
 
   @impl true
   def installed_extensions, do: ["ash-functions"]

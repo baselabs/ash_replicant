@@ -99,12 +99,15 @@ The current 1.6.4 release baseline is built and tested with:
 - AshOnetime `>= 1.3.2 and < 2.0.0-0` (current lock 1.5.0);
 - AshCloak `>= 0.4.0 and < 1.0.0-0` (current lock 0.4.0; every release below
   0.4.0 carries CVE-2026-81319 and CVE-2026-81322 and is not admitted); and
-- PostgreSQL with `wal_level=logical` for the live integration gate: CI runs
-  pinned PostgreSQL 16, 17, and 18 cells, the local gate runs whatever instance
-  `ASH_REPLICANT_TEST_URL` points at (derive the live version with
-  `SELECT version();` — never assume it from this doc). The SOURCE support
-  matrix is pgoutput on PostgreSQL 12 and 15–18, pglogical 2.x and
-  wal2json ≥ 2.6 on 9.6 and 12 — exactly what CI runs.
+- PostgreSQL with `wal_level=logical`: CI uses the BaseLabs platform engine
+  recorded in `.github/postgres.ref` for dependency ranges, consumers, performance,
+  drift reports, and decoder destinations. `.github/postgres-lanes.json` declares
+  upstream images by digest for PostgreSQL 15, 16, and 17 compatibility and 9.6/12
+  decoder sources. One reader generates the matrices; one action owns startup,
+  password authentication, TCP readiness, logging, and unconditional removal.
+  The SOURCE support matrix remains pgoutput on PostgreSQL 12 and 15–18,
+  pglogical 2.x and wal2json ≥ 2.6 on 9.6 and 12; destinations 16–18 remain
+  supported. Tests compare the live server with the declared lane major.
 
 The Ash floor excludes `EEF-CVE-2026-94201` (atom-table exhaustion, fixed
 in 3.34.3), `EEF-CVE-2026-101028` (related-resource read-policy bypass

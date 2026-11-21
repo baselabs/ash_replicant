@@ -260,7 +260,7 @@ for dependency_name in ASH_REPLICANT_DEPENDENCY_SENTINEL ash_replicant_missing_d
 done
 scripts/test-fresh-consumer-requirements.sh
 scripts/test-fresh-consumer.sh --check
-scripts/test-postgres-readiness.sh >/dev/null
+python3 -B -m unittest discover -s scripts -p 'test_postgres_lanes.py' >/dev/null
 
 printf '%s\n' \
   'defmodule AshReplicant.ReleaseCheckerFixtureTest do' \

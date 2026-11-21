@@ -10,7 +10,96 @@ defmodule AshReplicant.ReleaseContract do
   @fail_late "${{ !cancelled() && steps.compile.outcome == 'success' }}"
   @report_if "${{ !cancelled() && steps.runtime.outcome == 'success' }}"
   @immutable_action ~r/\A[^@\s]+@[0-9a-f]{40}\z/
-  @pg16_image "postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b"
+  @postgres_action "./.github/actions/postgres"
+
+  @public_engine_check ~S"""
+  engine="$(cat .github/postgres.ref)"
+  [[ "$engine" =~ ^ghcr\.io/baselabs/postgres:[0-9]+\.[0-9]+-inputs-[0-9a-f]{64}@sha256:[0-9a-f]{64}$ ]]
+  current_digest="$(python3 - <<'PY'
+  import json, re, urllib.request
+  host, path = 'ghcr.io', 'baselabs/postgres'
+  with urllib.request.urlopen(f'https://{host}/token?scope=repository:{path}:pull', timeout=30) as response:
+      token = json.load(response)['token']
+  request = urllib.request.Request(f'https://{host}/v2/{path}/manifests/current', method='HEAD', headers={
+      'Authorization': 'Bearer ' + token,
+      'Accept': ', '.join(('application/vnd.oci.image.index.v1+json', 'application/vnd.oci.image.manifest.v1+json',
+                           'application/vnd.docker.distribution.manifest.list.v2+json',
+                           'application/vnd.docker.distribution.manifest.v2+json'))})
+  with urllib.request.urlopen(request, timeout=30) as response:
+      digest = response.headers.get('Docker-Content-Digest', '')
+  if not re.fullmatch(r'sha256:[0-9a-f]{64}', digest):
+      raise SystemExit('ghcr.io/baselabs/postgres:current: registry named no digest')
+  print(digest)
+  PY
+  )"
+  if [ "${engine##*@}" != "$current_digest" ]; then
+    echo 'checked PostgreSQL digest differs from ghcr.io/baselabs/postgres:current' >&2; exit 1
+  fi
+  docker pull "$engine"
+  """
+
+  @postgres_manage ~S"""
+  set -euo pipefail
+  [[ "$CONTAINER" =~ ^[a-z][a-z0-9-]*$ && "$PORT" =~ ^[1-9][0-9]{3,4}$ ]]
+  hba="${RUNNER_TEMP:?}/postgres-$CONTAINER-hba.conf"
+  case "$MODE" in
+    stop)
+      cleanup_status=0
+      if docker container inspect "$CONTAINER" > /dev/null 2>&1; then
+        docker logs "$CONTAINER" || cleanup_status=1
+        docker rm -f -v "$CONTAINER" || cleanup_status=1
+      fi
+      rm -f "$hba"
+      exit "$cleanup_status"
+      ;;
+    start) ;;
+    *) echo 'mode must be start or stop' >&2; exit 1 ;;
+  esac
+  settings=(-c wal_level=logical -c max_replication_slots=20 -c max_wal_senders=20)
+  if [[ -z "$IMAGE" ]]; then
+    [[ "$DECODER_SOURCE" == false ]]
+    engine="$(cat .github/postgres.ref)"
+    docker run --detach --pull=never --name "$CONTAINER" \
+      --publish "127.0.0.1:$PORT:5432" \
+      --tmpfs /var/lib/pg:uid=26,gid=26,mode=0750 --tmpfs /tmp \
+      --env TEST_PG_USER --env TEST_PG_PASSWORD --env TEST_PG_DATABASE \
+      --entrypoint baselabs-test-postgres "$engine" "${settings[@]}"
+  else
+    mounts=()
+    case "$DECODER_SOURCE" in
+      true)
+        [[ "$IMAGE" =~ ^sha256:[0-9a-f]{64}$ ]]
+        # Peer for entrypoint initialization; all host logins require a password.
+        printf 'local all all peer\nhost all all all md5\nhost replication all all md5\n' > "$hba"
+        mounts=(--volume "$hba:/hba.conf:ro")
+        settings+=(-c shared_preload_libraries=pglogical -c hba_file=/hba.conf)
+        ;;
+      false)
+        [[ "$IMAGE" =~ ^postgres:[0-9][a-z0-9.-]*@sha256:[0-9a-f]{64}$ ]]
+        docker pull "$IMAGE"
+        ;;
+      *) echo 'decoder-source must be true or false' >&2; exit 1 ;;
+    esac
+    docker run --detach --pull=never --name "$CONTAINER" \
+      --publish "127.0.0.1:$PORT:5432" \
+      --env POSTGRES_USER --env POSTGRES_PASSWORD --env POSTGRES_DB \
+      "${mounts[@]}" "$IMAGE" "${settings[@]}"
+  fi
+  ready=false
+  for ((attempt=0; attempt<60; attempt++)); do
+    if docker exec "$CONTAINER" pg_isready -h 127.0.0.1 -U "$TEST_PG_USER" -d "$TEST_PG_DATABASE"; then
+      ready=true
+      break
+    fi
+    sleep 1
+  done
+  if [[ "$ready" != true ]]; then
+    docker logs "$CONTAINER"
+    echo 'PostgreSQL did not become ready within 60 attempts' >&2
+    exit 1
+  fi
+  """
+
   @ash_requirement ">= 3.37.3 and < 4.0.0-0"
   @replicant_requirement ">= 1.4.0 and < 2.0.0-0"
   @onetime_requirement ">= 1.3.2 and < 2.0.0-0"
@@ -72,14 +161,6 @@ defmodule AshReplicant.ReleaseContract do
   published_commit="$(cat "$work/published-commit")"
   printf 'published_commit=%s\n' "$published_commit" >> "${GITHUB_OUTPUT:?}"
   echo "Release read-back: published commit $published_commit"
-  """
-
-  @published_postgres_run ~S"""
-  docker run -d --name pg \
-    -e POSTGRES_HOST_AUTH_METHOD=trust -p 5432:5432 \
-    postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b \
-    -c wal_level=logical -c max_replication_slots=20 -c max_wal_senders=20
-  scripts/wait-for-postgres.sh pg
   """
 
   @fresh_consumer_audits ~S"""
@@ -1172,17 +1253,6 @@ defmodule AshReplicant.ReleaseContract do
     'repos/baselabs/ash_replicant/commits?since=not-a-date'
   """
 
-  # The image ref rides the matrix (pg_image: the pinned digest ref per
-  # cell); the digest pinning is enforced through the exact @matrix match.
-  @postgres_run """
-  docker run -d --name pg \\
-    -e POSTGRES_HOST_AUTH_METHOD=trust \\
-    -p 5432:5432 \\
-    "$PG_IMAGE" \\
-    -c wal_level=logical -c max_replication_slots=20 -c max_wal_senders=20
-  scripts/wait-for-postgres.sh pg
-  """
-
   @resolve_dependencies """
   if [[ "$LOCKFILE" != 'mix.lock' ]]; then
     cp "$LOCKFILE" mix.lock
@@ -1322,12 +1392,6 @@ defmodule AshReplicant.ReleaseContract do
        staged="$(printf '%s\n' "$inspection" \
          | sed -e 's|^package_dir=\$(mktemp -d)$|package_dir="$ASH_REPLICANT_PACKAGE_FIXTURE"|' \
                -e "s|^${selector_free_build}\$|: # self-test staged fixture|")" || return
-     """},
-    {"scripts/test-postgres-readiness.sh",
-     ~S"""
-     exec_count="$(grep -c '^exec$' "$calls_file")" || [[ $? -eq 1 ]]
-     logs_count="$(grep -c '^logs$' "$calls_file")" || [[ $? -eq 1 ]]
-     if [[ "$exec_count" -ne 4 || "$logs_count" -ne 0 ]]; then
      """}
   ]
 
@@ -1370,65 +1434,39 @@ defmodule AshReplicant.ReleaseContract do
   """
 
   @job_env %{
-    "no-database" => %{"MIX_ENV" => "test"},
+    "postgres-lanes" => nil,
+    "no-database" => %{
+      "MIX_ENV" => "test",
+      "EXPECTED_PG_MAJOR" => "${{ needs.postgres-lanes.outputs.engine_major }}"
+    },
     "compatibility" => %{
+      "EXPECTED_PG_MAJOR" => "${{ matrix.pg_major }}",
       "MIX_ENV" => "test",
       "ASH_REPLICANT_ASH_VERSION" => "${{ matrix.ash_selector }}",
       "ASH_REPLICANT_REPLICANT_VERSION" => "${{ matrix.replicant_selector }}",
       "ASH_REPLICANT_ONETIME_VERSION" => "${{ matrix.onetime_selector }}",
-      "ASH_REPLICANT_TEST_URL" => "postgres://postgres@localhost:5432/postgres"
+      "ASH_REPLICANT_TEST_URL" => "postgres://postgres:postgres@127.0.0.1:5432/ash_replicant_test"
     },
     "release-artifact" => %{"MIX_ENV" => "dev"},
     "fresh-consumer" => %{
+      "EXPECTED_PG_MAJOR" => "${{ needs.postgres-lanes.outputs.engine_major }}",
       "MIX_ENV" => "dev",
-      "ASH_REPLICANT_TEST_URL" => "postgres://postgres@localhost:5432/ash_replicant_test"
+      "ASH_REPLICANT_TEST_URL" => "postgres://postgres:postgres@127.0.0.1:5432/ash_replicant_test"
     },
     "performance" => %{
+      "EXPECTED_PG_MAJOR" => "${{ needs.postgres-lanes.outputs.engine_major }}",
       "MIX_ENV" => "test",
-      "ASH_REPLICANT_TEST_URL" => "postgres://postgres@localhost:5432/postgres",
+      "ASH_REPLICANT_TEST_URL" => "postgres://postgres:postgres@127.0.0.1:5432/ash_replicant_test",
       "ASH_REPLICANT_PERFORMANCE" => "1"
     },
     "decoder-old-majors" => %{
+      "EXPECTED_PGOLD_MAJOR" => "${{ matrix.pg_major }}",
+      "EXPECTED_PG_MAJOR" => "${{ needs.postgres-lanes.outputs.engine_major }}",
       "MIX_ENV" => "test",
-      "ASH_REPLICANT_TEST_URL" => "postgres://postgres@localhost:5432/postgres",
-      "ASH_REPLICANT_PGOLD_URL" => "postgres://postgres@localhost:5433/postgres"
+      "ASH_REPLICANT_TEST_URL" => "postgres://postgres:postgres@127.0.0.1:5432/ash_replicant_test",
+      "ASH_REPLICANT_PGOLD_URL" => "postgres://postgres:postgres@127.0.0.1:5433/ash_replicant_test"
     }
   }
-
-  # The dedicated performance job is not a matrix job — its PG16 step
-  # carries the literal pinned digest (the parameterized @postgres_run
-  # belongs to the compatibility cells).
-  @performance_postgres_run """
-  docker run -d --name pg \\
-    -e POSTGRES_HOST_AUTH_METHOD=trust \\
-    -p 5432:5432 \\
-    #{@pg16_image} \\
-    -c wal_level=logical -c max_replication_slots=20 -c max_wal_senders=20
-  scripts/wait-for-postgres.sh pg
-  """
-
-  @decoder_postgres_run """
-  # The old images' entrypoint never appends a `host replication`
-  # pg_hba line (unlike 12+), so the walsender needs this file.
-  printf 'local all all trust\\nhost all all all trust\\nhost replication all all trust\\n' > /tmp/pgold-hba.conf
-  docker run -d --name pg \\
-    -e POSTGRES_HOST_AUTH_METHOD=trust \\
-    -p 5432:5432 \\
-    #{@pg16_image} \\
-    -c wal_level=logical -c max_replication_slots=20 -c max_wal_senders=20
-  docker run -d --name pgold \\
-    -e POSTGRES_HOST_AUTH_METHOD=trust \\
-    -p 5433:5432 \\
-    -v /tmp/pgold-hba.conf:/hba.conf:ro \\
-    pgold-plugins:ci \\
-    -c wal_level=logical -c max_wal_senders=20 -c max_replication_slots=20 \\
-    -c shared_preload_libraries=pglogical -c hba_file=/hba.conf
-  scripts/wait-for-postgres.sh pg
-  scripts/wait-for-postgres.sh pgold
-  """
-
-  @pg17_image "postgres:17@sha256:e38411452a464af89e5adadb8d223bf53b898d47d6ef918b2d58c08707350449"
-  @pg18_image "postgres:18@sha256:06cad38a5d9f5d24b4d83d86def30795d5e4b757fedbf5281172b576dedcd941"
 
   @matrix [
     %{
@@ -1439,70 +1477,46 @@ defmodule AshReplicant.ReleaseContract do
       "replicant_selector" => "1.4.0",
       "replicant_requirement" => "== 1.4.0",
       "onetime_selector" => "1.3.2",
-      "onetime_requirement" => "== 1.3.2",
-      "pg_major" => "16",
-      "pg_image" => @pg16_image
+      "onetime_requirement" => "== 1.3.2"
     },
     %{
       "label" => "current-lock",
       "lockfile" => "mix.lock",
       "ash_selector" => "",
-      "ash_requirement" => @ash_requirement,
+      "ash_requirement" => ">= 3.37.3 and < 4.0.0-0",
       "replicant_selector" => "",
-      "replicant_requirement" => @replicant_requirement,
+      "replicant_requirement" => ">= 1.4.0 and < 2.0.0-0",
       "onetime_selector" => "",
-      "onetime_requirement" => @onetime_requirement,
-      "pg_major" => "16",
-      "pg_image" => @pg16_image
+      "onetime_requirement" => ">= 1.3.2 and < 2.0.0-0"
     },
     %{
       "label" => "latest-compatible",
       "lockfile" => "locks/latest-compatible.lock",
       "ash_selector" => "latest",
-      "ash_requirement" => @ash_requirement,
+      "ash_requirement" => ">= 3.37.3 and < 4.0.0-0",
       "replicant_selector" => "latest",
-      "replicant_requirement" => @replicant_requirement,
+      "replicant_requirement" => ">= 1.4.0 and < 2.0.0-0",
       "onetime_selector" => "latest",
-      "onetime_requirement" => @onetime_requirement,
-      "pg_major" => "16",
-      "pg_image" => @pg16_image
-    },
-    %{
-      "label" => "current-lock-pg17",
-      "lockfile" => "mix.lock",
-      "ash_selector" => "",
-      "ash_requirement" => @ash_requirement,
-      "replicant_selector" => "",
-      "replicant_requirement" => @replicant_requirement,
-      "onetime_selector" => "",
-      "onetime_requirement" => @onetime_requirement,
-      "pg_major" => "17",
-      "pg_image" => @pg17_image
-    },
-    %{
-      "label" => "current-lock-pg18",
-      "lockfile" => "mix.lock",
-      "ash_selector" => "",
-      "ash_requirement" => @ash_requirement,
-      "replicant_selector" => "",
-      "replicant_requirement" => @replicant_requirement,
-      "onetime_selector" => "",
-      "onetime_requirement" => @onetime_requirement,
-      "pg_major" => "18",
-      "pg_image" => @pg18_image
+      "onetime_requirement" => ">= 1.3.2 and < 2.0.0-0"
     }
   ]
 
   @job_keys %{
-    "no-database" => ~w(env name permissions runs-on steps timeout-minutes),
-    "compatibility" => ~w(env name runs-on steps strategy timeout-minutes),
+    "postgres-lanes" => ~w(name outputs runs-on steps timeout-minutes),
+    "no-database" => ~w(env name permissions runs-on steps timeout-minutes needs),
+    "compatibility" => ~w(env name runs-on steps strategy timeout-minutes needs),
     "release-artifact" => ~w(env name runs-on steps timeout-minutes),
-    "fresh-consumer" => ~w(env name permissions runs-on steps timeout-minutes),
-    "performance" => ~w(env name runs-on steps timeout-minutes),
-    "decoder-old-majors" => ~w(env name runs-on steps strategy timeout-minutes)
+    "fresh-consumer" => ~w(env name permissions runs-on steps timeout-minutes needs),
+    "performance" => ~w(env name runs-on steps timeout-minutes needs),
+    "decoder-old-majors" => ~w(env name runs-on steps strategy timeout-minutes needs)
   }
 
   @job_steps %{
+    "postgres-lanes" => [
+      {:uses, @checkout, %{"persist-credentials" => false}},
+      {:run, "scripts/ci/postgres-lanes.sh", %{"id" => "lanes"}},
+      {:run, "python3 -B -m unittest discover -s scripts -p 'test_postgres_lanes.py'"}
+    ],
     "no-database" => [
       {:uses, @checkout, %{"persist-credentials" => false}},
       {:uses, @setup_beam, @setup_beam_inputs},
@@ -1529,7 +1543,7 @@ defmodule AshReplicant.ReleaseContract do
     ],
     "compatibility" => [
       {:uses, @checkout, %{"persist-credentials" => false}},
-      {:run, String.trim(@postgres_run), %{"env" => %{"PG_IMAGE" => "${{ matrix.pg_image }}"}}},
+      {:uses, @postgres_action, %{"image" => "${{ matrix.pg_image }}"}},
       {:uses, @setup_beam, @setup_beam_inputs},
       {:run, "scripts/assert-runtime-version.sh"},
       {:run, String.trim(@resolve_dependencies),
@@ -1552,11 +1566,12 @@ defmodule AshReplicant.ReleaseContract do
       {:run, "scripts/run-structural-tests.sh --include integration", %{"if" => @fail_late}},
       {:run, "scripts/run-structural-tests.sh test/integration --include integration",
        %{"if" => @fail_late}},
-      {:run, "mix dialyzer", %{"if" => @fail_late}}
+      {:run, "mix dialyzer", %{"if" => @fail_late}},
+      {:uses, @postgres_action, %{"mode" => "stop"}, %{"if" => "always()"}}
     ],
     "performance" => [
       {:uses, @checkout, %{"persist-credentials" => false}},
-      {:run, String.trim(@performance_postgres_run)},
+      {:uses, @postgres_action, :absent},
       {:uses, @setup_beam, @setup_beam_inputs},
       {:run, "scripts/assert-runtime-version.sh"},
       {:run, "mix deps.get --check-locked"},
@@ -1564,22 +1579,37 @@ defmodule AshReplicant.ReleaseContract do
       {:run, "mix compile --warnings-as-errors"},
       {:run, String.trim(@create_database)},
       {:run,
-       "scripts/run-structural-tests.sh test/integration/performance_bounds_test.exs --include integration"}
+       "scripts/run-structural-tests.sh test/integration/performance_bounds_test.exs --include integration"},
+      {:uses, @postgres_action, %{"mode" => "stop"}, %{"if" => "always()"}}
     ],
     "decoder-old-majors" => [
       {:uses, @checkout, %{"persist-credentials" => false}},
       {:uses, @setup_beam, @setup_beam_inputs},
       {:run, "scripts/assert-runtime-version.sh"},
       {:run,
-       ~s(docker build -f test/support/pg_old.dockerfile --build-arg "BASE=$PG_BASE" -t pgold-plugins:ci .),
-       %{"env" => %{"PG_BASE" => "${{ matrix.base }}"}}},
-      {:run, String.trim(@decoder_postgres_run)},
+       ~S"""
+       docker build -f test/support/pg_old.dockerfile --build-arg "BASE=$PG_BASE" -t pgold-plugins:ci .
+       image="$(docker image inspect --format '{{.Id}}' pgold-plugins:ci)"
+       printf 'image=%s\n' "$image" >> "$GITHUB_OUTPUT"
+       """ |> String.trim(),
+       %{"id" => "plugins", "env" => %{"PG_BASE" => "${{ matrix.base }}"}}},
+      {:uses, @postgres_action, :absent},
+      {:uses, @postgres_action,
+       %{
+         "name" => "pgold",
+         "port" => "5433",
+         "image" => "${{ steps.plugins.outputs.image }}",
+         "decoder-source" => "true"
+       }},
       {:run, "mix deps.get --check-locked"},
       {:run, "mix deps.compile"},
       {:run, "mix compile --warnings-as-errors"},
       {:run, String.trim(@create_database)},
       {:run,
-       "scripts/run-structural-tests.sh test/integration/decoder_admission_test.exs --include pgold"}
+       "scripts/run-structural-tests.sh test/integration/decoder_admission_test.exs --include pgold"},
+      {:uses, @postgres_action, %{"mode" => "stop"}, %{"if" => "always()"}},
+      {:uses, @postgres_action, %{"mode" => "stop", "name" => "pgold", "port" => "5433"},
+       %{"if" => "always()"}}
     ],
     "fresh-consumer" => [
       {:uses, @checkout, %{"persist-credentials" => false}},
@@ -1588,9 +1618,9 @@ defmodule AshReplicant.ReleaseContract do
       {:run, "mix local.hex 2.7.0 --force"},
       {:run, "mix deps.get --check-locked"},
       {:run, "mix deps.compile"},
-      {:run, String.trim(@published_postgres_run)},
+      {:uses, @postgres_action, :absent},
       {:run, "scripts/test-fresh-consumer.sh"},
-      {:run, "docker rm -fv pg", %{"if" => "always()"}}
+      {:uses, @postgres_action, %{"mode" => "stop"}, %{"if" => "always()"}}
     ],
     "release-artifact" => [
       {:uses, @checkout, %{"persist-credentials" => false}},
@@ -1788,6 +1818,7 @@ defmodule AshReplicant.ReleaseContract do
     assert_drift_report(drift, root)
     assert_workflow_runners(root)
     assert_ci_sources(root)
+    assert_postgres(root)
     assert_qualification_inventory(root, workflow)
     assert_runtime(workflow, root)
     assert_jobs(workflow)
@@ -1906,12 +1937,12 @@ defmodule AshReplicant.ReleaseContract do
 
     assert(inspection_count == 1, "package inspection checker wiring is incomplete")
 
-    readiness_count =
+    lanes_count =
       source
       |> String.split("\n")
-      |> Enum.count(&(String.trim(&1) == "scripts/test-postgres-readiness.sh >/dev/null"))
+      |> Enum.count(&(String.trim(&1) == "python3 -B -m unittest discover -s scripts -p 'test_postgres_lanes.py' >/dev/null"))
 
-    assert(readiness_count == 1, "PostgreSQL readiness checker wiring is incomplete")
+    assert(lanes_count == 1, "PostgreSQL lane checker wiring is incomplete")
 
     assert(
       not String.contains?(source, "scripts/test-release-guards.sh"),
@@ -2032,7 +2063,7 @@ defmodule AshReplicant.ReleaseContract do
         job["runs-on"] == "ubuntu-24.04" and job["timeout-minutes"] == 24 and
         job["env"] == %{
           "MIX_ENV" => "test",
-          "ASH_REPLICANT_TEST_URL" => "postgres://postgres@localhost:5432/postgres"
+          "ASH_REPLICANT_TEST_URL" => "postgres://postgres:postgres@127.0.0.1:5432/ash_replicant_test"
         },
       "drift report job cannot hold secrets, an environment, a cache, or write permissions"
     )
@@ -2053,19 +2084,33 @@ defmodule AshReplicant.ReleaseContract do
           "mix hex.audit",
           "mix deps.audit",
           "mix deps.compile",
-          String.trim(@performance_postgres_run),
           String.trim(@create_database),
           "mix compile --warnings-as-errors",
           "scripts/run-structural-tests.sh --include integration",
           "scripts/run-structural-tests.sh test/integration --include integration"
         ]
 
+    admission =
+      admission ++
+        [
+          {:run,
+           ~S"""
+           declarations="$(scripts/ci/postgres-lanes.sh --json)"
+           major="$(jq -r .engine_major <<< "$declarations")"
+           printf 'EXPECTED_PG_MAJOR=%s\n' "$major" >> "$GITHUB_ENV"
+           """ |> String.trim(), %{"if" => @report_if}}
+        ]
+
+    report_steps =
+      Enum.map(reports, fn
+        {run, controls} -> {:run, run, Map.put(controls, "if", @report_if)}
+        run -> {:run, run, %{"if" => @report_if}}
+      end)
+
     expected =
       admission ++
-        Enum.map(reports, fn
-          {run, controls} -> {:run, run, Map.put(controls, "if", @report_if)}
-          run -> {:run, run, %{"if" => @report_if}}
-        end)
+        List.insert_at(report_steps, 10, {:uses, @postgres_action, :absent, %{"if" => @report_if}}) ++
+        [{:uses, @postgres_action, %{"mode" => "stop"}, %{"if" => "always()"}}]
 
     assert(
       Enum.map(Map.get(job, "steps", []), &step_signature/1) == expected,
@@ -2154,7 +2199,8 @@ defmodule AshReplicant.ReleaseContract do
               "with" => %{
                 "name" => "release-assets",
                 "path" => "${{ runner.temp }}/release-assets/",
-                "if-no-files-found" => "error"
+                "if-no-files-found" => "error",
+                "retention-days" => 7
               }
             },
             %{
@@ -2175,7 +2221,7 @@ defmodule AshReplicant.ReleaseContract do
           "env" => %{
             "MIX_ENV" => "dev",
             "VERSION" => "${{ needs.publish.outputs.version }}",
-            "ASH_REPLICANT_TEST_URL" => "postgres://postgres@localhost:5432/ash_replicant_test"
+            "ASH_REPLICANT_TEST_URL" => "postgres://postgres:postgres@127.0.0.1:5432/ash_replicant_test"
           },
           "steps" => [
             %{
@@ -2196,7 +2242,7 @@ defmodule AshReplicant.ReleaseContract do
             %{"run" => "mix deps.compile"},
             %{
               "name" => "Start the published consumer's real PostgreSQL",
-              "run" => @published_postgres_run
+              "uses" => @postgres_action
             },
             %{
               "name" => "Audit and exercise the published package as a fresh consumer",
@@ -2205,7 +2251,8 @@ defmodule AshReplicant.ReleaseContract do
             %{
               "name" => "Remove the published consumer's PostgreSQL",
               "if" => "always()",
-              "run" => "docker rm -fv pg"
+              "uses" => @postgres_action,
+              "with" => %{"mode" => "stop"}
             }
           ]
         }
@@ -2251,7 +2298,10 @@ defmodule AshReplicant.ReleaseContract do
     pattern = ~r/^  #{Regex.escape(name)}:\n.*?(?=^  [a-z][a-z0-9-]+:\n|\z)/ms
     [block] = Regex.run(pattern, File.read!(path)) || fail("CI job source is missing")
 
-    if {Path.basename(path), name} == {"publish.yml", "published-package"} do
+    if {Path.basename(path), name} in [
+         {"publish.yml", "published-package"},
+         {"qualification.yml", "postgres-lanes"}
+       ] do
       assert(
         timeout == 90 and
           String.contains?(block, "    timeout-minutes: 90 # no green run yet\n"),
@@ -2281,7 +2331,7 @@ defmodule AshReplicant.ReleaseContract do
   end
 
   defp assert_ci_sources(root) do
-    shell_scripts = Path.wildcard(Path.join(root, "scripts/*.sh"))
+    shell_scripts = Path.wildcard(Path.join(root, "scripts/**/*.sh"))
     assert(shell_scripts != [], "CI shell script inventory is missing")
 
     Enum.each(shell_scripts, fn path ->
@@ -2369,21 +2419,91 @@ defmodule AshReplicant.ReleaseContract do
     end
   end
 
+  defp postgres_declarations(root) do
+    {output, status} = System.cmd(Path.join(root, "scripts/ci/postgres-lanes.sh"), ["--json", root])
+    assert(status == 0, "PostgreSQL lane reader refused its declarations")
+    Jason.decode!(output)
+  end
+
+  defp assert_postgres(root) do
+    dependencies =
+      root |> Path.join(".github/dependency-lanes.json") |> File.read!() |> Jason.decode!()
+
+    assert(dependencies == @matrix, "CI dependency matrix is invalid")
+    postgres_declarations(root)
+    action = YamlElixir.read_from_file!(Path.join(root, ".github/actions/postgres/action.yml"))
+    [check, manage] = get_in(action, ["runs", "steps"])
+    assert(get_in(action, ["runs", "using"]) == "composite", "PostgreSQL action must be composite")
+
+    assert(
+      check["name"] == "Check the public platform engine and pull its digest" and
+        check["if"] == "inputs.mode == 'start' && inputs.image == ''" and
+        check["shell"] == "bash" and check["run"] == @public_engine_check,
+      "public PostgreSQL digest check is invalid"
+    )
+
+    assert(
+      manage["if"] == "always() && (inputs.mode == 'stop' || success())" and
+        manage["shell"] == "bash" and manage["run"] == @postgres_manage,
+      "PostgreSQL startup, readiness or cleanup is invalid"
+    )
+
+    assert(
+      manage["env"] == %{
+        "MODE" => "${{ inputs.mode }}",
+        "CONTAINER" => "${{ inputs.name }}",
+        "PORT" => "${{ inputs.port }}",
+        "IMAGE" => "${{ inputs.image }}",
+        "DECODER_SOURCE" => "${{ inputs.decoder-source }}",
+        "TEST_PG_USER" => "postgres",
+        "TEST_PG_PASSWORD" => "postgres",
+        "TEST_PG_DATABASE" => "ash_replicant_test",
+        "POSTGRES_USER" => "postgres",
+        "POSTGRES_PASSWORD" => "postgres",
+        "POSTGRES_DB" => "ash_replicant_test"
+      },
+      "PostgreSQL fixture environment is invalid"
+    )
+
+    for path <- Path.wildcard(Path.join(root, ".github/workflows/*.yml")) do
+      source = File.read!(path)
+
+      assert(
+        not Regex.match?(
+          ~r/postgres:[0-9]|ghcr\.io\/baselabs\/postgres|PostgreSQL [0-9]|pg_major:\s*["']?[0-9]|docker (run|rm)/,
+          source
+        ),
+        "workflows must use PostgreSQL declarations and the composite action"
+      )
+    end
+  end
+
   defp assert_qualification_inventory(root, workflow) do
+    declarations = postgres_declarations(root)
+
     expected =
       workflow
       |> Map.fetch!("jobs")
       |> Enum.flat_map(fn {_id, job} ->
-        rows = get_in(job, ["strategy", "matrix", "include"]) || [%{}]
+        rows =
+          case get_in(job, ["strategy", "matrix", "include"]) do
+            "${{ fromJSON(needs.postgres-lanes.outputs.compatibility) }}" ->
+              declarations["compatibility"]
+
+            "${{ fromJSON(needs.postgres-lanes.outputs.decoder) }}" ->
+              declarations["decoder"]
+
+            nil ->
+              [%{}]
+
+            _other ->
+              fail("qualification matrix must come from the lane reader")
+          end
         Enum.map(rows, &qualification_check_name(job["name"], &1))
       end)
       |> Enum.sort()
 
-    inventory =
-      root
-      |> Path.join("scripts/qualification-jobs.json")
-      |> File.read!()
-      |> Jason.decode!()
+    inventory = declarations["checks"]
 
     assert(inventory == expected, "qualification check inventory differs from proof jobs")
   end
@@ -2551,6 +2671,27 @@ defmodule AshReplicant.ReleaseContract do
       assert(job["runs-on"] == "ubuntu-24.04", "CI release runner is invalid")
       assert(job["env"] == @job_env[name], "CI release job environment is invalid")
 
+      if name in [
+           "no-database",
+           "compatibility",
+           "performance",
+           "decoder-old-majors",
+           "fresh-consumer"
+         ] do
+        assert(job["needs"] == "postgres-lanes", "database lanes must use the declaration job")
+      end
+
+      if name == "postgres-lanes" do
+        assert(
+          job["outputs"] == %{
+            "engine_major" => "${{ steps.lanes.outputs.engine_major }}",
+            "compatibility" => "${{ steps.lanes.outputs.compatibility }}",
+            "decoder" => "${{ steps.lanes.outputs.decoder }}"
+          },
+          "PostgreSQL lane outputs are invalid"
+        )
+      end
+
       if name in ["no-database", "fresh-consumer"] do
         assert(
           job["permissions"] == %{"contents" => "read"},
@@ -2581,11 +2722,12 @@ defmodule AshReplicant.ReleaseContract do
 
   defp step_signature(%{"uses" => action} = step) when is_binary(action) do
     assert(
-      Map.keys(step) -- ["name", "uses", "with"] == [],
+      Map.keys(step) -- ["name", "uses", "with", "if"] == [],
       "CI release Action step control is invalid"
     )
 
-    {:uses, action, Map.get(step, "with", :absent)}
+    signature = {:uses, action, Map.get(step, "with", :absent)}
+    if Map.has_key?(step, "if"), do: Tuple.append(signature, %{"if" => step["if"]}), else: signature
   end
 
   defp step_signature(_step), do: fail("CI release step is invalid")
@@ -2594,7 +2736,10 @@ defmodule AshReplicant.ReleaseContract do
     job = get_in(workflow, ["jobs", "compatibility"]) || fail("CI compatibility job is missing")
 
     assert(
-      job["strategy"] == %{"fail-fast" => false, "matrix" => %{"include" => @matrix}},
+      job["strategy"] == %{
+        "fail-fast" => false,
+        "matrix" => %{"include" => "${{ fromJSON(needs.postgres-lanes.outputs.compatibility) }}"}
+      },
       "CI Ash compatibility matrix is invalid"
     )
   end

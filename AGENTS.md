@@ -176,7 +176,7 @@ The CI gates install the exact runtime, fetch with `mix deps.get --check-locked`
 format, compile with warnings as errors, Credo, both dependency audits, the covering tests,
 Dialyzer, and docs/package checks through the route above. The `fresh-consumer` job
 builds the candidate tarball and runs fresh resolution, both audits, compile with warnings
-as errors, docs, migrations, and a live CDC smoke against its own logical-WAL PostgreSQL 16.
+as errors, docs, migrations, and a live CDC smoke against its own logical-WAL platform engine.
 The consumer's `deps.audit --path` runs from the dev repository root, where `mix_audit`
 is declared; Hex's audit runs inside the consumer. The retired local `prepush.sh` route
 authorizes no build or test on the owner's Mac or build box; CI runs its collector self-tests.
@@ -194,6 +194,17 @@ continue independently after report failures, after ref and runtime admission. I
 only a reviewed, committed lock refresh changes qualification's admitted dependencies.
 Nothing compiles or tests on the owner's Mac, and this public repository uses GitHub-hosted
 CI rather than the build box.
+
+`.github/postgres.ref` is the checked platform engine reference. The single
+`.github/actions/postgres` action checks the public engine digest, starts every disposable
+server with password authentication, waits for TCP readiness, and logs and removes it on
+every exit. `.github/postgres-lanes.json` declares compatibility majors and source roles;
+`scripts/ci/postgres-lanes.sh` alone expands those declarations into matrices and the
+qualification inventory. Dependency-range cells from `.github/dependency-lanes.json`,
+performance, consumers, drift reporting, and decoder destinations run the engine.
+Compatibility sources cover PostgreSQL 15, 16, and 17; plugin sources cover 9.6 and 12.
+The engine's major is never repeated as a compatibility lane. Tests verify the live major
+against the reader's expected major. All fixture passwords are disposable test data.
 
 `.tool-versions` is the single checkout runtime source: every setup-beam install
 reads it with `version-file` and strict resolution, then immediately checks the

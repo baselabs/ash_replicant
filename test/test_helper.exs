@@ -6,6 +6,10 @@ if AshReplicant.Test.PG.enabled?() do
   # check out real connections and COMMIT, so every per-test Sandbox transaction sees
   # the tables. Switch to :manual for the isolated, rolled-back per-test transactions.
   Ecto.Adapters.SQL.Sandbox.mode(AshReplicant.TestRepo, :auto)
+  [[release]] =
+    AshReplicant.TestRepo.query!("SELECT current_setting('server_version_num')::int").rows
+
+  AshReplicant.Test.PG.assert_major!(release, "EXPECTED_PG_MAJOR")
   Ecto.Migrator.run(AshReplicant.TestRepo, :up, all: true)
   Ecto.Adapters.SQL.Sandbox.mode(AshReplicant.TestRepo, :manual)
 

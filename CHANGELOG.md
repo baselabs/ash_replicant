@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Run CI's dependency-range, consumer, performance, drift-report, and decoder-destination
+  checks on the checked BaseLabs PostgreSQL engine. Declare all other supported majors
+  once, including the previously missing PostgreSQL 15 compatibility lane. One reader
+  generates matrices and qualification checks, and one action owns password-authenticated
+  startup, TCP readiness, logs, and removal of every disposable database container.
+- Build plugin sources only from declared base digests, with explicit supported-major
+  branches, exact server headers, and full source commits, including wal2json 2.4.
+  Tests verify the live server's declared major and preserve password-bearing URLs.
+
 ### Fixed
 
 - Set the publish and drift-report timeouts from their first green runs (5 and 24

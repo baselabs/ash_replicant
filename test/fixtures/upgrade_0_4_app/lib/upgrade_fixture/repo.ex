@@ -11,5 +11,7 @@ defmodule UpgradeFixture.Repo do
   end
 
   @impl true
-  def min_pg_version, do: %Version{major: 16, minor: 0, patch: 0}
+  def min_pg_version do
+    Version.parse!(System.fetch_env!("EXPECTED_PG_MAJOR") <> ".0.0")
+  end
 end

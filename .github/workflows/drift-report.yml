@@ -20,7 +20,8 @@ jobs:
     timeout-minutes: 24
     env:
       MIX_ENV: test
-      ASH_REPLICANT_TEST_URL: postgres://postgres@localhost:5432/postgres
+      # Throwaway fixture password, never an external service credential.
+      ASH_REPLICANT_TEST_URL: postgres://postgres:postgres@127.0.0.1:5432/ash_replicant_test
 
     steps:
       - name: Refuse any ref but the default branch
@@ -42,6 +43,12 @@ jobs:
         id: runtime
 
       # Report failures independently, only after ref and runtime admission succeeded.
+      - name: Read the PostgreSQL declarations
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: |
+          declarations="$(scripts/ci/postgres-lanes.sh --json)"
+          major="$(jq -r .engine_major <<< "$declarations")"
+          printf 'EXPECTED_PG_MAJOR=%s\n' "$major" >> "$GITHUB_ENV"
       - name: Report Ash lock lag
         if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
         run: scripts/assert-dependency-version.sh --lock locks/latest-compatible.lock --newest ash '>= 3.37.3 and < 4.0.0-0'
@@ -98,15 +105,9 @@ jobs:
         run: mix deps.audit
       - run: mix deps.compile
         if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
-      - name: Start PostgreSQL 16 with logical replication
+      - name: Start the platform engine
         if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
-        run: |
-          docker run -d --name pg \
-            -e POSTGRES_HOST_AUTH_METHOD=trust \
-            -p 5432:5432 \
-            postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b \
-            -c wal_level=logical -c max_replication_slots=20 -c max_wal_senders=20
-          scripts/wait-for-postgres.sh pg
+        uses: ./.github/actions/postgres
       - name: Create and migrate the integration database
         if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
         run: |
@@ -120,3 +121,8 @@ jobs:
       - name: Explicit integration discovery against upstream
         if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
         run: scripts/run-structural-tests.sh test/integration --include integration
+      - name: Remove PostgreSQL
+        if: always()
+        uses: ./.github/actions/postgres
+        with:
+          mode: stop

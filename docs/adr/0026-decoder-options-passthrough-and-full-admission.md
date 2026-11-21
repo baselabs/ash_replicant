@@ -8,6 +8,13 @@ before any release was cut — see the amendment note)
 Status: Accepted. Supersedes: none (extends the ADR-0005 coordination contract
 with Replicant's ADR-0009 decoder surface).
 
+> **Superseding CI substrate amendment (2026-11-21).** Old-major sources are now
+> selected from `.github/postgres-lanes.json` by the single lane reader and built
+> on their declared upstream digests. Their destination runs the checked BaseLabs
+> platform engine. The shared PostgreSQL action supplies password authentication,
+> TCP readiness, logs, and unconditional cleanup. Plugin sources use full commits
+> and explicit supported-major build branches; the admission contract is unchanged.
+
 > **Amendment (2026-10-01, pre-release).** This ADR was first authored with a
 > `:pgoutput`-only admission refusal while the decoder options were passed
 > through. The owner rejected that scope: the point of the Replicant 1.4

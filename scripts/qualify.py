@@ -82,9 +82,17 @@ def run_jobs(repository, run_id):
     raise ValueError("job pagination limit exceeded")
 
 
+def expected_checks():
+    response = subprocess.run(
+        [str(INVENTORY.parent / "ci/postgres-lanes.sh"), "--json"],
+        check=True, capture_output=True, text=True, timeout=30,
+    )
+    return json.loads(response.stdout)["checks"]
+
+
 def main():
     try:
-        expected = json.loads(INVENTORY.read_text(encoding="utf-8"))
+        expected = expected_checks()
         jobs = run_jobs(
             os.environ["GITHUB_REPOSITORY"],
             os.environ["GITHUB_RUN_ID"],

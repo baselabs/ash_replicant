@@ -414,7 +414,7 @@ defmodule AshReplicant.Test.DestinationFixtures do
     use AshPostgres.Repo, otp_app: :ash_replicant
 
     @impl AshPostgres.Repo
-    def min_pg_version, do: %Version{major: 16, minor: 0, patch: 0}
+    def min_pg_version, do: AshReplicant.TestRepo.min_pg_version()
 
     @impl AshPostgres.Repo
     def installed_extensions, do: ["ash-functions"]

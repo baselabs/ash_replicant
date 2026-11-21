@@ -5,14 +5,14 @@
 # for the :decoder_option_unsupported halt (a build that predates
 # numeric-data-types-as-string rejects the option wal2json ≥ 2.6 requires).
 #
-# Build (the two majors from the SAME Dockerfile):
-#   docker build -f test/support/pg_old.dockerfile --build-arg BASE=postgres:9.6@sha256:caddd35b05cdd56c614ab1f674e63be778e0abdf54e71a7507ff3e28d4902698 -t replicant-pg96-plugins:test .
-#   docker build -f test/support/pg_old.dockerfile --build-arg BASE=postgres:12@sha256:2f2a8c2a7d10862e7fba2602e304523554f9df8244c632dafe2628ccb398fb5c -t replicant-pg12-plugins:test .
+# The base is mandatory: scripts/ci/postgres-lanes.sh supplies the declared
+# image@digest from .github/postgres-lanes.json to the workflow's BASE build arg.
+# An absent or empty BASE cannot resolve FROM and fails the build.
 #
 # The build context is the repo root. Plugin sources are pinned by commit (not a
 # moving branch) so a rebuild reproduces the same bytes.
 
-ARG BASE=postgres:12@sha256:2f2a8c2a7d10862e7fba2602e304523554f9df8244c632dafe2628ccb398fb5c
+ARG BASE
 FROM ${BASE} AS build
 
 # The 9.6 image rides Debian stretch (archived upstream; PGDG's stretch archive has
@@ -20,7 +20,7 @@ FROM ${BASE} AS build
 # postgresql-server-dev-9.6 for arm64; installing it needs the base image's PGDG
 # libpq5 downgraded to Debian's matching build (--allow-downgrades pins the trio).
 RUN set -eux; \
-    case "$PG_MAJOR" in 9.*) \
+    case "$PG_MAJOR" in 9.6) \
       printf 'deb http://archive.debian.org/debian stretch main\ndeb http://archive.debian.org/debian-security stretch/updates main\n' > /etc/apt/sources.list; \
       rm -f /etc/apt/sources.list.d/*.list; \
       apt-get update -o Acquire::Check-Valid-Until=false; \
@@ -30,12 +30,13 @@ RUN set -eux; \
         build-essential git ca-certificates libkrb5-dev libselinux1-dev \
         libxslt1-dev libpam0g-dev zlib1g-dev libssl-dev libedit-dev; \
       ;; \
-    *) \
+    12) \
       apt-get update; \
       apt-get install -y --no-install-recommends build-essential git ca-certificates \
         libkrb5-dev libselinux1-dev libxslt1-dev libpam0g-dev zlib1g-dev libedit-dev \
-        postgresql-server-dev-$PG_MAJOR; \
+        "postgresql-server-dev-$PG_MAJOR=$PG_VERSION"; \
       ;; \
+    *) echo "unsupported plugin source major" >&2; exit 1 ;; \
     esac
 
 # pglogical 2.4.8 (output plugin `pglogical_output`) — OBSERVED protocol facts in
@@ -49,7 +50,7 @@ RUN set -eux; \
 
 # wal2json, the wal2json_2_6 tag @ 75629c2 (≥ 2.6: numeric-data-types-as-string;
 # the same commit replicant's own dockerfile pins for every pre-15 major), and
-# the wal2json_2_4 tag as `wal2json2_4` (the option-rejection halt's live lever).
+# wal2json_2_4 (36fbee6cbb7e4bc1bf9ee4f55842ab51393e3ac0) as `wal2json2_4` (the option-rejection halt's live lever).
 # Intentional difference from replicant's per-major pinning: this lane runs only
 # the pre-15 majors (9.6/12) — this repo's 15-18 cells run pgoutput, which ships
 # in-core and needs no plugin build — so replicant's master@75a4b494-on-15+ pin
@@ -61,7 +62,7 @@ RUN set -eux; \
     make -j"$(nproc)" PG_CONFIG=/usr/lib/postgresql/$PG_MAJOR/bin/pg_config; \
     make install PG_CONFIG=/usr/lib/postgresql/$PG_MAJOR/bin/pg_config; \
     mv /usr/lib/postgresql/$PG_MAJOR/lib/wal2json.so /usr/lib/postgresql/$PG_MAJOR/lib/wal2json_head.so; \
-    git checkout --quiet wal2json_2_4; \
+    git checkout --quiet 36fbee6cbb7e4bc1bf9ee4f55842ab51393e3ac0; \
     make -j"$(nproc)" PG_CONFIG=/usr/lib/postgresql/$PG_MAJOR/bin/pg_config; \
     make install PG_CONFIG=/usr/lib/postgresql/$PG_MAJOR/bin/pg_config; \
     mv /usr/lib/postgresql/$PG_MAJOR/lib/wal2json.so /usr/lib/postgresql/$PG_MAJOR/lib/wal2json2_4.so; \

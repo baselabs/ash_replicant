@@ -2,8 +2,8 @@ defmodule AshReplicant.Test.PgOld do
   @moduledoc """
   The pre-15 plugin-decoder substrate helper (ADR-0026): DDL and identity
   reads on a DIRECT Postgrex connection to the old-major source — never
-  Ecto, never TestRepo (the destination stays the ordinary 16–18 test
-  database; the old server is a SOURCE only).
+  Ecto, never TestRepo (the destination runs the platform engine;
+  the old server is a SOURCE only).
 
   Gated on `ASH_REPLICANT_PGOLD_URL` (the same gating pattern as
   `AshReplicant.Test.PG`). The substrate image is
@@ -47,6 +47,7 @@ defmodule AshReplicant.Test.PgOld do
   @spec release!() :: integer()
   def release! do
     [[release]] = query!("SELECT current_setting('server_version_num')::int").rows
+    PG.assert_major!(release, "EXPECTED_PGOLD_MAJOR")
     release
   end
 

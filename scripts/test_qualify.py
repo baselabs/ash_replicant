@@ -1,17 +1,13 @@
 """Pure verdict tests: no services, API calls, or Elixir runtime."""
 
-import json
-from pathlib import Path
 import unittest
 
-from qualify import refusals
+from qualify import expected_checks, refusals
 
 
 class QualificationTest(unittest.TestCase):
     def setUp(self):
-        self.expected = json.loads(
-            Path(__file__).with_name("qualification-jobs.json").read_text(encoding="utf-8")
-        )
+        self.expected = expected_checks()
         self.jobs = [
             {"name": name, "status": "completed", "conclusion": "success"}
             for name in self.expected
