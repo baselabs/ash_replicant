@@ -103,7 +103,7 @@ defmodule AshReplicant.Test.DynamicDestination do
 
   defp server_uri do
     "ASH_REPLICANT_TEST_URL"
-    |> System.get_env("postgres://postgres@localhost:5599")
+    |> System.get_env("postgres://postgres:postgres@127.0.0.1:5432")
     |> URI.parse()
   end
 end

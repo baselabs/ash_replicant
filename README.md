@@ -1110,7 +1110,7 @@ env -u ASH_REPLICANT_TEST_URL \
   scripts/with-release-runtime.sh scripts/run-structural-tests.sh \
     --allow-excluded --exclude integration
 
-export ASH_REPLICANT_TEST_URL="postgres://postgres@localhost:5599/postgres" # example — point at YOUR logical-replication Postgres (host/port are machine-local; the database name is forced anyway)
+export ASH_REPLICANT_TEST_URL="postgres://postgres:postgres@127.0.0.1:5432/postgres" # the CI lane's throwaway endpoint (.github/actions/postgres); point at YOUR logical-replication PostgreSQL (the database name is forced anyway)
 MIX_ENV=test scripts/with-release-runtime.sh mix ecto.create
 MIX_ENV=test scripts/with-release-runtime.sh mix ecto.migrate
 scripts/with-release-runtime.sh scripts/run-structural-tests.sh --include integration

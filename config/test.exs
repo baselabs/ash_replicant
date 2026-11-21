@@ -4,7 +4,7 @@ import Config
 # schema. CI supplies a password-bearing loopback URL for its disposable lane;
 # the endpoint and authentication are preserved when selecting the test database.
 url =
-  System.get_env("ASH_REPLICANT_TEST_URL", "postgres://postgres@localhost:5599")
+  System.get_env("ASH_REPLICANT_TEST_URL", "postgres://postgres:postgres@127.0.0.1:5432")
   |> URI.parse()
   |> Map.put(:path, "/ash_replicant_test")
   |> URI.to_string()

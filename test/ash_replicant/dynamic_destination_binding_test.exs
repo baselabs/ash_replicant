@@ -110,7 +110,7 @@ defmodule AshReplicant.DynamicDestinationBindingTest do
 
   defp source_connection do
     "ASH_REPLICANT_TEST_URL"
-    |> System.get_env("postgres://postgres@localhost:5599")
+    |> System.fetch_env!()
     |> URI.parse()
     |> DynamicDestination.connect_opts("postgres")
   end
