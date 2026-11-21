@@ -159,8 +159,10 @@ Land only with `python3 /Users/rp/Developer/kimosabe/bin/kimosabe-land --repo . 
 It submits a fresh `kci/<commit>` candidate and moves `main` only after `qualified` succeeds.
 The landing SHA must never have been pushed to any `kci/` ref: two `qualified` checks on one
 SHA make landing ambiguous. After a green topic check, make a final docs-only commit, use
-that new SHA for landing, and remove the topic refs created for the check. Never push `main`
-directly. Workflow and release-script changes require infra-1's review before landing.
+that new SHA for landing. It settles after promotion itself: it deletes local and origin branches that contain the landed
+commits, retires clean delegate worktrees and sweeps `kci/` refs. Exit 0 means landed and settled;
+exit 4 means landed with leftovers named, so fix the cause and run `kimosabe-land --repo . --sweep`.
+Never push `main` directly. Workflow and release-script changes require infra-1's review before landing.
 
 ## Development workflow
 
