@@ -2447,6 +2447,7 @@ defmodule AshReplicant.ReleaseContract do
     declarations = postgres_declarations(root)
     action = YamlElixir.read_from_file!(Path.join(root, ".github/actions/postgres/action.yml"))
     [check, manage] = get_in(action, ["runs", "steps"])
+
     assert(
       get_in(action, ["runs", "using"]) == "composite",
       "PostgreSQL action must be composite"

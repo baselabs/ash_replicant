@@ -675,7 +675,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       assert_invalid!()
       prepare_fixture()
 
-      command = if job == "postgres-lanes", do: "scripts/ci/postgres-lanes.sh", else: "mix deps.compile"
+      command =
+        if job == "postgres-lanes", do: "scripts/ci/postgres-lanes.sh", else: "mix deps.compile"
 
       mutate_run_step!(job, command, fn step ->
         String.trim_trailing(step) <> "\n        continue-on-error: #{value}\n"
@@ -1986,8 +1987,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     for control <- [
           "    continue-on-error: ${{ true }}\n",
-          "    defaults:\n      run:\n        shell: echo {0}\n",
-          "    needs: disabled-prerequisite\n"
+          "    defaults:\n      run:\n        shell: echo {0}\n"
         ] do
       prepare_fixture()
 
@@ -1999,6 +1999,16 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
       assert_invalid!()
     end
+
+    prepare_fixture()
+
+    mutate_job!(
+      "no-database",
+      "    needs: postgres-lanes\n",
+      "    needs: disabled-prerequisite\n"
+    )
+
+    assert_invalid!()
 
     prepare_fixture()
     replace_once!(@workflow, "    runs-on: ubuntu-24.04\n", "    runs-on: self-hosted\n")
