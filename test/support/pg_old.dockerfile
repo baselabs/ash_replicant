@@ -10,7 +10,9 @@
 # An absent or empty BASE cannot resolve FROM and fails the build.
 #
 # The build context is the repo root. Plugin sources are pinned by commit (not a
-# moving branch) so a rebuild reproduces the same bytes.
+# moving branch) so a rebuild reproduces the same bytes. The final image copies
+# only staged plugin files, never apt-installed server libraries. PGDG's archive
+# retains the exact server headers after the live suite drops that patch build.
 
 ARG BASE
 FROM ${BASE} AS build
@@ -32,8 +34,14 @@ RUN set -eux; \
       ;; \
     12) \
       apt-get update; \
-      apt-get install -y --no-install-recommends build-essential git ca-certificates \
+      apt-get install -y --no-install-recommends ca-certificates; \
+      sed -E 's#https?://apt\.postgresql\.org#https://apt-archive.postgresql.org#; s#-pgdg main.*$#-pgdg-archive main#' \
+        /etc/apt/sources.list.d/pgdg.list > /etc/apt/sources.list.d/pgdg-archive.list; \
+      grep -q 'https://apt-archive.postgresql.org' /etc/apt/sources.list.d/pgdg-archive.list; \
+      apt-get update; \
+      apt-get install -y --no-install-recommends build-essential git \
         libkrb5-dev libselinux1-dev libxslt1-dev libpam0g-dev zlib1g-dev libedit-dev \
+        libzstd-dev liblz4-dev \
         "postgresql-server-dev-$PG_MAJOR=$PG_VERSION"; \
       ;; \
     *) echo "unsupported plugin source major" >&2; exit 1 ;; \
@@ -46,7 +54,7 @@ RUN set -eux; \
     cd /tmp/pglogical; \
     git checkout --quiet 9a0e182745885ad0152ea387988c95a483396a81; \
     make -j"$(nproc)" PG_CONFIG=/usr/lib/postgresql/$PG_MAJOR/bin/pg_config; \
-    make install PG_CONFIG=/usr/lib/postgresql/$PG_MAJOR/bin/pg_config
+    make install DESTDIR=/plugins PG_CONFIG=/usr/lib/postgresql/$PG_MAJOR/bin/pg_config
 
 # wal2json, the wal2json_2_6 tag @ 75629c2 (≥ 2.6: numeric-data-types-as-string;
 # the same commit replicant's own dockerfile pins for every pre-15 major), and
@@ -60,14 +68,13 @@ RUN set -eux; \
     cd /tmp/wal2json; \
     git checkout --quiet 75629c2e1e81a12350cc9d63782fc53252185d8d; \
     make -j"$(nproc)" PG_CONFIG=/usr/lib/postgresql/$PG_MAJOR/bin/pg_config; \
-    make install PG_CONFIG=/usr/lib/postgresql/$PG_MAJOR/bin/pg_config; \
-    mv /usr/lib/postgresql/$PG_MAJOR/lib/wal2json.so /usr/lib/postgresql/$PG_MAJOR/lib/wal2json_head.so; \
+    make install DESTDIR=/plugins PG_CONFIG=/usr/lib/postgresql/$PG_MAJOR/bin/pg_config; \
+    mv /plugins/usr/lib/postgresql/$PG_MAJOR/lib/wal2json.so /plugins/usr/lib/postgresql/$PG_MAJOR/lib/wal2json_head.so; \
     git checkout --quiet 36fbee6cbb7e4bc1bf9ee4f55842ab51393e3ac0; \
     make -j"$(nproc)" PG_CONFIG=/usr/lib/postgresql/$PG_MAJOR/bin/pg_config; \
-    make install PG_CONFIG=/usr/lib/postgresql/$PG_MAJOR/bin/pg_config; \
-    mv /usr/lib/postgresql/$PG_MAJOR/lib/wal2json.so /usr/lib/postgresql/$PG_MAJOR/lib/wal2json2_4.so; \
-    mv /usr/lib/postgresql/$PG_MAJOR/lib/wal2json_head.so /usr/lib/postgresql/$PG_MAJOR/lib/wal2json.so
+    make install DESTDIR=/plugins PG_CONFIG=/usr/lib/postgresql/$PG_MAJOR/bin/pg_config; \
+    mv /plugins/usr/lib/postgresql/$PG_MAJOR/lib/wal2json.so /plugins/usr/lib/postgresql/$PG_MAJOR/lib/wal2json2_4.so; \
+    mv /plugins/usr/lib/postgresql/$PG_MAJOR/lib/wal2json_head.so /plugins/usr/lib/postgresql/$PG_MAJOR/lib/wal2json.so
 
 FROM ${BASE}
-COPY --from=build /usr/lib/postgresql/$PG_MAJOR/lib/ /usr/lib/postgresql/$PG_MAJOR/lib/
-COPY --from=build /usr/share/postgresql/$PG_MAJOR/extension/ /usr/share/postgresql/$PG_MAJOR/extension/
+COPY --from=build /plugins/ /

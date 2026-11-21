@@ -1456,15 +1456,18 @@ defmodule AshReplicant.ReleaseContract do
     "performance" => %{
       "EXPECTED_PG_MAJOR" => "${{ needs.postgres-lanes.outputs.engine_major }}",
       "MIX_ENV" => "test",
-      "ASH_REPLICANT_TEST_URL" => "postgres://postgres:postgres@127.0.0.1:5432/ash_replicant_test",
+      "ASH_REPLICANT_TEST_URL" =>
+        "postgres://postgres:postgres@127.0.0.1:5432/ash_replicant_test",
       "ASH_REPLICANT_PERFORMANCE" => "1"
     },
     "decoder-old-majors" => %{
       "EXPECTED_PGOLD_MAJOR" => "${{ matrix.pg_major }}",
       "EXPECTED_PG_MAJOR" => "${{ needs.postgres-lanes.outputs.engine_major }}",
       "MIX_ENV" => "test",
-      "ASH_REPLICANT_TEST_URL" => "postgres://postgres:postgres@127.0.0.1:5432/ash_replicant_test",
-      "ASH_REPLICANT_PGOLD_URL" => "postgres://postgres:postgres@127.0.0.1:5433/ash_replicant_test"
+      "ASH_REPLICANT_TEST_URL" =>
+        "postgres://postgres:postgres@127.0.0.1:5432/ash_replicant_test",
+      "ASH_REPLICANT_PGOLD_URL" =>
+        "postgres://postgres:postgres@127.0.0.1:5433/ash_replicant_test"
     }
   }
 
@@ -1591,8 +1594,8 @@ defmodule AshReplicant.ReleaseContract do
        docker build -f test/support/pg_old.dockerfile --build-arg "BASE=$PG_BASE" -t pgold-plugins:ci .
        image="$(docker image inspect --format '{{.Id}}' pgold-plugins:ci)"
        printf 'image=%s\n' "$image" >> "$GITHUB_OUTPUT"
-       """ |> String.trim(),
-       %{"id" => "plugins", "env" => %{"PG_BASE" => "${{ matrix.base }}"}}},
+       """
+       |> String.trim(), %{"id" => "plugins", "env" => %{"PG_BASE" => "${{ matrix.base }}"}}},
       {:uses, @postgres_action, :absent},
       {:uses, @postgres_action,
        %{
@@ -1940,7 +1943,10 @@ defmodule AshReplicant.ReleaseContract do
     lanes_count =
       source
       |> String.split("\n")
-      |> Enum.count(&(String.trim(&1) == "python3 -B -m unittest discover -s scripts -p 'test_postgres_lanes.py' >/dev/null"))
+      |> Enum.count(
+        &(String.trim(&1) ==
+            "python3 -B -m unittest discover -s scripts -p 'test_postgres_lanes.py' >/dev/null")
+      )
 
     assert(lanes_count == 1, "PostgreSQL lane checker wiring is incomplete")
 
@@ -2063,7 +2069,8 @@ defmodule AshReplicant.ReleaseContract do
         job["runs-on"] == "ubuntu-24.04" and job["timeout-minutes"] == 24 and
         job["env"] == %{
           "MIX_ENV" => "test",
-          "ASH_REPLICANT_TEST_URL" => "postgres://postgres:postgres@127.0.0.1:5432/ash_replicant_test"
+          "ASH_REPLICANT_TEST_URL" =>
+            "postgres://postgres:postgres@127.0.0.1:5432/ash_replicant_test"
         },
       "drift report job cannot hold secrets, an environment, a cache, or write permissions"
     )
@@ -2098,7 +2105,8 @@ defmodule AshReplicant.ReleaseContract do
            declarations="$(scripts/ci/postgres-lanes.sh --json)"
            major="$(jq -r .engine_major <<< "$declarations")"
            printf 'EXPECTED_PG_MAJOR=%s\n' "$major" >> "$GITHUB_ENV"
-           """ |> String.trim(), %{"if" => @report_if}}
+           """
+           |> String.trim(), %{"if" => @report_if}}
         ]
 
     report_steps =
@@ -2109,7 +2117,11 @@ defmodule AshReplicant.ReleaseContract do
 
     expected =
       admission ++
-        List.insert_at(report_steps, 10, {:uses, @postgres_action, :absent, %{"if" => @report_if}}) ++
+        List.insert_at(
+          report_steps,
+          10,
+          {:uses, @postgres_action, :absent, %{"if" => @report_if}}
+        ) ++
         [{:uses, @postgres_action, %{"mode" => "stop"}, %{"if" => "always()"}}]
 
     assert(
@@ -2221,7 +2233,8 @@ defmodule AshReplicant.ReleaseContract do
           "env" => %{
             "MIX_ENV" => "dev",
             "VERSION" => "${{ needs.publish.outputs.version }}",
-            "ASH_REPLICANT_TEST_URL" => "postgres://postgres:postgres@127.0.0.1:5432/ash_replicant_test"
+            "ASH_REPLICANT_TEST_URL" =>
+              "postgres://postgres:postgres@127.0.0.1:5432/ash_replicant_test"
           },
           "steps" => [
             %{
@@ -2298,10 +2311,7 @@ defmodule AshReplicant.ReleaseContract do
     pattern = ~r/^  #{Regex.escape(name)}:\n.*?(?=^  [a-z][a-z0-9-]+:\n|\z)/ms
     [block] = Regex.run(pattern, File.read!(path)) || fail("CI job source is missing")
 
-    if {Path.basename(path), name} in [
-         {"publish.yml", "published-package"},
-         {"qualification.yml", "postgres-lanes"}
-       ] do
+    if {Path.basename(path), name} == {"publish.yml", "published-package"} do
       assert(
         timeout == 90 and
           String.contains?(block, "    timeout-minutes: 90 # no green run yet\n"),
@@ -2319,7 +2329,7 @@ defmodule AshReplicant.ReleaseContract do
         expected = if measured < 150, do: 5, else: div(2 * measured + 59, 60)
 
         assert(
-          run in ~w(44208487858 44214414813 44224060553 44227674373 44554148819 44572306314 44736595182 44738538737 44765244702) and
+          run in ~w(44208487858 44214414813 44224060553 44227674373 44554148819 44572306314 44736595182 44738538737 44765244702 44884720928) and
             measured > 0 and measured <= 2700 and is_integer(timeout) and timeout <= 90 and
             timeout == expected,
           "CI timeout must follow its slowest measured green run and infra's 5-minute floor"
@@ -2420,7 +2430,11 @@ defmodule AshReplicant.ReleaseContract do
   end
 
   defp postgres_declarations(root) do
-    {output, status} = System.cmd(Path.join(root, "scripts/ci/postgres-lanes.sh"), ["--json", root])
+    root = Path.expand(root)
+
+    {output, status} =
+      System.cmd(Path.join(root, "scripts/ci/postgres-lanes.sh"), ["--json", root])
+
     assert(status == 0, "PostgreSQL lane reader refused its declarations")
     Jason.decode!(output)
   end
@@ -2430,10 +2444,13 @@ defmodule AshReplicant.ReleaseContract do
       root |> Path.join(".github/dependency-lanes.json") |> File.read!() |> Jason.decode!()
 
     assert(dependencies == @matrix, "CI dependency matrix is invalid")
-    postgres_declarations(root)
+    declarations = postgres_declarations(root)
     action = YamlElixir.read_from_file!(Path.join(root, ".github/actions/postgres/action.yml"))
     [check, manage] = get_in(action, ["runs", "steps"])
-    assert(get_in(action, ["runs", "using"]) == "composite", "PostgreSQL action must be composite")
+    assert(
+      get_in(action, ["runs", "using"]) == "composite",
+      "PostgreSQL action must be composite"
+    )
 
     assert(
       check["name"] == "Check the public platform engine and pull its digest" and
@@ -2464,6 +2481,32 @@ defmodule AshReplicant.ReleaseContract do
       },
       "PostgreSQL fixture environment is invalid"
     )
+
+    dockerfile = File.read!(Path.join(root, "test/support/pg_old.dockerfile"))
+
+    assert(
+      Regex.match?(~r/^ARG BASE$/m, dockerfile) and
+        not Regex.match?(~r/ARG BASE=|@sha256:/, dockerfile) and
+        String.contains?(dockerfile, ~s("postgresql-server-dev-$PG_MAJOR=$PG_VERSION")) and
+        String.contains?(dockerfile, "https://apt-archive.postgresql.org") and
+        String.contains?(
+          dockerfile,
+          ~s|*) echo "unsupported plugin source major" >&2; exit 1|
+        ) and
+        String.contains?(dockerfile, "COPY --from=build /plugins/ /"),
+      "plugin builds must use declared bases, exact archived headers and staged plugin files"
+    )
+
+    for row <- declarations["decoder"] do
+      assert(
+        String.contains?(dockerfile, row["pg_major"] <> ")"),
+        "plugin source major must have an explicit build branch"
+      )
+    end
+
+    for [_, commit] <- Regex.scan(~r/git checkout --quiet ([^;\s]+)/, dockerfile) do
+      assert(Regex.match?(~r/\A[0-9a-f]{40}\z/, commit), "plugin source commit must be immutable")
+    end
 
     for path <- Path.wildcard(Path.join(root, ".github/workflows/*.yml")) do
       source = File.read!(path)
@@ -2499,6 +2542,7 @@ defmodule AshReplicant.ReleaseContract do
             _other ->
               fail("qualification matrix must come from the lane reader")
           end
+
         Enum.map(rows, &qualification_check_name(job["name"], &1))
       end)
       |> Enum.sort()
@@ -2727,7 +2771,10 @@ defmodule AshReplicant.ReleaseContract do
     )
 
     signature = {:uses, action, Map.get(step, "with", :absent)}
-    if Map.has_key?(step, "if"), do: Tuple.append(signature, %{"if" => step["if"]}), else: signature
+
+    if Map.has_key?(step, "if"),
+      do: Tuple.insert_at(signature, tuple_size(signature), %{"if" => step["if"]}),
+      else: signature
   end
 
   defp step_signature(_step), do: fail("CI release step is invalid")

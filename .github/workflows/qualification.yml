@@ -17,7 +17,8 @@ jobs:
   postgres-lanes:
     name: PostgreSQL lanes
     runs-on: ubuntu-24.04
-    timeout-minutes: 90 # no green run yet
+    # Green run 44884720928: PostgreSQL lanes 0m4s.
+    timeout-minutes: 5
     outputs:
       engine_major: ${{ steps.lanes.outputs.engine_major }}
       compatibility: ${{ steps.lanes.outputs.compatibility }}
@@ -99,7 +100,7 @@ jobs:
     needs: postgres-lanes
     name: Dependencies ${{ matrix.label }} / PostgreSQL ${{ matrix.pg_major }}
     runs-on: ubuntu-24.04
-    # Green run 44224060553: current-lock PG18, slowest compatibility cell 18m29s.
+    # Green run 44224060553: slowest compatibility cell 18m29s.
     timeout-minutes: 37
     strategy:
       fail-fast: false
@@ -239,7 +240,7 @@ jobs:
     needs: postgres-lanes
     name: Plugin decoders / PostgreSQL ${{ matrix.pg_major }}
     runs-on: ubuntu-24.04
-    # Green run 44224060553: PG12, slowest plugin decoder cell 3m15s.
+    # Green run 44224060553: slowest plugin decoder cell 3m15s.
     timeout-minutes: 7
     strategy:
       fail-fast: false

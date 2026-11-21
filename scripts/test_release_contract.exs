@@ -157,6 +157,10 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   """
 
   @job_commands %{
+    "postgres-lanes" => [
+      "scripts/ci/postgres-lanes.sh",
+      "python3 -B -m unittest discover -s scripts -p 'test_postgres_lanes.py'"
+    ],
     "no-database" => [
       "scripts/assert-runtime-version.sh",
       "mix deps.get --check-locked",
@@ -518,7 +522,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       @workflow,
-      "jobs:\n  no-database:",
+      "jobs:\n  postgres-lanes:",
       """
       jobs:
         harmless-environment-key:
@@ -528,7 +532,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           steps:
             - run: echo harmless
 
-        no-database:
+        postgres-lanes:
       """
       |> String.trim_trailing()
     )
@@ -639,6 +643,18 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       mutate_job!(job, old, replacement, workflow)
       assert_invalid!()
     end
+
+    for {old, replacement} <- [
+          {"ARG BASE\n", "ARG BASE=postgres:latest\n"},
+          {"=$PG_VERSION", ""},
+          {"COPY --from=build /plugins/ /", "COPY --from=build /usr/lib/ /usr/lib/"},
+          {"unsupported plugin source major\" >&2; exit 1",
+           "unsupported plugin source major\" >&2; exit 0"}
+        ] do
+      prepare_fixture()
+      replace_once!("test/support/pg_old.dockerfile", old, replacement)
+      assert_invalid!()
+    end
   end
 
   defp landing_and_fail_late_probes do
@@ -659,7 +675,9 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       assert_invalid!()
       prepare_fixture()
 
-      mutate_run_step!(job, "mix deps.compile", fn step ->
+      command = if job == "postgres-lanes", do: "scripts/ci/postgres-lanes.sh", else: "mix deps.compile"
+
+      mutate_run_step!(job, command, fn step ->
         String.trim_trailing(step) <> "\n        continue-on-error: #{value}\n"
       end)
 
@@ -960,6 +978,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     # Each check must remain independently reportable after another check fails.
     prepare_fixture()
     workflow = YamlElixir.read_from_file!(fixture_path(@drift))
+
     reports =
       workflow["jobs"]["report"]["steps"]
       |> Enum.drop(5)
@@ -1026,7 +1045,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       assert_invalid!()
     end
 
-    for path <- Path.wildcard(Path.join(@source_root, "scripts/*.sh")) do
+    for path <- Path.wildcard(Path.join(@source_root, "scripts/**/*.sh")) do
       relative = Path.relative_to(path, @source_root)
 
       for {old, replacement} <- [
@@ -1226,6 +1245,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
   defp ci_requirement_probes do
     jobs = [
+      {@workflow, "postgres-lanes", 5},
       {@workflow, "no-database", 77},
       {@workflow, "compatibility", 37},
       {@workflow, "performance", 7},
@@ -1277,7 +1297,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       mutate_job!(job, "persist-credentials: false", "persist-credentials: true", workflow)
       assert_invalid!()
 
-      unless workflow in [@landing, @drift] do
+      unless workflow in [@landing, @drift] or job == "postgres-lanes" do
         prepare_fixture()
         mutate_job!(job, "mix deps.get --check-locked", "mix deps.get", workflow)
         assert_invalid!()
@@ -1985,11 +2005,13 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     assert_invalid!()
 
     prepare_fixture()
+
     replace_once!(
       @workflow,
       "include: ${{ fromJSON(needs.postgres-lanes.outputs.compatibility) }}",
       "include: []"
     )
+
     assert_invalid!()
 
     for workflow <- [@workflow, @publish],
@@ -2567,6 +2589,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           ".github/actions/postgres/action.yml",
           "scripts/ci/postgres-lanes.sh",
           "scripts/test_postgres_lanes.py",
+          "test/support/pg_old.dockerfile",
           "scripts/qualify.py",
           "lib/ash_replicant.ex",
           "lib/ash_replicant/sink.ex",
