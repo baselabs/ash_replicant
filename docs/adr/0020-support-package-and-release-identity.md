@@ -59,8 +59,8 @@ same artifact.
    test seams are explicitly excluded and swept in real consumers.
 5. One release commit produces one canonical tarball manifest, checksum, SBOM,
    license report, docs source reference, and GitHub attestation. The same bytes
-   pass matrix, fault, performance, security, package, fresh-consumer, and
-   Navyler acceptance before separately authorized publication.
+   pass matrix, fault, performance, security, package and fresh-consumer
+   acceptance before separately authorized publication.
 6. Post-publication verification refetches Hex metadata and tarball, checks the
    checksum/content/docs source, and compiles a clean consumer. Replace/revert,
    retirement, tag, GitHub release, and Hex publish remain explicit operator
@@ -80,4 +80,4 @@ same artifact.
 - Exact floor/latest BEAM/dependency cells; PG15-18 live cells and PG19 canary;
   unpack/install/upgrade/rollback; package-content mutation gates; SBOM/license/
   secret/advisory checks; attestation verification; fresh tarball consumer;
-  Navyler RC; and post-publish checksum/content fetch.
+  and post-publish checksum/content fetch.

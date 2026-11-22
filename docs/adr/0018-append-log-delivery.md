@@ -64,8 +64,8 @@ represented by the transport callback.
   destination write path.
 - Separate mirror and append pipelines may use separate slots and checkpoints;
   the release does not claim one slot can serve both sink kinds.
-- Navyler may use its own append-only observer resource for release evidence,
-  but that resource is consumer-owned and not part of AshReplicant's API.
+- A consumer's own observer resources are consumer-owned and not part of
+  AshReplicant's API.
 
 ## Required proof before acceptance
 
