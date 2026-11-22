@@ -121,9 +121,9 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     }
   done
 
-  residue="$(find "$package_dir" -type d \( -name test -o -name .forge -o -name _build \) -print -quit)"
+  residue="$(find "$package_dir" -type d \( -name test -o -name _build -o -name '.*' ! -name . \) -print -quit)"
   if [[ -n "$residue" ]]; then
-    echo "::error::Package contains test, Forge, or build residue"
+    echo "::error::Package contains test, build, or dot-directory residue"
     exit 1
   fi
 

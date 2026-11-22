@@ -125,6 +125,6 @@ project's fail-closed-at-compile-time posture (`ValidateSensitive`, `ValidateTen
   + `resolver_test.exs` (all fail-opens RED-proven), `validate_tenant_source_test.exs`.
 - Ash-source verification: `Ash.Changeset.validate_multitenancy` no-op when strategy nil;
   `create.ex` `handle_multitenancy` truthiness/bypass guards — confirmed in
-  `.forge/reviews/2026-07-14-tenant-mfa-*.md`.
+  machine-local review notes, not published.
 - History: `tenant_attribute` gate `c0a379f` (2026-07-10); `tenant_mfa` symmetry + `false`
   fail-close + sink-action bypass gate 2026-07-14.

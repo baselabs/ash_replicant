@@ -62,7 +62,7 @@ Release evidence is separated by what it proves:
    documentation, and Action-pinning decision.
 7. The selector-free release job asserts the public Ash range, builds docs with
    warnings as errors, unpacks the Hex package, requires its code/docs/license
-   paths, and rejects test, Forge, build, environment, and credential-shaped
+   paths, and rejects test, build, dot-directory, environment, and credential-shaped
    residue.
 
 8. `scripts/run-mutation-gates.py` proves the fail-closed data-boundary

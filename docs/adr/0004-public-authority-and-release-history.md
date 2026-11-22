@@ -50,5 +50,5 @@ release bytes.
 - `CHANGELOG.md` 0.3.3 provenance note and immutable commit link.
 - `docs/ROADMAP.md` A4 and E1 acceptance contracts.
 - Hex package metadata and the local package-to-commit byte comparison recorded in
-  the A4 Forge design receipt.
+  the A4 design receipt.
 - Local/remote tag and GitHub Release enumeration performed during A4.

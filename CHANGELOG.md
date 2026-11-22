@@ -589,10 +589,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and carried the same label omission.
 - **The repository's repo-local tool state is untracked (`graphify-out/` and
   contributors' own tool directories).** The repository no longer references
-  `/docs/superpowers/` or `.forge/` as conventions (nor carries their
+  `/docs/superpowers/` or other agent-state directories as conventions (nor carries their
   `.gitignore` entries); frozen July-2026 implementation handoffs keep their
   historical mentions as records, and the release-contract package guards
-  keep refusing a `.forge` directory inside a built package.
+  keep refusing agent-state directories inside a built package.
 - **ADR reconciliation**: ADR-0021 promoted to Accepted (its bounds shipped
   in 1.0.0); ADR-0020's PostgreSQL-lane decision amended to the shipped
   PG16–18 matrix (PG15 dropped, no PG15 release shipped); ADR-0022's status
