@@ -57,7 +57,7 @@ bound does not mean “Ash 3 only.”
 - CI tests the exact floor and reviewed latest-compatible Ash 3.x lock from committed,
   reviewed locks, while a separate selector-free job proves the dependency
   requirement shipped in the package. Upstream-resolution workflows follow
-  infra's binding [dependency requirements](https://github.com/baselabs/infra/blob/main/baselabs/docs/ci.md#what-infra-requires-of-every-product).
+  the infrastructure maintainers' binding dependency requirements.
 
 AshOnetime supplements the checkpoint for an admitted local auxiliary action when
 its claim, response, effect, mapped rows, and checkpoint share the destination

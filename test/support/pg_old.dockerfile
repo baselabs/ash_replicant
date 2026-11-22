@@ -48,7 +48,7 @@ RUN set -eux; \
     esac
 
 # pglogical 2.4.8 (output plugin `pglogical_output`) — OBSERVED protocol facts in
-# .kimosabe/intents/pglogical-wal2json-decoders.md.
+# replicant's ADR-0009, "Plugin-fact verification".
 RUN set -eux; \
     git clone --quiet https://github.com/2ndQuadrant/pglogical.git /tmp/pglogical; \
     cd /tmp/pglogical; \

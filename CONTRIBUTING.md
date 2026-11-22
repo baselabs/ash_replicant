@@ -35,7 +35,7 @@ cd ash_replicant
 All builds and tests run in GitHub CI on GitHub-hosted runners. Nothing compiles or tests
 on the owner's Mac or the build box. Follow `AGENTS.md` under "Build and test": qualify a
 covering-test commit on a topic `kci/` ref, read that run once, then create a fresh landing
-head and use `kimosabe-land`. Never send the landing SHA to a `kci/` ref beforehand.
+head and use the landing tool. Never send the landing SHA to a `kci/` ref beforehand.
 
 ## Development Workflow
 
@@ -118,8 +118,8 @@ Job timeouts follow infra's binding CI requirements linked below. Each job's
 comment identifies its slowest measured green run and duration. Publish has no
 green run yet and uses `90 # no green run yet` until infra measures one.
 
-Infra's binding requirements live in [What infra requires of every product](https://github.com/baselabs/infra/blob/main/baselabs/docs/ci.md#what-infra-requires-of-every-product).
-Read that section from infra's default branch as directed in `AGENTS.md`.
+The infrastructure maintainers' CI requirements bind every workflow and release script here;
+maintainers read them as directed in `AGENTS.md`.
 
 
 ### Ash-bump grep procedure (B6 old-contract clause)
@@ -248,7 +248,7 @@ and explicit integration discovery against the same checked platform engine
 as qualification. Each report check runs even if an earlier report
 check fails, after ref and runtime admission succeed.
 
-Under infra's [dependency requirements](https://github.com/baselabs/infra/blob/main/baselabs/docs/ci.md#what-infra-requires-of-every-product),
+Under the infrastructure dependency requirements,
 this is the only workflow allowed to resolve the repository fresh. It holds only
 `contents: read`, has no secret or environment, reads and writes no cache, and
 has no `qualified` job. It reports upstream behavior and decides nothing;
@@ -271,7 +271,7 @@ tests run on GitHub-hosted CI, never on the owner's Mac or the build box.
 
 1. Run `scripts/bump-version.sh NEW_VERSION` to update the version-bearing anchors and
    changelog. Commit with named paths and qualify through a topic `kci/` ref. After green,
-   make a final docs-only commit with a fresh SHA for `kimosabe-land`; never push that landing
+   make a final docs-only commit with a fresh SHA for the landing tool; never push that landing
    SHA to any `kci/` ref beforehand. Infra reviews workflow and release-script changes before
    landing. The landing tool alone moves `main` after its `qualified` check.
 2. Infra asks an owner (`corepay` or `palermo-git`, including the triggering actor on reruns)

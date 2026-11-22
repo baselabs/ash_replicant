@@ -311,9 +311,9 @@ superseded tree is a stale record, not a release fact.
 
 - **Tracked/published:** `AGENTS.md`, `CLAUDE.md`, `README.md`, `CHANGELOG.md`,
   `CONTRIBUTING.md`, `usage-rules.md`, `LICENSE`, `NOTICE`, `docs/CHARTER.md`, `docs/ROADMAP.md`,
-  `docs/adr/`, the historical handoffs (`docs/handoffs/`), and the tour notebook
+  `docs/adr/`, and the tour notebook
   (`notebooks/ash_replicant_tour.livemd`).
-- **Local-only (gitignored tool state):** `.kimosabe/` and `graphify-out/`.
+- **Local-only (untracked tool state):** `graphify-out/` and contributors' own tool directories.
 
 ## Next action
 
@@ -342,7 +342,7 @@ large uncommitted changes.
    the dev/test workflow. **Binding.**
 2. **`docs/CHARTER.md`** — the project charter: mission, layering, scope, the decisions,
    and the resolved effect-once model. **Tracked** in full; repo-local tool state lives
-   under `.kimosabe/` and `graphify-out/` (gitignored).
+   in untracked tool directories.
 
 ## One-line orientation
 

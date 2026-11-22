@@ -587,8 +587,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "See also" no longer ships a `../replicant` sibling path to consumers;
   `AGENTS.md`'s boundary-body count said nine (ten since `handle_slot_origin/2`)
   and carried the same label omission.
-- **The repository's repo-local tool state lives under `.kimosabe/` and
-  `graphify-out/` (gitignored).** The repository no longer references
+- **The repository's repo-local tool state is untracked (`graphify-out/` and
+  contributors' own tool directories).** The repository no longer references
   `/docs/superpowers/` or `.forge/` as conventions (nor carries their
   `.gitignore` entries); frozen July-2026 implementation handoffs keep their
   historical mentions as records, and the release-contract package guards

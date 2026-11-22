@@ -701,7 +701,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     end
 
     # A path filter on push lets a candidate whose files are all filtered get no
-    # run, and kimosabe-land cannot land a commit CI never ran on.
+    # run, and the landing tool cannot land a commit CI never ran on.
     for filter <- ["paths-ignore: ['**/*.md']", "paths: ['lib/**']", "tags: ['v*']"] do
       prepare_fixture()
 

@@ -14,7 +14,7 @@
 # Dependency-foundation lines (Ash / Replicant / AshOnetime ranges and locks)
 # are NEVER touched: the anchors below are exact strings, not a version sed.
 # Next steps use AGENTS.md's CI-only Build and test route: qualify a topic
-# commit, then give kimosabe-land a fresh SHA never pushed to kci beforehand.
+# commit, then give the landing tool a fresh SHA never pushed to kci beforehand.
 # Infra asks an owner to dispatch Publish to Hex on main. A second dispatch
 # finishes a held release only with identical package bytes, keeping served docs.
 # Read-back validates served release.json against default-branch ancestry.
@@ -96,7 +96,7 @@ if [[ "$check" == true ]]; then
   exit 0
 fi
 echo 'bump-version: next: commit with named paths; use AGENTS.md, Build and test (CI only).'
-echo 'bump-version: kimosabe-land alone moves main; its head must never have been pushed to kci.'
+echo 'bump-version: the landing tool alone moves main; its head must never have been pushed to kci.'
 echo 'bump-version: infra asks an owner to dispatch Publish to Hex on the landed main commit.'
 echo 'bump-version: retry that same commit only after infra inspects an approved hold or interruption.'
 echo "bump-version: after read-back, infra tags v$new_version at the served published_commit"
