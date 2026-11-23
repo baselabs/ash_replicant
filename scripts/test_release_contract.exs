@@ -1832,10 +1832,10 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
   defp public_dependency_probes do
     for {configured, expected_status, message} <- [
-          {"deps: deps(),", 0, nil},
-          {~s(deps: deps() ++ [{:extra_literal, "~> 7.8"}],), 1,
+          {"deps: deps() |> select_requirements(),", 0, nil},
+          {~s(deps: select_requirements(deps()) ++ [{:extra_literal, "~> 7.8"}],), 1,
            "unexpected public dependency set"},
-          {"deps: Enum.reject(deps(), &(elem(&1, 0) == :ash_cloak)),", 1,
+          {"deps: Enum.reject(select_requirements(deps()), &(elem(&1, 0) == :ash_cloak)),", 1,
            "unexpected public dependency set"}
         ] do
       prepare_fixture()
@@ -1846,7 +1846,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
         @source_root
         |> Path.join("mix.exs")
         |> File.read!()
-        |> String.replace("deps: deps(),", configured)
+        |> String.replace("deps: deps() |> select_requirements(),", configured)
 
       File.write!(Path.join(directory, "mix.exs"), source)
       reader = Path.join(@source_root, "lib/ash_replicant/dependency_requirements.ex")
@@ -2325,8 +2325,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       "mix.exs",
-      "{:ash, ash_requirement()}",
-      "{:ash, String.replace(ash_requirement(), \">= 3.37.3\", \">= 3.0.0\")}"
+      "{:ash, @ash_requirement}",
+      "{:ash, ash_requirement()}"
     )
 
     assert_invalid!()
@@ -2345,7 +2345,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       "mix.exs",
-      "{:replicant, replicant_requirement()}",
+      "{:replicant, @replicant_requirement}",
       "{:replicant, path: \"../replicant\"}"
     )
 
@@ -2355,7 +2355,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       "mix.exs",
-      "{:ash_onetime, ash_onetime_requirement()}",
+      "{:ash_onetime, @ash_onetime_requirement}",
       "{:ash_onetime, \"~> 1.3\"}"
     )
 
@@ -2365,7 +2365,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       "mix.exs",
-      "{:ash_onetime, ash_onetime_requirement()}",
+      "{:ash_onetime, @ash_onetime_requirement}",
       "{:ash_onetime, path: \"../ash_onetime\"}"
     )
 

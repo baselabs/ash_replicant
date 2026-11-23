@@ -3160,7 +3160,10 @@ defmodule AshReplicant.ReleaseContract do
 
   defp exact_project_contract?([project]) when is_list(project) do
     Keyword.get_values(project, :elixir) == ["~> 1.20.3"] and
-      match?({:deps, _, []}, Keyword.get(project, :deps))
+      match?(
+        {:|>, _, [{:deps, _, []}, {:select_requirements, _, []}]},
+        Keyword.get(project, :deps)
+      )
   end
 
   defp exact_project_contract?(_projects), do: false

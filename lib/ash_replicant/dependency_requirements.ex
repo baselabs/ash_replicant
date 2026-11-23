@@ -52,5 +52,4 @@ defmodule AshReplicant.DependencyRequirements do
   end
 
   defp declaration_attribute!({:@, _, [{name, _, _}]}), do: name
-  defp declaration_attribute!({name, _, []}) when is_atom(name), do: name
 end

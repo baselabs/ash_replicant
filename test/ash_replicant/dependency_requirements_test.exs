@@ -35,10 +35,17 @@ defmodule AshReplicant.DependencyRequirementsTest do
         "      {:extra_public, @extra_public_requirement},\n      {:ash,"
       )
 
+    with_attribute =
+      String.replace(
+        with_attribute,
+        "  def project do",
+        "  defp extra_public_requirement, do: \"~> 9.0\"\n\n  def project do"
+      )
+
     File.write!(path, with_attribute)
     assert DependencyRequirements.read!(path).extra_public == "~> 7.8"
 
-    for reference <- [~s("~> 7.8"), "@missing_requirement"] do
+    for reference <- [~s("~> 7.8"), "@missing_requirement", "extra_public_requirement()"] do
       mutated =
         String.replace(
           with_attribute,

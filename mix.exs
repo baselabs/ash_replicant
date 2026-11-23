@@ -28,7 +28,7 @@ defmodule AshReplicant.MixProject do
       consolidate_protocols: Mix.env() != :test,
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
-      deps: deps(),
+      deps: deps() |> select_requirements(),
       # EEF-CVE-2026-95105 affects only Cloak's AES-CTR cipher; ash_replicant configures
       # AES-GCM only, enforced by test/cloak_cipher_guard_test.exs.
       # Cloak has no fixed release yet; remove this entry and upgrade when it ships.
@@ -57,16 +57,16 @@ defmodule AshReplicant.MixProject do
 
   defp deps do
     [
-      {:ash, ash_requirement()},
+      {:ash, @ash_requirement},
       # The committed test migrations match the reviewed compatibility lock's
       # generator. The drift report checks newer upstream releases separately.
       {:ash_postgres, @ash_postgres_requirement},
-      {:ash_onetime, ash_onetime_requirement()},
+      {:ash_onetime, @ash_onetime_requirement},
       # Security floor: EEF-CVE-2026-81319 and EEF-CVE-2026-81322 affect
       # every ash_cloak release below 0.4.0; a consumer must not be able
       # to resolve to a vulnerable one.
       {:ash_cloak, @ash_cloak_requirement},
-      {:replicant, replicant_requirement()},
+      {:replicant, @replicant_requirement},
       # The install codemod surface (I01). OPTIONAL for consumers and at
       # runtime: `mix ash_replicant.install` compiles to an actionable stub when
       # Igniter is absent, so no shipped library code depends on it.
@@ -86,52 +86,30 @@ defmodule AshReplicant.MixProject do
     ]
   end
 
-  defp ash_requirement do
-    case System.get_env("ASH_REPLICANT_ASH_VERSION") do
-      value when value in [nil, "", "latest"] ->
-        @ash_requirement
+  defp select_requirements(dependencies) do
+    selectors = %{
+      ash: "ASH_REPLICANT_ASH_VERSION",
+      replicant: "ASH_REPLICANT_REPLICANT_VERSION",
+      ash_onetime: "ASH_REPLICANT_ONETIME_VERSION"
+    }
 
-      value ->
-        with {:ok, _version} <- Version.parse(value),
-             true <- Version.match?(value, @ash_requirement) do
-          "== #{value}"
-        else
-          _ ->
-            raise "ASH_REPLICANT_ASH_VERSION must be a semantic version matching #{@ash_requirement}"
-        end
-    end
-  end
+    Enum.map(dependencies, fn dependency ->
+      selector = selectors[elem(dependency, 0)]
+      requirement = elem(dependency, 1)
 
-  defp replicant_requirement do
-    case System.get_env("ASH_REPLICANT_REPLICANT_VERSION") do
-      value when value in [nil, "", "latest"] ->
-        @replicant_requirement
+      case selector && System.get_env(selector) do
+        value when value in [nil, "", "latest"] ->
+          dependency
 
-      value ->
-        with {:ok, _version} <- Version.parse(value),
-             true <- Version.match?(value, @replicant_requirement) do
-          "== #{value}"
-        else
-          _ ->
-            raise "ASH_REPLICANT_REPLICANT_VERSION must be a semantic version matching #{@replicant_requirement}"
-        end
-    end
-  end
-
-  defp ash_onetime_requirement do
-    case System.get_env("ASH_REPLICANT_ONETIME_VERSION") do
-      value when value in [nil, "", "latest"] ->
-        @ash_onetime_requirement
-
-      value ->
-        with {:ok, _version} <- Version.parse(value),
-             true <- Version.match?(value, @ash_onetime_requirement) do
-          "== #{value}"
-        else
-          _ ->
-            raise "ASH_REPLICANT_ONETIME_VERSION must be a semantic version matching #{@ash_onetime_requirement}"
-        end
-    end
+        value ->
+          with {:ok, _version} <- Version.parse(value),
+               true <- Version.match?(value, requirement) do
+            put_elem(dependency, 1, "== #{value}")
+          else
+            _ -> raise "#{selector} must be a semantic version matching #{requirement}"
+          end
+      end
+    end)
   end
 
   defp aliases do
