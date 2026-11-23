@@ -52,9 +52,9 @@ defmodule AshReplicant.Doctor do
   alias AshReplicant.Snapshot.{Provenance, State}
   alias AshReplicant.SourceSet
 
-  # Duplicated from `mix.exs` because `mix.exs` is not loadable from a release.
-  # `AshReplicant.DoctorTest` asserts the literals are equal, so changing one
-  # without the other goes red.
+  # Embed this package's public declarations at compile time. The reader parses
+  # its own mix.exs without evaluating selectors or consulting the host project;
+  # a release needs neither Mix nor source files to use these embedded ranges.
   @requirements_path Path.expand("../../mix.exs", __DIR__)
   @external_resource @requirements_path
   Code.ensure_compiled!(AshReplicant.DependencyRequirements)

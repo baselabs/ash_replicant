@@ -47,6 +47,14 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
   expected = AshReplicant.DependencyRequirements.read!("mix.exs")
 
+  public_deps = Enum.reject(deps, fn dependency ->
+    options = if tuple_size(dependency) == 3, do: elem(dependency, 2), else: []
+    Keyword.has_key?(options, :only)
+  end)
+
+  unless Enum.sort(Enum.map(public_deps, &elem(&1, 0))) == Enum.sort(Map.keys(expected)),
+    do: raise("unexpected public dependency set")
+
   Enum.each(expected, fn {dependency, requirement} ->
     actual = deps |> List.keyfind!(dependency, 0) |> elem(1)
     unless actual == requirement, do: raise("unexpected public dependency requirement")
@@ -392,6 +400,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     NegativeThinSpace NegativeVeryThinSpace NewLine NoBreak NonBreakingSpace numsp
     puncsp rlm shy Tab ThickSpace thinsp ThinSpace VeryThinSpace ZeroWidthSpace zwj zwnj
   )
+
   defp mix_contracts do
     Enum.map(@requirements, fn {name, requirement} ->
       "@#{name}_requirement #{inspect(requirement)}"
@@ -423,6 +432,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       command_probes()
       compatibility_probes()
       packaging_selector_probes()
+      public_dependency_probes()
       workflow_structure_probes()
       checker_wiring_probes()
       mix_contract_probes()
@@ -1818,6 +1828,48 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     )
 
     assert_invalid!()
+  end
+
+  defp public_dependency_probes do
+    for {configured, expected_status, message} <- [
+          {"deps: deps(),", 0, nil},
+          {~s(deps: deps() ++ [{:extra_literal, "~> 7.8"}],), 1,
+           "unexpected public dependency set"},
+          {"deps: Enum.reject(deps(), &(elem(&1, 0) == :ash_cloak)),", 1,
+           "unexpected public dependency set"}
+        ] do
+      prepare_fixture()
+      directory = fixture_path("metadata-consumer")
+      File.mkdir_p!(directory)
+
+      source =
+        @source_root
+        |> Path.join("mix.exs")
+        |> File.read!()
+        |> String.replace("deps: deps(),", configured)
+
+      File.write!(Path.join(directory, "mix.exs"), source)
+      reader = Path.join(@source_root, "lib/ash_replicant/dependency_requirements.ex")
+
+      command =
+        String.replace(
+          @public_dependency_check,
+          "mix run --no-start -e",
+          "elixir -r \"#{reader}\" -S mix run --no-start --no-compile --no-deps-check -e"
+        )
+
+      {output, status} =
+        System.cmd("bash", ["-euo", "pipefail", "-c", command],
+          cd: directory,
+          stderr_to_stdout: true
+        )
+
+      unless status == expected_status and (is_nil(message) or String.contains?(output, message)) do
+        raise "public dependency metadata guard did not observe the expected set"
+      end
+
+      Process.put({__MODULE__, :checks}, Process.get({__MODULE__, :checks}, 0) + 1)
+    end
   end
 
   # The selector-free packaging commands must clear ALL THREE dependency

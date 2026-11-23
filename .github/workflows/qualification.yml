@@ -385,6 +385,14 @@ jobs:
 
           expected = AshReplicant.DependencyRequirements.read!("mix.exs")
 
+          public_deps = Enum.reject(deps, fn dependency ->
+            options = if tuple_size(dependency) == 3, do: elem(dependency, 2), else: []
+            Keyword.has_key?(options, :only)
+          end)
+
+          unless Enum.sort(Enum.map(public_deps, &elem(&1, 0))) == Enum.sort(Map.keys(expected)),
+            do: raise("unexpected public dependency set")
+
           Enum.each(expected, fn {dependency, requirement} ->
             actual = deps |> List.keyfind!(dependency, 0) |> elem(1)
             unless actual == requirement, do: raise("unexpected public dependency requirement")

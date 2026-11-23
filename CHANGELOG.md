@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Refresh the shared toolchain reader's installed-version probes; CI keeps its
+  existing runtime declarations and verifies the new reader checksum.
+
 - Declare public dependency requirements once in `mix.exs`; derive CI lanes,
   drift checks, package assertions, runtime diagnosis, and checker expectations
   from those declarations. Check documented ranges against the same source.

@@ -119,7 +119,7 @@ defmodule AshReplicant.ReleaseContract do
     "elixir" => "${{ steps.toolchain.outputs.elixir }}",
     "otp" => "${{ steps.toolchain.outputs.otp }}"
   }
-  @toolchain_sha256 "b29bfeb6ec4ec8f5b7e3ac3c963f04b6d3c73483172e5bd59ea40f20b102f1eb"
+  @toolchain_sha256 "25bbfa023b7f031256428b498fe300fcc460988fea81277072355e4c0d933764"
 
   @install_hex ~S"""
   mix local.hex "$WANT_HEX" --force
@@ -1531,6 +1531,14 @@ defmodule AshReplicant.ReleaseContract do
   deps = Mix.Project.config() |> Keyword.fetch!(:deps)
 
   expected = AshReplicant.DependencyRequirements.read!("mix.exs")
+
+  public_deps = Enum.reject(deps, fn dependency ->
+    options = if tuple_size(dependency) == 3, do: elem(dependency, 2), else: []
+    Keyword.has_key?(options, :only)
+  end)
+
+  unless Enum.sort(Enum.map(public_deps, &elem(&1, 0))) == Enum.sort(Map.keys(expected)),
+    do: raise("unexpected public dependency set")
 
   Enum.each(expected, fn {dependency, requirement} ->
     actual = deps |> List.keyfind!(dependency, 0) |> elem(1)
@@ -3130,7 +3138,13 @@ defmodule AshReplicant.ReleaseContract do
     )
 
     assert(
-      exact_project_contract?(projects) and exact_dependency_contract?(dependency_lists, public_requirements(root)),
+      exact_project_contract?(projects) and
+        Enum.any?(dependencies, fn dependency ->
+          match?(
+            {:{}, _, [:igniter, {:@, _, [{:igniter_requirement, _, _}]}, [optional: true]]},
+            dependency
+          )
+        end),
       "Mix release contract is incomplete"
     )
   rescue
@@ -3150,34 +3164,6 @@ defmodule AshReplicant.ReleaseContract do
   end
 
   defp exact_project_contract?(_projects), do: false
-
-  defp exact_dependency_contract?([dependencies], requirements) when is_list(dependencies) do
-    Enum.all?(requirements, fn {name, _requirement} ->
-      attribute = String.to_existing_atom("#{name}_requirement")
-      entries =
-        Enum.filter(dependencies, fn
-          {^name, _requirement} -> true
-          {:{}, _, [^name | _]} -> true
-          _ -> false
-        end)
-
-      case entries do
-        [{^name, {selector, _, []}}] when name in [:ash, :replicant, :ash_onetime] ->
-          selector == attribute
-
-        [{^name, {:@, _, [{^attribute, _, _}]}}] ->
-          true
-
-        [{:{}, _, [^name, {:@, _, [{^attribute, _, _}]}, [optional: true]]}] ->
-          name == :igniter
-
-        _ ->
-          false
-      end
-    end)
-  end
-
-  defp exact_dependency_contract?(_dependency_lists, _requirements), do: false
 
   defp public_requirements(root) do
     DependencyRequirements.read!(Path.join(root, "mix.exs"))

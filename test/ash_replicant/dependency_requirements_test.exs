@@ -12,6 +12,47 @@ defmodule AshReplicant.DependencyRequirementsTest do
     assert Doctor.ash_requirement() == requirements.ash
   end
 
+  test "the public dependency set comes from deps, including new attributes" do
+    directory =
+      Path.join(
+        System.tmp_dir!(),
+        "ash-replicant-public-set-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(directory)
+    on_exit(fn -> File.rm_rf!(directory) end)
+    path = Path.join(directory, "mix.exs")
+    source = File.read!(@mixfile)
+
+    with_attribute =
+      source
+      |> String.replace(
+        "  use Mix.Project",
+        "  use Mix.Project\n  @extra_public_requirement \"~> 7.8\""
+      )
+      |> String.replace(
+        "      {:ash,",
+        "      {:extra_public, @extra_public_requirement},\n      {:ash,"
+      )
+
+    File.write!(path, with_attribute)
+    assert DependencyRequirements.read!(path).extra_public == "~> 7.8"
+
+    for reference <- [~s("~> 7.8"), "@missing_requirement"] do
+      mutated =
+        String.replace(
+          with_attribute,
+          "{:extra_public, @extra_public_requirement}",
+          "{:extra_public, #{reference}}"
+        )
+      File.write!(path, mutated)
+
+      assert_raise ArgumentError, "public dependency declarations are invalid", fn ->
+        DependencyRequirements.read!(path)
+      end
+    end
+  end
+
   test "reading declarations never evaluates the Mix project and refuses ambiguous values" do
     directory =
       Path.join(
@@ -33,7 +74,8 @@ defmodule AshReplicant.DependencyRequirementsTest do
     for replacement <- [
           "@replicant_requirement System.fetch_env!(\"UNTRUSTED\")",
           declaration <> "\n  " <> declaration,
-          "@replicant_requirement \"invalid\""
+          "@replicant_requirement \"invalid\"",
+          "@missing_requirement \"~> 7.8\""
         ] do
       File.write!(path, String.replace(source, declaration, replacement))
 
