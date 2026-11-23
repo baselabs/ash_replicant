@@ -116,7 +116,7 @@ defmodule AshReplicant.ReleaseContract do
     "elixir" => "${{ steps.toolchain.outputs.elixir }}",
     "otp" => "${{ steps.toolchain.outputs.otp }}"
   }
-  @toolchain_sha256 "25bbfa023b7f031256428b498fe300fcc460988fea81277072355e4c0d933764"
+  @toolchain_sha256 "b29bfeb6ec4ec8f5b7e3ac3c963f04b6d3c73483172e5bd59ea40f20b102f1eb"
 
   @install_hex ~S"""
   mix local.hex "$WANT_HEX" --force
