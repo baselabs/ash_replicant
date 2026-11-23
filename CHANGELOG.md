@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Refuse publication without exactly one nonempty changelog section for the release.
+  Retain release notes from the verified served package with its published commit and
+  the served package and docs digests in the release assets.
+
 - Read CI, release, drift-report, and checkout runtime versions only through the shared
   toolchain reader. Install its exact outputs through one BEAM action, verify the Elixir
   OTP build suffix and full OTP version, and guard the reader's bytes and executable mode.

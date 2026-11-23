@@ -1137,6 +1137,9 @@ scripts/with-release-runtime.sh mix hex.build
 
 Qualify the commit through CI before landing. Update `CHANGELOG.md` for the version being prepared.
 
+Publication first refuses a missing, duplicated or empty changelog section for the release.
+Release assets include `RELEASE-NOTES.md` from the served package's changelog, with the
+published commit and both served archive digests.
 The release path renders docs once, writes `release.json` with this package, version and full
 source commit, and inspects the archive. Held releases require identical package bytes and no
 retirement; served docs are kept. A docs 404 permits upload only with `has_docs: false`;

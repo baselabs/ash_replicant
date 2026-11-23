@@ -3,6 +3,7 @@
 
 import argparse
 import hashlib
+import importlib.util
 import json
 from pathlib import Path, PurePosixPath
 import re
@@ -11,6 +12,13 @@ import subprocess
 import sys
 import tarfile
 import zlib
+
+
+spec = importlib.util.spec_from_file_location(
+    "release_notes", Path(__file__).with_name("release-notes.py")
+)
+release_notes = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(release_notes)
 
 
 SEMVER = re.compile(
@@ -129,18 +137,28 @@ def check(archive, directory=None, *, package="ash_replicant", version, commit, 
 
 
 def retain_assets(archive, package_archive, assets, version, published):
-    # The caller passes the downloaded docs, never the local rendering.
+    # Both archives are the verified served bytes. Notes come from the package they identify.
+    notes = release_notes.package_section(package_archive, version)
+    if not re.fullmatch(r"[0-9a-f]{40}", published):
+        raise ValueError("Release notes require the full published commit.")
     assets.mkdir()
     try:
         paths = [assets / f"ash_replicant-{version}.tar", assets / f"ash_replicant-{version}-docs.tar.gz"]
         shutil.copyfile(package_archive, paths[0])
         shutil.copyfile(archive, paths[1])
         sums = ""
+        digests = []
         for path in paths:
             with path.open("rb") as stream:
                 digest = hashlib.file_digest(stream, "sha256").hexdigest()
+            digests.append(digest)
             sums += f"{digest}  {path.name}\n"
         (assets / "SHA256SUMS").write_text(sums)
+        (assets / "RELEASE-NOTES.md").write_text(
+            f"{notes}\n\nCommit: {published}\n\n"
+            f"Package SHA-256: {digests[0]}\n\nDocs SHA-256: {digests[1]}\n",
+            encoding="utf-8",
+        )
         (assets / "published-commit.txt").write_text(published + "\n")
     except BaseException:
         shutil.rmtree(assets)
@@ -168,7 +186,7 @@ def main():
             retain_assets(args.archive, args.package_archive, args.assets, args.version, published)
         if args.commit_output:
             args.commit_output.write_text(published + "\n")
-    except (OSError, ValueError, tarfile.TarError, EOFError, zlib.error) as error:
+    except (OSError, UnicodeError, ValueError, tarfile.TarError, EOFError, zlib.error) as error:
         print(f"Docs archive refused: {error}", file=sys.stderr)
         return 1
     return 0

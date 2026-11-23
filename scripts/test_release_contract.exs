@@ -167,7 +167,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   python3 -I scripts/check-docs-archive.py "$RUNNER_TEMP/hex-docs.tar.gz" "$RUNNER_TEMP/hex-docs.tar.gz.rendered" --version "$version" --commit "$GITHUB_SHA"
   env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION scripts/with-release-runtime.sh mix hex.build --output "$RUNNER_TEMP/package.tar"
   scripts/inspect-release-package.sh "$RUNNER_TEMP/package.tar"
-  python3 -B scripts/test_release_docs.py "$RUNNER_TEMP/hex-docs.tar.gz" "$RUNNER_TEMP/hex-docs.tar.gz.rendered"
+  python3 -B scripts/test_release_docs.py "$RUNNER_TEMP/hex-docs.tar.gz" "$RUNNER_TEMP/hex-docs.tar.gz.rendered" "$RUNNER_TEMP/package.tar"
   cd "$RUNNER_TEMP"
   mix run --no-mix-exs "$GITHUB_WORKSPACE/scripts/test_publish_hex_artifacts.exs"
   """
@@ -1104,6 +1104,48 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   end
 
   defp publish_probes do
+    admission =
+      "      - name: Refuse a missing, duplicated or empty release changelog section\n" <>
+        "        run: python3 -I scripts/release-notes.py\n"
+
+    for replacement <- [
+          "",
+          String.replace(admission, "        run:", "        if: false\n        run:")
+        ] do
+      prepare_fixture()
+      replace_once!(@publish, admission, replacement)
+      assert_invalid!()
+    end
+
+    prepare_fixture()
+    replace_once!(@publish, admission, "")
+
+    replace_once!(
+      @publish,
+      "      - run: mix local.rebar --force\n",
+      "      - run: mix local.rebar --force\n" <> admission
+    )
+
+    assert_invalid!()
+
+    for {path, old} <- [
+          {"scripts/release-notes.py", "if len(versions) != 1:"},
+          {"scripts/release-notes.py", "if len(matches) != 1 or not matches[0].isfile():"},
+          {"scripts/release-notes.py", "if not re.sub("},
+          {"scripts/release-notes.py", "if len(sections) == 1 else"},
+          {"scripts/check-docs-archive.py",
+           "notes = release_notes.package_section(package_archive, version)"},
+          {"scripts/check-docs-archive.py", "Commit: {published}"},
+          {"scripts/check-docs-archive.py", "Package SHA-256: {digests[0]}"},
+          {"scripts/check-docs-archive.py", "Docs SHA-256: {digests[1]}"},
+          {"scripts/test_release_docs.py", "release notes accepted an invalid changelog section"},
+          {"scripts/test_release_docs.py", "release assets accepted invalid packaged release notes"}
+        ] do
+      prepare_fixture()
+      replace_once!(path, old, "removed_release_notes_guard")
+      assert_invalid!()
+    end
+
     for trigger <- ["push", "pull_request"] do
       prepare_fixture()
 
@@ -2621,6 +2663,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           "scripts/assert-release-tree.sh",
           "scripts/publish_hex_artifacts.exs",
           "scripts/check-docs-archive.py",
+          "scripts/release-notes.py",
           "scripts/build-docs-archive.exs",
           "scripts/build-release-docs.sh",
           "scripts/release_identity.exs",

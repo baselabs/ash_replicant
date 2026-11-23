@@ -37,6 +37,8 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+      - name: Refuse a missing, duplicated or empty release changelog section
+        run: python3 -I scripts/release-notes.py
       - uses: ./.github/actions/toolchain
         id: toolchain
       - uses: ./.github/actions/beam

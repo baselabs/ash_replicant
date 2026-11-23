@@ -309,7 +309,10 @@ tests run on GitHub-hosted CI, never on the owner's Mac or the build box.
    alone cannot identify docs rendered from unpackaged guides or the docs dependency lock.
    The published commit is reported as the `published_commit` job output and retained in
    `published-commit.txt`. The `release-assets` artifact carries the downloaded package and
-   SERVED docs, with `SHA256SUMS` for those bytes. Temporary archives are removed even on failure.
+   SERVED docs, with `SHA256SUMS` for those bytes. `RELEASE-NOTES.md` takes the release section
+   from the changelog inside the served package, followed by the published commit and both
+   archive digests. Publication refuses a missing, duplicated or empty release section before
+   any build or upload. Temporary archives are removed even on failure.
    A published-package check needs the upload job, holds no key or environment, and exercises
    a fresh registry consumer against real PostgreSQL. Qualification consumes the candidate tarball.
 8. Infra tags `v<version>` at the published commit from the served provenance, compares the

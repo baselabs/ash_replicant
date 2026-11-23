@@ -17,13 +17,52 @@ spec = importlib.util.spec_from_file_location(
 )
 inspector = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(inspector)
-archive, directory = sys.argv[1:]
+archive, directory, package_archive = sys.argv[1:]
 identity = json.loads((Path(directory) / "release.json").read_text())
 version, commit = identity["version"], identity["commit"]
 
 
 def check(candidate, tree=None, **kwargs):
     return inspector.check(Path(candidate), tree, version=version, commit=commit, **kwargs)
+
+
+# The same parser admits the checkout preflight and the changelog inside served packages.
+notes = inspector.release_notes
+valid_section = f"## [{version}] - 2026-11-22\n\n### Fixed\n\n- Packaged release note."
+assert notes.section(version, valid_section + "\n\n## [0.0.0]\n\n- Older.\n") == valid_section
+
+for changelog in [
+    "## [Unreleased]\n\n- A different release.\n",
+    valid_section + "\n\n" + valid_section,
+    f"## [{version}]",
+    f"## [{version}]\n\n### Fixed\n\n",
+]:
+    try:
+        notes.section(version, changelog)
+    except ValueError as error:
+        assert "missing, duplicated or empty" in str(error)
+    else:
+        raise AssertionError("release notes accepted an invalid changelog section")
+
+with tempfile.TemporaryDirectory(prefix="ash-replicant-changelog-") as scratch:
+    work = Path(scratch)
+    mixfile, changelog = work / "mix.exs", work / "CHANGELOG.md"
+    mixfile.write_text(f'  @version "{version}"\n')
+    changelog.write_text(valid_section)
+    notes.verify_changelog(mixfile, changelog)
+    command = [sys.executable, "-I", str(Path(notes.__file__)),
+               "--mixfile", str(mixfile), "--changelog", str(changelog)]
+    subprocess.run(command, check=True, capture_output=True)
+    for invalid in ["", valid_section + "\n\n" + valid_section,
+                    f"## [{version}]\n\n### Fixed\n"]:
+        changelog.write_text(invalid)
+        result = subprocess.run(command, check=False, capture_output=True)
+        assert result.returncode == 1 and b"missing, duplicated or empty" in result.stderr
+    changelog.write_text(valid_section)
+    for invalid in ["", f'  @version "{version}"\n  @version "{version}"\n']:
+        mixfile.write_text(invalid)
+        result = subprocess.run(command, check=False, capture_output=True)
+        assert result.returncode == 1 and b"exactly one Mix project version" in result.stderr
 
 
 check(archive, Path(directory))
@@ -168,7 +207,7 @@ with tempfile.TemporaryDirectory(prefix="ash-replicant-docs-provenance-") as scr
     candidate = variant({**identity, "commit": ancestor})
     published = served(candidate)
     package = work / "package.tar"
-    package.write_bytes(b"inspected package")
+    package.write_bytes(Path(package_archive).read_bytes())
     assets = work / "release-assets"
     inspector.retain_assets(candidate, package, assets, version, published)
     retained = assets / f"ash_replicant-{version}-docs.tar.gz"
@@ -177,5 +216,68 @@ with tempfile.TemporaryDirectory(prefix="ash-replicant-docs-provenance-") as scr
     sums = (assets / "SHA256SUMS").read_text()
     assert hashlib.sha256(candidate.read_bytes()).hexdigest() + "  " + retained.name in sums
     assert (assets / "published-commit.txt").read_text().strip() == ancestor
+    package_digest = hashlib.sha256(package.read_bytes()).hexdigest()
+    docs_digest = hashlib.sha256(candidate.read_bytes()).hexdigest()
+    release_text = (assets / "RELEASE-NOTES.md").read_text()
+    assert release_text == (
+        notes.package_section(package, version) + f"\n\nCommit: {ancestor}\n\n"
+        f"Package SHA-256: {package_digest}\n\nDocs SHA-256: {docs_digest}\n"
+    )
+    assert f"Commit: {dispatched}" not in release_text
+    assert package_digest + "  " + f"ash_replicant-{version}.tar" in sums
+
+    for invalid_commit in ["", ancestor[:7], "g" * 40]:
+        destination = work / "assets-invalid-commit"
+        try:
+            inspector.retain_assets(candidate, package, destination, version, invalid_commit)
+        except ValueError as error:
+            assert "full published commit" in str(error) and not destination.exists()
+        else:
+            raise AssertionError("release notes accepted an incomplete published commit")
+
+    # Mutate the actual built package in memory; never extract archive paths to disk.
+    with tarfile.open(package_archive, "r:") as original:
+        original_entries = [(entry, original.extractfile(entry).read()) for entry in original]
+    contents = next(payload for entry, payload in original_entries if entry.name == "contents.tar.gz")
+    for mutation in ["changed", "missing", "duplicate", "empty", "linked", "duplicate_member"]:
+        packed = io.BytesIO()
+        with tarfile.open(fileobj=io.BytesIO(contents), mode="r:gz") as original, \
+                tarfile.open(fileobj=packed, mode="w:gz") as output:
+            for entry in original:
+                payload = original.extractfile(entry).read()
+                if entry.name == "CHANGELOG.md":
+                    if mutation == "missing":
+                        continue
+                    payload = valid_section.encode()
+                    if mutation == "duplicate":
+                        payload += b"\n\n" + payload
+                    if mutation == "empty":
+                        payload = f"## [{version}]\n\n### Fixed\n".encode()
+                    entry.size = len(payload)
+                    if mutation == "linked":
+                        entry.type, entry.linkname, entry.size = tarfile.SYMTYPE, "README.md", 0
+                output.addfile(entry, io.BytesIO(payload))
+                if mutation == "duplicate_member" and entry.name == "CHANGELOG.md":
+                    output.addfile(entry, io.BytesIO(payload))
+        altered = work / "package-variant.tar"
+        with tarfile.open(altered, "w:") as output:
+            for entry, payload in original_entries:
+                if entry.name == "contents.tar.gz":
+                    payload = packed.getvalue()
+                    entry.size = len(payload)
+                output.addfile(entry, io.BytesIO(payload))
+        destination = work / f"assets-{mutation}"
+        if mutation == "changed":
+            inspector.retain_assets(candidate, altered, destination, version, ancestor)
+            retained_notes = (destination / "RELEASE-NOTES.md").read_text()
+            assert retained_notes.startswith(valid_section + "\n\nCommit: " + ancestor)
+            assert hashlib.sha256(altered.read_bytes()).hexdigest() in retained_notes
+        else:
+            try:
+                inspector.retain_assets(candidate, altered, destination, version, ancestor)
+            except ValueError:
+                assert not destination.exists()
+            else:
+                raise AssertionError("release assets accepted invalid packaged release notes")
 
 print("docs inspection: real renders, negative archives, provenance, ancestry and served assets PASS")

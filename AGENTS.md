@@ -253,7 +253,9 @@ must name this package and version, and the dispatched commit or an ancestor of 
 complete default-branch history; unavailable history refuses. Legacy docs without provenance
 refuse read-back. The `published_commit` job output and `published-commit.txt` asset report that
 commit for infra's tag. One `release-assets` artifact retains the versioned package, the docs
-bytes downloaded from Hex, and their `SHA256SUMS`. Infra tags the published commit, compares
+bytes downloaded from Hex, and their `SHA256SUMS`. `RELEASE-NOTES.md` takes the release
+section from the served package's changelog and records that commit and both digests;
+publication refuses a missing, duplicated or empty section before any build. Infra tags the published commit, compares
 the artifact package with Hex, and creates the GitHub release from those assets. Consumer verification names that
 permanent GitHub release, never the expiring workflow artifact. After infra reports read-back
 and the tag, this repository records the verified package digest in

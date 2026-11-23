@@ -344,12 +344,76 @@ defmodule AshReplicant.ReleaseContract do
   PublishHexArtifacts.main(System.argv())
   """
 
+  @release_notes_script ~S'''
+  #!/usr/bin/env python3
+  """Validate the release changelog before publication and read it from a served package."""
+
+  import argparse
+  import io
+  from pathlib import Path
+  import re
+  import sys
+  import tarfile
+
+
+  def section(version, changelog):
+      sections = re.findall(
+          rf"^## \[{re.escape(version)}\][^\n]*(?:\n|\Z).*?(?=^## |\Z)", changelog,
+          re.M | re.S,
+      )
+      body = sections[0].partition("\n")[2] if len(sections) == 1 else ""
+      if not re.sub(r"^\s*#+[^\n]*$", "", body, flags=re.M).strip():
+          raise ValueError("The release changelog section is missing, duplicated or empty.")
+      return sections[0].strip()
+
+
+  def verify_changelog(mixfile, changelog):
+      versions = re.findall(r'^  @version "([^"]+)"$', mixfile.read_text(encoding="utf-8"), re.M)
+      if len(versions) != 1:
+          raise ValueError("Expected exactly one Mix project version.")
+      section(versions[0], changelog.read_text(encoding="utf-8"))
+
+
+  def member(packed, name):
+      matches = [entry for entry in packed if entry.name == name]
+      if len(matches) != 1 or not matches[0].isfile():
+          raise ValueError("Hex package changelog is missing, duplicated or malformed.")
+      return packed.extractfile(matches[0]).read()
+
+
+  def package_section(archive, version):
+      with tarfile.open(archive, "r:") as package:
+          contents = member(package, "contents.tar.gz")
+      with tarfile.open(fileobj=io.BytesIO(contents), mode="r:gz") as contents:
+          changelog = member(contents, "CHANGELOG.md").decode("utf-8")
+      return section(version, changelog)
+
+
+  def main():
+      parser = argparse.ArgumentParser(description=__doc__)
+      parser.add_argument("--mixfile", type=Path, default=Path("mix.exs"))
+      parser.add_argument("--changelog", type=Path, default=Path("CHANGELOG.md"))
+      args = parser.parse_args()
+      try:
+          verify_changelog(args.mixfile, args.changelog)
+      except (OSError, UnicodeError, ValueError) as error:
+          print(f"Release notes refused: {error}", file=sys.stderr)
+          return 1
+      print("CHANGELOG OK: exactly one nonempty release section")
+      return 0
+
+
+  if __name__ == "__main__":
+      raise SystemExit(main())
+  '''
+
   @docs_inspection_script ~S'''
   #!/usr/bin/env python3
   """Inspect rendered or served Hex docs and their release provenance."""
 
   import argparse
   import hashlib
+  import importlib.util
   import json
   from pathlib import Path, PurePosixPath
   import re
@@ -358,6 +422,13 @@ defmodule AshReplicant.ReleaseContract do
   import sys
   import tarfile
   import zlib
+
+
+  spec = importlib.util.spec_from_file_location(
+      "release_notes", Path(__file__).with_name("release-notes.py")
+  )
+  release_notes = importlib.util.module_from_spec(spec)
+  spec.loader.exec_module(release_notes)
 
 
   SEMVER = re.compile(
@@ -476,18 +547,28 @@ defmodule AshReplicant.ReleaseContract do
 
 
   def retain_assets(archive, package_archive, assets, version, published):
-      # The caller passes the downloaded docs, never the local rendering.
+      # Both archives are the verified served bytes. Notes come from the package they identify.
+      notes = release_notes.package_section(package_archive, version)
+      if not re.fullmatch(r"[0-9a-f]{40}", published):
+          raise ValueError("Release notes require the full published commit.")
       assets.mkdir()
       try:
           paths = [assets / f"ash_replicant-{version}.tar", assets / f"ash_replicant-{version}-docs.tar.gz"]
           shutil.copyfile(package_archive, paths[0])
           shutil.copyfile(archive, paths[1])
           sums = ""
+          digests = []
           for path in paths:
               with path.open("rb") as stream:
                   digest = hashlib.file_digest(stream, "sha256").hexdigest()
+              digests.append(digest)
               sums += f"{digest}  {path.name}\n"
           (assets / "SHA256SUMS").write_text(sums)
+          (assets / "RELEASE-NOTES.md").write_text(
+              f"{notes}\n\nCommit: {published}\n\n"
+              f"Package SHA-256: {digests[0]}\n\nDocs SHA-256: {digests[1]}\n",
+              encoding="utf-8",
+          )
           (assets / "published-commit.txt").write_text(published + "\n")
       except BaseException:
           shutil.rmtree(assets)
@@ -515,7 +596,7 @@ defmodule AshReplicant.ReleaseContract do
               retain_assets(args.archive, args.package_archive, args.assets, args.version, published)
           if args.commit_output:
               args.commit_output.write_text(published + "\n")
-      except (OSError, ValueError, tarfile.TarError, EOFError, zlib.error) as error:
+      except (OSError, UnicodeError, ValueError, tarfile.TarError, EOFError, zlib.error) as error:
           print(f"Docs archive refused: {error}", file=sys.stderr)
           return 1
       return 0
@@ -647,13 +728,52 @@ defmodule AshReplicant.ReleaseContract do
   )
   inspector = importlib.util.module_from_spec(spec)
   spec.loader.exec_module(inspector)
-  archive, directory = sys.argv[1:]
+  archive, directory, package_archive = sys.argv[1:]
   identity = json.loads((Path(directory) / "release.json").read_text())
   version, commit = identity["version"], identity["commit"]
 
 
   def check(candidate, tree=None, **kwargs):
       return inspector.check(Path(candidate), tree, version=version, commit=commit, **kwargs)
+
+
+  # The same parser admits the checkout preflight and the changelog inside served packages.
+  notes = inspector.release_notes
+  valid_section = f"## [{version}] - 2026-11-22\n\n### Fixed\n\n- Packaged release note."
+  assert notes.section(version, valid_section + "\n\n## [0.0.0]\n\n- Older.\n") == valid_section
+
+  for changelog in [
+      "## [Unreleased]\n\n- A different release.\n",
+      valid_section + "\n\n" + valid_section,
+      f"## [{version}]",
+      f"## [{version}]\n\n### Fixed\n\n",
+  ]:
+      try:
+          notes.section(version, changelog)
+      except ValueError as error:
+          assert "missing, duplicated or empty" in str(error)
+      else:
+          raise AssertionError("release notes accepted an invalid changelog section")
+
+  with tempfile.TemporaryDirectory(prefix="ash-replicant-changelog-") as scratch:
+      work = Path(scratch)
+      mixfile, changelog = work / "mix.exs", work / "CHANGELOG.md"
+      mixfile.write_text(f'  @version "{version}"\n')
+      changelog.write_text(valid_section)
+      notes.verify_changelog(mixfile, changelog)
+      command = [sys.executable, "-I", str(Path(notes.__file__)),
+                 "--mixfile", str(mixfile), "--changelog", str(changelog)]
+      subprocess.run(command, check=True, capture_output=True)
+      for invalid in ["", valid_section + "\n\n" + valid_section,
+                      f"## [{version}]\n\n### Fixed\n"]:
+          changelog.write_text(invalid)
+          result = subprocess.run(command, check=False, capture_output=True)
+          assert result.returncode == 1 and b"missing, duplicated or empty" in result.stderr
+      changelog.write_text(valid_section)
+      for invalid in ["", f'  @version "{version}"\n  @version "{version}"\n']:
+          mixfile.write_text(invalid)
+          result = subprocess.run(command, check=False, capture_output=True)
+          assert result.returncode == 1 and b"exactly one Mix project version" in result.stderr
 
 
   check(archive, Path(directory))
@@ -798,7 +918,7 @@ defmodule AshReplicant.ReleaseContract do
       candidate = variant({**identity, "commit": ancestor})
       published = served(candidate)
       package = work / "package.tar"
-      package.write_bytes(b"inspected package")
+      package.write_bytes(Path(package_archive).read_bytes())
       assets = work / "release-assets"
       inspector.retain_assets(candidate, package, assets, version, published)
       retained = assets / f"ash_replicant-{version}-docs.tar.gz"
@@ -807,6 +927,69 @@ defmodule AshReplicant.ReleaseContract do
       sums = (assets / "SHA256SUMS").read_text()
       assert hashlib.sha256(candidate.read_bytes()).hexdigest() + "  " + retained.name in sums
       assert (assets / "published-commit.txt").read_text().strip() == ancestor
+      package_digest = hashlib.sha256(package.read_bytes()).hexdigest()
+      docs_digest = hashlib.sha256(candidate.read_bytes()).hexdigest()
+      release_text = (assets / "RELEASE-NOTES.md").read_text()
+      assert release_text == (
+          notes.package_section(package, version) + f"\n\nCommit: {ancestor}\n\n"
+          f"Package SHA-256: {package_digest}\n\nDocs SHA-256: {docs_digest}\n"
+      )
+      assert f"Commit: {dispatched}" not in release_text
+      assert package_digest + "  " + f"ash_replicant-{version}.tar" in sums
+
+      for invalid_commit in ["", ancestor[:7], "g" * 40]:
+          destination = work / "assets-invalid-commit"
+          try:
+              inspector.retain_assets(candidate, package, destination, version, invalid_commit)
+          except ValueError as error:
+              assert "full published commit" in str(error) and not destination.exists()
+          else:
+              raise AssertionError("release notes accepted an incomplete published commit")
+
+      # Mutate the actual built package in memory; never extract archive paths to disk.
+      with tarfile.open(package_archive, "r:") as original:
+          original_entries = [(entry, original.extractfile(entry).read()) for entry in original]
+      contents = next(payload for entry, payload in original_entries if entry.name == "contents.tar.gz")
+      for mutation in ["changed", "missing", "duplicate", "empty", "linked", "duplicate_member"]:
+          packed = io.BytesIO()
+          with tarfile.open(fileobj=io.BytesIO(contents), mode="r:gz") as original, \
+                  tarfile.open(fileobj=packed, mode="w:gz") as output:
+              for entry in original:
+                  payload = original.extractfile(entry).read()
+                  if entry.name == "CHANGELOG.md":
+                      if mutation == "missing":
+                          continue
+                      payload = valid_section.encode()
+                      if mutation == "duplicate":
+                          payload += b"\n\n" + payload
+                      if mutation == "empty":
+                          payload = f"## [{version}]\n\n### Fixed\n".encode()
+                      entry.size = len(payload)
+                      if mutation == "linked":
+                          entry.type, entry.linkname, entry.size = tarfile.SYMTYPE, "README.md", 0
+                  output.addfile(entry, io.BytesIO(payload))
+                  if mutation == "duplicate_member" and entry.name == "CHANGELOG.md":
+                      output.addfile(entry, io.BytesIO(payload))
+          altered = work / "package-variant.tar"
+          with tarfile.open(altered, "w:") as output:
+              for entry, payload in original_entries:
+                  if entry.name == "contents.tar.gz":
+                      payload = packed.getvalue()
+                      entry.size = len(payload)
+                  output.addfile(entry, io.BytesIO(payload))
+          destination = work / f"assets-{mutation}"
+          if mutation == "changed":
+              inspector.retain_assets(candidate, altered, destination, version, ancestor)
+              retained_notes = (destination / "RELEASE-NOTES.md").read_text()
+              assert retained_notes.startswith(valid_section + "\n\nCommit: " + ancestor)
+              assert hashlib.sha256(altered.read_bytes()).hexdigest() in retained_notes
+          else:
+              try:
+                  inspector.retain_assets(candidate, altered, destination, version, ancestor)
+              except ValueError:
+                  assert not destination.exists()
+              else:
+                  raise AssertionError("release assets accepted invalid packaged release notes")
 
   print("docs inspection: real renders, negative archives, provenance, ancestry and served assets PASS")
   """
@@ -817,7 +1000,7 @@ defmodule AshReplicant.ReleaseContract do
   python3 -I scripts/check-docs-archive.py "$RUNNER_TEMP/hex-docs.tar.gz" "$RUNNER_TEMP/hex-docs.tar.gz.rendered" --version "$version" --commit "$GITHUB_SHA"
   env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION scripts/with-release-runtime.sh mix hex.build --output "$RUNNER_TEMP/package.tar"
   scripts/inspect-release-package.sh "$RUNNER_TEMP/package.tar"
-  python3 -B scripts/test_release_docs.py "$RUNNER_TEMP/hex-docs.tar.gz" "$RUNNER_TEMP/hex-docs.tar.gz.rendered"
+  python3 -B scripts/test_release_docs.py "$RUNNER_TEMP/hex-docs.tar.gz" "$RUNNER_TEMP/hex-docs.tar.gz.rendered" "$RUNNER_TEMP/package.tar"
   cd "$RUNNER_TEMP"
   mix run --no-mix-exs "$GITHUB_WORKSPACE/scripts/test_publish_hex_artifacts.exs"
   """
@@ -2193,6 +2376,10 @@ defmodule AshReplicant.ReleaseContract do
               "uses" => "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
               "with" => %{"persist-credentials" => false, "fetch-depth" => 0}
             },
+            %{
+              "name" => "Refuse a missing, duplicated or empty release changelog section",
+              "run" => "python3 -I scripts/release-notes.py"
+            },
             %{"uses" => @toolchain_action, "id" => "toolchain"},
             %{"uses" => @beam_action, "with" => @runtime_inputs},
             %{"run" => "mix local.rebar --force"},
@@ -2400,6 +2587,7 @@ defmodule AshReplicant.ReleaseContract do
           {"scripts/assert-release-tree.sh", @release_tree_script},
           {"scripts/publish_hex_artifacts.exs", @publish_hex_artifacts_script},
           {"scripts/check-docs-archive.py", @docs_inspection_script},
+          {"scripts/release-notes.py", @release_notes_script},
           {"scripts/build-release-docs.sh", @docs_build_script},
           {"scripts/read-release-assets.sh", @read_release_assets_script},
           {"scripts/build-docs-archive.exs", @docs_archive_builder},
