@@ -1833,7 +1833,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   defp public_dependency_probes do
     for {configured, expected_status, message} <- [
           {"deps: deps() |> select_requirements(),", 0, nil},
-          {~s(deps: select_requirements(deps()) ++ [{:extra_literal, "~> 7.8"}],), 1,
+          {~s|deps: select_requirements(deps()) ++ [{:extra_literal, "~> 7.8"}],|, 1,
            "unexpected public dependency set"},
           {"deps: Enum.reject(select_requirements(deps()), &(elem(&1, 0) == :ash_cloak)),", 1,
            "unexpected public dependency set"}
@@ -1906,8 +1906,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
       mutate_job!(
         "release-artifact",
-        ~s(          expected = AshReplicant.DependencyRequirements.read!("mix.exs")),
-        ~s(          expected = AshReplicant.DependencyRequirements.read!("mix.exs") |> Map.delete(:#{dependency}))
+        ~s[          expected = AshReplicant.DependencyRequirements.read!("mix.exs")],
+        ~s[          expected = AshReplicant.DependencyRequirements.read!("mix.exs") |> Map.delete(:#{dependency})]
       )
 
       assert_invalid!()

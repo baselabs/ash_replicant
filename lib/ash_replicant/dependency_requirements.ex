@@ -20,27 +20,32 @@ defmodule AshReplicant.DependencyRequirements do
 
     true = is_list(dependencies)
 
-    declarations =
-      Enum.flat_map(dependencies, fn dependency ->
-        {name, reference, options} = dependency_parts!(dependency)
-
-        if Keyword.has_key?(options, :only) do
-          []
-        else
-          attribute = declaration_attribute!(reference)
-          true = Atom.to_string(attribute) == "#{name}_requirement"
-          [requirement] = for {:@, _, [{^attribute, _, [value]}]} <- expressions, do: value
-          true = is_binary(requirement)
-          {:ok, _parsed} = Version.parse_requirement(requirement)
-          [{name, requirement}]
-        end
-      end)
-
+    declarations = Enum.flat_map(dependencies, &public_declaration!(&1, expressions))
     requirements = Map.new(declarations)
     true = map_size(requirements) == length(declarations)
     requirements
   rescue
-    _ -> raise ArgumentError, "public dependency declarations are invalid"
+    _ ->
+      reraise ArgumentError,
+              [message: "public dependency declarations are invalid"],
+              __STACKTRACE__
+  end
+
+  # A dependency limited by `only:` is not public; every other entry must name its
+  # own `@<name>_requirement`, declared exactly once as a parseable binary.
+  defp public_declaration!(dependency, expressions) do
+    {name, reference, options} = dependency_parts!(dependency)
+
+    if Keyword.has_key?(options, :only) do
+      []
+    else
+      attribute = declaration_attribute!(reference)
+      true = Atom.to_string(attribute) == "#{name}_requirement"
+      [requirement] = for {:@, _, [{^attribute, _, [value]}]} <- expressions, do: value
+      true = is_binary(requirement)
+      {:ok, _parsed} = Version.parse_requirement(requirement)
+      [{name, requirement}]
+    end
   end
 
   defp dependency_parts!({name, reference}) when is_atom(name), do: {name, reference, []}
