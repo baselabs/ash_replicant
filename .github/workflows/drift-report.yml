@@ -35,11 +35,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+      - uses: ./.github/actions/toolchain
+        id: toolchain
+      - uses: ./.github/actions/beam
         with:
-          version-file: .tool-versions
-          version-type: strict
-      - run: scripts/assert-runtime-version.sh
+          elixir: ${{ steps.toolchain.outputs.elixir }}
+          otp: ${{ steps.toolchain.outputs.otp }}
         id: runtime
 
       # Report failures independently, only after ref and runtime admission succeeded.

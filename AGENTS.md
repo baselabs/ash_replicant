@@ -208,10 +208,11 @@ Compatibility sources cover PostgreSQL 15, 16, and 17; plugin sources cover 9.6 
 The engine's major is never repeated as a compatibility lane. Tests verify the live major
 against the reader's expected major. All fixture passwords are disposable test data.
 
-`.tool-versions` is the single checkout runtime source: every setup-beam install
-reads it with `version-file` and strict resolution, then immediately checks the
-installed Elixir and full OTP release. The wrapper and config assertion read
-the same file; package compatibility requirements remain in `mix.exs`.
+`.tool-versions` is the single checkout runtime source. Only the shared, unedited
+`scripts/toolchain.sh` reads it; the local toolchain action tests the reader and exposes
+its outputs. The local BEAM action installs those versions strictly, immediately refuses
+an Elixir, build-suffix or full OTP mismatch through `--installed`, and pins the Hex client.
+The wrapper and checkout config use the same reader; package requirements stay in `mix.exs`.
 Job timeouts follow infra's binding CI requirements linked below; each comment
 names its slowest measured green run and duration. Publish has no green run yet
 and uses `90 # no green run yet` until infra measures one. No workflow runs repository code from a pull

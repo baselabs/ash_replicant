@@ -196,6 +196,7 @@ FULL_MATRIX_FILES = {
     "mix.exs",
     "mix.lock",
     ".tool-versions",
+    "scripts/toolchain.sh",
     "scripts/run-mutation-gates.py",
 }
 FULL_MATRIX_TEST_FILES = {"test/test_helper.exs"}

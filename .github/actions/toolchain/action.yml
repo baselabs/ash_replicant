@@ -1,0 +1,19 @@
+name: Runtime toolchain
+description: Read the checkout runtime through the shared toolchain reader before installation.
+outputs:
+  elixir:
+    description: Exact Elixir version and OTP build suffix.
+    value: ${{ steps.versions.outputs.elixir }}
+  otp:
+    description: Exact OTP version.
+    value: ${{ steps.versions.outputs.otp }}
+runs:
+  using: composite
+  steps:
+    - name: Test the shared toolchain reader
+      shell: bash
+      run: scripts/toolchain.sh --self-test
+    - name: Read the checkout runtime
+      id: versions
+      shell: bash
+      run: scripts/toolchain.sh >> "$GITHUB_OUTPUT"

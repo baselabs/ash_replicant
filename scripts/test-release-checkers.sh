@@ -67,14 +67,32 @@ if [[ "$requirement_exit" -ne 2 ]] || [[ "$requirement_output" != *"assertion in
   exit 1
 fi
 
-for mismatch in elixir otp; do
-  set +e
-  runtime_output="$(scripts/assert-runtime-version.sh "--self-test-${mismatch}-mismatch" 2>&1)"
-  runtime_exit=$?
-  set -e
+pins="$(scripts/toolchain.sh)"
+elixir_pin=""
+erlang_pin=""
+while IFS='=' read -r name version; do
+  case "$name" in
+    elixir) elixir_pin="$version" ;;
+    otp) erlang_pin="$version" ;;
+  esac
+done <<< "$pins"
+[[ -n "$elixir_pin" && -n "$erlang_pin" ]]
+scripts/toolchain.sh --installed "elixir=$elixir_pin" "erlang=$erlang_pin" >/dev/null
 
-  if [[ "$runtime_exit" -ne 1 ]] || [[ "$runtime_output" != "runtime identity does not match the release contract" ]]; then
-    echo "runtime checker did not reject a single-axis mismatch" >&2
+for mismatch in elixir erlang elixir_build; do
+  want_elixir="$elixir_pin"
+  want_otp="$erlang_pin"
+  case "$mismatch" in
+    elixir) want_elixir="0.0.0-otp-${elixir_pin##*-otp-}" ;;
+    erlang) want_otp="0.0.0" ;;
+    elixir_build) want_elixir="${elixir_pin%-otp-*}-otp-0" ;;
+  esac
+  if runtime_output="$(scripts/toolchain.sh --installed "elixir=$want_elixir" "erlang=$want_otp" 2>&1)"; then
+    echo "runtime checker accepted a single-axis mismatch" >&2
+    exit 1
+  fi
+  if [[ "$runtime_output" != *'.tool-versions requires'* ]]; then
+    echo "runtime checker failed without observing the mismatch" >&2
     exit 1
   fi
 done

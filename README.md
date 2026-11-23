@@ -1101,10 +1101,15 @@ violates one of these rules.
 
 All checks run on GitHub-hosted CI through `kci/` and the landing route in `AGENTS.md`.
 The commands below describe those gates; they do not authorize local builds or tests.
+The shared `scripts/toolchain.sh` is the only `.tool-versions` reader. CI's toolchain
+action exposes its outputs; the BEAM action installs them strictly and immediately
+checks Elixir, its OTP build suffix, and the full OTP version with `--installed`.
+The runtime wrapper and checkout config use that same reader.
 
 ```bash
 asdf install
-scripts/with-release-runtime.sh scripts/assert-runtime-version.sh
+scripts/toolchain.sh --self-test
+scripts/with-release-runtime.sh true
 scripts/with-release-runtime.sh mix deps.get --check-locked
 env -u ASH_REPLICANT_TEST_URL \
   scripts/with-release-runtime.sh scripts/run-structural-tests.sh \

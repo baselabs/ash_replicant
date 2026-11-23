@@ -109,10 +109,23 @@ defmodule AshReplicant.ReleaseContract do
   @participant_example_start "<!-- ash-replicant-destination-participant-example:start -->"
   @participant_example_end "<!-- ash-replicant-destination-participant-example:end -->"
 
-  @setup_beam_inputs %{
-    "version-file" => ".tool-versions",
-    "version-type" => "strict"
+  @toolchain_action "./.github/actions/toolchain"
+  @beam_action "./.github/actions/beam"
+  @runtime_inputs %{
+    "elixir" => "${{ steps.toolchain.outputs.elixir }}",
+    "otp" => "${{ steps.toolchain.outputs.otp }}"
   }
+  @toolchain_sha256 "b29bfeb6ec4ec8f5b7e3ac3c963f04b6d3c73483172e5bd59ea40f20b102f1eb"
+
+  @install_hex ~S"""
+  mix local.hex "$WANT_HEX" --force
+  installed=$(mix hex.info | awk '$1 == "Hex:" {print $2}')
+  if [ "$installed" != "$WANT_HEX" ]; then
+    echo "::error::Installed Hex $installed; expected $WANT_HEX."
+    exit 1
+  fi
+  echo "Hex $installed, as pinned"
+  """
 
   @publish_owner_condition "contains(fromJSON('[\"corepay\",\"palermo-git\"]'), github.actor) && contains(fromJSON('[\"corepay\",\"palermo-git\"]'), github.triggering_actor)"
 
@@ -1345,6 +1358,22 @@ defmodule AshReplicant.ReleaseContract do
   """
 
   @command_status_guards [
+    {"scripts/with-release-runtime.sh",
+     ~S"""
+     pins="$("$root/scripts/toolchain.sh" "$root/.tool-versions")"
+     """},
+    {"scripts/with-release-runtime.sh",
+     ~S"""
+     "$root/scripts/toolchain.sh" --installed "elixir=$elixir_pin" "erlang=$erlang_pin"
+     """},
+    {"config/config.exs",
+     ~S"""
+     {output, status} = System.cmd(reader, [Path.join(root, ".tool-versions")], stderr_to_stdout: true)
+     """},
+    {"config/config.exs",
+     ~S"""
+     actual_elixir = System.version() <> "-otp-" <> System.build_info()[:otp_release]
+     """},
     {"scripts/assert-release-tree.sh",
      ~S"""
        tree_status="$(git status --porcelain --untracked-files=all)" || release_tree_fail 'git status failed'
@@ -1522,8 +1551,8 @@ defmodule AshReplicant.ReleaseContract do
     ],
     "no-database" => [
       {:uses, @checkout, %{"persist-credentials" => false}},
-      {:uses, @setup_beam, @setup_beam_inputs},
-      {:run, "scripts/assert-runtime-version.sh"},
+      {:uses, @toolchain_action, :absent, %{"id" => "toolchain"}},
+      {:uses, @beam_action, @runtime_inputs},
       {:run, "mix deps.get --check-locked"},
       {:run, "mix deps.compile"},
       {:run, "mix compile --warnings-as-errors", %{"id" => "compile"}},
@@ -1547,8 +1576,8 @@ defmodule AshReplicant.ReleaseContract do
     "compatibility" => [
       {:uses, @checkout, %{"persist-credentials" => false}},
       {:uses, @postgres_action, %{"image" => "${{ matrix.pg_image }}"}},
-      {:uses, @setup_beam, @setup_beam_inputs},
-      {:run, "scripts/assert-runtime-version.sh"},
+      {:uses, @toolchain_action, :absent, %{"id" => "toolchain"}},
+      {:uses, @beam_action, @runtime_inputs},
       {:run, String.trim(@resolve_dependencies),
        %{
          "env" => %{
@@ -1575,8 +1604,8 @@ defmodule AshReplicant.ReleaseContract do
     "performance" => [
       {:uses, @checkout, %{"persist-credentials" => false}},
       {:uses, @postgres_action, :absent},
-      {:uses, @setup_beam, @setup_beam_inputs},
-      {:run, "scripts/assert-runtime-version.sh"},
+      {:uses, @toolchain_action, :absent, %{"id" => "toolchain"}},
+      {:uses, @beam_action, @runtime_inputs},
       {:run, "mix deps.get --check-locked"},
       {:run, "mix deps.compile"},
       {:run, "mix compile --warnings-as-errors"},
@@ -1587,8 +1616,8 @@ defmodule AshReplicant.ReleaseContract do
     ],
     "decoder-old-majors" => [
       {:uses, @checkout, %{"persist-credentials" => false}},
-      {:uses, @setup_beam, @setup_beam_inputs},
-      {:run, "scripts/assert-runtime-version.sh"},
+      {:uses, @toolchain_action, :absent, %{"id" => "toolchain"}},
+      {:uses, @beam_action, @runtime_inputs},
       {:run,
        ~S"""
        docker build -f test/support/pg_old.dockerfile --build-arg "BASE=$PG_BASE" -t pgold-plugins:ci .
@@ -1616,9 +1645,8 @@ defmodule AshReplicant.ReleaseContract do
     ],
     "fresh-consumer" => [
       {:uses, @checkout, %{"persist-credentials" => false}},
-      {:uses, @setup_beam, @setup_beam_inputs},
-      {:run, "scripts/assert-runtime-version.sh"},
-      {:run, "mix local.hex 2.7.0 --force"},
+      {:uses, @toolchain_action, :absent, %{"id" => "toolchain"}},
+      {:uses, @beam_action, @runtime_inputs},
       {:run, "mix deps.get --check-locked"},
       {:run, "mix deps.compile"},
       {:uses, @postgres_action, :absent},
@@ -1627,9 +1655,8 @@ defmodule AshReplicant.ReleaseContract do
     ],
     "release-artifact" => [
       {:uses, @checkout, %{"persist-credentials" => false}},
-      {:uses, @setup_beam, @setup_beam_inputs},
-      {:run, "scripts/assert-runtime-version.sh"},
-      {:run, "mix local.hex 2.7.0 --force"},
+      {:uses, @toolchain_action, :absent, %{"id" => "toolchain"}},
+      {:uses, @beam_action, @runtime_inputs},
       {:run,
        "env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix deps.get --check-locked"},
       {:run, "mix deps.compile"},
@@ -2079,8 +2106,8 @@ defmodule AshReplicant.ReleaseContract do
       {:run, String.trim(@drift_refusal),
        %{"env" => %{"DEFAULT_BRANCH" => "${{ github.event.repository.default_branch }}"}}},
       {:uses, @checkout, %{"persist-credentials" => false}},
-      {:uses, @setup_beam, @setup_beam_inputs},
-      {:run, "scripts/assert-runtime-version.sh", %{"id" => "runtime"}}
+      {:uses, @toolchain_action, :absent, %{"id" => "toolchain"}},
+      {:uses, @beam_action, @runtime_inputs, %{"id" => "runtime"}}
     ]
 
     reports =
@@ -2166,12 +2193,8 @@ defmodule AshReplicant.ReleaseContract do
               "uses" => "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
               "with" => %{"persist-credentials" => false, "fetch-depth" => 0}
             },
-            %{
-              "uses" => "erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124",
-              "with" => %{"version-file" => ".tool-versions", "version-type" => "strict"}
-            },
-            %{"run" => "scripts/assert-runtime-version.sh"},
-            %{"run" => "mix local.hex 2.7.0 --force"},
+            %{"uses" => @toolchain_action, "id" => "toolchain"},
+            %{"uses" => @beam_action, "with" => @runtime_inputs},
             %{"run" => "mix local.rebar --force"},
             %{
               "name" => "Refuse a tagged release or inadmissible Hex identity",
@@ -2245,12 +2268,8 @@ defmodule AshReplicant.ReleaseContract do
               "uses" => "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
               "with" => %{"persist-credentials" => false}
             },
-            %{
-              "uses" => "erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124",
-              "with" => %{"version-file" => ".tool-versions", "version-type" => "strict"}
-            },
-            %{"run" => "scripts/assert-runtime-version.sh"},
-            %{"run" => "mix local.hex 2.7.0 --force"},
+            %{"uses" => @toolchain_action, "id" => "toolchain"},
+            %{"uses" => @beam_action, "with" => @runtime_inputs},
             %{"run" => "mix deps.get --check-locked"},
             %{"run" => "mix deps.compile"},
             %{
@@ -2285,6 +2304,21 @@ defmodule AshReplicant.ReleaseContract do
     |> Enum.each(fn path ->
       workflow = YamlElixir.read_from_file!(path)
       assert_actions(workflow)
+      controls = if Path.basename(path) == "drift-report.yml", do: %{"id" => "runtime"}, else: %{}
+      assert_runtime(workflow, root, controls)
+      source = File.read!(path)
+
+      assert(
+        not String.contains?(source, [
+          "version-file:",
+          "elixir-version:",
+          "otp-version:",
+          ".tool-versions"
+        ]) and
+          not Regex.match?(~r/\b(?:elixir|erlang|otp)[_-]?(?:version)?\s*:\s*["']?[0-9]/i, source),
+        "workflow runtime versions must come only from the shared reader outputs"
+      )
+
       assert_workflow_controls(workflow, Path.basename(path) == "drift-report.yml")
 
       Enum.each(Map.get(workflow, "jobs", %{}), fn {name, job} ->
@@ -2570,50 +2604,147 @@ defmodule AshReplicant.ReleaseContract do
     "qualification / " <> expanded
   end
 
-  # Runtime installation reads .tool-versions directly; no workflow version copies.
+  # Every installation consumes reader outputs and refuses an installed mismatch.
   defp assert_runtime(workflow, root, controls \\ %{}) do
+    assert_toolchain_actions(root)
     pinned_runtime(root)
-    assert(not Map.has_key?(workflow, "env"), "CI runtime must come only from .tool-versions")
+    assert(not Map.has_key?(workflow, "env"), "CI runtime must come only from the reader")
 
     for {_name, job} <- Map.get(workflow, "jobs", %{}),
-        {step, index} <- Enum.with_index(Map.get(job, "steps", [])),
-        String.starts_with?(Map.get(step, "uses", ""), "erlef/setup-beam@") do
-      assert(step["with"] == @setup_beam_inputs, "CI runtime must read strict .tool-versions")
-
+        {step, index} <- Enum.with_index(Map.get(job, "steps", [])) do
       assert(
-        Enum.at(job["steps"], index + 1) ==
-          Map.merge(%{"run" => "scripts/assert-runtime-version.sh"}, controls),
-        "CI runtime installation must immediately refuse a version mismatch"
+        not String.starts_with?(Map.get(step, "uses", ""), "erlef/setup-beam@"),
+        "runtime installation must use the shared BEAM action"
       )
+
+      if step["uses"] == @beam_action do
+        assert(
+          step == Map.merge(%{"uses" => @beam_action, "with" => @runtime_inputs}, controls),
+          "runtime inputs must be unmodified reader outputs"
+        )
+
+        assert(
+          index > 0 and
+            Enum.at(job["steps"], index - 1) ==
+              %{"uses" => @toolchain_action, "id" => "toolchain"},
+          "runtime installation must follow the unconditional shared reader"
+        )
+      end
     end
   end
 
+  defp assert_toolchain_actions(root) do
+    path = Path.join(root, "scripts/toolchain.sh")
+    digest = :sha256 |> :crypto.hash(File.read!(path)) |> Base.encode16(case: :lower)
+
+    assert(
+      digest == @toolchain_sha256 and Bitwise.band(File.stat!(path).mode, 0o7777) == 0o755,
+      "shared toolchain reader bytes or mode differ from the pin"
+    )
+
+    toolchain = YamlElixir.read_from_file!(Path.join(root, ".github/actions/toolchain/action.yml"))
+    beam = YamlElixir.read_from_file!(Path.join(root, ".github/actions/beam/action.yml"))
+
+    outputs = %{
+      "elixir" => %{
+        "description" => "Exact Elixir version and OTP build suffix.",
+        "value" => "${{ steps.versions.outputs.elixir }}"
+      },
+      "otp" => %{
+        "description" => "Exact OTP version.",
+        "value" => "${{ steps.versions.outputs.otp }}"
+      }
+    }
+
+    reader_runs = %{
+      "using" => "composite",
+      "steps" => [
+        %{
+          "name" => "Test the shared toolchain reader",
+          "shell" => "bash",
+          "run" => "scripts/toolchain.sh --self-test"
+        },
+        %{
+          "name" => "Read the checkout runtime",
+          "id" => "versions",
+          "shell" => "bash",
+          "run" => ~s(scripts/toolchain.sh >> "$GITHUB_OUTPUT")
+        }
+      ]
+    }
+
+    assert(
+      not Map.has_key?(toolchain, "inputs") and toolchain["outputs"] == outputs and
+        toolchain["runs"] == reader_runs,
+      "toolchain action must test and call the reader by path and expose its outputs"
+    )
+
+    inputs = %{
+      "elixir" => %{
+        "description" => "Exact Elixir version and OTP build suffix from the reader.",
+        "required" => true
+      },
+      "otp" => %{"description" => "Exact OTP version from the reader.", "required" => true}
+    }
+
+    beam_runs = %{
+      "using" => "composite",
+      "steps" => [
+        %{
+          "uses" => @setup_beam,
+          "with" => %{
+            "elixir-version" => "${{ inputs.elixir }}",
+            "otp-version" => "${{ inputs.otp }}",
+            "version-type" => "strict",
+            "install-hex" => false
+          }
+        },
+        %{
+          "name" => "Refuse a runtime other than the reader names",
+          "shell" => "bash",
+          "env" => %{"WANT_ELIXIR" => "${{ inputs.elixir }}", "WANT_OTP" => "${{ inputs.otp }}"},
+          "run" =>
+            ~s("$GITHUB_WORKSPACE/scripts/toolchain.sh" --installed "elixir=$WANT_ELIXIR" "erlang=$WANT_OTP")
+        },
+        %{
+          "name" => "Install and verify the pinned Hex client",
+          "shell" => "bash",
+          "working-directory" => "${{ runner.temp }}",
+          "env" => %{"WANT_HEX" => "2.7.0"},
+          "run" => @install_hex
+        }
+      ]
+    }
+
+    assert(
+      beam["inputs"] == inputs and beam["runs"] == beam_runs,
+      "BEAM action must install strictly, immediately check the runtime and verify pinned Hex"
+    )
+  end
+
   defp pinned_runtime(root) do
+    {output, status} =
+      System.cmd(
+        Path.join(Path.expand(root), "scripts/toolchain.sh"),
+        [Path.join(Path.expand(root), ".tool-versions")],
+        stderr_to_stdout: true
+      )
+
+    assert(status == 0, "shared toolchain reader refused its declarations")
+
     pins =
-      root
-      |> Path.join(".tool-versions")
-      |> File.read!()
+      output
       |> String.split("\n", trim: true)
-      |> Enum.map(&String.split/1)
+      |> Map.new(fn line ->
+        [name, version] = String.split(line, "=", parts: 2)
+        {name, version}
+      end)
 
-    case pins do
-      [["elixir", elixir], ["erlang", otp]] ->
-        case Regex.run(~r/\A(\d+\.\d+\.\d+)-otp-(\d+)\z/, elixir) do
-          [_elixir, version, major] ->
-            assert(
-              Regex.match?(~r/\A#{major}(\.\d+)+\z/, otp),
-              ".tool-versions Elixir and Erlang majors differ"
-            )
-
-            {version, otp}
-
-          nil ->
-            fail(".tool-versions Elixir pin is invalid")
-        end
-
-      _pins ->
-        fail(".tool-versions must pin exactly elixir then erlang")
-    end
+    elixir = Map.get(pins, "elixir", "")
+    otp = Map.get(pins, "otp", "")
+    assert(Regex.match?(~r/\A\d+\.\d+\.\d+-otp-\d+\z/, elixir), "Elixir pin must be exact")
+    assert(Regex.match?(~r/\A\d+(\.\d+)+\z/, otp), "OTP pin must be exact")
+    {elixir |> String.split("-otp-") |> hd(), otp}
   end
 
   defp assert_actions(workflow) do

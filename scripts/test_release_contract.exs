@@ -57,6 +57,22 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   """
 
   @command_status_guards [
+    {"scripts/with-release-runtime.sh",
+     ~S"""
+     pins="$("$root/scripts/toolchain.sh" "$root/.tool-versions")"
+     """},
+    {"scripts/with-release-runtime.sh",
+     ~S"""
+     "$root/scripts/toolchain.sh" --installed "elixir=$elixir_pin" "erlang=$erlang_pin"
+     """},
+    {"config/config.exs",
+     ~S"""
+     {output, status} = System.cmd(reader, [Path.join(root, ".tool-versions")], stderr_to_stdout: true)
+     """},
+    {"config/config.exs",
+     ~S"""
+     actual_elixir = System.version() <> "-otp-" <> System.build_info()[:otp_release]
+     """},
     {"scripts/assert-release-tree.sh",
      ~S"""
        tree_status="$(git status --porcelain --untracked-files=all)" || release_tree_fail 'git status failed'
@@ -162,7 +178,6 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       "python3 -B -m unittest discover -s scripts -p 'test_postgres_lanes.py'"
     ],
     "no-database" => [
-      "scripts/assert-runtime-version.sh",
       "mix deps.get --check-locked",
       "mix deps.compile",
       "mix compile --warnings-as-errors",
@@ -180,7 +195,6 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       String.trim(@mutation_gates_run)
     ],
     "compatibility" => [
-      "scripts/assert-runtime-version.sh",
       "mix deps.compile",
       "mix compile --warnings-as-errors",
       "elixir --version",
@@ -194,22 +208,17 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       "mix dialyzer"
     ],
     "performance" => [
-      "scripts/assert-runtime-version.sh",
       "mix deps.compile",
       "mix compile --warnings-as-errors",
       String.trim(@create_database),
       "scripts/run-structural-tests.sh test/integration/performance_bounds_test.exs --include integration"
     ],
     "fresh-consumer" => [
-      "scripts/assert-runtime-version.sh",
-      "mix local.hex 2.7.0 --force",
       "mix deps.get --check-locked",
       "mix deps.compile",
       "scripts/test-fresh-consumer.sh"
     ],
     "release-artifact" => [
-      "scripts/assert-runtime-version.sh",
-      "mix local.hex 2.7.0 --force",
       "env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix deps.get --check-locked",
       "mix deps.compile",
       "mix compile --warnings-as-errors",
@@ -374,6 +383,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
   @checkout "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
   @setup_beam "erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124"
+  @beam ".github/actions/beam/action.yml"
+  @toolchain ".github/actions/toolchain/action.yml"
   @named_separator_entities ~w(
     af ApplyFunction emsp13 emsp14 emsp ensp hairsp ic InvisibleComma
     InvisibleTimes it lrm MediumSpace nbsp NegativeMediumSpace NegativeThickSpace
@@ -582,7 +593,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     assert_invalid!()
 
     prepare_fixture()
-    replace_once!(@workflow, @setup_beam, @setup_beam <> "0")
+    replace_once!(@beam, @setup_beam, @setup_beam <> "0")
     assert_invalid!()
 
     prepare_fixture()
@@ -618,6 +629,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       {@workflow, "compatibility"},
       {@workflow, "performance"},
       {@workflow, "decoder-old-majors"},
+      {@workflow, "fresh-consumer"},
       {@workflow, "release-artifact"},
       {@publish, "publish"},
       {@publish, "published-package"},
@@ -626,21 +638,52 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     for {workflow, job} <- runtimes,
         {old, replacement} <- [
-          {"          version-file: .tool-versions\n", ""},
-          {"          version-file: .tool-versions\n",
-           "          version-file: other.versions\n"},
-          {"          version-file: .tool-versions\n", "          elixir-version: 1.20.3\n"},
-          {"          version-file: .tool-versions\n", "          otp-version: 29.0.5\n"},
-          {"          version-file: .tool-versions\n",
-           "          version-file: .tool-versions\n          elixir-version: 1.20.3\n"},
-          {"          version-type: strict\n", ""},
-          {"          version-type: strict\n", "          version-type: loose\n"},
-          {"      - run: scripts/assert-runtime-version.sh\n", ""},
-          {"      - run: scripts/assert-runtime-version.sh\n",
-           "      - run: scripts/assert-runtime-version.sh\n        if: false\n"}
+          {"      - uses: ./.github/actions/toolchain\n        id: toolchain\n", ""},
+          {"      - uses: ./.github/actions/beam\n",
+           "      - uses: ./.github/actions/beam\n        if: false\n"},
+          {"          elixir: ${{ steps.toolchain.outputs.elixir }}\n",
+           "          elixir: 1.20.3-otp-29\n"},
+          {"          otp: ${{ steps.toolchain.outputs.otp }}\n", "          otp: 29.0.5\n"},
+          {"          otp: ${{ steps.toolchain.outputs.otp }}\n", ""},
+          {"        id: toolchain\n", "        id: toolchain\n        if: false\n"}
         ] do
       prepare_fixture()
       mutate_job!(job, old, replacement, workflow)
+      assert_invalid!()
+    end
+
+    for {path, old, replacement} <- [
+          {@beam, "        elixir-version: ${{ inputs.elixir }}\n",
+           "        version-file: .tool-versions\n"},
+          {@beam, "        elixir-version: ${{ inputs.elixir }}\n",
+           "        elixir-version: 1.20.3-otp-29\n"},
+          {@beam, "        otp-version: ${{ inputs.otp }}\n", "        otp-version: 29.0.5\n"},
+          {@beam, "        version-type: strict\n", "        version-type: loose\n"},
+          {@beam, "        install-hex: false\n", ""},
+          {@beam, "--installed", "--unverified"},
+          {@beam, "    - name: Refuse a runtime other than the reader names\n",
+           "    - name: Refuse a runtime other than the reader names\n      if: false\n"},
+          {@beam, "        WANT_ELIXIR: ${{ inputs.elixir }}\n",
+           "        WANT_ELIXIR: 1.20.3-otp-29\n"},
+          {@beam, "        WANT_OTP: ${{ inputs.otp }}\n", "        WANT_OTP: 29.0.5\n"},
+          {@beam, "        WANT_HEX: \"2.7.0\"\n", "        WANT_HEX: \"2.6.0\"\n"},
+          {@beam, "        mix local.hex \"$WANT_HEX\" --force\n",
+           "        mix local.hex --force\n"},
+          {@toolchain, "scripts/toolchain.sh --self-test", "true"},
+          {@toolchain, "scripts/toolchain.sh >>", "sh scripts/toolchain.sh >>"},
+          {@toolchain, "scripts/toolchain.sh >>", "awk '{print}' .tool-versions >>"},
+          {@toolchain, "${{ steps.versions.outputs.elixir }}", "1.20.3-otp-29"},
+          {@toolchain, "${{ steps.versions.outputs.otp }}", "29.0.5"},
+          {"scripts/toolchain.sh", "set -euo pipefail", "set -eu"}
+        ] do
+      prepare_fixture()
+      replace_once!(path, old, replacement)
+      assert_invalid!()
+    end
+
+    for mode <- [0o644, 0o777, 0o4755] do
+      prepare_fixture()
+      File.chmod!(fixture_path("scripts/toolchain.sh"), mode)
       assert_invalid!()
     end
 
@@ -1078,13 +1121,11 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           {"    environment: publish\n", "    environment: other\n"},
           {"mix deps.get --check-locked", "mix deps.get"},
           {"          persist-credentials: false\n", "          persist-credentials: true\n"},
-          {"          version-type: strict\n", ""},
           {"    timeout-minutes: 90 # no green run yet\n", "    timeout-minutes: 30\n"},
           {"90 # no green run yet", "90 # unmeasured"},
           {"90 # no green run yet", "90"},
           {"          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}\n",
            "          HEX_API_KEY: ${{ secrets.OTHER_KEY }}\n"},
-          {"mix local.hex 2.7.0 --force", "mix local.hex --force"},
           {~s(scripts/build-release-docs.sh "$RUNNER_TEMP/hex-docs.tar.gz"), "true"},
           {"scripts/build-release-docs.sh", "true"},
           {"scripts/inspect-release-package.sh", "true"},
@@ -1407,8 +1448,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       @publish,
-      "      - uses: #{@setup_beam}",
-      ref_step <> "      - uses: #{@setup_beam}"
+      "      - uses: ./.github/actions/toolchain",
+      ref_step <> "      - uses: ./.github/actions/toolchain"
     )
 
     assert_invalid!()
@@ -2572,6 +2613,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           "docs/adr/0007-source-bound-checkpoint-effect-once.md",
           "docs/adr/0002-supported-runtime-and-dependencies.md",
           ".tool-versions",
+          "config/config.exs",
           "mix.exs",
           "mix.lock",
           "scripts/test-release-checkers.sh",
@@ -2597,6 +2639,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           ".github/postgres-lanes.json",
           ".github/dependency-lanes.json",
           ".github/actions/postgres/action.yml",
+          @beam,
+          @toolchain,
           "scripts/ci/postgres-lanes.sh",
           "scripts/test_postgres_lanes.py",
           "test/support/pg_old.dockerfile",

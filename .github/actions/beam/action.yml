@@ -1,0 +1,37 @@
+name: Exact BEAM runtime
+description: Install and verify the reader's exact runtime and the pinned Hex client.
+inputs:
+  elixir:
+    description: Exact Elixir version and OTP build suffix from the reader.
+    required: true
+  otp:
+    description: Exact OTP version from the reader.
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+      with:
+        elixir-version: ${{ inputs.elixir }}
+        otp-version: ${{ inputs.otp }}
+        version-type: strict
+        install-hex: false
+    - name: Refuse a runtime other than the reader names
+      shell: bash
+      env:
+        WANT_ELIXIR: ${{ inputs.elixir }}
+        WANT_OTP: ${{ inputs.otp }}
+      run: '"$GITHUB_WORKSPACE/scripts/toolchain.sh" --installed "elixir=$WANT_ELIXIR" "erlang=$WANT_OTP"'
+    - name: Install and verify the pinned Hex client
+      shell: bash
+      working-directory: ${{ runner.temp }}
+      env:
+        WANT_HEX: "2.7.0"
+      run: |
+        mix local.hex "$WANT_HEX" --force
+        installed=$(mix hex.info | awk '$1 == "Hex:" {print $2}')
+        if [ "$installed" != "$WANT_HEX" ]; then
+          echo "::error::Installed Hex $installed; expected $WANT_HEX."
+          exit 1
+        fi
+        echo "Hex $installed, as pinned"

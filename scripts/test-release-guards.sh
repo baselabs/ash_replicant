@@ -6,7 +6,7 @@ package="$(mktemp -d "${TMPDIR:-/tmp}/ash-replicant-release-package.XXXXXX")"
 trap 'rm -rf "$work" "$package"' EXIT
 mkdir -p "$work/scripts"
 cp "$root/scripts/verify-release.sh" "$root/scripts/assert-release-tree.sh" \
-  "$root/scripts/with-release-runtime.sh" "$root/scripts/assert-runtime-version.sh" \
+  "$root/scripts/with-release-runtime.sh" "$root/scripts/toolchain.sh" \
   "$root/scripts/inspect-release-package.sh" "$root/scripts/release-package-files.txt" \
   "$root/scripts/release_identity.exs" \
   "$work/scripts/"
