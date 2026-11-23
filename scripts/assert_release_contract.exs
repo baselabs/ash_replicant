@@ -2,11 +2,14 @@ unless Code.ensure_loaded?(AshReplicant.DependencyRequirements) do
   Code.require_file(Path.expand("../lib/ash_replicant/dependency_requirements.ex", __DIR__))
 end
 
+Code.require_file(Path.join(__DIR__, "dependency_lanes.exs"))
+
 defmodule AshReplicant.ReleaseContractError do
   defexception [:message]
 end
 
 defmodule AshReplicant.ReleaseContract do
+  alias AshReplicant.DependencyLanes
   alias AshReplicant.DependencyRequirements
   alias AshReplicant.ReleaseContractError
   alias Jason.DecodeError
@@ -2655,7 +2658,7 @@ defmodule AshReplicant.ReleaseContract do
       declarations["compatibility"]
       |> Enum.take(3)
       |> Enum.map(&Map.drop(&1, ["pg_major", "pg_image"])) ==
-        DependencyRequirements.lanes(public_requirements(root)),
+        DependencyLanes.lanes(public_requirements(root)),
       "CI dependency matrix is invalid"
     )
 
@@ -3127,7 +3130,7 @@ defmodule AshReplicant.ReleaseContract do
     )
 
     assert(
-      exact_project_contract?(projects) and exact_dependency_contract?(dependency_lists),
+      exact_project_contract?(projects) and exact_dependency_contract?(dependency_lists, public_requirements(root)),
       "Mix release contract is incomplete"
     )
   rescue
@@ -3148,8 +3151,9 @@ defmodule AshReplicant.ReleaseContract do
 
   defp exact_project_contract?(_projects), do: false
 
-  defp exact_dependency_contract?([dependencies]) when is_list(dependencies) do
-    Enum.all?(DependencyRequirements.attributes(), fn {name, attribute} ->
+  defp exact_dependency_contract?([dependencies], requirements) when is_list(dependencies) do
+    Enum.all?(requirements, fn {name, _requirement} ->
+      attribute = String.to_existing_atom("#{name}_requirement")
       entries =
         Enum.filter(dependencies, fn
           {^name, _requirement} -> true
@@ -3173,7 +3177,7 @@ defmodule AshReplicant.ReleaseContract do
     end)
   end
 
-  defp exact_dependency_contract?(_dependency_lists), do: false
+  defp exact_dependency_contract?(_dependency_lists, _requirements), do: false
 
   defp public_requirements(root) do
     DependencyRequirements.read!(Path.join(root, "mix.exs"))

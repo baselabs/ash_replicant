@@ -1,12 +1,15 @@
 Code.require_file(Path.expand("../lib/ash_replicant/dependency_requirements.ex", __DIR__))
 
+Code.require_file(Path.join(__DIR__, "dependency_lanes.exs"))
+
+alias AshReplicant.DependencyLanes
 alias AshReplicant.DependencyRequirements
 
 case System.argv() do
   ["--lanes", mixfile] ->
     mixfile
     |> DependencyRequirements.read!()
-    |> DependencyRequirements.lanes()
+    |> DependencyLanes.lanes()
     |> JSON.encode!()
     |> IO.puts()
 
@@ -16,5 +19,5 @@ case System.argv() do
     {_name, requirement} =
       Enum.find(requirements, fn {name, _} -> to_string(name) == dependency end)
 
-    IO.write(if mode == "--floor", do: DependencyRequirements.floor!(requirement), else: requirement)
+    IO.write(if mode == "--floor", do: DependencyLanes.floor!(requirement), else: requirement)
 end

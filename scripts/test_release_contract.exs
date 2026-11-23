@@ -5,6 +5,7 @@ implementation =
 Code.require_file(implementation)
 
 defmodule AshReplicant.ReleaseContractSelfTest do
+  alias AshReplicant.DependencyLanes
   alias AshReplicant.DependencyRequirements
   alias AshReplicant.ReleaseContract
   alias AshReplicant.ReleaseContractError
@@ -392,8 +393,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     puncsp rlm shy Tab ThickSpace thinsp ThinSpace VeryThinSpace ZeroWidthSpace zwj zwnj
   )
   defp mix_contracts do
-    Enum.map(DependencyRequirements.attributes(), fn {name, attribute} ->
-      "@#{attribute} #{inspect(Map.fetch!(@requirements, name))}"
+    Enum.map(@requirements, fn {name, requirement} ->
+      "@#{name}_requirement #{inspect(requirement)}"
     end) ++
       [
         ~s(elixir: "~> 1.20.3"),
@@ -471,7 +472,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
   defp replicant_selector_probes do
     # Accept the declared floor, then reject stale locks and older selectors.
-    floor = DependencyRequirements.floor!(@requirements.replicant)
+    floor = DependencyLanes.floor!(@requirements.replicant)
     prepare_fixture()
     with_env("ASH_REPLICANT_REPLICANT_VERSION", floor, &assert_valid!/0)
 
@@ -1804,7 +1805,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
            ~s(selector = if mode == :floor, do: "0.0.0", else: mode)}
         ] do
       prepare_fixture()
-      replace_once!("lib/ash_replicant/dependency_requirements.ex", old, replacement)
+      replace_once!("scripts/dependency_lanes.exs", old, replacement)
       assert_invalid!()
     end
 
@@ -2302,7 +2303,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       "mix.exs",
-      "{:ash_onetime, onetime_requirement()}",
+      "{:ash_onetime, ash_onetime_requirement()}",
       "{:ash_onetime, \"~> 1.3\"}"
     )
 
@@ -2312,7 +2313,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       "mix.exs",
-      "{:ash_onetime, onetime_requirement()}",
+      "{:ash_onetime, ash_onetime_requirement()}",
       "{:ash_onetime, path: \"../ash_onetime\"}"
     )
 
@@ -2322,7 +2323,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       "mix.exs",
-      "{:ash_cloak, @cloak_requirement}",
+      "{:ash_cloak, @ash_cloak_requirement}",
       "{:ash_cloak, \"~> 0.1\"}"
     )
 
@@ -2584,6 +2585,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           ".github/postgres.ref",
           ".github/postgres-lanes.json",
           "scripts/dependency-requirements.exs",
+          "scripts/dependency_lanes.exs",
           "lib/ash_replicant/dependency_requirements.ex",
           ".github/actions/postgres/action.yml",
           @beam,

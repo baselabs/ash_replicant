@@ -5,10 +5,10 @@ defmodule AshReplicant.MixProject do
   @source_url "https://github.com/baselabs/ash_replicant"
   @ash_requirement ">= 3.37.3 and < 4.0.0-0"
   @replicant_requirement ">= 1.6.0 and < 2.0.0-0"
-  @onetime_requirement ">= 1.3.2 and < 2.0.0-0"
+  @ash_onetime_requirement ">= 1.3.2 and < 2.0.0-0"
 
   @ash_postgres_requirement "~> 2.13"
-  @cloak_requirement ">= 0.4.0 and < 1.0.0-0"
+  @ash_cloak_requirement ">= 0.4.0 and < 1.0.0-0"
   @igniter_requirement ">= 0.8.4 and < 1.0.0-0"
   @spark_requirement "~> 2.7.0"
   @splode_requirement "~> 0.3"
@@ -61,11 +61,11 @@ defmodule AshReplicant.MixProject do
       # The committed test migrations match the reviewed compatibility lock's
       # generator. The drift report checks newer upstream releases separately.
       {:ash_postgres, @ash_postgres_requirement},
-      {:ash_onetime, onetime_requirement()},
+      {:ash_onetime, ash_onetime_requirement()},
       # Security floor: EEF-CVE-2026-81319 and EEF-CVE-2026-81322 affect
       # every ash_cloak release below 0.4.0; a consumer must not be able
       # to resolve to a vulnerable one.
-      {:ash_cloak, @cloak_requirement},
+      {:ash_cloak, @ash_cloak_requirement},
       {:replicant, replicant_requirement()},
       # The install codemod surface (I01). OPTIONAL for consumers and at
       # runtime: `mix ash_replicant.install` compiles to an actionable stub when
@@ -118,18 +118,18 @@ defmodule AshReplicant.MixProject do
     end
   end
 
-  defp onetime_requirement do
+  defp ash_onetime_requirement do
     case System.get_env("ASH_REPLICANT_ONETIME_VERSION") do
       value when value in [nil, "", "latest"] ->
-        @onetime_requirement
+        @ash_onetime_requirement
 
       value ->
         with {:ok, _version} <- Version.parse(value),
-             true <- Version.match?(value, @onetime_requirement) do
+             true <- Version.match?(value, @ash_onetime_requirement) do
           "== #{value}"
         else
           _ ->
-            raise "ASH_REPLICANT_ONETIME_VERSION must be a semantic version matching #{@onetime_requirement}"
+            raise "ASH_REPLICANT_ONETIME_VERSION must be a semantic version matching #{@ash_onetime_requirement}"
         end
     end
   end

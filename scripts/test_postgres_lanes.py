@@ -146,10 +146,24 @@ class PostgresLanesTest(unittest.TestCase):
         for row in rows[1:]:
             self.assertEqual(row["replicant_requirement"], requirement)
 
+    def test_floor_policy_accepts_exact_and_pessimistic_lower_bounds(self):
+        path = self.root / "mix.exs"
+        original = path.read_text()
+        for requirement, floor in (("~> 7.8", "7.8.0"), ("== 7.8.9", "7.8.9")):
+            with self.subTest(requirement=requirement):
+                path.write_text(re.sub(r'@replicant_requirement "[^"]+"',
+                                       '@replicant_requirement "' + requirement + '"', original, count=1))
+                result = self.read()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                row = json.loads(result.stdout)["compatibility"][0]
+                self.assertEqual(row["replicant_selector"], floor)
+                self.assertEqual(row["replicant_requirement"], "== " + floor)
+
     def test_duplicate_missing_and_nonliteral_declarations_are_refused(self):
         path = self.root / "mix.exs"
         original = path.read_text()
         for replacement in ('@replicant_requirement "bad"',
+                            '@replicant_requirement "> 7.8.9"',
                             '@replicant_requirement System.get_env("UNTRUSTED")',
                             '@replicant_requirement "~> 1.0"\n  @replicant_requirement "~> 1.0"'):
             with self.subTest(replacement=replacement):
