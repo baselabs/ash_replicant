@@ -99,12 +99,13 @@ Release evidence is separated by what it proves:
 
 The proof jobs live in `.github/workflows/qualification.yml`, callable only
 through `workflow_call`. `.github/workflows/ci.yml` calls them only for
-`kci/**` pushes, without path or tag filters. Its final `qualified` job reads
-every job of the run and requires the exact ten-check inventory, one completed
-successful execution per check, plus a successful reusable-workflow result.
+`kci/**` pushes, without path or tag filters. The BEAM-equipped `postgres-lanes`
+job derives the expected inventory and exposes it through the reusable workflow's
+`checks` output. Its final, runtime-free `qualified` job reads that output as
+`EXPECTED_CHECKS` and compares it with every job of the run, requiring one completed
+successful execution per expected check plus a successful reusable-workflow result.
 `main` moves only on that commit's `qualified` check. Pushes to `main`, tags,
-and releases start nothing. `.github/workflows/pull-request.yml` calls the
-same proofs under review check names, without secrets or a `qualified` check.
+and releases start nothing. No workflow executes repository code from a pull request.
 All executable jobs use GitHub-hosted `ubuntu-24.04` runners.
 
 Every new gate needs a red-capable probe against the exact checked-in command or
@@ -152,7 +153,7 @@ ancestry and retained-asset checks. Publication and keys remain infra's work.
 - Test split: `test/ash_replicant/checkpoint_policy_test.exs` and
   `test/integration/checkpoint_policy_test.exs`.
 - Gate implementations: `.github/workflows/qualification.yml`,
-  `.github/workflows/ci.yml`, `.github/workflows/pull-request.yml`,
+  `.github/workflows/ci.yml`,
   `scripts/qualify.py`, `scripts/qualification-jobs.json`,
   `scripts/run-structural-tests.sh`, `scripts/assert-exunit-output.sh`,
   `scripts/assert-dependency-version.sh`, and

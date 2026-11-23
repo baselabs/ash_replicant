@@ -2215,7 +2215,8 @@ defmodule AshReplicant.ReleaseContract do
             "run" => "python3 scripts/qualify.py",
             "env" => %{
               "GH_TOKEN" => "${{ github.token }}",
-              "QUALIFICATION_RESULT" => "${{ needs.qualification.result }}"
+              "QUALIFICATION_RESULT" => "${{ needs.qualification.result }}",
+              "EXPECTED_CHECKS" => "${{ needs.qualification.outputs.checks }}"
             }
           }
         ]
@@ -2233,8 +2234,17 @@ defmodule AshReplicant.ReleaseContract do
     )
 
     assert(
-      workflow["on"] == %{"workflow_call" => nil},
-      "qualification trigger must be workflow_call only"
+      workflow["on"] == %{
+        "workflow_call" => %{
+          "outputs" => %{
+            "checks" => %{
+              "description" => "Expected qualification check inventory",
+              "value" => "${{ jobs.postgres-lanes.outputs.checks }}"
+            }
+          }
+        }
+      },
+      "qualification must expose its check inventory through workflow_call only"
     )
 
     source = File.read!(Path.join(root, ".github/workflows/qualification.yml"))
@@ -3055,7 +3065,8 @@ defmodule AshReplicant.ReleaseContract do
           job["outputs"] == %{
             "engine_major" => "${{ steps.lanes.outputs.engine_major }}",
             "compatibility" => "${{ steps.lanes.outputs.compatibility }}",
-            "decoder" => "${{ steps.lanes.outputs.decoder }}"
+            "decoder" => "${{ steps.lanes.outputs.decoder }}",
+            "checks" => "${{ steps.lanes.outputs.checks }}"
           },
           "PostgreSQL lane outputs are invalid"
         )

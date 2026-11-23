@@ -38,3 +38,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           QUALIFICATION_RESULT: ${{ needs.qualification.result }}
+          EXPECTED_CHECKS: ${{ needs.qualification.outputs.checks }}

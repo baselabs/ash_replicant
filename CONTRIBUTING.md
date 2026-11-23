@@ -110,9 +110,11 @@ The proof jobs live in `.github/workflows/qualification.yml`, called only by
 `ubuntu-24.04`. Qualification runs once per `kci/<commit>` push, with no path
 or tag filters. No workflow runs repository code from a pull request. A fork's
 change is qualified when a maintainer lands it through a `kci/<commit>` branch.
-The final `qualified` check reads the run's complete job inventory and requires
-all eleven expected proofs to finish successfully. `main` moves only on that
-commit's `qualified` check; a push to `main`, a tag, or a release starts no run.
+The BEAM-equipped `postgres-lanes` job derives the expected proofs once and exposes
+them through the reusable workflow's `checks` output. The runtime-free `qualified`
+job reads that output as `EXPECTED_CHECKS`, compares it with the run's complete job
+inventory, and requires every expected proof to finish successfully. `main` moves
+only on that commit's `qualified` check; a push to `main`, a tag, or a release starts no run.
 If qualification fails, fix forward in the next commit.
 
 Job timeouts follow infra's binding CI requirements linked below. Each job's

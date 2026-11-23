@@ -41,6 +41,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Pass the generated qualification inventory from the lane job to the runtime-free
+  verdict job. Refuse missing or invalid inventory and identify failed input or
+  Actions reads without exposing response values.
+
 - Set the publish and drift-report timeouts from their first green runs (5 and 24
   minutes), following infra's measured timeout rule; the release contract pins both.
   Verifying the published package keeps its 90-minute bound until its first green run.

@@ -2,6 +2,7 @@
 
 import copy
 import json
+import os
 import re
 from pathlib import Path
 import shutil
@@ -77,6 +78,27 @@ class PostgresLanesTest(unittest.TestCase):
                 "qualification / Dependencies " + row["label"] + " / PostgreSQL " + row["pg_major"],
                 data["checks"],
             )
+
+    def test_github_outputs_include_the_same_inventory_and_matrices(self):
+        result = self.read()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        expected = json.loads(result.stdout)
+        output = self.root / "github-output"
+        result = subprocess.run(
+            [str(READER), "", str(self.root)],
+            env=dict(os.environ, GITHUB_OUTPUT=str(output)),
+            check=False, capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "")
+        records = [line.split("=", 1) for line in output.read_text().splitlines()]
+        self.assertEqual([key for key, _value in records],
+                         ["engine_major", "compatibility", "decoder", "checks"])
+        for key, value in records:
+            if key == "engine_major":
+                self.assertEqual(value, expected[key])
+            else:
+                self.assertEqual(value, json.dumps(expected[key], separators=(",", ":")))
 
     def test_invalid_shapes_and_unknown_fields(self):
         for invalid in (None, {}, [], [None], [dict(self.lanes[0], unknown=True)]):

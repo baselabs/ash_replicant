@@ -204,7 +204,9 @@ CI rather than the build box.
 server with password authentication, waits for TCP readiness, and logs and removes it on
 every exit. `.github/postgres-lanes.json` declares compatibility majors and source roles;
 `scripts/ci/postgres-lanes.sh` alone expands those declarations into matrices and the
-qualification inventory. Dependency-range cells from `.github/dependency-lanes.json`,
+qualification inventory in the BEAM-equipped `postgres-lanes` job. The reusable workflow
+passes that inventory to the runtime-free `qualified` job as `EXPECTED_CHECKS`;
+the verdict never runs the lane reader. Dependency-range cells derived from `mix.exs`,
 performance, consumers, drift reporting, and decoder destinations run the engine.
 Compatibility sources cover PostgreSQL 15, 16, and 17; plugin sources cover 9.6 and 12.
 The engine's major is never repeated as a compatibility lane. Tests verify the live major

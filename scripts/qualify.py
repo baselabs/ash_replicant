@@ -3,13 +3,15 @@
 
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 
 
-INVENTORY = Path(__file__).with_name("qualification-jobs.json")
 MAX_PAGES = 10
+
+
+class QualificationInputError(ValueError):
+    """An input refusal containing only a fixed, value-free reason."""
 
 
 def refusals(qualification_result, jobs, expected):
@@ -52,7 +54,7 @@ def refusals(qualification_result, jobs, expected):
 def run_jobs(repository, run_id):
     """Read every latest job execution, refusing incomplete or oversized pagination."""
     if not os.environ.get("GH_TOKEN"):
-        raise ValueError("GitHub token is required")
+        raise QualificationInputError("GitHub token is required")
     jobs = []
     total = None
     for page in range(1, MAX_PAGES + 1):
@@ -83,23 +85,49 @@ def run_jobs(repository, run_id):
 
 
 def expected_checks():
-    response = subprocess.run(
-        [str(INVENTORY.parent / "ci/postgres-lanes.sh"), "--json"],
-        check=True, capture_output=True, text=True, timeout=30,
-    )
-    return json.loads(response.stdout)["checks"]
+    """Read the inventory already derived by the qualification workflow."""
+    reason = "expected check inventory (EXPECTED_CHECKS) is missing or invalid"
+    try:
+        expected = json.loads(os.environ.get("EXPECTED_CHECKS", ""))
+    except (ValueError, TypeError):
+        raise QualificationInputError(reason) from None
+    if (
+        not isinstance(expected, list)
+        or not expected
+        or not all(isinstance(name, str) and name.strip() for name in expected)
+        or len(set(expected)) != len(expected)
+    ):
+        raise QualificationInputError(reason)
+    return expected
+
+
+def job_read_refusal(error):
+    """Describe a failed Actions read without command arguments, output, or API values."""
+    reason = "Actions job inventory could not be read: "
+    if isinstance(error, subprocess.CalledProcessError):
+        return reason + f"gh api exited {error.returncode}"
+    if isinstance(error, subprocess.TimeoutExpired):
+        return reason + "gh api timed out"
+    if isinstance(error, OSError):
+        return reason + "gh api could not be executed"
+    if isinstance(error, subprocess.SubprocessError):
+        return reason + "gh api failed"
+    return reason + "invalid or incomplete response"
 
 
 def main():
     try:
         expected = expected_checks()
-        jobs = run_jobs(
-            os.environ["GITHUB_REPOSITORY"],
-            os.environ["GITHUB_RUN_ID"],
-        )
+        repository = os.environ.get("GITHUB_REPOSITORY")
+        run_id = os.environ.get("GITHUB_RUN_ID")
+        if not repository or not run_id:
+            raise QualificationInputError("GITHUB_REPOSITORY/GITHUB_RUN_ID missing")
+        jobs = run_jobs(repository, run_id)
         refused = refusals(os.environ.get("QUALIFICATION_RESULT"), jobs, expected)
-    except (KeyError, OSError, subprocess.SubprocessError, ValueError, TypeError):
-        refused = ["qualification inputs or Actions job inventory could not be read"]
+    except QualificationInputError as error:
+        refused = [str(error)]
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError) as error:
+        refused = [job_read_refusal(error)]
     if refused:
         print("Qualification refused:\n  " + "\n  ".join(refused))
         return 1

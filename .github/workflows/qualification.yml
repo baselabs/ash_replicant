@@ -3,6 +3,10 @@ name: Qualification
 # Proofs called only by ci.yml for candidate qualification.
 on:
   workflow_call:
+    outputs:
+      checks:
+        description: Expected qualification check inventory
+        value: ${{ jobs.postgres-lanes.outputs.checks }}
 
 defaults:
   run:
@@ -23,6 +27,7 @@ jobs:
       engine_major: ${{ steps.lanes.outputs.engine_major }}
       compatibility: ${{ steps.lanes.outputs.compatibility }}
       decoder: ${{ steps.lanes.outputs.decoder }}
+      checks: ${{ steps.lanes.outputs.checks }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

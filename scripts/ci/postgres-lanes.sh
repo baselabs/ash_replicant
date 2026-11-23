@@ -97,7 +97,7 @@ PYTHON
 if [[ "$mode" == --json ]]; then
   printf '%s\n' "$result"
 else
-  for key in engine_major compatibility decoder; do
+  for key in engine_major compatibility decoder checks; do
     value="$(jq -c --arg key "$key" '.[$key]' <<< "$result")"
     if [[ "$key" == engine_major ]]; then value="$(jq -r '.engine_major' <<< "$result")"; fi
     printf '%s=%s\n' "$key" "$value" >> "${GITHUB_OUTPUT:?}"

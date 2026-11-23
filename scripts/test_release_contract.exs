@@ -859,11 +859,29 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           {"      - run: python3 scripts/qualify.py\n", "      - run: true\n"},
           {"          GH_TOKEN: ${{ github.token }}\n", ""},
           {"          QUALIFICATION_RESULT: ${{ needs.qualification.result }}\n", ""},
+          {"          EXPECTED_CHECKS: ${{ needs.qualification.outputs.checks }}\n", ""},
+          {"          EXPECTED_CHECKS: ${{ needs.qualification.outputs.checks }}\n",
+           "          EXPECTED_CHECKS: ${{ needs.qualification.outputs.other }}\n"},
           {"    uses: ./.github/workflows/qualification.yml\n",
            "    uses: ./.github/workflows/other.yml\n"}
         ] do
       prepare_fixture()
       replace_once!(@landing, old, replacement)
+      assert_invalid!()
+    end
+
+    for {old, replacement} <- [
+          {"      checks: ${{ steps.lanes.outputs.checks }}\n", ""},
+          {"      checks: ${{ steps.lanes.outputs.checks }}\n",
+           "      checks: ${{ steps.lanes.outputs.other }}\n"},
+          {"    outputs:\n      checks:\n" <>
+             "        description: Expected qualification check inventory\n" <>
+             "        value: ${{ jobs.postgres-lanes.outputs.checks }}\n", ""},
+          {"        value: ${{ jobs.postgres-lanes.outputs.checks }}\n",
+           "        value: ${{ jobs.postgres-lanes.outputs.other }}\n"}
+        ] do
+      prepare_fixture()
+      replace_once!(@workflow, old, replacement)
       assert_invalid!()
     end
 
