@@ -52,6 +52,7 @@ defmodule AshReplicant.DependencyRequirementsTest do
           "{:extra_public, @extra_public_requirement}",
           "{:extra_public, #{reference}}"
         )
+
       File.write!(path, mutated)
 
       assert_raise ArgumentError, "public dependency declarations are invalid", fn ->

@@ -21,5 +21,9 @@ normalized_result="$(
     sed '/^Waiting for lock on the build directory /d'
 )"
 
-[[ "$normalized_result" =~ ^release\ contract\ self-tests:\ PASS\ \([1-9][0-9]*\ checks\)$ ]]
+if ! [[ "$normalized_result" =~ ^release\ contract\ self-tests:\ PASS\ \([1-9][0-9]*\ checks\)$ ]]; then
+  printf '%s\n' "$normalized_result" >&2
+  echo "release contract self-tests printed output other than the single PASS line" >&2
+  exit 1
+fi
 printf '%s\n' "$normalized_result"

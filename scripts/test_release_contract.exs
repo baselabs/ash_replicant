@@ -1340,7 +1340,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     ]
 
     for {workflow, job, timeout} <- jobs do
-      suffix = if job in ["published-package", "postgres-lanes"], do: " # no green run yet", else: ""
+      suffix =
+        if job in ["published-package", "postgres-lanes"], do: " # no green run yet", else: ""
 
       for replacement <- ["", "    timeout-minutes: 1\n"] do
         prepare_fixture()
