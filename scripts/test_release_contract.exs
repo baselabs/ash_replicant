@@ -1139,7 +1139,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           {"scripts/check-docs-archive.py", "Package SHA-256: {digests[0]}"},
           {"scripts/check-docs-archive.py", "Docs SHA-256: {digests[1]}"},
           {"scripts/test_release_docs.py", "release notes accepted an invalid changelog section"},
-          {"scripts/test_release_docs.py", "release assets accepted invalid packaged release notes"}
+          {"scripts/test_release_docs.py",
+           "release assets accepted invalid packaged release notes"}
         ] do
       prepare_fixture()
       replace_once!(path, old, "removed_release_notes_guard")
