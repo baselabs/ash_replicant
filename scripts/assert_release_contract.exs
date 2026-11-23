@@ -2898,15 +2898,16 @@ defmodule AshReplicant.ReleaseContract do
 
   defp step_signature(%{"uses" => action} = step) when is_binary(action) do
     assert(
-      Map.keys(step) -- ["name", "uses", "with", "if"] == [],
+      Map.keys(step) -- ["name", "uses", "with", "id", "if"] == [],
       "CI release Action step control is invalid"
     )
 
     signature = {:uses, action, Map.get(step, "with", :absent)}
 
-    if Map.has_key?(step, "if"),
-      do: Tuple.insert_at(signature, tuple_size(signature), %{"if" => step["if"]}),
-      else: signature
+    case Map.take(step, ["id", "if"]) do
+      controls when map_size(controls) == 0 -> signature
+      controls -> Tuple.insert_at(signature, tuple_size(signature), controls)
+    end
   end
 
   defp step_signature(_step), do: fail("CI release step is invalid")
