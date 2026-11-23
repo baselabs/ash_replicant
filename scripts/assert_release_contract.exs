@@ -2647,8 +2647,8 @@ defmodule AshReplicant.ReleaseContract do
   defp postgres_declarations(root) do
     root = Path.expand(root)
 
-    {output, status} =
-      System.cmd(Path.join(root, "scripts/ci/postgres-lanes.sh"), ["--json", root])
+    reader = Path.join(root, "scripts/ci/postgres-lanes.sh")
+    {output, status} = System.cmd(reader, ["--json", root], stderr_to_stdout: true)
 
     assert(status == 0, "PostgreSQL lane reader refused its declarations")
     Jason.decode!(output)
