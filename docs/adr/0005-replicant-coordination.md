@@ -89,6 +89,13 @@ delivery subsequently landed under [ADR-0018](0018-append-log-delivery.md),
 raising the package-wide Replicant floor to 1.2.3 because the transport must not
 idle-advance filtered append WAL.
 
+## Amendment (2026-11-23)
+
+The public dependency is `>= 1.6.0 and < 2.0.0-0`, and the exact-floor cell
+resolves Replicant 1.6.0. Replicant 1.6.0 requires Postgrex `~> 0.23`, so the
+Postgrex floor moved with it. The 1.2.3 and 1.3.0 floors and the Postgrex 0.22.4
+lock above are the earlier contract.
+
 ## Evidence
 
 - `mix.lock` records Replicant 1.2.3 and Postgrex 0.22.4 from Hex.

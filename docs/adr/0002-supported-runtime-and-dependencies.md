@@ -7,6 +7,11 @@ Date: 2026-08-13
 Accepted for the 1.0.0 release line. Amended September 29, October 11, and
 October 28, 2026 and November 5, 2026 (the Ash security floor is now `>= 3.37.3 and < 4.0.0-0`).
 
+> **Dependency floor amendment (2026-11-23).** Postgrex is declared `~> 0.23` and
+> Replicant `>= 1.6.0 and < 2.0.0-0`: Replicant 1.6.0 requires Postgrex `~> 0.23`.
+> The exact-floor, latest-compatible and release locks record Replicant 1.6.0 and
+> Postgrex 0.23.0. The Postgrex 0.22.4 statements below are the earlier floor.
+
 > **Superseding CI substrate amendment (2026-11-21).** The historical database cell
 > lists below are superseded by the checked BaseLabs platform engine and
 > `.github/postgres-lanes.json`. Dependency-range checks, consumers, performance,
