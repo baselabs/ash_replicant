@@ -76,14 +76,24 @@ defmodule AshReplicant.DocsArchiveTest do
     mutated = String.replace(checker, ~s|path.suffix == ".epub"|, "False")
     refute mutated == checker
 
+    # Run the mutated script with its real shared parser, as production does.
+    mutant = Path.join(dir, "mutant")
+    File.mkdir!(mutant)
+    checker_path = Path.join(mutant, "check-docs-archive.py")
+    File.write!(checker_path, mutated)
+
+    File.cp!(
+      Path.join(Path.dirname(@checker), "release-notes.py"),
+      Path.join(mutant, "release-notes.py")
+    )
+
     # This exact mutation must admit the otherwise valid EPUB archive.
     assert {_output, 0} =
              System.cmd(
                "python3",
                [
                  "-I",
-                 "-c",
-                 mutated,
+                 checker_path,
                  archive,
                  tree,
                  "--version",

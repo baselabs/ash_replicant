@@ -2830,7 +2830,9 @@ defmodule AshReplicant.ReleaseContract do
       "shared toolchain reader bytes or mode differ from the pin"
     )
 
-    toolchain = YamlElixir.read_from_file!(Path.join(root, ".github/actions/toolchain/action.yml"))
+    toolchain =
+      YamlElixir.read_from_file!(Path.join(root, ".github/actions/toolchain/action.yml"))
+
     beam = YamlElixir.read_from_file!(Path.join(root, ".github/actions/beam/action.yml"))
 
     outputs = %{
