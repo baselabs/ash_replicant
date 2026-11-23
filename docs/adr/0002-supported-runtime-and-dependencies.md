@@ -386,3 +386,23 @@ tooling (crux, nimble_options, sourceror, spitfire, splode). Ash 3.37.3 still
 requires Spark `~> 2.7 and >= 2.7.6`, so the Spark requirement stays `~> 2.7.0`.
 `mix hex.audit` at the new lock reports only the ignored Cloak advisory.
 
+
+## Amendment (November 23, 2026): one declaration per public requirement
+
+Each public dependency requirement is declared once, as a module attribute in
+`mix.exs` (for example `@postgrex_requirement "~> 0.23"`), and `deps/0` names
+that attribute. No other file repeats a range. `AshReplicant.DependencyRequirements.read!/1`
+reads `mix.exs` as source, without evaluating Mix, accepts only the attribute form
+for public dependencies, and derives the public set from it. Everything that needs
+a range reads it from there: the doctor embeds the ranges at compile time
+(`@external_resource` on `mix.exs`), `scripts/dependency-requirements.exs` and
+`scripts/dependency_lanes.exs` derive the exact-floors, current-lock and
+latest-compatible CI cells (replacing `.github/dependency-lanes.json`), and the
+release contract compares the declared names with the package in both directions.
+
+Because the lane reader now needs an Elixir runtime, only the BEAM-equipped
+`postgres-lanes` job runs it; the qualification inventory reaches the runtime-free
+`qualified` verdict as the reusable workflow's `checks` output (`EXPECTED_CHECKS`).
+
+OBSERVED: CI run 45177573854 on b2ec13a, 14 of 14 jobs successful including
+`qualified`.
