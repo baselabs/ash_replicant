@@ -31,7 +31,7 @@ defmodule AshReplicant.ReplicantDependencyTest do
     assert function_exported?(Replicant.Sink, :notify_slot_origin, 3)
 
     version = Application.spec(:replicant, :vsn) |> List.to_string()
-    assert Version.match?(version, ">= 1.6.0 and < 2.0.0-0")
+    assert Version.match?(version, AshReplicant.Doctor.replicant_requirement())
     # The 1.4 decoder grammar the adapter forwards (ADR-0026): the three
     # behavior atoms are exactly what the admission rule enumerates against.
     assert Plugin.decoder_atoms() == [:pgoutput, :pglogical, :wal2json]

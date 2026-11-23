@@ -5,6 +5,7 @@ implementation =
 Code.require_file(implementation)
 
 defmodule AshReplicant.ReleaseContractSelfTest do
+  alias AshReplicant.DependencyRequirements
   alias AshReplicant.ReleaseContract
   alias AshReplicant.ReleaseContractError
 
@@ -13,6 +14,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
                   System.tmp_dir!(),
                   "ash-replicant-release-contract-#{System.pid()}-#{System.unique_integer([:positive])}"
                 )
+  @requirements DependencyRequirements.read!(Path.join(@source_root, "mix.exs"))
   @workflow ".github/workflows/qualification.yml"
   @landing ".github/workflows/ci.yml"
   @drift ".github/workflows/drift-report.yml"
@@ -42,13 +44,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix run --no-start -e '
   deps = Mix.Project.config() |> Keyword.fetch!(:deps)
 
-  expected = %{
-    ash: ">= 3.37.3 and < 4.0.0-0",
-    replicant: ">= 1.6.0 and < 2.0.0-0",
-    postgrex: "~> 0.23",
-    ash_onetime: ">= 1.3.2 and < 2.0.0-0",
-    ash_cloak: ">= 0.4.0 and < 1.0.0-0"
-  }
+  expected = AshReplicant.DependencyRequirements.read!("mix.exs")
 
   Enum.each(expected, fn {dependency, requirement} ->
     actual = deps |> List.keyfind!(dependency, 0) |> elem(1)
@@ -236,28 +232,31 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     {"README.md", "### Supported foundation",
      [
        "- Elixir 1.20.3 on Erlang/OTP 29;",
-       "- Ash `>= 3.37.3 and < 4.0.0-0` (current lock 3.37.3);",
-       "- AshPostgres `~> 2.13` (current lock 2.15.2 with AshSql 0.8.8; qualification tests the reviewed compatibility lock);",
-       "- Spark `~> 2.7.0` (effective floor 2.7.6 through Ash; current lock 2.7.9);",
-       "- Replicant `>= 1.6.0 and < 2.0.0-0` (current lock 1.6.0)",
-       "- AshOnetime `>= 1.3.2 and < 2.0.0-0` (current lock 1.5.0)",
-       "- AshCloak `>= 0.4.0 and < 1.0.0-0` (current lock 0.4.0"
+       "- Ash `#{@requirements.ash}` (current lock 3.37.3);",
+       "- AshPostgres `#{@requirements.ash_postgres}` (current lock 2.15.2 with AshSql 0.8.8; qualification tests the reviewed compatibility lock);",
+       "- Spark `#{@requirements.spark}` (effective floor 2.7.6 through Ash; current lock 2.7.9);",
+       "- Replicant `#{@requirements.replicant}` (current lock 1.6.0)",
+       "- Postgrex `#{@requirements.postgrex}` (current lock 0.23.0);",
+       "- AshOnetime `#{@requirements.ash_onetime}` (current lock 1.5.0)",
+       "- AshCloak `#{@requirements.ash_cloak}` (current lock 0.4.0"
      ]},
     {"CONTRIBUTING.md", "## Prerequisites",
      [
        "- **Elixir 1.20.3** and **Erlang/OTP 29**",
-       "- Ash `>= 3.37.3 and < 4.0.0-0`; selector-free development uses this public range",
-       "- Replicant `>= 1.6.0 and < 2.0.0-0` from Hex; the lock is 1.6.0.",
-       "- AshCloak `>= 0.4.0 and < 1.0.0-0` from Hex; the current lock is 0.4.0 (the"
+       "- Ash `#{@requirements.ash}`; selector-free development uses this public range",
+       "- Replicant `#{@requirements.replicant}` from Hex; the lock is 1.6.0.",
+       "- Postgrex `#{@requirements.postgrex}` from Hex; the lock is 0.23.0.",
+       "- AshCloak `#{@requirements.ash_cloak}` from Hex; the current lock is 0.4.0 (the"
      ]},
     {"AGENTS.md", "## Development workflow",
      [
        "The supported release foundation is Elixir 1.20.3 on Erlang/OTP 29 with Ash\n" <>
-         "`>= 3.37.3 and < 4.0.0-0` (current lock 3.37.3) and Replicant\n" <>
-         "`>= 1.6.0 and < 2.0.0-0` (current lock 1.6.0), plus\n" <>
-         "AshOnetime `>= 1.3.2 and < 2.0.0-0` (current lock 1.5.0) and AshCloak\n" <>
-         "`>= 0.4.0 and < 1.0.0-0` (current lock 0.4.0; releases below 0.4.0 carry\n" <>
-         "CVE-2026-81319 and CVE-2026-81322 and are not admitted)."
+         "`#{@requirements.ash}` (current lock 3.37.3) and Replicant\n" <>
+         "`#{@requirements.replicant}` (current lock 1.6.0), plus\n" <>
+         "AshOnetime `#{@requirements.ash_onetime}` (current lock 1.5.0) and AshCloak\n" <>
+         "`#{@requirements.ash_cloak}` (current lock 0.4.0; releases below 0.4.0 carry\n" <>
+         "CVE-2026-81319 and CVE-2026-81322 and are not admitted).",
+       "Postgrex requires `#{@requirements.postgrex}` (current lock 0.23.0)"
      ]}
   ]
 
@@ -392,14 +391,16 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     NegativeThinSpace NegativeVeryThinSpace NewLine NoBreak NonBreakingSpace numsp
     puncsp rlm shy Tab ThickSpace thinsp ThinSpace VeryThinSpace ZeroWidthSpace zwj zwnj
   )
-  @mix_contracts [
-    ~s(@ash_requirement ">= 3.37.3 and < 4.0.0-0"),
-    ~s(@replicant_requirement ">= 1.6.0 and < 2.0.0-0"),
-    ~s(@onetime_requirement ">= 1.3.2 and < 2.0.0-0"),
-    ~s(elixir: "~> 1.20.3"),
-    ~s(formatters: ["html", "markdown"]),
-    ~s({:ex_doc, "== 0.40.4", only: :dev, runtime: false})
-  ]
+  defp mix_contracts do
+    Enum.map(DependencyRequirements.attributes(), fn {name, attribute} ->
+      "@#{attribute} #{inspect(Map.fetch!(@requirements, name))}"
+    end) ++
+      [
+        ~s(elixir: "~> 1.20.3"),
+        ~s(formatters: ["html", "markdown"]),
+        ~s({:ex_doc, "== 0.40.4", only: :dev, runtime: false})
+      ]
+  end
 
   def run do
     Process.put({__MODULE__, :checks}, 0)
@@ -469,10 +470,10 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   end
 
   defp replicant_selector_probes do
-    # The current and exact-floor locks both resolve 1.6.0. Accept the exact
-    # selector, then reject a stale lock and a selector below the public floor.
+    # Accept the declared floor, then reject stale locks and older selectors.
+    floor = DependencyRequirements.floor!(@requirements.replicant)
     prepare_fixture()
-    with_env("ASH_REPLICANT_REPLICANT_VERSION", "1.6.0", &assert_valid!/0)
+    with_env("ASH_REPLICANT_REPLICANT_VERSION", floor, &assert_valid!/0)
 
     prepare_fixture()
 
@@ -482,7 +483,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       ~s("replicant": {:hex, :replicant, "1.5.1")
     )
 
-    with_env("ASH_REPLICANT_REPLICANT_VERSION", "1.6.0", &assert_invalid!/0)
+    with_env("ASH_REPLICANT_REPLICANT_VERSION", floor, &assert_invalid!/0)
 
     prepare_fixture()
     with_env("ASH_REPLICANT_REPLICANT_VERSION", "1.5.1", &assert_invalid!/0)
@@ -1314,7 +1315,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
   defp ci_requirement_probes do
     jobs = [
-      {@workflow, "postgres-lanes", 5},
+      {@workflow, "postgres-lanes", 90},
       {@workflow, "no-database", 77},
       {@workflow, "compatibility", 37},
       {@workflow, "performance", 7},
@@ -1328,7 +1329,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     ]
 
     for {workflow, job, timeout} <- jobs do
-      suffix = if job == "published-package", do: " # no green run yet", else: ""
+      suffix = if job in ["published-package", "postgres-lanes"], do: " # no green run yet", else: ""
 
       for replacement <- ["", "    timeout-minutes: 1\n"] do
         prepare_fixture()
@@ -1338,7 +1339,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
       prepare_fixture()
 
-      if job == "published-package" do
+      if job in ["published-package", "postgres-lanes"] do
         mutate_job!(job, "# no green run yet", "# No measurement", workflow)
       else
         path = fixture_path(workflow)
@@ -1351,7 +1352,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
       assert_invalid!()
 
-      unless job == "published-package" do
+      unless job in ["published-package", "postgres-lanes"] do
         # A measured timeout must cite a recorded green run, not any number.
         prepare_fixture()
         path = fixture_path(workflow)
@@ -1793,75 +1794,19 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     assert_invalid!()
 
-    prepare_fixture()
-
-    replace_once!(
-      ".github/dependency-lanes.json",
-      "    \"label\": \"current-lock\",\n",
-      "    \"label\": \"changed-lock\",\n"
-    )
-
-    assert_invalid!()
-
-    prepare_fixture()
-
-    replace_once!(
-      ".github/dependency-lanes.json",
-      "    \"ash_selector\": \"\",\n",
-      "    \"ash_selector\": \"latest\",\n"
-    )
-
-    assert_invalid!()
-
-    prepare_fixture()
-
-    replace_once!(
-      ".github/dependency-lanes.json",
-      "    \"replicant_selector\": \"\",\n",
-      "    \"replicant_selector\": \"latest\",\n"
-    )
-
-    assert_invalid!()
-
-    prepare_fixture()
-
-    replace_once!(
-      ".github/dependency-lanes.json",
-      "    \"lockfile\": \"mix.lock\",\n",
-      "    \"lockfile\": \"locks/latest-compatible.lock\",\n"
-    )
-
-    assert_invalid!()
-
-    prepare_fixture()
-
-    replace_once!(
-      ".github/dependency-lanes.json",
-      "    \"lockfile\": \"locks/exact-floors.lock\",\n",
-      "    \"lockfile\": \"mix.lock\",\n"
-    )
-
-    assert_invalid!()
-
-    prepare_fixture()
-
-    replace_once!(
-      ".github/dependency-lanes.json",
-      "    \"ash_requirement\": \"== 3.37.3\",\n",
-      "    \"ash_requirement\": \">= 3.37.3\",\n"
-    )
-
-    assert_invalid!()
-
-    prepare_fixture()
-
-    replace_once!(
-      ".github/dependency-lanes.json",
-      "    \"replicant_requirement\": \"== 1.6.0\",\n",
-      "    \"replicant_requirement\": \">= 1.6.0\",\n"
-    )
-
-    assert_invalid!()
+    for {old, replacement} <- [
+          {~s({"current-lock", "mix.lock", ""}), ~s({"changed-lock", "mix.lock", ""})},
+          {~s({"current-lock", "mix.lock", ""}), ~s({"current-lock", "mix.lock", "latest"})},
+          {~s({"exact-floors", "locks/exact-floors.lock", :floor}),
+           ~s({"exact-floors", "mix.lock", :floor})},
+          {~s("== " <> selector), ~s(">= " <> selector)},
+          {"selector = if mode == :floor, do: floor!(requirement), else: mode",
+           ~s(selector = if mode == :floor, do: "0.0.0", else: mode)}
+        ] do
+      prepare_fixture()
+      replace_once!("lib/ash_replicant/dependency_requirements.ex", old, replacement)
+      assert_invalid!()
+    end
 
     prepare_fixture()
 
@@ -1869,26 +1814,6 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       "compatibility",
       "      ASH_REPLICANT_ONETIME_VERSION: ${{ matrix.onetime_selector }}\n",
       ""
-    )
-
-    assert_invalid!()
-
-    prepare_fixture()
-
-    replace_once!(
-      ".github/dependency-lanes.json",
-      "    \"onetime_selector\": \"1.3.2\",\n",
-      "    \"onetime_selector\": \"1.1.0\",\n"
-    )
-
-    assert_invalid!()
-
-    prepare_fixture()
-
-    replace_once!(
-      ".github/dependency-lanes.json",
-      "    \"onetime_requirement\": \"== 1.3.2\"\n",
-      "    \"onetime_requirement\": \">= 1.3.2\"\n"
     )
 
     assert_invalid!()
@@ -1923,25 +1848,17 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     assert_invalid!()
 
-    prepare_fixture()
+    for dependency <- [:ash_onetime, :ash_cloak, :postgrex] do
+      prepare_fixture()
 
-    mutate_job!(
-      "release-artifact",
-      "            ash_onetime: \">= 1.3.2 and < 2.0.0-0\",\n",
-      "            ash_onetime: \">= 1.1.0 and < 2.0.0-0\",\n"
-    )
+      mutate_job!(
+        "release-artifact",
+        ~s(          expected = AshReplicant.DependencyRequirements.read!("mix.exs")),
+        ~s(          expected = AshReplicant.DependencyRequirements.read!("mix.exs") |> Map.delete(:#{dependency}))
+      )
 
-    assert_invalid!()
-
-    prepare_fixture()
-
-    mutate_job!(
-      "release-artifact",
-      "            ash_cloak: \">= 0.4.0 and < 1.0.0-0\"\n",
-      "            ash_cloak: \"~> 0.1\"\n"
-    )
-
-    assert_invalid!()
+      assert_invalid!()
+    end
 
     prepare_fixture()
 
@@ -2304,7 +2221,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   end
 
   defp mix_contract_probes do
-    Enum.each(@mix_contracts, fn required ->
+    Enum.each(mix_contracts(), fn required ->
       prepare_fixture()
       replace_once!("mix.exs", required, "release dependency removed")
       assert_invalid!()
@@ -2324,8 +2241,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       "mix.exs",
-      ~s(@ash_requirement ">= 3.37.3 and < 4.0.0-0"),
-      ~s(@ash_requirement ">= 3.37.3 and < 4.0.0-0"\n  @ash_requirement ">= 3.0.0 and < 4.0.0-0")
+      ~s(@ash_requirement "#{@requirements.ash}"),
+      ~s(@ash_requirement "#{@requirements.ash}"\n  @ash_requirement ">= 3.0.0 and < 4.0.0-0")
     )
 
     assert_invalid!()
@@ -2365,7 +2282,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       "mix.exs",
-      ~s(@replicant_requirement ">= 1.6.0 and < 2.0.0-0"),
+      ~s(@replicant_requirement "#{@requirements.replicant}"),
       ~s(@replicant_requirement ">= 0.3.0 and < 2.0.0-0")
     )
 
@@ -2405,7 +2322,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       "mix.exs",
-      "{:ash_cloak, \">= 0.4.0 and < 1.0.0-0\"}",
+      "{:ash_cloak, @cloak_requirement}",
       "{:ash_cloak, \"~> 0.1\"}"
     )
 
@@ -2639,6 +2556,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           "docs/CHARTER.md",
           "docs/adr/0007-source-bound-checkpoint-effect-once.md",
           "docs/adr/0002-supported-runtime-and-dependencies.md",
+          "docs/adr/0005-replicant-coordination.md",
           ".tool-versions",
           "config/config.exs",
           "mix.exs",
@@ -2665,7 +2583,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           @inventory,
           ".github/postgres.ref",
           ".github/postgres-lanes.json",
-          ".github/dependency-lanes.json",
+          "scripts/dependency-requirements.exs",
+          "lib/ash_replicant/dependency_requirements.ex",
           ".github/actions/postgres/action.yml",
           @beam,
           @toolchain,

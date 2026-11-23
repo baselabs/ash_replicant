@@ -55,8 +55,12 @@ defmodule AshReplicant.Doctor do
   # Duplicated from `mix.exs` because `mix.exs` is not loadable from a release.
   # `AshReplicant.DoctorTest` asserts the literals are equal, so changing one
   # without the other goes red.
-  @replicant_requirement ">= 1.6.0 and < 2.0.0-0"
-  @ash_requirement ">= 3.37.3 and < 4.0.0-0"
+  @requirements_path Path.expand("../../mix.exs", __DIR__)
+  @external_resource @requirements_path
+  Code.ensure_compiled!(AshReplicant.DependencyRequirements)
+  @public_requirements AshReplicant.DependencyRequirements.read!(@requirements_path)
+  @replicant_requirement Map.fetch!(@public_requirements, :replicant)
+  @ash_requirement Map.fetch!(@public_requirements, :ash)
 
   # The source release floors live in `AshReplicant.SourceSet` — the ONE
   # decoder-fact home — and are ENFORCED at activation (the census's release

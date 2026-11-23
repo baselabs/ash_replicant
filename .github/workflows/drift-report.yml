@@ -52,19 +52,19 @@ jobs:
           printf 'EXPECTED_PG_MAJOR=%s\n' "$major" >> "$GITHUB_ENV"
       - name: Report Ash lock lag
         if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
-        run: scripts/assert-dependency-version.sh --lock locks/latest-compatible.lock --newest ash '>= 3.37.3 and < 4.0.0-0'
+        run: scripts/assert-dependency-version.sh --lock locks/latest-compatible.lock --newest ash
       - name: Report Replicant lock lag
         if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
-        run: scripts/assert-dependency-version.sh --lock locks/latest-compatible.lock --newest replicant '>= 1.6.0 and < 2.0.0-0'
+        run: scripts/assert-dependency-version.sh --lock locks/latest-compatible.lock --newest replicant
       - name: Report AshOnetime lock lag
         if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
-        run: scripts/assert-dependency-version.sh --lock locks/latest-compatible.lock --newest ash_onetime '>= 1.3.2 and < 2.0.0-0'
+        run: scripts/assert-dependency-version.sh --lock locks/latest-compatible.lock --newest ash_onetime
       - name: Report AshPostgres lock lag
         if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
-        run: scripts/assert-dependency-version.sh --lock locks/latest-compatible.lock --newest ash_postgres '~> 2.13'
+        run: scripts/assert-dependency-version.sh --lock locks/latest-compatible.lock --newest ash_postgres
       - name: Report Spark lock lag
         if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
-        run: scripts/assert-dependency-version.sh --lock locks/latest-compatible.lock --newest spark '~> 2.7.0'
+        run: scripts/assert-dependency-version.sh --lock locks/latest-compatible.lock --newest spark
 
       - name: Resolve upstream within public dependency requirements
         if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}

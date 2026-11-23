@@ -40,16 +40,16 @@ if scripts/assert-exunit-output.sh "$fixture_dir/intentional-exclusion.txt" >/de
   exit 1
 fi
 
-scripts/assert-dependency-version.sh ash '>= 3.37.3 and < 4.0.0-0' >/dev/null
+scripts/assert-dependency-version.sh ash >/dev/null
 root="$(pwd)"
-(cd test/fixtures/release_checker && "$root/scripts/assert-dependency-version.sh" ash '>= 3.37.3 and < 4.0.0-0') >/dev/null
+(cd test/fixtures/release_checker && "$root/scripts/assert-dependency-version.sh" ash) >/dev/null
 scripts/assert-dependency-version.sh --lock test/fixtures/release_checker/recorded.lock ash '== 3.34.6' >/dev/null
 if scripts/assert-dependency-version.sh --lock test/fixtures/release_checker/recorded.lock ash '>= 3.37.3' >/dev/null 2>&1; then
   echo "dependency checker ignored the explicit recorded lock" >&2
   exit 1
 fi
-scripts/assert-dependency-version.sh replicant '>= 1.6.0 and < 2.0.0-0' >/dev/null
-scripts/assert-dependency-version.sh ash_onetime '>= 1.3.2 and < 2.0.0-0' >/dev/null
+scripts/assert-dependency-version.sh replicant >/dev/null
+scripts/assert-dependency-version.sh ash_onetime >/dev/null
 
 if scripts/assert-dependency-version.sh ash '== 0.0.0' >/dev/null 2>&1; then
   echo "dependency checker accepted a nonmatching requirement" >&2
@@ -138,7 +138,8 @@ if [[ "$ash4_exit" -eq 0 ]] || [[ "$ash4_output" != *"must be a semantic version
   exit 1
 fi
 
-public_requirement=">= 3.37.3 and < 4.0.0-0"
+public_requirement="$(elixir scripts/dependency-requirements.exs --requirement ash)"
+floor="$(elixir scripts/dependency-requirements.exs --floor ash)"
 
 for selector in unset empty latest; do
   case "$selector" in
@@ -162,10 +163,10 @@ for selector in unset empty latest; do
   fi
 done
 
-floor_requirement="$(ASH_REPLICANT_ASH_VERSION=3.37.3 mix run --no-start --no-compile --no-deps-check -e '
+floor_requirement="$(ASH_REPLICANT_ASH_VERSION="$floor" mix run --no-start --no-compile --no-deps-check -e '
   Mix.Project.config() |> Keyword.fetch!(:deps) |> List.keyfind!(:ash, 0) |> elem(1) |> IO.write()')"
 
-if [[ "$floor_requirement" != "== 3.37.3" ]]; then
+if [[ "$floor_requirement" != "== $floor" ]]; then
   echo "exact Ash floor selector did not produce an exact requirement" >&2
   exit 1
 fi
@@ -200,7 +201,8 @@ if [[ "$replicant_old_exit" -eq 0 ]] || [[ "$replicant_old_output" != *"must be 
   exit 1
 fi
 
-replicant_public_requirement=">= 1.6.0 and < 2.0.0-0"
+replicant_public_requirement="$(elixir scripts/dependency-requirements.exs --requirement replicant)"
+replicant_floor="$(elixir scripts/dependency-requirements.exs --floor replicant)"
 
 for selector in unset empty latest; do
   case "$selector" in
@@ -224,15 +226,16 @@ for selector in unset empty latest; do
   fi
 done
 
-replicant_floor_requirement="$(ASH_REPLICANT_REPLICANT_VERSION=1.6.0 mix run --no-start --no-compile --no-deps-check -e '
+replicant_floor_requirement="$(ASH_REPLICANT_REPLICANT_VERSION="$replicant_floor" mix run --no-start --no-compile --no-deps-check -e '
   Mix.Project.config() |> Keyword.fetch!(:deps) |> List.keyfind!(:replicant, 0) |> elem(1) |> IO.write()')"
 
-if [[ "$replicant_floor_requirement" != "== 1.6.0" ]]; then
+if [[ "$replicant_floor_requirement" != "== $replicant_floor" ]]; then
   echo "exact Replicant floor selector did not produce an exact requirement" >&2
   exit 1
 fi
 
-onetime_public_requirement=">= 1.3.2 and < 2.0.0-0"
+onetime_public_requirement="$(elixir scripts/dependency-requirements.exs --requirement ash_onetime)"
+onetime_floor="$(elixir scripts/dependency-requirements.exs --floor ash_onetime)"
 
 for selector in unset empty latest; do
   case "$selector" in
@@ -256,10 +259,10 @@ for selector in unset empty latest; do
   fi
 done
 
-onetime_floor_requirement="$(ASH_REPLICANT_ONETIME_VERSION=1.3.2 mix run --no-start --no-compile --no-deps-check -e '
+onetime_floor_requirement="$(ASH_REPLICANT_ONETIME_VERSION="$onetime_floor" mix run --no-start --no-compile --no-deps-check -e '
   Mix.Project.config() |> Keyword.fetch!(:deps) |> List.keyfind!(:ash_onetime, 0) |> elem(1) |> IO.write()')"
 
-if [[ "$onetime_floor_requirement" != "== 1.3.2" ]]; then
+if [[ "$onetime_floor_requirement" != "== $onetime_floor" ]]; then
   echo "exact AshOnetime floor selector did not produce an exact requirement" >&2
   exit 1
 fi

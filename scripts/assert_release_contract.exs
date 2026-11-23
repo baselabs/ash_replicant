@@ -1,8 +1,13 @@
+unless Code.ensure_loaded?(AshReplicant.DependencyRequirements) do
+  Code.require_file(Path.expand("../lib/ash_replicant/dependency_requirements.ex", __DIR__))
+end
+
 defmodule AshReplicant.ReleaseContractError do
   defexception [:message]
 end
 
 defmodule AshReplicant.ReleaseContract do
+  alias AshReplicant.DependencyRequirements
   alias AshReplicant.ReleaseContractError
   alias Jason.DecodeError
   alias YamlElixir.ParsingError
@@ -100,10 +105,6 @@ defmodule AshReplicant.ReleaseContract do
   fi
   """
 
-  @ash_requirement ">= 3.37.3 and < 4.0.0-0"
-  @replicant_requirement ">= 1.6.0 and < 2.0.0-0"
-  @onetime_requirement ">= 1.3.2 and < 2.0.0-0"
-  @cloak_requirement ">= 0.4.0 and < 1.0.0-0"
   @checkout "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
   @setup_beam "erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124"
   @participant_example_start "<!-- ash-replicant-destination-participant-example:start -->"
@@ -115,7 +116,7 @@ defmodule AshReplicant.ReleaseContract do
     "elixir" => "${{ steps.toolchain.outputs.elixir }}",
     "otp" => "${{ steps.toolchain.outputs.otp }}"
   }
-  @toolchain_sha256 "b29bfeb6ec4ec8f5b7e3ac3c963f04b6d3c73483172e5bd59ea40f20b102f1eb"
+  @toolchain_sha256 "25bbfa023b7f031256428b498fe300fcc460988fea81277072355e4c0d933764"
 
   @install_hex ~S"""
   mix local.hex "$WANT_HEX" --force
@@ -1470,11 +1471,11 @@ defmodule AshReplicant.ReleaseContract do
   """
 
   @drift_newest_checks [
-    "scripts/assert-dependency-version.sh --lock locks/latest-compatible.lock --newest ash '#{@ash_requirement}'",
-    "scripts/assert-dependency-version.sh --lock locks/latest-compatible.lock --newest replicant '#{@replicant_requirement}'",
-    "scripts/assert-dependency-version.sh --lock locks/latest-compatible.lock --newest ash_onetime '#{@onetime_requirement}'",
-    "scripts/assert-dependency-version.sh --lock locks/latest-compatible.lock --newest ash_postgres '~> 2.13'",
-    "scripts/assert-dependency-version.sh --lock locks/latest-compatible.lock --newest spark '~> 2.7.0'"
+    "scripts/assert-dependency-version.sh --lock locks/latest-compatible.lock --newest ash",
+    "scripts/assert-dependency-version.sh --lock locks/latest-compatible.lock --newest replicant",
+    "scripts/assert-dependency-version.sh --lock locks/latest-compatible.lock --newest ash_onetime",
+    "scripts/assert-dependency-version.sh --lock locks/latest-compatible.lock --newest ash_postgres",
+    "scripts/assert-dependency-version.sh --lock locks/latest-compatible.lock --newest spark"
   ]
 
   @drift_resolution """
@@ -1526,13 +1527,7 @@ defmodule AshReplicant.ReleaseContract do
   env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix run --no-start -e '
   deps = Mix.Project.config() |> Keyword.fetch!(:deps)
 
-  expected = %{
-    ash: ">= 3.37.3 and < 4.0.0-0",
-    replicant: ">= 1.6.0 and < 2.0.0-0",
-    postgrex: "~> 0.23",
-    ash_onetime: ">= 1.3.2 and < 2.0.0-0",
-    ash_cloak: ">= 0.4.0 and < 1.0.0-0"
-  }
+  expected = AshReplicant.DependencyRequirements.read!("mix.exs")
 
   Enum.each(expected, fn {dependency, requirement} ->
     actual = deps |> List.keyfind!(dependency, 0) |> elem(1)
@@ -1684,39 +1679,6 @@ defmodule AshReplicant.ReleaseContract do
     }
   }
 
-  @matrix [
-    %{
-      "label" => "exact-floors",
-      "lockfile" => "locks/exact-floors.lock",
-      "ash_selector" => "3.37.3",
-      "ash_requirement" => "== 3.37.3",
-      "replicant_selector" => "1.6.0",
-      "replicant_requirement" => "== 1.6.0",
-      "onetime_selector" => "1.3.2",
-      "onetime_requirement" => "== 1.3.2"
-    },
-    %{
-      "label" => "current-lock",
-      "lockfile" => "mix.lock",
-      "ash_selector" => "",
-      "ash_requirement" => ">= 3.37.3 and < 4.0.0-0",
-      "replicant_selector" => "",
-      "replicant_requirement" => ">= 1.6.0 and < 2.0.0-0",
-      "onetime_selector" => "",
-      "onetime_requirement" => ">= 1.3.2 and < 2.0.0-0"
-    },
-    %{
-      "label" => "latest-compatible",
-      "lockfile" => "locks/latest-compatible.lock",
-      "ash_selector" => "latest",
-      "ash_requirement" => ">= 3.37.3 and < 4.0.0-0",
-      "replicant_selector" => "latest",
-      "replicant_requirement" => ">= 1.6.0 and < 2.0.0-0",
-      "onetime_selector" => "latest",
-      "onetime_requirement" => ">= 1.3.2 and < 2.0.0-0"
-    }
-  ]
-
   @job_keys %{
     "postgres-lanes" => ~w(name outputs runs-on steps timeout-minutes),
     "no-database" => ~w(env name permissions runs-on steps timeout-minutes needs),
@@ -1730,6 +1692,8 @@ defmodule AshReplicant.ReleaseContract do
   @job_steps %{
     "postgres-lanes" => [
       {:uses, @checkout, %{"persist-credentials" => false}},
+      {:uses, @toolchain_action, :absent, %{"id" => "toolchain"}},
+      {:uses, @beam_action, @runtime_inputs},
       {:run, "scripts/ci/postgres-lanes.sh", %{"id" => "lanes"}},
       {:run, "python3 -B -m unittest discover -s scripts -p 'test_postgres_lanes.py'"}
     ],
@@ -1861,34 +1825,48 @@ defmodule AshReplicant.ReleaseContract do
     puncsp rlm shy Tab ThickSpace thinsp ThinSpace VeryThinSpace ZeroWidthSpace zwj zwnj
   )
 
-  @doc_contracts [
-    {"README.md", "### Supported foundation",
-     [
-       "- Elixir 1.20.3 on Erlang/OTP 29;",
-       "- Ash `#{@ash_requirement}` (current lock 3.37.3);",
-       "- AshPostgres `~> 2.13` (current lock 2.15.2 with AshSql 0.8.8; qualification tests the reviewed compatibility lock);",
-       "- Spark `~> 2.7.0` (effective floor 2.7.6 through Ash; current lock 2.7.9);",
-       "- Replicant `#{@replicant_requirement}` (current lock 1.6.0)",
-       "- AshOnetime `#{@onetime_requirement}` (current lock 1.5.0)",
-       "- AshCloak `#{@cloak_requirement}` (current lock 0.4.0"
-     ]},
-    {"CONTRIBUTING.md", "## Prerequisites",
-     [
-       "- **Elixir 1.20.3** and **Erlang/OTP 29**",
-       "- Ash `#{@ash_requirement}`; selector-free development uses this public range",
-       "- Replicant `#{@replicant_requirement}` from Hex; the lock is 1.6.0.",
-       "- AshCloak `#{@cloak_requirement}` from Hex; the current lock is 0.4.0 (the"
-     ]},
-    {"AGENTS.md", "## Development workflow",
-     [
-       "The supported release foundation is Elixir 1.20.3 on Erlang/OTP 29 with Ash\n" <>
-         "`#{@ash_requirement}` (current lock 3.37.3) and Replicant\n" <>
-         "`#{@replicant_requirement}` (current lock 1.6.0), plus\n" <>
-         "AshOnetime `#{@onetime_requirement}` (current lock 1.5.0) and AshCloak\n" <>
-         "`#{@cloak_requirement}` (current lock 0.4.0; releases below 0.4.0 carry\n" <>
-         "CVE-2026-81319 and CVE-2026-81322 and are not admitted)."
-     ]}
-  ]
+  defp doc_contracts(root) do
+    requirements = public_requirements(root)
+
+    [
+      {"README.md", "### Supported foundation",
+       [
+         "- Elixir 1.20.3 on Erlang/OTP 29;",
+         "- Ash `#{requirements.ash}` (current lock 3.37.3);",
+         "- AshPostgres `#{requirements.ash_postgres}` (current lock 2.15.2 with AshSql 0.8.8; qualification tests the reviewed compatibility lock);",
+         "- Spark `#{requirements.spark}` (effective floor 2.7.6 through Ash; current lock 2.7.9);",
+         "- Replicant `#{requirements.replicant}` (current lock 1.6.0)",
+         "- Postgrex `#{requirements.postgrex}` (current lock 0.23.0);",
+         "- AshOnetime `#{requirements.ash_onetime}` (current lock 1.5.0)",
+         "- AshCloak `#{requirements.ash_cloak}` (current lock 0.4.0"
+       ]},
+      {"CONTRIBUTING.md", "## Prerequisites",
+       [
+         "- **Elixir 1.20.3** and **Erlang/OTP 29**",
+         "- Ash `#{requirements.ash}`; selector-free development uses this public range",
+         "- Replicant `#{requirements.replicant}` from Hex; the lock is 1.6.0.",
+         "- Postgrex `#{requirements.postgrex}` from Hex; the lock is 0.23.0.",
+         "- AshCloak `#{requirements.ash_cloak}` from Hex; the current lock is 0.4.0 (the"
+       ]},
+      {"AGENTS.md", "## Development workflow",
+       [
+         "The supported release foundation is Elixir 1.20.3 on Erlang/OTP 29 with Ash\n" <>
+           "`#{requirements.ash}` (current lock 3.37.3) and Replicant\n" <>
+           "`#{requirements.replicant}` (current lock 1.6.0), plus\n" <>
+           "AshOnetime `#{requirements.ash_onetime}` (current lock 1.5.0) and AshCloak\n" <>
+           "`#{requirements.ash_cloak}` (current lock 0.4.0; releases below 0.4.0 carry\n" <>
+           "CVE-2026-81319 and CVE-2026-81322 and are not admitted).",
+         "Postgrex requires `#{requirements.postgrex}` (current lock 0.23.0)"
+       ]},
+      {"docs/adr/0002-supported-runtime-and-dependencies.md", nil,
+       [
+         "Postgrex is declared `#{requirements.postgrex}`",
+         "Replicant `#{requirements.replicant}`:"
+       ]},
+      {"docs/adr/0005-replicant-coordination.md", nil,
+       ["The public dependency is `#{requirements.replicant}`"]}
+    ]
+  end
 
   @b1_doc_contracts [
     {"README.md", "## Destination transaction boundary",
@@ -2533,7 +2511,10 @@ defmodule AshReplicant.ReleaseContract do
     pattern = ~r/^  #{Regex.escape(name)}:\n.*?(?=^  [a-z][a-z0-9-]+:\n|\z)/ms
     [block] = Regex.run(pattern, File.read!(path)) || fail("CI job source is missing")
 
-    if {Path.basename(path), name} == {"publish.yml", "published-package"} do
+    if {Path.basename(path), name} in [
+         {"publish.yml", "published-package"},
+         {"qualification.yml", "postgres-lanes"}
+       ] do
       assert(
         timeout == 90 and
           String.contains?(block, "    timeout-minutes: 90 # no green run yet\n"),
@@ -2663,11 +2644,21 @@ defmodule AshReplicant.ReleaseContract do
   end
 
   defp assert_postgres(root) do
-    dependencies =
-      root |> Path.join(".github/dependency-lanes.json") |> File.read!() |> Jason.decode!()
+    assert(
+      not File.exists?(Path.join(root, ".github/dependency-lanes.json")),
+      "CI dependency lanes must derive from Mix declarations"
+    )
 
-    assert(dependencies == @matrix, "CI dependency matrix is invalid")
     declarations = postgres_declarations(root)
+
+    assert(
+      declarations["compatibility"]
+      |> Enum.take(3)
+      |> Enum.map(&Map.drop(&1, ["pg_major", "pg_image"])) ==
+        DependencyRequirements.lanes(public_requirements(root)),
+      "CI dependency matrix is invalid"
+    )
+
     action = YamlElixir.read_from_file!(Path.join(root, ".github/actions/postgres/action.yml"))
     [check, manage] = get_in(action, ["runs", "steps"])
 
@@ -3120,9 +3111,7 @@ defmodule AshReplicant.ReleaseContract do
     body = mix_project_body(ast)
     projects = find_definitions(body, :def, :project)
     dependency_lists = find_definitions(body, :defp, :deps)
-    ash_requirements = find_module_attributes(body, :ash_requirement)
-    replicant_requirements = find_module_attributes(body, :replicant_requirement)
-    onetime_requirements = find_module_attributes(body, :onetime_requirement)
+    public_requirements(root)
     docs = find_definitions(body, :defp, :docs)
     [dependencies] = dependency_lists
 
@@ -3138,10 +3127,7 @@ defmodule AshReplicant.ReleaseContract do
     )
 
     assert(
-      exact_project_contract?(projects) and exact_dependency_contract?(dependency_lists) and
-        ash_requirements == [@ash_requirement] and
-        replicant_requirements == [@replicant_requirement] and
-        onetime_requirements == [@onetime_requirement],
+      exact_project_contract?(projects) and exact_dependency_contract?(dependency_lists),
       "Mix release contract is incomplete"
     )
   rescue
@@ -3163,33 +3149,51 @@ defmodule AshReplicant.ReleaseContract do
   defp exact_project_contract?(_projects), do: false
 
   defp exact_dependency_contract?([dependencies]) when is_list(dependencies) do
-    case Enum.filter(dependencies, fn
-           {:ash, _requirement} -> true
-           {:replicant, _requirement} -> true
-           {:ash_onetime, _requirement} -> true
-           {:ash_cloak, _requirement} -> true
-           _dependency -> false
-         end) do
-      [
-        {:ash, {:ash_requirement, _, []}},
-        {:ash_onetime, {:onetime_requirement, _, []}},
-        {:ash_cloak, @cloak_requirement},
-        {:replicant, {:replicant_requirement, _, []}}
-      ] ->
-        true
+    Enum.all?(DependencyRequirements.attributes(), fn {name, attribute} ->
+      entries =
+        Enum.filter(dependencies, fn
+          {^name, _requirement} -> true
+          {:{}, _, [^name | _]} -> true
+          _ -> false
+        end)
 
-      _dependencies ->
-        false
-    end
+      case entries do
+        [{^name, {selector, _, []}}] when name in [:ash, :replicant, :ash_onetime] ->
+          selector == attribute
+
+        [{^name, {:@, _, [{^attribute, _, _}]}}] ->
+          true
+
+        [{:{}, _, [^name, {:@, _, [{^attribute, _, _}]}, [optional: true]]}] ->
+          name == :igniter
+
+        _ ->
+          false
+      end
+    end)
   end
 
   defp exact_dependency_contract?(_dependency_lists), do: false
 
+  defp public_requirements(root) do
+    DependencyRequirements.read!(Path.join(root, "mix.exs"))
+  rescue
+    ArgumentError -> fail("Mix release contract is invalid")
+  end
+
   defp assert_replicant_contract(root) do
     lock = root |> Path.join("mix.lock") |> File.read!()
 
-    assert_hex_lock(lock, "replicant", expected_replicant_lock_version(lock))
-    assert_hex_lock(lock, "postgrex", "0.23.0")
+    assert_hex_lock(
+      lock,
+      "replicant",
+      expected_replicant_lock_version(lock, public_requirements(root).replicant)
+    )
+
+    assert(
+      Version.match?(hex_lock_version(lock, "postgrex"), public_requirements(root).postgrex),
+      "Postgrex dependency lock contract is incomplete"
+    )
 
     session_source = read_dependency_source!(root, "lib/replicant/session_identity.ex")
     sink_source = read_dependency_source!(root, "lib/replicant/sink.ex")
@@ -3274,25 +3278,25 @@ defmodule AshReplicant.ReleaseContract do
     )
   end
 
-  defp expected_replicant_lock_version(lock) do
+  defp expected_replicant_lock_version(lock, requirement) do
     case System.get_env("ASH_REPLICANT_REPLICANT_VERSION") do
       value when value in [nil, ""] ->
-        "1.6.0"
+        lock |> hex_lock_version("replicant") |> validate_replicant_lock_version!(requirement)
 
       "latest" ->
         lock
         |> hex_lock_version("replicant")
-        |> validate_replicant_lock_version!()
+        |> validate_replicant_lock_version!(requirement)
 
       value ->
-        validate_replicant_lock_version!(value)
+        validate_replicant_lock_version!(value, requirement)
     end
   end
 
-  defp validate_replicant_lock_version!(value) do
+  defp validate_replicant_lock_version!(value, requirement) do
     with true <- is_binary(value),
          {:ok, _version} <- Version.parse(value),
-         true <- Version.match?(value, @replicant_requirement) do
+         true <- Version.match?(value, requirement) do
       value
     else
       _other -> fail("Replicant dependency lock contract is incomplete")
@@ -3366,13 +3370,6 @@ defmodule AshReplicant.ReleaseContract do
     end)
   end
 
-  defp find_module_attributes(expressions, name) do
-    Enum.flat_map(expressions, fn
-      {:@, _, [{^name, _, [value]}]} -> [value]
-      _node -> []
-    end)
-  end
-
   defp block_expressions({:__block__, _, expressions}), do: expressions
   defp block_expressions(expression), do: [expression]
 
@@ -3389,7 +3386,7 @@ defmodule AshReplicant.ReleaseContract do
       )
     end
 
-    Enum.each(@doc_contracts, fn {path, heading, required_texts} ->
+    Enum.each(doc_contracts(root), fn {path, heading, required_texts} ->
       visible = root |> Path.join(path) |> File.read!() |> visible_markdown()
       section = section(visible, heading)
 
@@ -3626,6 +3623,8 @@ defmodule AshReplicant.ReleaseContract do
     |> String.replace(~r/[\s\p{Cf}]+/u, " ")
     |> String.trim()
   end
+
+  defp section(content, nil), do: content
 
   defp section(content, heading) do
     lines = String.split(content, "\n")

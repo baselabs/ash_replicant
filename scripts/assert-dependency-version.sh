@@ -4,7 +4,7 @@ set -euo pipefail
 newest=false
 hex_response=""
 lockfile="$(cd "$(dirname "$0")/.." && pwd)/mix.lock"
-usage='usage: assert-dependency-version.sh [--lock PATH] [--newest [--hex-response PATH]] DEPENDENCY REQUIREMENT'
+usage='usage: assert-dependency-version.sh [--lock PATH] [--newest [--hex-response PATH]] DEPENDENCY [REQUIREMENT]'
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
     --lock)
@@ -24,15 +24,20 @@ while [[ "${1:-}" == --* ]]; do
     *) echo "$usage" >&2; exit 2 ;;
   esac
 done
-[[ "$#" -eq 2 ]] || { echo "$usage" >&2; exit 2; }
+[[ "$#" -eq 1 || "$#" -eq 2 ]] || { echo "$usage" >&2; exit 2; }
 [[ -z "$hex_response" || "$newest" == true ]] || exit 2
 dependency="$1"
-requirement="$2"
-
 if [[ ! "$dependency" =~ ^[a-z][a-z0-9_]*$ ]]; then
   echo "dependency assertion name is invalid" >&2
   exit 2
 fi
+
+if [[ "$#" -eq 2 ]]; then
+  requirement="$2"
+else
+  requirement="$(elixir "$(dirname "$0")/dependency-requirements.exs" --requirement "$dependency")"
+fi
+
 
 # Read the lock as recorded input, independently of declared or fetched deps.
 # Recorded checker fixtures are data, never an Elixir project.

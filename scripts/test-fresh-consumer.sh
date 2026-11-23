@@ -428,6 +428,14 @@ consumer_mix hex.audit
 consumer_mix deps.compile >/dev/null
 consumer_mix compile --warnings-as-errors >/dev/null
 echo "fresh-consumer: compile-WAE ok"
+consumer_mix run --no-start -e '
+  dependency = Mix.Project.deps_paths() |> Map.fetch!(:ash_replicant)
+  requirements = AshReplicant.DependencyRequirements.read!(Path.join(dependency, "mix.exs"))
+  true = Mix.Project.config()[:app] == :fresh_consumer
+  true = AshReplicant.Doctor.replicant_requirement() == requirements.replicant
+  true = AshReplicant.Doctor.ash_requirement() == requirements.ash
+  IO.puts("fresh-consumer: Doctor requirements match the packed dependency")
+'
 
 echo "== consumer: docs build =="
 consumer_mix docs >/dev/null

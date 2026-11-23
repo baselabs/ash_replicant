@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Declare public dependency requirements once in `mix.exs`; derive CI lanes,
+  drift checks, package assertions, runtime diagnosis, and checker expectations
+  from those declarations. Check documented ranges against the same source.
+
 - Require Postgrex `~> 0.23` and Replicant `>= 1.6.0 and < 2.0.0-0`.
   Move the current, exact-floor, and latest-compatible locks to Postgrex 0.23.0
   and Replicant 1.6.0; align runtime diagnosis, dependency lanes, and consumer

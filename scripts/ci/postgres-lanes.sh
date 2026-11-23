@@ -5,11 +5,12 @@ mode="${1:-}"
 [[ "$mode" == '' || "$mode" == --json ]] || exit 2
 [[ "$#" -le 2 ]] || exit 2
 root="${2:-$(cd "$(dirname "$0")/../.." && pwd)}"
-result="$(python3 - "$root" <<'PYTHON'
+result="$(python3 - "$root" "$(dirname "$0")/../dependency-requirements.exs" <<'PYTHON'
 import json
 from pathlib import Path
 import re
 import sys
+import subprocess
 
 
 def refuse():
@@ -56,7 +57,11 @@ try:
             role not in ('compatibility', 'decoder-source') for role in roles
         ) or len(set(roles)) != len(roles):
             refuse()
-    dependencies = json.loads((root / '.github/dependency-lanes.json').read_text(), object_pairs_hook=unique_object)
+    generated = subprocess.run(
+        ['elixir', sys.argv[2], '--lanes', str(root / 'mix.exs')],
+        check=True, capture_output=True, text=True, timeout=30,
+    )
+    dependencies = json.loads(generated.stdout, object_pairs_hook=unique_object)
     keys = {'label', 'lockfile', 'ash_selector', 'ash_requirement', 'replicant_selector',
             'replicant_requirement', 'onetime_selector', 'onetime_requirement'}
     if not isinstance(dependencies, list) or len(dependencies) != 3:
@@ -85,7 +90,7 @@ try:
         refuse()
     result = dict(engine_major=engine_major, compatibility=compatibility, decoder=decoder, checks=sorted(checks))
     print(json.dumps(result, separators=(',', ':')))
-except (OSError, ValueError, TypeError, KeyError):
+except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
     sys.exit('PostgreSQL declarations are invalid')
 PYTHON
 )"

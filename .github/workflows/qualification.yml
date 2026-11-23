@@ -17,8 +17,8 @@ jobs:
   postgres-lanes:
     name: PostgreSQL lanes
     runs-on: ubuntu-24.04
-    # Green run 44884720928: PostgreSQL lanes 0m4s.
-    timeout-minutes: 5
+    # Runtime setup added to the lane generator; no green run yet.
+    timeout-minutes: 90 # no green run yet
     outputs:
       engine_major: ${{ steps.lanes.outputs.engine_major }}
       compatibility: ${{ steps.lanes.outputs.compatibility }}
@@ -27,6 +27,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: ./.github/actions/toolchain
+        id: toolchain
+      - uses: ./.github/actions/beam
+        with:
+          elixir: ${{ steps.toolchain.outputs.elixir }}
+          otp: ${{ steps.toolchain.outputs.otp }}
       - id: lanes
         run: scripts/ci/postgres-lanes.sh
       - run: python3 -B -m unittest discover -s scripts -p 'test_postgres_lanes.py'
@@ -377,13 +383,7 @@ jobs:
           env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix run --no-start -e '
           deps = Mix.Project.config() |> Keyword.fetch!(:deps)
 
-          expected = %{
-            ash: ">= 3.37.3 and < 4.0.0-0",
-            replicant: ">= 1.6.0 and < 2.0.0-0",
-            postgrex: "~> 0.23",
-            ash_onetime: ">= 1.3.2 and < 2.0.0-0",
-            ash_cloak: ">= 0.4.0 and < 1.0.0-0"
-          }
+          expected = AshReplicant.DependencyRequirements.read!("mix.exs")
 
           Enum.each(expected, fn {dependency, requirement} ->
             actual = deps |> List.keyfind!(dependency, 0) |> elem(1)

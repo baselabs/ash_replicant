@@ -2,6 +2,7 @@
 
 import copy
 import json
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -21,7 +22,7 @@ class PostgresLanesTest(unittest.TestCase):
         for name in (
             ".github/postgres.ref",
             ".github/postgres-lanes.json",
-            ".github/dependency-lanes.json",
+            "mix.exs",
             "scripts/qualification-jobs.json",
         ):
             destination = self.root / name
@@ -48,9 +49,18 @@ class PostgresLanesTest(unittest.TestCase):
         result = self.read()
         self.assertEqual(result.returncode, 0, result.stderr)
         data = json.loads(result.stdout)
-        dependencies = json.loads((self.root / ".github/dependency-lanes.json").read_text())
-        for row, dependency in zip(data["compatibility"][:len(dependencies)], dependencies):
-            self.assertEqual(row, dict(dependency, pg_major=data["engine_major"], pg_image=""))
+        dependencies = data["compatibility"][:3]
+        self.assertEqual([row["label"] for row in dependencies],
+                         ["exact-floors", "current-lock", "latest-compatible"])
+        self.assertEqual([row["ash_selector"] for row in dependencies[1:]], ["", "latest"])
+        for row in dependencies:
+            self.assertEqual(row["pg_major"], data["engine_major"])
+            self.assertEqual(row["pg_image"], "")
+        for prefix in ("ash", "replicant", "onetime"):
+            self.assertEqual(dependencies[0][prefix + "_requirement"],
+                             "== " + dependencies[0][prefix + "_selector"])
+            self.assertEqual(dependencies[1][prefix + "_requirement"],
+                             dependencies[2][prefix + "_requirement"])
         compatibility = [lane for lane in self.lanes if "compatibility" in lane["roles"]]
         self.assertEqual(
             [(row["pg_major"], row["pg_image"]) for row in data["compatibility"][len(dependencies):]],
@@ -122,12 +132,29 @@ class PostgresLanesTest(unittest.TestCase):
         path.write_text(path.read_text().replace('"major":', '"major": "invalid", "major":', 1))
         self.refused()
 
-    def test_dependency_policy_needs_all_cells_and_known_fields(self):
-        path = self.root / ".github/dependency-lanes.json"
-        original = json.loads(path.read_text())
-        for rows in (original[:1], original[::-1], [dict(original[0], unknown=True)] + original[1:]):
-            with self.subTest(rows=rows):
-                path.write_text(json.dumps(rows))
+    def test_dependency_floors_and_ranges_follow_mix_declarations(self):
+        path = self.root / "mix.exs"
+        source = path.read_text()
+        requirement = ">= 1.7.2 and < 2.0.0-0"
+        path.write_text(re.sub(r'@replicant_requirement "[^"]+"',
+                               '@replicant_requirement "' + requirement + '"', source, count=1))
+        result = self.read()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        rows = json.loads(result.stdout)["compatibility"]
+        self.assertEqual(rows[0]["replicant_selector"], "1.7.2")
+        self.assertEqual(rows[0]["replicant_requirement"], "== 1.7.2")
+        for row in rows[1:]:
+            self.assertEqual(row["replicant_requirement"], requirement)
+
+    def test_duplicate_missing_and_nonliteral_declarations_are_refused(self):
+        path = self.root / "mix.exs"
+        original = path.read_text()
+        for replacement in ('@replicant_requirement "bad"',
+                            '@replicant_requirement System.get_env("UNTRUSTED")',
+                            '@replicant_requirement "~> 1.0"\n  @replicant_requirement "~> 1.0"'):
+            with self.subTest(replacement=replacement):
+                path.write_text(re.sub(r'@replicant_requirement "[^"]+"',
+                                       lambda _: replacement, original, count=1))
                 self.refused()
 
 

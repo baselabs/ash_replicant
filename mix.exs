@@ -7,6 +7,17 @@ defmodule AshReplicant.MixProject do
   @replicant_requirement ">= 1.6.0 and < 2.0.0-0"
   @onetime_requirement ">= 1.3.2 and < 2.0.0-0"
 
+  @ash_postgres_requirement "~> 2.13"
+  @cloak_requirement ">= 0.4.0 and < 1.0.0-0"
+  @igniter_requirement ">= 0.8.4 and < 1.0.0-0"
+  @spark_requirement "~> 2.7.0"
+  @splode_requirement "~> 0.3"
+  @jason_requirement "~> 1.4"
+  @telemetry_requirement "~> 1.4.0"
+  @postgrex_requirement "~> 0.23"
+  @ymlr_requirement "~> 5.1.6"
+  @simple_sat_requirement "~> 0.1"
+
   def project do
     [
       app: :ash_replicant,
@@ -49,24 +60,24 @@ defmodule AshReplicant.MixProject do
       {:ash, ash_requirement()},
       # The committed test migrations match the reviewed compatibility lock's
       # generator. The drift report checks newer upstream releases separately.
-      {:ash_postgres, "~> 2.13"},
+      {:ash_postgres, @ash_postgres_requirement},
       {:ash_onetime, onetime_requirement()},
       # Security floor: EEF-CVE-2026-81319 and EEF-CVE-2026-81322 affect
       # every ash_cloak release below 0.4.0; a consumer must not be able
       # to resolve to a vulnerable one.
-      {:ash_cloak, ">= 0.4.0 and < 1.0.0-0"},
+      {:ash_cloak, @cloak_requirement},
       {:replicant, replicant_requirement()},
       # The install codemod surface (I01). OPTIONAL for consumers and at
       # runtime: `mix ash_replicant.install` compiles to an actionable stub when
       # Igniter is absent, so no shipped library code depends on it.
-      {:igniter, ">= 0.8.4 and < 1.0.0-0", optional: true},
-      {:spark, "~> 2.7.0"},
-      {:splode, "~> 0.3"},
-      {:jason, "~> 1.4"},
-      {:telemetry, "~> 1.4.0"},
-      {:postgrex, "~> 0.23"},
-      {:ymlr, "~> 5.1.6"},
-      {:simple_sat, "~> 0.1"},
+      {:igniter, @igniter_requirement, optional: true},
+      {:spark, @spark_requirement},
+      {:splode, @splode_requirement},
+      {:jason, @jason_requirement},
+      {:telemetry, @telemetry_requirement},
+      {:postgrex, @postgrex_requirement},
+      {:ymlr, @ymlr_requirement},
+      {:simple_sat, @simple_sat_requirement},
       {:ex_doc, "== 0.40.4", only: :dev, runtime: false},
       {:cloak, "~> 1.1", only: [:dev, :test], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},

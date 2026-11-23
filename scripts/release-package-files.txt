@@ -17,6 +17,7 @@ lib/ash_replicant/coverage.ex
 lib/ash_replicant/destination.ex
 lib/ash_replicant/destination/notifier_loads.ex
 lib/ash_replicant/destination_participant.ex
+lib/ash_replicant/dependency_requirements.ex
 lib/ash_replicant/doctor.ex
 lib/ash_replicant/doctor/check.ex
 lib/ash_replicant/doctor/probe.ex
