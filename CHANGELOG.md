@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Require Postgrex `~> 0.23` and Replicant `>= 1.6.0 and < 2.0.0-0`.
+  Move the current, exact-floor, and latest-compatible locks to Postgrex 0.23.0
+  and Replicant 1.6.0; align runtime diagnosis, dependency lanes, and consumer
+  qualification with that supported foundation.
+
 - Refuse publication without exactly one nonempty changelog section for the release.
   Retain release notes from the verified served package with its published commit and
   the served package and docs digests in the release assets.

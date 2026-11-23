@@ -212,8 +212,8 @@ defmodule AshReplicant.Test.PgOld do
     ] ++ credentials(uri)
   end
 
-  # Postgrex 0.22 has no URL parser module: derive the opts from the URI the
-  # same way config/test.exs and the dynamic-destination fixture do — the
+  # Derive connection options from the URI the same way config/test.exs and
+  # the dynamic-destination fixture do — the
   # userinfo is `user` or `user:password`.
   defp credentials(%URI{userinfo: nil}), do: [username: "postgres"]
 

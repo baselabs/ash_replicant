@@ -55,7 +55,7 @@ defmodule AshReplicant.Doctor do
   # Duplicated from `mix.exs` because `mix.exs` is not loadable from a release.
   # `AshReplicant.DoctorTest` asserts the literals are equal, so changing one
   # without the other goes red.
-  @replicant_requirement ">= 1.4.0 and < 2.0.0-0"
+  @replicant_requirement ">= 1.6.0 and < 2.0.0-0"
   @ash_requirement ">= 3.37.3 and < 4.0.0-0"
 
   # The source release floors live in `AshReplicant.SourceSet` — the ONE

@@ -5,8 +5,13 @@ fixture="$root/test/fixtures/release_checker"
 checker="$root/scripts/assert-dependency-version.sh"
 # Replay the recorded Hex API response and lock, independent of new releases.
 "$checker" --lock "$fixture/recorded.lock" --newest --hex-response "$fixture/ash.json" ash '>= 3.34.6 and < 4.0.0-0'
-"$checker" --lock "$fixture/recorded.lock" --newest --hex-response "$fixture/replicant.json" replicant '>= 1.4.0 and < 1.5.1'
-if output="$("$checker" --lock "$fixture/recorded.lock" --newest --hex-response "$fixture/replicant.json" replicant '>= 1.4.0 and < 2.0.0-0' 2>&1)"; then
+"$checker" --lock "$fixture/recorded.lock" --newest --hex-response "$fixture/replicant.json" replicant '>= 1.6.0 and < 2.0.0-0'
+# Mutate the recorded lock to a real older release. This test-only range admits
+# both recorded releases so the newest check, rather than the floor check, rejects it.
+stale_lock="$(mktemp "${TMPDIR:-/tmp}/ash-replicant-stale-lock.XXXXXX")"
+trap 'rm -f "$stale_lock"' EXIT
+sed 's/:replicant, "1.6.0"/:replicant, "1.5.1"/' "$fixture/recorded.lock" > "$stale_lock"
+if output="$("$checker" --lock "$stale_lock" --newest --hex-response "$fixture/replicant.json" replicant '>= 1.5.1 and < 2.0.0-0' 2>&1)"; then
   echo 'newest checker accepted the older recorded Replicant lock' >&2
   exit 1
 fi

@@ -9,7 +9,8 @@ Thank you for your interest in contributing to AshReplicant!
   install uses setup-beam's `version-file: .tool-versions` and `version-type: strict`,
   then refuses unless installed Elixir and the full OTP release match that file.
 - Ash `>= 3.37.3 and < 4.0.0-0`; selector-free development uses this public range
-- Replicant `>= 1.4.0 and < 2.0.0-0` from Hex; the lock is 1.5.1.
+- Replicant `>= 1.6.0 and < 2.0.0-0` from Hex; the lock is 1.6.0.
+- Postgrex `~> 0.23` from Hex; the lock is 0.23.0.
   No sibling checkout is required to build or test. A local checkout at
   `../replicant` is only needed for cross-repo design work and is never release evidence.
 - AshCloak `>= 0.4.0 and < 1.0.0-0` from Hex; the current lock is 0.4.0 (the

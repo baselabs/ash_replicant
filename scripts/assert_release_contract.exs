@@ -101,7 +101,7 @@ defmodule AshReplicant.ReleaseContract do
   """
 
   @ash_requirement ">= 3.37.3 and < 4.0.0-0"
-  @replicant_requirement ">= 1.4.0 and < 2.0.0-0"
+  @replicant_requirement ">= 1.6.0 and < 2.0.0-0"
   @onetime_requirement ">= 1.3.2 and < 2.0.0-0"
   @cloak_requirement ">= 0.4.0 and < 1.0.0-0"
   @checkout "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
@@ -1528,7 +1528,8 @@ defmodule AshReplicant.ReleaseContract do
 
   expected = %{
     ash: ">= 3.37.3 and < 4.0.0-0",
-    replicant: ">= 1.4.0 and < 2.0.0-0",
+    replicant: ">= 1.6.0 and < 2.0.0-0",
+    postgrex: "~> 0.23",
     ash_onetime: ">= 1.3.2 and < 2.0.0-0",
     ash_cloak: ">= 0.4.0 and < 1.0.0-0"
   }
@@ -1689,8 +1690,8 @@ defmodule AshReplicant.ReleaseContract do
       "lockfile" => "locks/exact-floors.lock",
       "ash_selector" => "3.37.3",
       "ash_requirement" => "== 3.37.3",
-      "replicant_selector" => "1.4.0",
-      "replicant_requirement" => "== 1.4.0",
+      "replicant_selector" => "1.6.0",
+      "replicant_requirement" => "== 1.6.0",
       "onetime_selector" => "1.3.2",
       "onetime_requirement" => "== 1.3.2"
     },
@@ -1700,7 +1701,7 @@ defmodule AshReplicant.ReleaseContract do
       "ash_selector" => "",
       "ash_requirement" => ">= 3.37.3 and < 4.0.0-0",
       "replicant_selector" => "",
-      "replicant_requirement" => ">= 1.4.0 and < 2.0.0-0",
+      "replicant_requirement" => ">= 1.6.0 and < 2.0.0-0",
       "onetime_selector" => "",
       "onetime_requirement" => ">= 1.3.2 and < 2.0.0-0"
     },
@@ -1710,7 +1711,7 @@ defmodule AshReplicant.ReleaseContract do
       "ash_selector" => "latest",
       "ash_requirement" => ">= 3.37.3 and < 4.0.0-0",
       "replicant_selector" => "latest",
-      "replicant_requirement" => ">= 1.4.0 and < 2.0.0-0",
+      "replicant_requirement" => ">= 1.6.0 and < 2.0.0-0",
       "onetime_selector" => "latest",
       "onetime_requirement" => ">= 1.3.2 and < 2.0.0-0"
     }
@@ -1867,7 +1868,7 @@ defmodule AshReplicant.ReleaseContract do
        "- Ash `#{@ash_requirement}` (current lock 3.37.3);",
        "- AshPostgres `~> 2.13` (current lock 2.15.2 with AshSql 0.8.8; qualification tests the reviewed compatibility lock);",
        "- Spark `~> 2.7.0` (effective floor 2.7.6 through Ash; current lock 2.7.9);",
-       "- Replicant `#{@replicant_requirement}` (current lock 1.5.1)",
+       "- Replicant `#{@replicant_requirement}` (current lock 1.6.0)",
        "- AshOnetime `#{@onetime_requirement}` (current lock 1.5.0)",
        "- AshCloak `#{@cloak_requirement}` (current lock 0.4.0"
      ]},
@@ -1875,14 +1876,14 @@ defmodule AshReplicant.ReleaseContract do
      [
        "- **Elixir 1.20.3** and **Erlang/OTP 29**",
        "- Ash `#{@ash_requirement}`; selector-free development uses this public range",
-       "- Replicant `#{@replicant_requirement}` from Hex; the lock is 1.5.1.",
+       "- Replicant `#{@replicant_requirement}` from Hex; the lock is 1.6.0.",
        "- AshCloak `#{@cloak_requirement}` from Hex; the current lock is 0.4.0 (the"
      ]},
     {"AGENTS.md", "## Development workflow",
      [
        "The supported release foundation is Elixir 1.20.3 on Erlang/OTP 29 with Ash\n" <>
          "`#{@ash_requirement}` (current lock 3.37.3) and Replicant\n" <>
-         "`#{@replicant_requirement}` (current lock 1.5.1), plus\n" <>
+         "`#{@replicant_requirement}` (current lock 1.6.0), plus\n" <>
          "AshOnetime `#{@onetime_requirement}` (current lock 1.5.0) and AshCloak\n" <>
          "`#{@cloak_requirement}` (current lock 0.4.0; releases below 0.4.0 carry\n" <>
          "CVE-2026-81319 and CVE-2026-81322 and are not admitted)."
@@ -3188,7 +3189,7 @@ defmodule AshReplicant.ReleaseContract do
     lock = root |> Path.join("mix.lock") |> File.read!()
 
     assert_hex_lock(lock, "replicant", expected_replicant_lock_version(lock))
-    assert_hex_lock(lock, "postgrex", "0.22.4")
+    assert_hex_lock(lock, "postgrex", "0.23.0")
 
     session_source = read_dependency_source!(root, "lib/replicant/session_identity.ex")
     sink_source = read_dependency_source!(root, "lib/replicant/sink.ex")
@@ -3276,7 +3277,7 @@ defmodule AshReplicant.ReleaseContract do
   defp expected_replicant_lock_version(lock) do
     case System.get_env("ASH_REPLICANT_REPLICANT_VERSION") do
       value when value in [nil, ""] ->
-        "1.5.1"
+        "1.6.0"
 
       "latest" ->
         lock

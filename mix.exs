@@ -4,7 +4,7 @@ defmodule AshReplicant.MixProject do
   @version "1.6.4"
   @source_url "https://github.com/baselabs/ash_replicant"
   @ash_requirement ">= 3.37.3 and < 4.0.0-0"
-  @replicant_requirement ">= 1.4.0 and < 2.0.0-0"
+  @replicant_requirement ">= 1.6.0 and < 2.0.0-0"
   @onetime_requirement ">= 1.3.2 and < 2.0.0-0"
 
   def project do
@@ -64,7 +64,7 @@ defmodule AshReplicant.MixProject do
       {:splode, "~> 0.3"},
       {:jason, "~> 1.4"},
       {:telemetry, "~> 1.4.0"},
-      {:postgrex, "~> 0.22.4"},
+      {:postgrex, "~> 0.23"},
       {:ymlr, "~> 5.1.6"},
       {:simple_sat, "~> 0.1"},
       {:ex_doc, "== 0.40.4", only: :dev, runtime: false},
