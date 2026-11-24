@@ -430,6 +430,11 @@ to the loaded version. All three locks move from 2.10.2 to 2.10.3. [OSV EEF-CVE-
 
 The release inspector compares the built Hex archive's dependency metadata
 with `mix.exs` and requires DBConnection to be a mandatory Hex dependency.
-CI qualified `2a5c682d58a3dad8fcb57e4b0388095b742e4780` with locked fetches,
-both dependency audits, archive inspection, and fresh consumption.
-[Qualification run 45457382232](https://github.com/baselabs/ash_replicant/actions/runs/45457382232).
+
+All 14 qualification jobs passed for the AshReplicant 1.6.5 candidate
+`3d4becff98807f92c43a378f2bc38459bed85848`, including `qualified`. CI verified
+locked fetches, both dependency audits, archive inspection, and a fresh
+consumer. The archive job ran the publication workflow's changelog check
+against the built Hex package and confirmed that it refused a copy with an
+entry under Unreleased.
+[Qualification run 45480922218](https://github.com/baselabs/ash_replicant/actions/runs/45480922218).
