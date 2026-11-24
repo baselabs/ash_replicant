@@ -1859,8 +1859,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
            "unexpected public dependency set"},
           {"deps: Enum.reject(select_requirements(deps()), &(elem(&1, 0) == :ash_cloak)),", 1,
            "unexpected public dependency set"},
-          {"deps: Enum.reject(select_requirements(deps()), &(elem(&1, 0) == :db_connection)),",
-           1, "unexpected public dependency set"}
+          {"deps: Enum.reject(select_requirements(deps()), &(elem(&1, 0) == :db_connection)),", 1,
+           "unexpected public dependency set"}
         ] do
       prepare_fixture()
       directory = fixture_path("metadata-consumer")

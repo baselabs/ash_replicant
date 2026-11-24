@@ -507,7 +507,8 @@ defmodule AshReplicant.DoctorTest do
     end
 
     test "a DBConnection release below the security floor fails" do
-      check = Doctor.check_dependency_requirements(%{@compatible_versions | db_connection: "2.10.2"})
+      check =
+        Doctor.check_dependency_requirements(%{@compatible_versions | db_connection: "2.10.2"})
 
       assert check.status == :fail
       assert check.reason == :dependency_version_mismatch
@@ -563,7 +564,9 @@ defmodule AshReplicant.DoctorTest do
     end
 
     test "the two version axes never share a reason" do
-      dependency = Doctor.check_dependency_requirements(%{@compatible_versions | replicant: "1.5.1"})
+      dependency =
+        Doctor.check_dependency_requirements(%{@compatible_versions | replicant: "1.5.1"})
+
       source = Doctor.check_source_release(140_000, :pgoutput)
 
       assert dependency.reason != source.reason
