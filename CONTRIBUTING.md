@@ -8,7 +8,7 @@ Thank you for your interest in contributing to AshReplicant!
   from `.tool-versions`. Every CI
   install uses setup-beam's `version-file: .tool-versions` and `version-type: strict`,
   then refuses unless installed Elixir and the full OTP release match that file.
-- Ash `>= 3.37.3 and < 4.0.0-0`; selector-free development uses this public range
+- Ash `>= 3.38.1 and < 4.0.0-0`; selector-free development uses this public range
 - Replicant `>= 1.6.0 and < 2.0.0-0` from Hex; the lock is 1.6.0.
 - Postgrex `~> 0.23` from Hex; the lock is 0.23.0.
   No sibling checkout is required to build or test. A local checkout at
@@ -129,7 +129,7 @@ maintainers read them as directed in `AGENTS.md`.
 
 The frozen host action contract is pinned by `test/ash_replicant/action_contract_freeze_test.exs`
 (the D8 table, asserted against live reflection) and the suppression/admission suites. Ash is a
-floor-pinned dependency (`>= 3.37.3 and < 4.0.0-0`); when bumping the lock, run the old-contract
+floor-pinned dependency (`>= 3.38.1 and < 4.0.0-0`); when bumping the lock, run the old-contract
 grep BEFORE trusting green
 tests — a behavior change inside Ash can silently invalidate a pinned fact while the pin still
 passes against the NEW behavior:

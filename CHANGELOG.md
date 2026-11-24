@@ -53,6 +53,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Qualification now runs the full tarball consumer against its own PostgreSQL before
   publication, including compilation, docs, migrations, and the live CDC smoke.
 
+### Security
+
+- Require Ash `>= 3.38.1 and < 4.0.0-0` for the fixes for
+  EEF-CVE-2026-120299 (GHSA-rwmx-99mc-qr2x) and EEF-CVE-2026-124283
+  (GHSA-m5v6-3qwf-6w9r). Consumers locked below 3.38.1 must update Ash.
+  The current and exact-floors locks move from Ash 3.37.3 to 3.38.1, and
+  the latest-compatible lock moves from 3.37.7 to 3.38.1.
+
 ## [1.6.4] - 2026-11-20
 
 ### Changed

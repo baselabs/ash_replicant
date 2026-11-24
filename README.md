@@ -84,7 +84,7 @@ as a transitive dependency.
 The current 1.6.4 release baseline is built and tested with:
 
 - Elixir 1.20.3 on Erlang/OTP 29;
-- Ash `>= 3.37.3 and < 4.0.0-0` (current lock 3.37.3);
+- Ash `>= 3.38.1 and < 4.0.0-0` (current lock 3.38.1);
 - AshPostgres `~> 2.13` (current lock 2.15.2 with AshSql 0.8.8; qualification tests the reviewed compatibility lock);
 - Spark `~> 2.7.0` (effective floor 2.7.6 through Ash; current lock 2.7.9);
 - Replicant `>= 1.6.0 and < 2.0.0-0` (current lock 1.6.0);
@@ -114,11 +114,12 @@ The Ash floor excludes `EEF-CVE-2026-94201` (atom-table exhaustion, fixed
 in 3.34.3), `EEF-CVE-2026-101028` (related-resource read-policy bypass
 in counts, existence checks, and aggregates, fixed in 3.34.6),
 `EEF-CVE-2026-114214` (a through relationship loaded with a limit of 1
-ignores the through path, fixed in 3.37.1), and `EEF-CVE-2026-96581` (a
-primary-key upsert ignores attribute multitenancy, fixed in 3.37.2). It is
-3.37.3 because AshSql 0.8.6 and later (AshSql 0.8.5 and earlier are
-retired for an Ecto query cache issue) require it. The upper
-bound excludes Ash 4 prereleases. The AshCloak lower bound is a security floor:
+ignores the through path, fixed in 3.37.1), `EEF-CVE-2026-96581` (a
+primary-key upsert ignores attribute multitenancy, fixed in 3.37.2),
+`EEF-CVE-2026-124283` (unsafe decoding of keyset cursors, fixed in 3.38.0),
+and `EEF-CVE-2026-120299` (storage casting applied to keyword input, fixed in
+3.38.1). Consumers locked below 3.38.1 must update Ash. The upper bound
+excludes Ash 4 prereleases. The AshCloak lower bound is a security floor:
 every release below 0.4.0 carries CVE-2026-81319 (unsafe deserialization of
 decrypted terms) and CVE-2026-81322 (plaintext leak through a non-sensitive
 action argument), and the requirement refuses to resolve to a vulnerable

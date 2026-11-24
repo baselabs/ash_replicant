@@ -3,7 +3,7 @@ defmodule AshReplicant.MixProject do
 
   @version "1.6.4"
   @source_url "https://github.com/baselabs/ash_replicant"
-  @ash_requirement ">= 3.37.3 and < 4.0.0-0"
+  @ash_requirement ">= 3.38.1 and < 4.0.0-0"
   @replicant_requirement ">= 1.6.0 and < 2.0.0-0"
   @ash_onetime_requirement ">= 1.3.2 and < 2.0.0-0"
 
@@ -57,6 +57,8 @@ defmodule AshReplicant.MixProject do
 
   defp deps do
     [
+      # Security floor: EEF-CVE-2026-120299 is fixed in Ash 3.38.1, and
+      # EEF-CVE-2026-124283 is fixed in Ash 3.38.0.
       {:ash, @ash_requirement},
       # The committed test migrations match the reviewed compatibility lock's
       # generator. The drift report checks newer upstream releases separately.

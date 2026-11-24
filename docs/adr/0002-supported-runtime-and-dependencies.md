@@ -4,8 +4,8 @@ Date: 2026-08-13
 
 ## Status
 
-Accepted for the 1.0.0 release line. Amended September 29, October 11, and
-October 28, 2026 and November 5, 2026 (the Ash security floor is now `>= 3.37.3 and < 4.0.0-0`).
+Accepted for the 1.0.0 release line. The November 24, 2026 amendment raises
+the Ash security floor to `>= 3.38.1 and < 4.0.0-0`.
 
 > **Dependency floor amendment (2026-11-23).** Postgrex is declared `~> 0.23` and
 > Replicant `>= 1.6.0 and < 2.0.0-0`: Replicant 1.6.0 requires Postgrex `~> 0.23`.
@@ -406,3 +406,18 @@ Because the lane reader now needs an Elixir runtime, only the BEAM-equipped
 
 OBSERVED: CI run 45177573854 on b2ec13a, 14 of 14 jobs successful including
 `qualified`.
+
+## Amendment (November 24, 2026): Ash security floor 3.38.1
+
+Ash is now `>= 3.38.1 and < 4.0.0-0`. Ash 3.38.0 fixes unsafe decoding of
+keyset cursors (GHSA-m5v6-3qwf-6w9r), and 3.38.1 fixes storage casting
+applied to keyword input (GHSA-rwmx-99mc-qr2x).
+[OSV EEF-CVE-2026-124283](https://osv.dev/vulnerability/EEF-CVE-2026-124283)
+and [OSV EEF-CVE-2026-120299](https://osv.dev/vulnerability/EEF-CVE-2026-120299).
+
+The public floor in `mix.exs`, the exact-floors CI cell, the doctor's
+runtime requirement, and the release contract move together. The current
+and exact-floors locks move Ash from 3.37.3 to 3.38.1. The latest-compatible
+lock moves Ash from 3.37.7 to 3.38.1. The requirements in the Ash Hex
+tarball match those in the previous locks, including the effective Spark
+floor of 2.7.6, and each lock already satisfies them.

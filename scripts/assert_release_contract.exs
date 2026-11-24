@@ -1843,7 +1843,7 @@ defmodule AshReplicant.ReleaseContract do
       {"README.md", "### Supported foundation",
        [
          "- Elixir 1.20.3 on Erlang/OTP 29;",
-         "- Ash `#{requirements.ash}` (current lock 3.37.3);",
+         "- Ash `#{requirements.ash}` (current lock 3.38.1);",
          "- AshPostgres `#{requirements.ash_postgres}` (current lock 2.15.2 with AshSql 0.8.8; qualification tests the reviewed compatibility lock);",
          "- Spark `#{requirements.spark}` (effective floor 2.7.6 through Ash; current lock 2.7.9);",
          "- Replicant `#{requirements.replicant}` (current lock 1.6.0)",
@@ -1862,7 +1862,7 @@ defmodule AshReplicant.ReleaseContract do
       {"AGENTS.md", "## Development workflow",
        [
          "The supported release foundation is Elixir 1.20.3 on Erlang/OTP 29 with Ash\n" <>
-           "`#{requirements.ash}` (current lock 3.37.3) and Replicant\n" <>
+           "`#{requirements.ash}` (current lock 3.38.1) and Replicant\n" <>
            "`#{requirements.replicant}` (current lock 1.6.0), plus\n" <>
            "AshOnetime `#{requirements.ash_onetime}` (current lock 1.5.0) and AshCloak\n" <>
            "`#{requirements.ash_cloak}` (current lock 0.4.0; releases below 0.4.0 carry\n" <>

@@ -167,7 +167,7 @@ Never push `main` directly. Workflow and release-script changes require the infr
 ## Development workflow
 
 The supported release foundation is Elixir 1.20.3 on Erlang/OTP 29 with Ash
-`>= 3.37.3 and < 4.0.0-0` (current lock 3.37.3) and Replicant
+`>= 3.38.1 and < 4.0.0-0` (current lock 3.38.1) and Replicant
 `>= 1.6.0 and < 2.0.0-0` (current lock 1.6.0), plus
 AshOnetime `>= 1.3.2 and < 2.0.0-0` (current lock 1.5.0) and AshCloak
 `>= 0.4.0 and < 1.0.0-0` (current lock 0.4.0; releases below 0.4.0 carry

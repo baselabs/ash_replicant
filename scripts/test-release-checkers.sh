@@ -44,8 +44,10 @@ scripts/assert-dependency-version.sh ash >/dev/null
 root="$(pwd)"
 (cd test/fixtures/release_checker && "$root/scripts/assert-dependency-version.sh" ash) >/dev/null
 scripts/assert-dependency-version.sh --lock test/fixtures/release_checker/recorded.lock ash '== 3.34.6' >/dev/null
-if scripts/assert-dependency-version.sh --lock test/fixtures/release_checker/recorded.lock ash '>= 3.37.3' >/dev/null 2>&1; then
-  echo "dependency checker ignored the explicit recorded lock" >&2
+recorded_lock_exit=0
+recorded_lock_output="$(scripts/assert-dependency-version.sh --lock test/fixtures/release_checker/recorded.lock ash 2>&1)" || recorded_lock_exit=$?
+if [[ "$recorded_lock_exit" -ne 1 || "$recorded_lock_output" != *"dependency version does not satisfy requirement"* ]]; then
+  echo "dependency checker did not reject the recorded Ash version against the public requirement" >&2
   exit 1
 fi
 scripts/assert-dependency-version.sh replicant >/dev/null
