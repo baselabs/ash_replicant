@@ -421,3 +421,7 @@ and exact-floors locks move Ash from 3.37.3 to 3.38.1. The latest-compatible
 lock moves Ash from 3.37.7 to 3.38.1. The requirements in the Ash Hex
 tarball match those in the previous locks, including the effective Spark
 floor of 2.7.6, and each lock already satisfies them.
+
+The same change moves DBConnection from 2.10.2 to 2.10.3 in all three locks.
+DBConnection remains transitive through Postgrex and Ecto SQL. Both already
+admit the fixed release. [OSV EEF-CVE-2026-133555](https://osv.dev/vulnerability/EEF-CVE-2026-133555).

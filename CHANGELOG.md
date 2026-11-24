@@ -61,6 +61,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The current and exact-floors locks move from Ash 3.37.3 to 3.38.1, and
   the latest-compatible lock moves from 3.37.7 to 3.38.1.
 
+- Update DBConnection from 2.10.2 to 2.10.3 in all three locks for
+  EEF-CVE-2026-133555 (GHSA-gmmq-fw75-wq46). Postgrex's existing requirement
+  admits the fix. Consumers with older DBConnection locks must update them.
+
 ## [1.6.4] - 2026-11-20
 
 ### Changed
