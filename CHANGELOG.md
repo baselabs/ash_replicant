@@ -45,6 +45,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   verdict job. Refuse missing or invalid inventory and identify failed input or
   Actions reads without exposing response values.
 
+- Retry transient public PostgreSQL registry reads before checking and pulling
+  the pinned engine digest.
+
 - Set the publish and drift-report timeouts from their first green runs (5 and 24
   minutes), following infra's measured timeout rule; the release contract pins both.
   Verifying the published package keeps its 90-minute bound until its first green run.

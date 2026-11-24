@@ -1606,6 +1606,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           {"--env TEST_PG_PASSWORD", "--env OMITTED_PASSWORD"},
           {"--tmpfs /var/lib/pg:uid=26,gid=26,mode=0750", "--tmpfs /var/lib/pg"},
           {"host replication all all md5", "host replication all all trust"},
+          {"for attempt in range(3):", "for attempt in range(1):"},
+          {"error.code != 429 and error.code < 500", "error.code < 500"},
           {"docker pull \"$engine\"", "true"}
         ] do
       prepare_fixture()
