@@ -316,7 +316,9 @@ tests run on GitHub-hosted CI, never on the owner's Mac or the build box.
    SERVED docs, with `SHA256SUMS` for those bytes. `RELEASE-NOTES.md` takes the release section
    from the changelog inside the served package, followed by the published commit and both
    archive digests. Publication refuses a missing, duplicated or empty release section before
-   any build or upload. Temporary archives are removed even on failure.
+   any build or upload. Before upload planning, the built package must also have
+   no changelog entries above its version. Temporary archives are removed even on
+   failure.
    A published-package check needs the upload job, holds no key or environment, and exercises
    a fresh registry consumer against real PostgreSQL. Qualification consumes the candidate tarball.
 8. Infra tags `v<version>` at the published commit from the served provenance, compares the

@@ -231,7 +231,9 @@ transport failure or any other unexpected response refuses. The workflow
 contract mutation-tests token placement, transport and refusal controls.
 Publication first requires an anonymous HTTP 200 for the existing Hex package
 name. A missing name refuses: first publication is the owner's decision. Keyless
-steps build and inspect package and docs archives. Only the upload step receives
+steps build and inspect package and docs archives. Before upload planning, the
+built package must have a nonempty changelog section for its version and no
+entries above it. Only the upload step receives
 the publish key; it runs from the runner's temporary directory, loads no project,
 rechecks package existence and permits an untagged held version only when its checksum
 matches the freshly built package and it is not retired. Local or remote version tags and

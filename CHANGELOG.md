@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.5] - 2026-11-24
+
 ### Changed
 
 - Refresh the shared toolchain reader's installed-version probes; CI keeps its
@@ -25,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Retain release notes from the verified served package with its published commit and
   the served package and docs digests in the release assets.
   The publication check and asset retention share one section parser.
+  Publication also checks the built archive for changelog entries above its version.
 
 - Read CI, release, drift-report, and checkout runtime versions only through the shared
   toolchain reader. Install its exact outputs through one BEAM action, verify the Elixir
@@ -1968,7 +1971,8 @@ sensitive-column verification.
   `usage-rules.md`, `CONTRIBUTING.md`, `LICENSE`, `NOTICE`; tracked charter at
   `docs/CHARTER.md`.
 
-[Unreleased]: https://github.com/baselabs/ash_replicant/compare/v1.6.4...HEAD
+[Unreleased]: https://github.com/baselabs/ash_replicant/compare/v1.6.5...HEAD
+[1.6.5]: https://github.com/baselabs/ash_replicant/tree/v1.6.5
 [1.6.4]: https://github.com/baselabs/ash_replicant/tree/v1.6.4
 [1.6.3]: https://github.com/baselabs/ash_replicant/tree/v1.6.3
 [1.6.2]: https://github.com/baselabs/ash_replicant/tree/v1.6.2

@@ -6,11 +6,13 @@ import importlib.util
 import io
 import hashlib
 import json
+import re
 import subprocess
 import sys
 import tarfile
 import tempfile
 from pathlib import Path
+from textwrap import dedent
 
 spec = importlib.util.spec_from_file_location(
     "release_docs", Path(__file__).with_name("check-docs-archive.py")
@@ -20,6 +22,33 @@ spec.loader.exec_module(inspector)
 archive, directory, package_archive = sys.argv[1:]
 identity = json.loads((Path(directory) / "release.json").read_text())
 version, commit = identity["version"], identity["commit"]
+
+publish = Path(__file__).resolve().parents[1] / ".github/workflows/publish.yml"
+stamp_step = re.search(
+    r"^      - name: Refuse a package whose changelog is not stamped for its version\n"
+    r".*?^        run: \|\n(.*?)(?=^      - )",
+    publish.read_text(encoding="utf-8"),
+    flags=re.M | re.S,
+)
+assert stamp_step is not None, "publish workflow is missing the package changelog stamp check"
+
+
+def check_changelog_stamp(package):
+    package = Path(package)
+    assert package.name == "package.tar"
+    return subprocess.run(
+        ["bash", "-euo", "pipefail", "-c",
+         'export RUNNER_TEMP="$1" VERSION="$2"\n' + dedent(stamp_step[1]),
+         "changelog-stamp", str(package.resolve().parent), version],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+stamped = check_changelog_stamp(package_archive)
+assert stamped.returncode == 0, stamped.stderr
+print(stamped.stdout, end="")
 
 
 def check(candidate, tree=None, **kwargs):
@@ -239,7 +268,7 @@ with tempfile.TemporaryDirectory(prefix="ash-replicant-docs-provenance-") as scr
     with tarfile.open(package_archive, "r:") as original:
         original_entries = [(entry, original.extractfile(entry).read()) for entry in original]
     contents = next(payload for entry, payload in original_entries if entry.name == "contents.tar.gz")
-    for mutation in ["changed", "missing", "duplicate", "empty", "linked", "duplicate_member"]:
+    for mutation in ["changed", "missing", "duplicate", "empty", "linked", "duplicate_member", "unstamped"]:
         packed = io.BytesIO()
         with tarfile.open(fileobj=io.BytesIO(contents), mode="r:gz") as original, \
                 tarfile.open(fileobj=packed, mode="w:gz") as output:
@@ -253,19 +282,26 @@ with tempfile.TemporaryDirectory(prefix="ash-replicant-docs-provenance-") as scr
                         payload += b"\n\n" + payload
                     if mutation == "empty":
                         payload = f"## [{version}]\n\n### Fixed\n".encode()
+                    if mutation == "unstamped":
+                        payload = b"## [Unreleased]\n\n- An unstamped entry.\n\n" + payload
                     entry.size = len(payload)
                     if mutation == "linked":
                         entry.type, entry.linkname, entry.size = tarfile.SYMTYPE, "README.md", 0
                 output.addfile(entry, io.BytesIO(payload))
                 if mutation == "duplicate_member" and entry.name == "CHANGELOG.md":
                     output.addfile(entry, io.BytesIO(payload))
-        altered = work / "package-variant.tar"
+        altered = work / "package.tar"
         with tarfile.open(altered, "w:") as output:
             for entry, payload in original_entries:
                 if entry.name == "contents.tar.gz":
                     payload = packed.getvalue()
                     entry.size = len(payload)
                 output.addfile(entry, io.BytesIO(payload))
+        if mutation == "unstamped":
+            result = check_changelog_stamp(altered)
+            assert result.returncode == 1, result.stdout
+            assert f"entries above {version}" in result.stderr, result.stderr
+            continue
         destination = work / f"assets-{mutation}"
         if mutation == "changed":
             inspector.retain_assets(candidate, altered, destination, version, ancestor)

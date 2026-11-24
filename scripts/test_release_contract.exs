@@ -1250,6 +1250,19 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       Regex.scan(~r/^      - .*?(?=^      - |^  [a-z][a-z0-9-]+:\n|\z)/ms, source)
       |> List.flatten()
 
+    stamp_name = "      - name: Refuse a package whose changelog is not stamped for its version"
+    build_name = "      - name: Build and inspect package and docs archives"
+    [stamp] = Enum.filter(steps, &String.starts_with?(&1, stamp_name))
+
+    prepare_fixture()
+    replace_once!(@publish, stamp, "")
+    assert_invalid!()
+
+    prepare_fixture()
+    replace_once!(@publish, stamp, "")
+    replace_once!(@publish, build_name, stamp <> build_name)
+    assert_invalid!()
+
     for step <- steps, not String.contains?(step, "name: Upload inspected archives") do
       prepare_fixture()
 
