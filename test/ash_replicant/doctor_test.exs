@@ -14,6 +14,8 @@ defmodule AshReplicant.DoctorTest do
   alias AshReplicant.Doctor.{Check, Report}
   alias AshReplicant.Error
 
+  @compatible_versions %{replicant: "1.6.0", ash: "3.38.1", db_connection: "2.10.3"}
+
   defp pass(name), do: %Check{name: name, domain: :source, status: :pass, reason: :ok}
   defp warn(name), do: %Check{name: name, domain: :source, status: :warn, reason: :something}
   defp fail(name), do: %Check{name: name, domain: :source, status: :fail, reason: :broken}
@@ -486,9 +488,9 @@ defmodule AshReplicant.DoctorTest do
     end
   end
 
-  describe "version mismatches are distinguished on both axes" do
+  describe "dependency and source version checks" do
     test "a Replicant release below the supported floor fails" do
-      check = Doctor.check_dependency_requirements(%{replicant: "1.5.1", ash: "3.38.1"})
+      check = Doctor.check_dependency_requirements(%{@compatible_versions | replicant: "1.5.1"})
 
       assert check.status == :fail
       assert check.reason == :dependency_version_mismatch
@@ -497,31 +499,32 @@ defmodule AshReplicant.DoctorTest do
 
     test "an Ash release one patch below the security floor fails" do
       # Ash 3.38.0 still carries EEF-CVE-2026-120299.
-      check = Doctor.check_dependency_requirements(%{replicant: "1.6.0", ash: "3.38.0"})
+      check = Doctor.check_dependency_requirements(%{@compatible_versions | ash: "3.38.0"})
 
       assert check.status == :fail
       assert check.reason == :dependency_version_mismatch
       assert check.detail == "ash"
     end
 
+    test "a DBConnection release below the security floor fails" do
+      check = Doctor.check_dependency_requirements(%{@compatible_versions | db_connection: "2.10.2"})
+
+      assert check.status == :fail
+      assert check.reason == :dependency_version_mismatch
+      assert check.detail == "db_connection"
+    end
+
     test "an unloaded dependency fails with its own reason" do
-      check = Doctor.check_dependency_requirements(%{replicant: nil, ash: "3.38.1"})
+      check = Doctor.check_dependency_requirements(%{@compatible_versions | replicant: nil})
 
       assert check.status == :fail
       assert check.reason == :dependency_missing
     end
 
     test "loaded versions inside the requirements pass" do
-      check = Doctor.check_dependency_requirements(%{replicant: "1.6.0", ash: "3.38.1"})
+      check = Doctor.check_dependency_requirements(@compatible_versions)
 
       assert check.status == :pass
-    end
-
-    test "the runtime requirement literals match mix.exs" do
-      mix = File.read!("mix.exs")
-
-      assert mix =~ ~s(@replicant_requirement "#{Doctor.replicant_requirement()}")
-      assert mix =~ ~s(@ash_requirement "#{Doctor.ash_requirement()}")
     end
 
     test "a source below the decoder's floor fails" do
@@ -560,7 +563,7 @@ defmodule AshReplicant.DoctorTest do
     end
 
     test "the two version axes never share a reason" do
-      dependency = Doctor.check_dependency_requirements(%{replicant: "1.5.1", ash: "3.38.1"})
+      dependency = Doctor.check_dependency_requirements(%{@compatible_versions | replicant: "1.5.1"})
       source = Doctor.check_source_release(140_000, :pgoutput)
 
       assert dependency.reason != source.reason

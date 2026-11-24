@@ -13,6 +13,7 @@ Thank you for your interest in contributing to AshReplicant!
 - Postgrex `~> 0.23` from Hex; the lock is 0.23.0.
   No sibling checkout is required to build or test. A local checkout at
   `../replicant` is only needed for cross-repo design work and is never release evidence.
+- DBConnection `>= 2.10.3 and < 3.0.0-0` from Hex. The lock is 2.10.3.
 - AshCloak `>= 0.4.0 and < 1.0.0-0` from Hex; the current lock is 0.4.0 (the
   CVE-2026-81319 / CVE-2026-81322 security floor — every earlier release is
   vulnerable and the requirement refuses to resolve to one).

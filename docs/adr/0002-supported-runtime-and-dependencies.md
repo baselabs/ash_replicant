@@ -408,7 +408,7 @@ Because the lane reader now needs an Elixir runtime, only the BEAM-equipped
 OBSERVED: CI run 45177573854 on b2ec13a, 14 of 14 jobs successful including
 `qualified`.
 
-## Amendment (November 24, 2026): Ash security floor 3.38.1
+## Amendment (November 24, 2026): Ash 3.38.1 and DBConnection 2.10.3 security floors
 
 Ash is now `>= 3.38.1 and < 4.0.0-0`. Ash 3.38.0 fixes unsafe decoding of
 keyset cursors (GHSA-m5v6-3qwf-6w9r), and 3.38.1 fixes storage casting
@@ -423,6 +423,7 @@ lock moves Ash from 3.37.7 to 3.38.1. The requirements in the Ash Hex
 tarball match those in the previous locks, including the effective Spark
 floor of 2.7.6, and each lock already satisfies them.
 
-The same change moves DBConnection from 2.10.2 to 2.10.3 in all three locks.
-DBConnection remains transitive through Postgrex and Ecto SQL. Both already
-admit the fixed release. [OSV EEF-CVE-2026-133555](https://osv.dev/vulnerability/EEF-CVE-2026-133555).
+DBConnection is declared `>= 2.10.3 and < 3.0.0-0` because the doctor
+uses `DBConnection.ConnectionError` directly. Its floor excludes the affected
+versions from consumer resolution, and the doctor applies the same requirement
+to the loaded version. All three locks move from 2.10.2 to 2.10.3. [OSV EEF-CVE-2026-133555](https://osv.dev/vulnerability/EEF-CVE-2026-133555).

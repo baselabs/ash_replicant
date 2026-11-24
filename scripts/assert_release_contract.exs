@@ -1848,6 +1848,7 @@ defmodule AshReplicant.ReleaseContract do
          "- Spark `#{requirements.spark}` (effective floor 2.7.6 through Ash; current lock 2.7.9);",
          "- Replicant `#{requirements.replicant}` (current lock 1.6.0)",
          "- Postgrex `#{requirements.postgrex}` (current lock 0.23.0);",
+         "- DBConnection `#{requirements.db_connection}` (current lock 2.10.3).",
          "- AshOnetime `#{requirements.ash_onetime}` (current lock 1.5.0)",
          "- AshCloak `#{requirements.ash_cloak}` (current lock 0.4.0"
        ]},
@@ -1857,6 +1858,7 @@ defmodule AshReplicant.ReleaseContract do
          "- Ash `#{requirements.ash}`; selector-free development uses this public range",
          "- Replicant `#{requirements.replicant}` from Hex; the lock is 1.6.0.",
          "- Postgrex `#{requirements.postgrex}` from Hex; the lock is 0.23.0.",
+         "- DBConnection `#{requirements.db_connection}` from Hex. The lock is 2.10.3.",
          "- AshCloak `#{requirements.ash_cloak}` from Hex; the current lock is 0.4.0 (the"
        ]},
       {"AGENTS.md", "## Development workflow",
@@ -1867,12 +1869,14 @@ defmodule AshReplicant.ReleaseContract do
            "AshOnetime `#{requirements.ash_onetime}` (current lock 1.5.0) and AshCloak\n" <>
            "`#{requirements.ash_cloak}` (current lock 0.4.0; releases below 0.4.0 carry\n" <>
            "CVE-2026-81319 and CVE-2026-81322 and are not admitted).",
-         "Postgrex requires `#{requirements.postgrex}` (current lock 0.23.0)"
+         "Postgrex requires `#{requirements.postgrex}` (current lock 0.23.0)",
+         "DBConnection requires `#{requirements.db_connection}` (current lock 2.10.3)."
        ]},
       {"docs/adr/0002-supported-runtime-and-dependencies.md", nil,
        [
          "Postgrex is declared `#{requirements.postgrex}`",
-         "Replicant `#{requirements.replicant}`:"
+         "Replicant `#{requirements.replicant}`:",
+         "DBConnection is declared `#{requirements.db_connection}`"
        ]},
       {"docs/adr/0005-replicant-coordination.md", nil,
        ["The public dependency is `#{requirements.replicant}`"]}
@@ -3155,6 +3159,9 @@ defmodule AshReplicant.ReleaseContract do
             {:{}, _, [:igniter, {:@, _, [{:igniter_requirement, _, _}]}, [optional: true]]},
             dependency
           )
+        end) and
+        Enum.any?(dependencies, fn dependency ->
+          match?({:db_connection, {:@, _, [{:db_connection_requirement, _, _}]}}, dependency)
         end),
       "Mix release contract is incomplete"
     )
@@ -3187,16 +3194,22 @@ defmodule AshReplicant.ReleaseContract do
 
   defp assert_replicant_contract(root) do
     lock = root |> Path.join("mix.lock") |> File.read!()
+    requirements = public_requirements(root)
 
     assert_hex_lock(
       lock,
       "replicant",
-      expected_replicant_lock_version(lock, public_requirements(root).replicant)
+      expected_replicant_lock_version(lock, requirements.replicant)
     )
 
     assert(
-      Version.match?(hex_lock_version(lock, "postgrex"), public_requirements(root).postgrex),
+      Version.match?(hex_lock_version(lock, "postgrex"), requirements.postgrex),
       "Postgrex dependency lock contract is incomplete"
+    )
+
+    assert(
+      Version.match?(hex_lock_version(lock, "db_connection"), requirements.db_connection),
+      "DBConnection dependency lock contract is incomplete"
     )
 
     session_source = read_dependency_source!(root, "lib/replicant/session_identity.ex")

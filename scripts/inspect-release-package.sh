@@ -14,4 +14,29 @@ if ! diff -u "$root/scripts/release-package-files.txt" - <<<"$package_files"; th
   echo 'inspect-release-package: package files differ from the release allowlist' >&2
   exit 1
 fi
-echo 'inspect-release-package: built package matches the release allowlist'
+elixir -r "$root/lib/ash_replicant/dependency_requirements.ex" -e '
+  [mixfile, metadata_file] = System.argv()
+  declared = AshReplicant.DependencyRequirements.read!(mixfile)
+  expected = Map.new(declared, fn {app, requirement} -> {Atom.to_string(app), requirement} end)
+
+  {:ok, metadata} = :file.consult(metadata_file)
+  dependencies = metadata |> Map.new() |> Map.fetch!("requirements") |> Enum.map(&Map.new/1)
+
+  packed =
+    Map.new(dependencies, fn dependency ->
+      {Map.fetch!(dependency, "app"), Map.fetch!(dependency, "requirement")}
+    end)
+
+  unless map_size(packed) == length(dependencies) and packed == expected do
+    raise "packed dependency requirements differ from mix.exs"
+  end
+
+  unless Enum.any?(dependencies, &match?(%{
+           "app" => "db_connection", "name" => "db_connection", "optional" => false,
+           "repository" => "hexpm"
+         }, &1)) do
+    raise "packed DBConnection dependency must be required"
+  end
+' -- "$root/mix.exs" "$work/outer/metadata.config"
+
+echo 'inspect-release-package: built package matches the release allowlist and dependency requirements'

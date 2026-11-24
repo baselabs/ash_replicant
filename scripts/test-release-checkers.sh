@@ -52,6 +52,7 @@ if [[ "$recorded_lock_exit" -ne 1 || "$recorded_lock_output" != *"dependency ver
 fi
 scripts/assert-dependency-version.sh replicant >/dev/null
 scripts/assert-dependency-version.sh ash_onetime >/dev/null
+scripts/assert-dependency-version.sh db_connection >/dev/null
 
 if scripts/assert-dependency-version.sh ash '== 0.0.0' >/dev/null 2>&1; then
   echo "dependency checker accepted a nonmatching requirement" >&2

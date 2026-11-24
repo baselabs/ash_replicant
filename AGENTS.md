@@ -175,6 +175,7 @@ CVE-2026-81319 and CVE-2026-81322 and are not admitted). Replicant 1.4's
 decoder options pass through with FULL decoder admission (ADR-0026).
 
 Postgrex requires `~> 0.23` (current lock 0.23.0), matching Replicant 1.6.0.
+DBConnection requires `>= 2.10.3 and < 3.0.0-0` (current lock 2.10.3).
 
 The CI gates install the exact runtime, fetch with `mix deps.get --check-locked`, and run
 format, compile with warnings as errors, Credo, both dependency audits, the covering tests,

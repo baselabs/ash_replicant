@@ -15,6 +15,7 @@ defmodule AshReplicant.MixProject do
   @jason_requirement "~> 1.4"
   @telemetry_requirement "~> 1.4.0"
   @postgrex_requirement "~> 0.23"
+  @db_connection_requirement ">= 2.10.3 and < 3.0.0-0"
   @ymlr_requirement "~> 5.1.6"
   @simple_sat_requirement "~> 0.1"
 
@@ -78,6 +79,8 @@ defmodule AshReplicant.MixProject do
       {:jason, @jason_requirement},
       {:telemetry, @telemetry_requirement},
       {:postgrex, @postgrex_requirement},
+      # Security floor: EEF-CVE-2026-133555 is fixed in DBConnection 2.10.3.
+      {:db_connection, @db_connection_requirement},
       {:ymlr, @ymlr_requirement},
       {:simple_sat, @simple_sat_requirement},
       {:ex_doc, "== 0.40.4", only: :dev, runtime: false},

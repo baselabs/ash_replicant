@@ -246,6 +246,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
        "- Spark `#{@requirements.spark}` (effective floor 2.7.6 through Ash; current lock 2.7.9);",
        "- Replicant `#{@requirements.replicant}` (current lock 1.6.0)",
        "- Postgrex `#{@requirements.postgrex}` (current lock 0.23.0);",
+       "- DBConnection `#{@requirements.db_connection}` (current lock 2.10.3).",
        "- AshOnetime `#{@requirements.ash_onetime}` (current lock 1.5.0)",
        "- AshCloak `#{@requirements.ash_cloak}` (current lock 0.4.0"
      ]},
@@ -255,6 +256,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
        "- Ash `#{@requirements.ash}`; selector-free development uses this public range",
        "- Replicant `#{@requirements.replicant}` from Hex; the lock is 1.6.0.",
        "- Postgrex `#{@requirements.postgrex}` from Hex; the lock is 0.23.0.",
+       "- DBConnection `#{@requirements.db_connection}` from Hex. The lock is 2.10.3.",
        "- AshCloak `#{@requirements.ash_cloak}` from Hex; the current lock is 0.4.0 (the"
      ]},
     {"AGENTS.md", "## Development workflow",
@@ -265,7 +267,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
          "AshOnetime `#{@requirements.ash_onetime}` (current lock 1.5.0) and AshCloak\n" <>
          "`#{@requirements.ash_cloak}` (current lock 0.4.0; releases below 0.4.0 carry\n" <>
          "CVE-2026-81319 and CVE-2026-81322 and are not admitted).",
-       "Postgrex requires `#{@requirements.postgrex}` (current lock 0.23.0)"
+       "Postgrex requires `#{@requirements.postgrex}` (current lock 0.23.0)",
+       "DBConnection requires `#{@requirements.db_connection}` (current lock 2.10.3)."
      ]}
   ]
 
@@ -1855,7 +1858,9 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           {~s|deps: select_requirements(deps()) ++ [{:extra_literal, "~> 7.8"}],|, 1,
            "unexpected public dependency set"},
           {"deps: Enum.reject(select_requirements(deps()), &(elem(&1, 0) == :ash_cloak)),", 1,
-           "unexpected public dependency set"}
+           "unexpected public dependency set"},
+          {"deps: Enum.reject(select_requirements(deps()), &(elem(&1, 0) == :db_connection)),",
+           1, "unexpected public dependency set"}
         ] do
       prepare_fixture()
       directory = fixture_path("metadata-consumer")
@@ -1920,7 +1925,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     assert_invalid!()
 
-    for dependency <- [:ash_onetime, :ash_cloak, :postgrex] do
+    for dependency <- [:ash_onetime, :ash_cloak, :postgrex, :db_connection] do
       prepare_fixture()
 
       mutate_job!(
@@ -2416,6 +2421,26 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       "mix.lock",
       ~s("replicant": {:hex, :replicant, "1.6.0"),
       ~s("replicant": {:hex, :replicant, "1.1.0")
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
+    replace_once!(
+      "mix.exs",
+      "{:db_connection, @db_connection_requirement}",
+      "{:db_connection, @db_connection_requirement, optional: true}"
+    )
+
+    assert_invalid!()
+
+    prepare_fixture()
+
+    replace_once!(
+      "mix.lock",
+      ~s("db_connection": {:hex, :db_connection, "2.10.3"),
+      ~s("db_connection": {:hex, :db_connection, "2.10.2")
     )
 
     assert_invalid!()

@@ -66,6 +66,20 @@ reject() {
   echo "release guards: RED — $expected"
 }
 
+# Build real Hex metadata with DBConnection omitted while deps/0 still declares it.
+python3 - <<'PYTHON'
+from pathlib import Path
+
+file = Path("mix.exs")
+source = file.read_text()
+checked = "deps: deps() |> select_requirements(),"
+mutated = "deps: Enum.reject(select_requirements(deps()), &(elem(&1, 0) == :db_connection)),"
+assert source.count(checked) == 1
+file.write_text(source.replace(checked, mutated))
+PYTHON
+reject 'packed dependency requirements differ from mix.exs' build_and_inspect
+git restore mix.exs
+
 scripts/verify-release.sh 1.6.3 v1.6.3 --check
 printf 'dirty\n' >> mix.exs
 reject 'dirty tree' scripts/verify-release.sh 1.6.3 v1.6.3 --check

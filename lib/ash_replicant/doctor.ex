@@ -61,6 +61,12 @@ defmodule AshReplicant.Doctor do
   @public_requirements AshReplicant.DependencyRequirements.read!(@requirements_path)
   @replicant_requirement Map.fetch!(@public_requirements, :replicant)
   @ash_requirement Map.fetch!(@public_requirements, :ash)
+  @db_connection_requirement Map.fetch!(@public_requirements, :db_connection)
+  @runtime_requirements [
+    replicant: @replicant_requirement,
+    ash: @ash_requirement,
+    db_connection: @db_connection_requirement
+  ]
 
   # The source release floors live in `AshReplicant.SourceSet` — the ONE
   # decoder-fact home — and are ENFORCED at activation (the census's release
@@ -120,6 +126,10 @@ defmodule AshReplicant.Doctor do
   @doc "This package's declared Ash requirement (kept equal to `mix.exs`)."
   @spec ash_requirement() :: String.t()
   def ash_requirement, do: @ash_requirement
+
+  @doc "This package's declared DBConnection requirement (kept equal to `mix.exs`)."
+  @spec db_connection_requirement() :: String.t()
+  def db_connection_requirement, do: @db_connection_requirement
 
   @doc """
   The ordered check names a mode reports. `:doctor` is a strict superset of
@@ -534,10 +544,9 @@ defmodule AshReplicant.Doctor do
   """
   @spec check_dependency_requirements(%{optional(atom()) => String.t() | nil}) :: Check.t()
   def check_dependency_requirements(loaded \\ loaded_requirements()) do
-    requirements = [{:replicant, @replicant_requirement}, {:ash, @ash_requirement}]
+    default = pass(:dependency_requirements, :runtime, :ok)
 
-    Enum.find_value(requirements, pass(:dependency_requirements, :runtime, :ok), fn {app,
-                                                                                     requirement} ->
+    Enum.find_value(@runtime_requirements, default, fn {app, requirement} ->
       case dependency_verdict(Map.get(loaded, app), requirement) do
         :ok -> nil
         reason -> fail(:dependency_requirements, :runtime, reason, Atom.to_string(app))
@@ -554,7 +563,7 @@ defmodule AshReplicant.Doctor do
   end
 
   defp loaded_requirements do
-    Map.new([:replicant, :ash], fn app -> {app, loaded_version(app)} end)
+    Map.new(@runtime_requirements, fn {app, _requirement} -> {app, loaded_version(app)} end)
   end
 
   defp loaded_version(app) do

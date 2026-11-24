@@ -434,6 +434,7 @@ consumer_mix run --no-start -e '
   true = Mix.Project.config()[:app] == :fresh_consumer
   true = AshReplicant.Doctor.replicant_requirement() == requirements.replicant
   true = AshReplicant.Doctor.ash_requirement() == requirements.ash
+  true = AshReplicant.Doctor.db_connection_requirement() == requirements.db_connection
   IO.puts("fresh-consumer: Doctor requirements match the packed dependency")
 '
 

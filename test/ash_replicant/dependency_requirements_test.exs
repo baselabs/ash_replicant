@@ -10,6 +10,7 @@ defmodule AshReplicant.DependencyRequirementsTest do
     requirements = DependencyRequirements.read!(@mixfile)
     assert Doctor.replicant_requirement() == requirements.replicant
     assert Doctor.ash_requirement() == requirements.ash
+    assert Doctor.db_connection_requirement() == requirements.db_connection
   end
 
   test "the public dependency set comes from deps, including new attributes" do
