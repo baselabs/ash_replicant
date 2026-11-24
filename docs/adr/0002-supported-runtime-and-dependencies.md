@@ -427,3 +427,9 @@ DBConnection is declared `>= 2.10.3 and < 3.0.0-0` because the doctor
 uses `DBConnection.ConnectionError` directly. Its floor excludes the affected
 versions from consumer resolution, and the doctor applies the same requirement
 to the loaded version. All three locks move from 2.10.2 to 2.10.3. [OSV EEF-CVE-2026-133555](https://osv.dev/vulnerability/EEF-CVE-2026-133555).
+
+The release inspector compares the built Hex archive's dependency metadata
+with `mix.exs` and requires DBConnection to be a mandatory Hex dependency.
+CI qualified `2a5c682d58a3dad8fcb57e4b0388095b742e4780` with locked fetches,
+both dependency audits, archive inspection, and fresh consumption.
+[Qualification run 45457382232](https://github.com/baselabs/ash_replicant/actions/runs/45457382232).
