@@ -946,11 +946,11 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       for shell <- ["sh", "bash {0}", "python3", "echo {0}"] do
         prepare_fixture()
 
-        replace_once!(
-          workflow,
-          "      - run:",
-          "      - shell: #{shell}\n        run:"
-        )
+        if workflow == @publish do
+          replace_once!(workflow, "        run: |", "        shell: #{shell}\n        run: |")
+        else
+          replace_once!(workflow, "      - run:", "      - shell: #{shell}\n        run:")
+        end
 
         assert_invalid!()
       end
