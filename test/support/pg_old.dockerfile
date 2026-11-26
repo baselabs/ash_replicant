@@ -1,9 +1,6 @@
-# ADR-0009 — the old-major test substrate: pglogical + wal2json compiled into the
-# official postgres:9.6 and postgres:12 images (base pinned by digest; the tags are
-# frozen upstream so the digest IS the reproducibility guarantee). Also builds the
-# wal2json 2.4 snapshot under a second plugin name (`wal2json2_4`) — the live lever
-# for the :decoder_option_unsupported halt (a build that predates
-# numeric-data-types-as-string rejects the option wal2json ≥ 2.6 requires).
+# ADR-0027 — pglogical built against digest-pinned official PostgreSQL
+# images. The deprecated 9.6 and 12 rows also build wal2json and retain the
+# wal2json 2.4 option-rejection fixture under its own plugin name.
 #
 # The base is mandatory: scripts/ci/postgres-lanes.sh supplies the declared
 # image@digest from .github/postgres-lanes.json to the workflow's BASE build arg.
@@ -32,7 +29,7 @@ RUN set -eux; \
         build-essential git ca-certificates libkrb5-dev libselinux1-dev \
         libxslt1-dev libpam0g-dev zlib1g-dev libssl-dev libedit-dev; \
       ;; \
-    12) \
+    12|15|16|17|18|19) \
       apt-get update; \
       apt-get install -y --no-install-recommends ca-certificates; \
       sed -E 's#https?://apt\.postgresql\.org#https://apt-archive.postgresql.org#; s#-pgdg main.*$#-pgdg-archive main#' \
@@ -41,7 +38,7 @@ RUN set -eux; \
       apt-get update; \
       apt-get install -y --no-install-recommends build-essential git \
         libkrb5-dev libselinux1-dev libxslt1-dev libpam0g-dev zlib1g-dev libedit-dev \
-        libzstd-dev liblz4-dev \
+        libzstd-dev liblz4-dev libnuma-dev \
         "postgresql-server-dev-$PG_MAJOR=$PG_VERSION"; \
       ;; \
     *) echo "unsupported plugin source major" >&2; exit 1 ;; \
@@ -53,17 +50,21 @@ RUN set -eux; \
     git clone --quiet https://github.com/2ndQuadrant/pglogical.git /tmp/pglogical; \
     cd /tmp/pglogical; \
     git checkout --quiet 9a0e182745885ad0152ea387988c95a483396a81; \
-    make -j"$(nproc)" PG_CONFIG=/usr/lib/postgresql/$PG_MAJOR/bin/pg_config; \
-    make install DESTDIR=/plugins PG_CONFIG=/usr/lib/postgresql/$PG_MAJOR/bin/pg_config
+    make -j"$(nproc)" PG_CONFIG=/usr/lib/postgresql/$PG_MAJOR/bin/pg_config \
+      LDFLAGS_EX="-L/usr/lib/postgresql/$PG_MAJOR/lib"; \
+    make install DESTDIR=/plugins PG_CONFIG=/usr/lib/postgresql/$PG_MAJOR/bin/pg_config \
+      LDFLAGS_EX="-L/usr/lib/postgresql/$PG_MAJOR/lib"
 
 # wal2json, the wal2json_2_6 tag @ 75629c2 (≥ 2.6: numeric-data-types-as-string;
 # the same commit replicant's own dockerfile pins for every pre-15 major), and
 # wal2json_2_4 (36fbee6cbb7e4bc1bf9ee4f55842ab51393e3ac0) as `wal2json2_4` (the option-rejection halt's live lever).
-# Intentional difference from replicant's per-major pinning: this lane runs only
-# the pre-15 majors (9.6/12) — this repo's 15-18 cells run pgoutput, which ships
-# in-core and needs no plugin build — so replicant's master@75a4b494-on-15+ pin
-# and the PG15+ output_plugin_libraries GUC do not apply here.
+ARG WITH_WAL2JSON
 RUN set -eux; \
+    case "$PG_MAJOR:$WITH_WAL2JSON" in \
+      9.6:true|12:true) ;; \
+      15:false|16:false|17:false|18:false|19:false) exit 0 ;; \
+      *) echo "invalid wal2json build profile" >&2; exit 1 ;; \
+    esac; \
     git clone --quiet https://github.com/eulerto/wal2json.git /tmp/wal2json; \
     cd /tmp/wal2json; \
     git checkout --quiet 75629c2e1e81a12350cc9d63782fc53252185d8d; \

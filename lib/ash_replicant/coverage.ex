@@ -705,7 +705,7 @@ defmodule AshReplicant.Coverage do
 
   @doc """
   ONE round-trip identity + version probe. `pg_control_system()` exposes the
-  system identifier across the supported PostgreSQL matrix (9.6 through 18),
+  system identifier across the source qualification matrix (9.6, 12, and 15–19),
   so every supported release verifies the same system-and-database pair; the
   release probe above admits or refuses the release BEFORE this runs.
   """

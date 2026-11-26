@@ -6,7 +6,8 @@ Date: 2026-08-13
 
 Accepted for the 1.0.0 release line. Amended September 29, October 11,
 October 28, November 5 and November 24, 2026 (the Ash security floor is now
-`>= 3.38.1 and < 4.0.0-0`).
+`>= 3.38.1 and < 4.0.0-0`). Partly superseded by
+[ADR-0027](0027-postgresql-server-support.md) for source support and qualification.
 
 > **Dependency floor amendment (2026-11-23).** Postgrex is declared `~> 0.23` and
 > Replicant `>= 1.6.0 and < 2.0.0-0`: Replicant 1.6.0 requires Postgrex `~> 0.23`.

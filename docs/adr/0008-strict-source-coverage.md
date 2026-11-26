@@ -35,7 +35,7 @@ auto-applies `:additive` Relation changes with no sink callback, so a source
   durable binds from it (the manifest comes from the compiled DSL via the
   identity-verified bind path), and its own identity probe
   (`pg_control_system().system_identifier::text` + `current_database()` across
-  the supported PostgreSQL 15 through 18 matrix)
+  the supported source majors in [ADR-0027](0027-postgresql-server-support.md))
   must equal the CONFIGURED identity the replication session separately
   proves. A wrong-node catalog read can only delay a halt to the first
   affected change (the per-change guard), never silently advance past one.

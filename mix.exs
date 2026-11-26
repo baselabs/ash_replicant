@@ -128,7 +128,8 @@ defmodule AshReplicant.MixProject do
     [
       maintainers: ["rjpalermo"],
       licenses: ["MIT"],
-      files: ~w(lib .formatter.exs mix.exs README.md LICENSE NOTICE CHANGELOG.md usage-rules.md),
+      files:
+        ~w(lib .formatter.exs mix.exs README.md LICENSE NOTICE CHANGELOG.md usage-rules.md docs/adr/0027-postgresql-server-support.md),
       links: %{"GitHub" => @source_url, "Changelog" => "#{@source_url}/blob/main/CHANGELOG.md"}
     ]
   end
@@ -139,7 +140,14 @@ defmodule AshReplicant.MixProject do
       # EPUB embeds build time; HTML and Markdown are reproducible.
       formatters: ["html", "markdown"],
       source_ref: "baselabs_ash_replicant-v#{@version}",
-      extras: ["README.md", "usage-rules.md", "CHANGELOG.md", "CONTRIBUTING.md", "LICENSE"]
+      extras: [
+        "README.md",
+        "usage-rules.md",
+        "CHANGELOG.md",
+        "CONTRIBUTING.md",
+        "LICENSE",
+        "docs/adr/0027-postgresql-server-support.md"
+      ]
     ]
   end
 end

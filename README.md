@@ -95,21 +95,18 @@ The current 1.6.5 release baseline is built and tested with:
   transport unchanged and ADMITTED for all three decoders — the table-set
   key (`publication:` / `replication_sets:` / `tables:`) feeds the adapter's
   own coverage census, contract manifest, and doctor checks
-  ([ADR-0026](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0026-decoder-options-passthrough-and-full-admission.md)); the supported SOURCE matrix is pgoutput on
-  PostgreSQL 12 and 15–18, pglogical 2.x and wal2json ≥ 2.6 on 9.6 and 12
-  (the `decoder-old-majors` CI cells run exactly that);
+  ([ADR-0026](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0026-decoder-options-passthrough-and-full-admission.md));
 - AshOnetime `>= 1.3.2 and < 2.0.0-0` (current lock 1.5.0);
 - AshCloak `>= 0.4.0 and < 1.0.0-0` (current lock 0.4.0; every release below
   0.4.0 carries CVE-2026-81319 and CVE-2026-81322 and is not admitted); and
-- PostgreSQL with `wal_level=logical`: CI uses the BaseLabs platform engine
-  recorded in `.github/postgres.ref` for dependency ranges, consumers, performance,
-  drift reports, and decoder destinations. `.github/postgres-lanes.json` declares
-  upstream images by digest for PostgreSQL 15, 16, and 17 compatibility and 9.6/12
-  decoder sources. One reader generates the matrices; one action owns startup,
-  password authentication, TCP readiness, logging, and unconditional removal.
-  The SOURCE support matrix remains pgoutput on PostgreSQL 12 and 15–18,
-  pglogical 2.x and wal2json ≥ 2.6 on 9.6 and 12; destinations 16–18 remain
-  supported. Tests compare the live server with the declared lane major.
+- **Source PostgreSQL 15–19** with `wal_level=logical`, using pgoutput or
+  pglogical 2.4.8. Sources follow PGDG's supported majors.
+- **AshPostgres destination PostgreSQL 16–18.** The decoder-source lanes use
+  the PostgreSQL 18 platform engine as their destination.
+- **Deprecated in 1.x, scheduled for removal in 2.0** — PostgreSQL sources
+  below 15 and `decoder: :wal2json`. The 9.6 and 12 source lanes still cover
+  pglogical and wal2json ≥ 2.6, and PostgreSQL 12 still covers pgoutput.
+  Doctor warns on sources running PostgreSQL 20 or newer. [ADR-0027](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0027-postgresql-server-support.md).
 
 The Ash floor excludes `EEF-CVE-2026-94201` (atom-table exhaustion, fixed
 in 3.34.3), `EEF-CVE-2026-101028` (related-resource read-policy bypass

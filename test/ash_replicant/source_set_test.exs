@@ -120,7 +120,9 @@ defmodule AshReplicant.SourceSetTest do
       assert :ok = SourceSet.check_release_floor(90_600, :wal2json)
       assert :ok = SourceSet.check_release_floor(90_624, :pglogical)
       assert :ok = SourceSet.check_release_floor(120_000, :pgoutput)
-      assert :ok = SourceSet.check_release_floor(180_000, :pgoutput)
+      assert :ok = SourceSet.check_release_floor(190_000, :pgoutput)
+      assert :ok = SourceSet.check_release_floor(190_000, :pglogical)
+      assert :ok = SourceSet.check_release_floor(200_000, :pgoutput)
     end
   end
 

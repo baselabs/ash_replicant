@@ -36,13 +36,12 @@ defmodule AshReplicant.SourceSet do
   @decoders Map.keys(@table_set_keys)
 
   # The source release floor per decoder, as `server_version_num` (ADR-0026):
-  # pgoutput needs publications (PostgreSQL 10+; the 12 floor is the oldest
-  # major this adapter claims and CI runs), the plugin decoders reach 9.6 —
-  # the majors the decoder-old-majors CI cells run. ENFORCED at activation
+  # The 1.x admission floors retain legacy pgoutput on 12 and the two
+  # plugin decoders on 9.6 (ADR-0027). ENFORCED at activation
   # (the census's release probe answers on every connectable release, so a
   # below-floor source halts with `{:error, :source_release_unsupported}`
   # before any 9.6-dependent probe can fault); the doctor mirrors the same
-  # map. Above the ceiling nothing is tested — that stays a doctor warning.
+  # map and owns the advisory ceiling.
   @release_floors %{pgoutput: 120_000, pglogical: 90_600, wal2json: 90_600}
 
   unless MapSet.new(Map.keys(@release_floors)) == MapSet.new(@decoders) do

@@ -46,7 +46,7 @@ try:
         major, image, roles = lane['major'], lane['image'], lane['roles']
         if not isinstance(major, str) or not re.fullmatch(r'(?:9\.[0-9]+|[1-9][0-9]+)', major):
             refuse()
-        if major == engine_major or major in seen:
+        if major in seen:
             refuse()
         seen.add(major)
         if not isinstance(image, str) or not re.fullmatch(
@@ -56,6 +56,8 @@ try:
         if not isinstance(roles, list) or not roles or any(
             role not in ('compatibility', 'decoder-source') for role in roles
         ) or len(set(roles)) != len(roles):
+            refuse()
+        if 'compatibility' in roles and (major == engine_major or int(major.split('.')[0]) < 15):
             refuse()
     generated = subprocess.run(
         ['elixir', sys.argv[2], '--lanes', str(root / 'mix.exs')],
@@ -76,8 +78,14 @@ try:
         dict(current, label='current-lock-pg' + lane['major'], pg_major=lane['major'], pg_image=lane['image'])
         for lane in lanes if 'compatibility' in lane['roles']
     ]
-    decoder = [dict(pg_major=lane['major'], base=lane['image'])
-               for lane in lanes if 'decoder-source' in lane['roles']]
+    decoder = [
+        dict(
+            pg_major=lane['major'],
+            base=lane['image'],
+            legacy=str(int(lane['major'].split('.')[0]) < 15).lower(),
+        )
+        for lane in lanes if 'decoder-source' in lane['roles']
+    ]
     if len(compatibility) == 3 or not decoder:
         refuse()
     checks = json.loads((root / 'scripts/qualification-jobs.json').read_text())

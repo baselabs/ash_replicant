@@ -73,11 +73,9 @@ defmodule AshReplicant.Doctor do
   # probe answers on every connectable release, so a below-floor source halts
   # `{:error, :source_release_unsupported}` before any 9.6-dependent probe
   # can fault; ADR-0026). This check MIRRORS that map for the operator's
-  # pull channel: below the floor fails, above the tested ceiling warns
-  # (a newer major is likely fine and refusing it would be a false
-  # negative — the ceiling stays advisory, the floor does not).
+  # pull channel and warns starting at the first untested major (ADR-0027).
   @source_release_floors SourceSet.release_floors()
-  @source_release_ceiling 190_000
+  @source_release_ceiling 200_000
 
   @expected_plugin "pgoutput"
 
@@ -603,9 +601,8 @@ defmodule AshReplicant.Doctor do
   @doc """
   The source PostgreSQL version against the supported matrix — the MIRROR of
   the floor activation enforces (`AshReplicant.SourceSet` owns the map).
-  Below the floor is a failure; above the tested ceiling is a warning,
-  because a newer major is likely fine and refusing it would be a false
-  negative.
+  A source below the decoder's floor fails. PostgreSQL 20 and newer produce
+  an advisory warning.
   """
   @spec check_source_release(integer() | nil, :pgoutput | :pglogical | :wal2json) :: Check.t()
   def check_source_release(version, decoder) when is_integer(version) do

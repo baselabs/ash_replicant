@@ -541,7 +541,7 @@ defmodule AshReplicant.DoctorTest do
     end
 
     test "the plugin decoders admit the 9.6 floor pgoutput does not" do
-      # 9.6 and 12 are the plugin majors (ADR-0026): plugins pass, pgoutput
+      # The 1.x legacy sources keep their admission floors: plugins pass, pgoutput
       # fails 9.6 (no publications on a pre-10 server).
       for decoder <- [:pglogical, :wal2json] do
         assert Doctor.check_source_release(90_624, decoder).status == :pass
@@ -552,15 +552,18 @@ defmodule AshReplicant.DoctorTest do
       assert Doctor.check_source_release(120_004, :pgoutput).status == :pass
     end
 
-    test "a source above the tested ceiling warns rather than fails" do
-      check = Doctor.check_source_release(190_000, :pgoutput)
+    test "the first untested source major warns" do
+      check = Doctor.check_source_release(200_000, :pgoutput)
 
       assert check.status == :warn
       assert check.reason == :source_release_untested
     end
 
-    test "a supported source passes" do
-      assert Doctor.check_source_release(180_004, :pgoutput).status == :pass
+    test "PostgreSQL 19 passes for both supported decoders" do
+      for decoder <- [:pgoutput, :pglogical] do
+        assert Doctor.check_source_release(190_000, decoder).status == :pass
+        assert Doctor.check_source_release(190_004, decoder).status == :pass
+      end
     end
 
     test "the two version axes never share a reason" do

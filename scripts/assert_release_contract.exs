@@ -85,10 +85,15 @@ defmodule AshReplicant.ReleaseContract do
   else
     mounts=()
     case "$DECODER_SOURCE" in
-      true)
+      legacy|modern)
         [[ "$IMAGE" =~ ^sha256:[0-9a-f]{64}$ ]]
         # Peer for entrypoint initialization; all host logins require a password.
-        printf 'local all all peer\nhost all all all md5\nhost replication all all md5\n' > "$hba"
+        auth=md5
+        if [[ "$DECODER_SOURCE" == modern ]]; then
+          auth=scram-sha-256
+          settings+=(-c output_plugin_libraries=pgoutput,pglogical_output)
+        fi
+        printf 'local all all peer\nhost all all all %s\nhost replication all all %s\n' "$auth" "$auth" > "$hba"
         mounts=(--volume "$hba:/hba.conf:ro")
         settings+=(-c shared_preload_libraries=pglogical -c hba_file=/hba.conf)
         ;;
@@ -96,7 +101,7 @@ defmodule AshReplicant.ReleaseContract do
         [[ "$IMAGE" =~ ^postgres:[0-9][a-z0-9.-]*@sha256:[0-9a-f]{64}$ ]]
         docker pull "$IMAGE"
         ;;
-      *) echo 'decoder-source must be true or false' >&2; exit 1 ;;
+      *) echo 'decoder-source must be legacy, modern or false' >&2; exit 1 ;;
     esac
     docker run --detach --pull=never --name "$CONTAINER" \
       --publish "127.0.0.1:$PORT:5432" \
@@ -379,13 +384,13 @@ defmodule AshReplicant.ReleaseContract do
         "postgres://postgres:postgres@127.0.0.1:5432/ash_replicant_test",
       "ASH_REPLICANT_PERFORMANCE" => "1"
     },
-    "decoder-old-majors" => %{
-      "EXPECTED_PGOLD_MAJOR" => "${{ matrix.pg_major }}",
+    "decoder-sources" => %{
+      "EXPECTED_PG_SOURCE_MAJOR" => "${{ matrix.pg_major }}",
       "EXPECTED_PG_MAJOR" => "${{ needs.postgres-lanes.outputs.engine_major }}",
       "MIX_ENV" => "test",
       "ASH_REPLICANT_TEST_URL" =>
         "postgres://postgres:postgres@127.0.0.1:5432/ash_replicant_test",
-      "ASH_REPLICANT_PGOLD_URL" =>
+      "ASH_REPLICANT_DECODER_SOURCE_URL" =>
         "postgres://postgres:postgres@127.0.0.1:5433/ash_replicant_test"
     }
   }
@@ -397,7 +402,7 @@ defmodule AshReplicant.ReleaseContract do
     "release-artifact" => ~w(env name runs-on steps timeout-minutes),
     "fresh-consumer" => ~w(env name permissions runs-on steps timeout-minutes needs),
     "performance" => ~w(env name runs-on steps timeout-minutes needs),
-    "decoder-old-majors" => ~w(env name runs-on steps strategy timeout-minutes needs)
+    "decoder-sources" => ~w(env name runs-on steps strategy timeout-minutes needs)
   }
 
   @job_steps %{
@@ -471,33 +476,38 @@ defmodule AshReplicant.ReleaseContract do
        "scripts/run-structural-tests.sh test/integration/performance_bounds_test.exs --include integration"},
       {:uses, @postgres_action, %{"mode" => "stop"}, %{"if" => "always()"}}
     ],
-    "decoder-old-majors" => [
+    "decoder-sources" => [
       {:uses, @checkout, %{"persist-credentials" => false}},
       {:uses, @toolchain_action, :absent, %{"id" => "toolchain"}},
       {:uses, @beam_action, @runtime_inputs},
       {:run,
        ~S"""
-       docker build -f test/support/pg_old.dockerfile --build-arg "BASE=$PG_BASE" -t pgold-plugins:ci .
-       image="$(docker image inspect --format '{{.Id}}' pgold-plugins:ci)"
+       docker build -f test/support/pg_old.dockerfile --build-arg "BASE=$PG_BASE" \
+         --build-arg "WITH_WAL2JSON=$WITH_WAL2JSON" -t decoder-source-plugins:ci .
+       image="$(docker image inspect --format '{{.Id}}' decoder-source-plugins:ci)"
        printf 'image=%s\n' "$image" >> "$GITHUB_OUTPUT"
        """
-       |> String.trim(), %{"id" => "plugins", "env" => %{"PG_BASE" => "${{ matrix.base }}"}}},
+       |> String.trim(),
+       %{
+         "id" => "plugins",
+         "env" => %{"PG_BASE" => "${{ matrix.base }}", "WITH_WAL2JSON" => "${{ matrix.legacy }}"}
+       }},
       {:uses, @postgres_action, :absent},
       {:uses, @postgres_action,
        %{
-         "name" => "pgold",
+         "name" => "decoder-source",
          "port" => "5433",
          "image" => "${{ steps.plugins.outputs.image }}",
-         "decoder-source" => "true"
+         "decoder-source" => "${{ matrix.legacy == 'true' && 'legacy' || 'modern' }}"
        }},
       {:run, "mix deps.get --check-locked"},
       {:run, "mix deps.compile"},
       {:run, "mix compile --warnings-as-errors"},
       {:run, String.trim(@create_database)},
       {:run,
-       "scripts/run-structural-tests.sh test/integration/decoder_admission_test.exs --include pgold"},
+       "scripts/run-structural-tests.sh test/integration/decoder_admission_test.exs"},
       {:uses, @postgres_action, %{"mode" => "stop"}, %{"if" => "always()"}},
-      {:uses, @postgres_action, %{"mode" => "stop", "name" => "pgold", "port" => "5433"},
+      {:uses, @postgres_action, %{"mode" => "stop", "name" => "decoder-source", "port" => "5433"},
        %{"if" => "always()"}}
     ],
     "fresh-consumer" => [
@@ -1177,12 +1187,15 @@ defmodule AshReplicant.ReleaseContract do
           "ash_replicant" => %{
             "app" => "ash_replicant",
             "directory" => ".",
+            "files" => [_ | _],
             "requirements" => ^requirements
           }
         },
         declaration
-      ),
-      "Hex package declaration must match the public Mix dependencies"
+      ) and
+        "docs/adr/0027-postgresql-server-support.md" in declaration["ash_replicant"]["files"] and
+        File.regular?(Path.join(root, "docs/adr/0027-postgresql-server-support.md")),
+      "Hex package declaration must match the public Mix dependencies and include the server support ADR"
     )
   end
 
@@ -1235,6 +1248,7 @@ defmodule AshReplicant.ReleaseContract do
          {"publish.yml", "upload"},
          {"publish.yml", "read-back"},
          {"qualification.yml", "postgres-lanes"},
+         {"qualification.yml", "decoder-sources"},
          {"qualification.yml", "release-artifact"},
          {"qualification.yml", "fresh-consumer"}
        ] do
@@ -1405,13 +1419,19 @@ defmodule AshReplicant.ReleaseContract do
           dockerfile,
           ~s|*) echo "unsupported plugin source major" >&2; exit 1|
         ) and
+        String.contains?(dockerfile, "libnuma-dev") and
+        length(:binary.matches(dockerfile, ~S(LDFLAGS_EX="-L/usr/lib/postgresql/$PG_MAJOR/lib"))) ==
+          2 and
         String.contains?(dockerfile, "COPY --from=build /plugins/ /"),
       "plugin builds must use declared bases, exact archived headers and staged plugin files"
     )
 
     for row <- declarations["decoder"] do
       assert(
-        String.contains?(dockerfile, row["pg_major"] <> ")"),
+        Regex.match?(
+          ~r/(?:\s|\|)#{Regex.escape(row["pg_major"])}(?:\||\))/,
+          dockerfile
+        ),
         "plugin source major must have an explicit build branch"
       )
     end
@@ -1729,7 +1749,7 @@ defmodule AshReplicant.ReleaseContract do
            "no-database",
            "compatibility",
            "performance",
-           "decoder-old-majors"
+           "decoder-sources"
          ] do
         assert(job["needs"] == "postgres-lanes", "database lanes must use the declaration job")
       end

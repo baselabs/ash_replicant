@@ -246,24 +246,23 @@ jobs:
         with:
           mode: stop
 
-  decoder-old-majors:
+  decoder-sources:
     needs: postgres-lanes
     name: Plugin decoders / PostgreSQL ${{ matrix.pg_major }}
     runs-on: ubuntu-24.04
-    # Green run 44224060553: slowest plugin decoder cell 3m15s.
-    timeout-minutes: 7
+    timeout-minutes: 90 # no green run yet
     strategy:
       fail-fast: false
       matrix:
         include: ${{ fromJSON(needs.postgres-lanes.outputs.decoder) }}
     env:
-      EXPECTED_PGOLD_MAJOR: ${{ matrix.pg_major }}
+      EXPECTED_PG_SOURCE_MAJOR: ${{ matrix.pg_major }}
       EXPECTED_PG_MAJOR: ${{ needs.postgres-lanes.outputs.engine_major }}
       MIX_ENV: test
       # Job-level so ecto.create/migrate see the destination too.
       # Throwaway fixture password, never an external service credential.
       ASH_REPLICANT_TEST_URL: postgres://postgres:postgres@127.0.0.1:5432/ash_replicant_test
-      ASH_REPLICANT_PGOLD_URL: postgres://postgres:postgres@127.0.0.1:5433/ash_replicant_test
+      ASH_REPLICANT_DECODER_SOURCE_URL: postgres://postgres:postgres@127.0.0.1:5433/ash_replicant_test
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -277,24 +276,26 @@ jobs:
           elixir: ${{ steps.toolchain.outputs.elixir }}
           otp: ${{ steps.toolchain.outputs.otp }}
 
-      - name: Build the old-major plugin substrate image
+      - name: Build the decoder source image
         id: plugins
         env:
           PG_BASE: ${{ matrix.base }}
+          WITH_WAL2JSON: ${{ matrix.legacy }}
         run: |
-          docker build -f test/support/pg_old.dockerfile --build-arg "BASE=$PG_BASE" -t pgold-plugins:ci .
-          image="$(docker image inspect --format '{{.Id}}' pgold-plugins:ci)"
+          docker build -f test/support/pg_old.dockerfile --build-arg "BASE=$PG_BASE" \
+            --build-arg "WITH_WAL2JSON=$WITH_WAL2JSON" -t decoder-source-plugins:ci .
+          image="$(docker image inspect --format '{{.Id}}' decoder-source-plugins:ci)"
           printf 'image=%s\n' "$image" >> "$GITHUB_OUTPUT"
 
       - name: Start the destination engine
         uses: ./.github/actions/postgres
-      - name: Start the declared old-major source
+      - name: Start the declared decoder source
         uses: ./.github/actions/postgres
         with:
-          name: pgold
+          name: decoder-source
           port: '5433'
           image: ${{ steps.plugins.outputs.image }}
-          decoder-source: 'true'
+          decoder-source: ${{ matrix.legacy == 'true' && 'legacy' || 'modern' }}
 
       - run: mix deps.get --check-locked
       - run: mix deps.compile
@@ -305,19 +306,19 @@ jobs:
           mix ecto.create
           mix ecto.migrate
 
-      - name: Decoder admission lane (pglogical, wal2json, pgoutput-on-old)
-        run: scripts/run-structural-tests.sh test/integration/decoder_admission_test.exs --include pgold
+      - name: Exercise decoder admission and live delivery
+        run: scripts/run-structural-tests.sh test/integration/decoder_admission_test.exs
       - name: Remove PostgreSQL
         if: always()
         uses: ./.github/actions/postgres
         with:
           mode: stop
-      - name: Remove the old-major source
+      - name: Remove the decoder source
         if: always()
         uses: ./.github/actions/postgres
         with:
           mode: stop
-          name: pgold
+          name: decoder-source
           port: '5433'
 
   fresh-consumer:

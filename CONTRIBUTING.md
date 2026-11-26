@@ -20,12 +20,12 @@ Thank you for your interest in contributing to AshReplicant!
 - **PostgreSQL** with `wal_level=logical` for the live integration gate; the
   integration suite runs against a live Postgres with a logical replication slot
   and publication. CI runs the checked BaseLabs platform engine plus declared
-  upstream compatibility lanes and `decoder-old-majors` sources (with the plugin substrate —
-  `test/support/pg_old.dockerfile`, the commit-pinned pglogical 2.4.8 +
-  wal2json build). Each CI job owns its disposable PostgreSQL and supplies
-  `ASH_REPLICANT_TEST_URL` and, for the plugin lane, `ASH_REPLICANT_PGOLD_URL`.
-  The support matrix is pgoutput on PG12 and 15–18, pglogical/wal2json on
-  PG9.6 and 12; derive the live major rather than assuming it from this doc.
+  upstream compatibility lanes. The `decoder-sources` jobs use
+  `ASH_REPLICANT_DECODER_SOURCE_URL` for the separate source and
+  `ASH_REPLICANT_TEST_URL` for the destination. Sources 15–19 run
+  pgoutput and commit-pinned pglogical. The deprecated 9.6 and 12 sources
+  retain pglogical and wal2json in 1.x, and 12 also runs pgoutput.
+  Supported AshPostgres destinations are PostgreSQL 16–18. [ADR-0027](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0027-postgresql-server-support.md).
 
 ## Getting Started
 

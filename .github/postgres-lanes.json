@@ -17,21 +17,38 @@
     "major": "15",
     "image": "postgres:15@sha256:10f9e886f772e9d6484350b043bcf990ead67ae5d9988ddce265d72a299055d5",
     "roles": [
-      "compatibility"
+      "compatibility",
+      "decoder-source"
     ]
   },
   {
     "major": "16",
     "image": "postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b",
     "roles": [
-      "compatibility"
+      "compatibility",
+      "decoder-source"
     ]
   },
   {
     "major": "17",
     "image": "postgres:17@sha256:e38411452a464af89e5adadb8d223bf53b898d47d6ef918b2d58c08707350449",
     "roles": [
-      "compatibility"
+      "compatibility",
+      "decoder-source"
+    ]
+  },
+  {
+    "major": "18",
+    "image": "postgres:18@sha256:64c8b0d31e4ab6ea665e8426ea406a94bf52de3c05b3a4a8bf713704eefa9328",
+    "roles": [
+      "decoder-source"
+    ]
+  },
+  {
+    "major": "19",
+    "image": "postgres:19@sha256:4ea94de574c17f0372722806c949757050fbb1cd7648410fe45d6bba275cc00e",
+    "roles": [
+      "decoder-source"
     ]
   }
 ]

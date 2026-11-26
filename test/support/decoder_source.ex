@@ -1,34 +1,30 @@
-defmodule AshReplicant.Test.PgOld do
+defmodule AshReplicant.Test.DecoderSource do
   @moduledoc """
-  The pre-15 plugin-decoder substrate helper (ADR-0026): DDL and identity
-  reads on a DIRECT Postgrex connection to the old-major source — never
-  Ecto, never TestRepo (the destination runs the platform engine;
-  the old server is a SOURCE only).
+  DDL and identity reads on a direct Postgrex connection to the decoder
+  source. TestRepo connects to the separate AshPostgres destination.
 
-  Gated on `ASH_REPLICANT_PGOLD_URL` (the same gating pattern as
-  `AshReplicant.Test.PG`). The substrate image is
-  `test/support/pg_old.dockerfile` (pglogical 2.4.8 + wal2json, both
-  commit-pinned, mirroring the upstream ADR-0009 substrate); CI runs one cell
-  per major with `wal_level=logical`.
+  The source comes from `ASH_REPLICANT_DECODER_SOURCE_URL`. CI builds
+  `test/support/pg_old.dockerfile` for each declared source major with
+  commit-pinned pglogical and legacy-only wal2json (ADR-0027).
   """
 
   alias AshReplicant.Test.PG
 
-  @doc "True iff the old-major source URL is set (gates the decoder lane)."
+  @doc "True iff the decoder source URL is set (gates the decoder lane)."
   @spec enabled?() :: boolean()
-  def enabled?, do: System.get_env("ASH_REPLICANT_PGOLD_URL") not in [nil, ""]
+  def enabled?, do: System.get_env("ASH_REPLICANT_DECODER_SOURCE_URL") not in [nil, ""]
 
   @doc "The source-side `connection:` opts for the pipeline and the DDL helper."
   @spec connection() :: keyword()
   def connection do
-    url = System.fetch_env!("ASH_REPLICANT_PGOLD_URL")
+    url = System.fetch_env!("ASH_REPLICANT_DECODER_SOURCE_URL")
 
     opts = url_opts(url)
     Keyword.merge(opts, queue_target: 50, queue_interval: 1000, timeout: 15_000)
   end
 
   @doc """
-  The old source's ACTUAL session identity — the `source_identity:` the
+  The decoder source's ACTUAL session identity — the `source_identity:` the
   activation must be configured with (`pg_control_system()` exists from 9.6).
   """
   @spec identity!() :: [system_identifier: String.t(), database: String.t()]
@@ -43,11 +39,11 @@ defmodule AshReplicant.Test.PgOld do
     [system_identifier: system_identifier, database: database]
   end
 
-  @doc "The old source's `server_version_num` (the release-floor fixture fact)."
+  @doc "The decoder source's `server_version_num` (the release-floor fixture fact)."
   @spec release!() :: integer()
   def release! do
     [[release]] = query!("SELECT current_setting('server_version_num')::int").rows
-    PG.assert_major!(release, "EXPECTED_PGOLD_MAJOR")
+    PG.assert_major!(release, "EXPECTED_PG_SOURCE_MAJOR")
     release
   end
 
@@ -107,7 +103,7 @@ defmodule AshReplicant.Test.PgOld do
   end
 
   @doc "Tear the source back down (slot + pglogical node + table)."
-  @spec teardown_source!(String.t(), String.t(), :pglogical | :wal2json) :: :ok
+  @spec teardown_source!(String.t(), String.t(), :pgoutput | :pglogical | :wal2json) :: :ok
   def teardown_source!(table, slot, decoder) do
     drop_slot!(slot)
 
@@ -133,9 +129,8 @@ defmodule AshReplicant.Test.PgOld do
   def delete_row!(table, id), do: query!("DELETE FROM #{table} WHERE id = $1", [id])
 
   @doc """
-  A catalog-touching transaction with ZERO published changes — the exact
-  shape Replicant 1.4 suppresses on pre-15 servers (every DDL txn): the
-  decoder lane asserts the pipeline tolerates the suppression (ADR-0026).
+  A catalog change with no published row changes. The decoder lane
+  checks that the following committed row still arrives (ADR-0026).
   """
   def empty_catalog_txn!(table) do
     query!("COMMENT ON TABLE #{table} IS 'lane'")
@@ -152,7 +147,7 @@ defmodule AshReplicant.Test.PgOld do
           result
 
         {:error, error} ->
-          raise "pgold query failed: " <> (error |> query_error_text() |> String.slice(0, 120))
+          raise "decoder source query failed: " <> (error |> query_error_text() |> String.slice(0, 120))
       end
     after
       GenServer.stop(conn)

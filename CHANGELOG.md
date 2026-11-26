@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Qualify PostgreSQL 15–19 sources with pgoutput and pglogical, including a
+  PostgreSQL 19 source against the PostgreSQL 18 platform engine. AshPostgres
+  destinations support PostgreSQL 16–18.
+
+### Changed
+
+- Doctor treats PostgreSQL 19.x sources as tested. PostgreSQL 20 and newer
+  receive an advisory warning, and the per-decoder admission floors stay enforced.
+
+### Deprecated
+
+- PostgreSQL sources below 15 and `decoder: :wal2json` are scheduled for removal
+  in 2.0. The existing 9.6 and 12 decoder-source tests remain in 1.x.
+  [ADR-0027](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0027-postgresql-server-support.md).
+
 ## [1.6.5] - 2026-11-24
 
 ### Changed

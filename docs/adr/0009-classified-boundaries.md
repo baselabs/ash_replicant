@@ -7,6 +7,8 @@ Date: 2026-08-14
 Accepted for the 1.0.0 release line (roadmap B5). Strengthens
 [ADR-0006](0006-destination-transaction-boundary.md)'s transaction boundary
 (the six delivery bodies) and the AGENTS Rule 4 enforcement points.
+[ADR-0027](0027-postgresql-server-support.md) governs PostgreSQL server support
+and decoder qualification. This ADR governs the value-free boundaries.
 
 ## Context
 

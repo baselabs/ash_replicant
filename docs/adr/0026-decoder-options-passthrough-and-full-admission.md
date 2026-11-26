@@ -6,7 +6,9 @@ before any release was cut — see the amendment note)
 ## Status
 
 Status: Accepted. Supersedes: none (extends the ADR-0005 coordination contract
-with Replicant's ADR-0009 decoder surface).
+with Replicant's ADR-0009 decoder surface). Partly superseded by
+[ADR-0027](0027-postgresql-server-support.md) for source support, qualification,
+and the planned wal2json retirement.
 
 > **Superseding CI substrate amendment (2026-11-21).** Old-major sources are now
 > selected from `.github/postgres-lanes.json` by the single lane reader and built

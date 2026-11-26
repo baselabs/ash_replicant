@@ -69,13 +69,34 @@ class PostgresLanesTest(unittest.TestCase):
         )
         self.assertEqual(
             data["decoder"],
-            [dict(pg_major=lane["major"], base=lane["image"])
+            [dict(pg_major=lane["major"], base=lane["image"],
+                  legacy="true" if lane["major"] in ("9.6", "12") else "false")
              for lane in self.lanes if "decoder-source" in lane["roles"]],
         )
         self.assertEqual(data["checks"], sorted(set(data["checks"])))
         for row in data["compatibility"]:
             self.assertIn(
                 "qualification / Dependencies " + row["label"] + " / PostgreSQL " + row["pg_major"],
+                data["checks"],
+            )
+
+    def test_current_support_and_documented_legacy_sources_are_qualified(self):
+        result = self.read()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(result.stdout)
+
+        self.assertEqual(
+            {row["pg_major"] for row in data["compatibility"]},
+            {"15", "16", "17", "18"},
+        )
+        self.assertEqual(
+            {row["pg_major"]: row["legacy"] for row in data["decoder"]},
+            {"9.6": "true", "12": "true",
+             "15": "false", "16": "false", "17": "false", "18": "false", "19": "false"},
+        )
+        for row in data["decoder"]:
+            self.assertIn(
+                "qualification / Plugin decoders / PostgreSQL " + row["pg_major"],
                 data["checks"],
             )
 
@@ -112,9 +133,10 @@ class PostgresLanesTest(unittest.TestCase):
 
     def test_engine_major_cannot_be_a_compatibility_lane(self):
         engine = json.loads(self.read().stdout)["engine_major"]
-        lane = dict(self.lanes[0], major=engine)
-        lane["image"] = "postgres:" + engine + "@" + lane["image"].split("@", 1)[1]
-        self.write_lanes(self.lanes + [lane])
+        lanes = copy.deepcopy(self.lanes)
+        lane = next(lane for lane in lanes if lane["major"] == engine)
+        lane["roles"].append("compatibility")
+        self.write_lanes(lanes)
         self.refused()
 
     def test_image_must_be_upstream_with_matching_tag_and_digest(self):

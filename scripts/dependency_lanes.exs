@@ -12,6 +12,7 @@ defmodule AshReplicant.DependencyLanes do
     _ -> raise ArgumentError, "public dependency lower bound is invalid"
   end
 
+  @doc "Dependency selections for the platform engine. The PostgreSQL lane reader expands the current lock for compatibility servers."
   def lanes(requirements) do
     for {label, lockfile, mode} <- [
           {"exact-floors", "locks/exact-floors.lock", :floor},

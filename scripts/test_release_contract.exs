@@ -505,7 +505,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       {@workflow, "no-database"},
       {@workflow, "compatibility"},
       {@workflow, "performance"},
-      {@workflow, "decoder-old-majors"},
+      {@workflow, "decoder-sources"},
       {@workflow, "fresh-consumer"},
       {@workflow, "release-artifact"},
       {@drift, "report"}
@@ -563,6 +563,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     for {old, replacement} <- [
           {"ARG BASE\n", "ARG BASE=postgres:latest\n"},
           {"=$PG_VERSION", ""},
+          {"libnuma-dev", ""},
+          {~S(LDFLAGS_EX="-L/usr/lib/postgresql/$PG_MAJOR/lib"), ""},
           {"COPY --from=build /plugins/ /", "COPY --from=build /usr/lib/ /usr/lib/"},
           {"unsupported plugin source major\" >&2; exit 1",
            "unsupported plugin source major\" >&2; exit 0"}
@@ -1040,7 +1042,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       {@workflow, "no-database", 77},
       {@workflow, "compatibility", 37},
       {@workflow, "performance", 7},
-      {@workflow, "decoder-old-majors", 7},
+      {@workflow, "decoder-sources", 90},
       {@workflow, "release-artifact", 90},
       {@workflow, "fresh-consumer", 90},
       {@landing, "qualified", 5},
@@ -1223,7 +1225,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
         ] do
       prepare_fixture()
 
-      mutate_run_step!("decoder-old-majors", "mix deps.compile", fn step ->
+      mutate_run_step!("decoder-sources", "mix deps.compile", fn step ->
         String.trim_trailing(step) <> "\n        #{control}\n"
       end)
 
@@ -1235,7 +1237,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     prepare_fixture()
 
     mutate_job!(
-      "decoder-old-majors",
+      "decoder-sources",
       "      MIX_ENV: test\n",
       "      MIX_ENV: test\n      BASH_ENV: /tmp/release-bypass\n"
     )
@@ -1245,7 +1247,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     prepare_fixture()
 
     mutate_job!(
-      "decoder-old-majors",
+      "decoder-sources",
       "    runs-on: ubuntu-24.04\n",
       "    runs-on: ubuntu-24.04\n    defaults:\n      run:\n        shell: echo {0}\n"
     )
@@ -2173,6 +2175,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           "docs/adr/0007-source-bound-checkpoint-effect-once.md",
           "docs/adr/0002-supported-runtime-and-dependencies.md",
           "docs/adr/0005-replicant-coordination.md",
+          "docs/adr/0027-postgresql-server-support.md",
           ".tool-versions",
           "config/config.exs",
           "mix.exs",

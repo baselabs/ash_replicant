@@ -1,4 +1,20 @@
-if AshReplicant.Test.PG.enabled?() do
+alias AshReplicant.Test.{DecoderSource, PG}
+
+decoder_excludes =
+  cond do
+    DecoderSource.enabled?() ->
+      unless PG.enabled?(), do: raise("decoder source requires a destination")
+
+      if DecoderSource.release!() < 150_000, do: [], else: [:legacy_decoder_source]
+
+    System.get_env("EXPECTED_PG_SOURCE_MAJOR") != nil ->
+      raise "decoder source lane requires a source URL"
+
+    true ->
+      [:decoder_source]
+  end
+
+if PG.enabled?() do
   {:ok, _} = AshReplicant.TestRepo.start_link()
 
   # Bring the bundled checkpoint (and, in later tasks, mirror) schema up before the
@@ -10,23 +26,17 @@ if AshReplicant.Test.PG.enabled?() do
   [[release]] =
     AshReplicant.TestRepo.query!("SELECT current_setting('server_version_num')::int").rows
 
-  AshReplicant.Test.PG.assert_major!(release, "EXPECTED_PG_MAJOR")
+  PG.assert_major!(release, "EXPECTED_PG_MAJOR")
   Ecto.Migrator.run(AshReplicant.TestRepo, :up, all: true)
   Ecto.Adapters.SQL.Sandbox.mode(AshReplicant.TestRepo, :manual)
 
-  pgold_excludes =
-    if System.get_env("ASH_REPLICANT_PGOLD_URL") in [nil, ""], do: [:pgold], else: []
-
-  ExUnit.configure(exclude: [:performance] ++ pgold_excludes)
+  ExUnit.configure(exclude: [:performance] ++ decoder_excludes)
   ExUnit.start()
 else
   Application.put_env(:ash_replicant, :forbid_test_repo_start?, true)
   :persistent_term.erase(AshReplicant.TestRepo.start_attempt_key())
 
-  pgold_excludes =
-    if System.get_env("ASH_REPLICANT_PGOLD_URL") in [nil, ""], do: [:pgold], else: []
-
-  ExUnit.configure(exclude: [:integration, :performance] ++ pgold_excludes)
+  ExUnit.configure(exclude: [:integration, :performance] ++ decoder_excludes)
   ExUnit.start()
 
   ExUnit.after_suite(fn _result ->

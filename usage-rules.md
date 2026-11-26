@@ -1293,10 +1293,14 @@ concern, the same split that keeps multitenancy here — and admits all three
 decoders through one table-set home (`AshReplicant.SourceSet`): the census,
 the contract manifest, the doctor, and the C01 re-check all judge the
 decoder-scoped table set exactly as they always judged a publication.
-`AshReplicant.SourceSetTest`, the decoder-lane integration suite, and the
-`decoder-old-majors` CI cells carry the evidence: pgoutput on PostgreSQL 12
-and 15–18, pglogical 2.x and wal2json ≥ 2.6 on PostgreSQL 9.6 and 12 — the
-matrix CI actually runs. A stored pgoutput contract is byte-untouched
+Supported sources run PostgreSQL 15–19 with pgoutput or pglogical 2.4.8.
+Supported AshPostgres destinations run PostgreSQL 16–18. In 1.x, sources
+below PostgreSQL 15 and `decoder: :wal2json` are deprecated. The live legacy
+lanes retain pglogical and wal2json on 9.6 and 12 and pgoutput on 12.
+AshReplicant 2.0 will remove the deprecated source versions and decoder.
+[ADR-0027](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0027-postgresql-server-support.md).
+
+A stored pgoutput contract is byte-untouched
 (upgrade-in-place); switching decoders or table sets on an existing
 checkpoint halts `{:incompatible, :decoder}` — an explicit operator reset
 decision.

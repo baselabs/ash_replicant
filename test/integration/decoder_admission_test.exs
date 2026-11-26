@@ -1,29 +1,20 @@
 defmodule AshReplicant.DecoderAdmissionTest do
   @moduledoc """
-  The plugin-decoder admission lane (ADR-0026): pglogical and wal2json
-  mirroring against a REAL pre-15 source (PostgreSQL 9.6 or 12 with the
-  plugins — `test/support/pg_old.dockerfile`), destination on the ordinary
-  test database. Proves, per decoder: the decoder-scoped census + contract
-  admission (preflight and doctor), insert/update/delete delivery through the
-  host's own actions, the pre-15 empty-transaction suppression tolerance, and
-  the effect-once watermark across a stop/resume.
+  Live decoder admission (ADR-0026 and ADR-0027) against the declared source
+  major and a separate AshPostgres destination. Exercises preflight, CRUD
+  through host actions, and the effect-once watermark across stop/resume.
 
-  Gated on BOTH `ASH_REPLICANT_TEST_URL` (the destination, like every
-  integration test) and `ASH_REPLICANT_PGOLD_URL` (the old-major source); CI
-  runs one cell per major, so each cell exercises both decoders on its major.
+  Every source runs pglogical and the pgoutput delivery or floor check.
+  The legacy sources also run wal2json.
   """
 
   use ExUnit.Case, async: false
 
-  # The decoder lanes carry ONLY :pgold (not :integration): a CLI
-  # `--include integration` re-includes excluded tests carrying the included
-  # tag, so piggybacking on :integration would defeat the exclusion in every
-  # ordinary live run. The lanes run where the substrate exists — the
-  # decoder-old-majors CI cells and local `--include pgold` runs with
-  # ASH_REPLICANT_PGOLD_URL set.
-  @moduletag :pgold
+  # The ordinary live suite uses --include integration, which would override
+  # the source exclusion if these cases also carried :integration.
+  @moduletag :decoder_source
 
-  alias AshReplicant.Test.{PG, PgOld}
+  alias AshReplicant.Test.{PG, DecoderSource}
 
   # One resource, one source table: the plugin table set carries exactly this
   # table, and the adapter's strict-coverage rules require the sink's mapped
@@ -101,7 +92,7 @@ defmodule AshReplicant.DecoderAdmissionTest do
   end
 
   defp lane_setup(decoder) do
-    PgOld.setup_source!(@source_table, decoder)
+    DecoderSource.setup_source!(@source_table, decoder)
 
     AshReplicant.TestRepo.query!("DROP TABLE IF EXISTS #{@mirror_table}")
 
@@ -118,7 +109,7 @@ defmodule AshReplicant.DecoderAdmissionTest do
 
     on_exit(fn ->
       AshReplicant.stop_supervised("decoder_lane")
-      PgOld.teardown_source!(@source_table, "decoder_lane", decoder)
+      DecoderSource.teardown_source!(@source_table, "decoder_lane", decoder)
       AshReplicant.TestRepo.query!("DROP TABLE IF EXISTS #{@mirror_table}")
 
       AshReplicant.TestRepo.query!(
@@ -130,7 +121,7 @@ defmodule AshReplicant.DecoderAdmissionTest do
 
   defp drop_lane_slot do
     PG.wait_until(fn ->
-      case PgOld.query(
+      case DecoderSource.query(
              "SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots WHERE slot_name = $1",
              ["decoder_lane"]
            ) do
@@ -144,8 +135,8 @@ defmodule AshReplicant.DecoderAdmissionTest do
   defp lane_opts(decoder) do
     base = [
       sink: LaneSink,
-      connection: PgOld.connection(),
-      source_identity: PgOld.identity!(),
+      connection: DecoderSource.connection(),
+      source_identity: DecoderSource.identity!(),
       go_forward_only: true,
       snapshot: false,
       census: [enabled?: false]
@@ -215,11 +206,12 @@ defmodule AshReplicant.DecoderAdmissionTest do
   end
 
   @tag decoder: :pglogical
-  test "pglogical: the decoder-scoped census admits, mirrors CRUD, and tolerates the pre-15 empty-transaction suppression",
+  test "pglogical: the decoder-scoped census admits and mirrors CRUD across resume",
        %{decoder: decoder} do
     assert_plugin_lane(decoder)
   end
 
+  @tag :legacy_decoder_source
   @tag decoder: :wal2json
   test "wal2json: the decoder-scoped census admits, mirrors CRUD, and tolerates the pre-15 empty-transaction suppression",
        %{decoder: decoder} do
@@ -227,10 +219,9 @@ defmodule AshReplicant.DecoderAdmissionTest do
   end
 
   @tag decoder: :pgoutput
-  test "pgoutput on an old major: publication mirroring where the floor admits it, refusal where it does not",
+  test "pgoutput: publication mirroring above the release floor and refusal below it",
        %{decoder: decoder} do
-    if PgOld.release!() >= 100_000 do
-      # The publication path on the old major (12 is the pgoutput floor).
+    if DecoderSource.release!() >= 100_000 do
       assert_plugin_lane(decoder)
     else
       # Pre-10 has no publications at all — and the release floor is
@@ -262,7 +253,7 @@ defmodule AshReplicant.DecoderAdmissionTest do
 
   defp assert_plugin_lane(decoder) do
     # 1. The doctor's plugin-source diagnosis: the decoder-scoped census runs
-    #    against the old server (coverage, privileges, RIF, release floor,
+    #    against the source (coverage, privileges, RIF, release floor,
     #    the plugin check's honest answer per decoder).
     report = AshReplicant.preflight(lane_opts(decoder))
 
@@ -298,22 +289,20 @@ defmodule AshReplicant.DecoderAdmissionTest do
     # 2. Live mirroring through the host's own actions.
     start_pipeline!(decoder)
 
-    PgOld.insert_row!(@source_table, "lane-1", "inserted")
+    DecoderSource.insert_row!(@source_table, "lane-1", "inserted")
     assert_mirrored!("lane-1", "inserted")
 
-    PgOld.update_row!(@source_table, "lane-1", "updated")
+    DecoderSource.update_row!(@source_table, "lane-1", "updated")
     assert_mirrored!("lane-1", "updated")
 
-    # 3. The pre-15 empty-transaction suppression (every catalog-touching
-    #    transaction is BEGIN/COMMIT with zero published changes on this
-    #    server): the pipeline must not rely on empty transactions — the next
-    #    real change still mirrors and the row count stays exact.
-    PgOld.empty_catalog_txn!(@source_table)
-    PgOld.insert_row!(@source_table, "lane-2", "after-empty")
+    # 3. A catalog-only transaction leaves the next row deliverable.
+    # This also exercises Replicant's pre-15 empty-transaction suppression.
+    DecoderSource.empty_catalog_txn!(@source_table)
+    DecoderSource.insert_row!(@source_table, "lane-2", "after-empty")
     assert_mirrored!("lane-2", "after-empty")
 
-    # 4. Delete carries the old record (REPLICA IDENTITY FULL) and mirrors.
-    PgOld.delete_row!(@source_table, "lane-1")
+    # 4. Delete mirrors with the decoder's configured replica identity.
+    DecoderSource.delete_row!(@source_table, "lane-1")
     assert_absent!("lane-1")
 
     # 5. No-duplication across a stop/resume: the durable watermark survives
@@ -331,7 +320,7 @@ defmodule AshReplicant.DecoderAdmissionTest do
     assert length(mirror_row!("lane-2")) == 1
     assert checkpoint_lsn() >= before_lsn
 
-    PgOld.update_row!(@source_table, "lane-2", "resumed")
+    DecoderSource.update_row!(@source_table, "lane-2", "resumed")
     assert_mirrored!("lane-2", "resumed")
   end
 end

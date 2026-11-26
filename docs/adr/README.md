@@ -39,6 +39,7 @@ the narrative "why"; an ADR is the tracked, per-decision record with code eviden
 | [0024](0024-install-generator-host-owned-contract.md) | The install generator writes host-owned code and never guesses: four modules, no connection/publication/key material, a bootable no-op, write-nothing refusals as unit-tested planner decisions, and the README manual block test-tied to the installer's output | I01 |
 | [0025](0025-doctor-read-only-diagnosis-surface.md) | The diagnosis surface is read-only, an adapter, and never guesses: three independent no-writes legs, adapters (never copies) over the activation rules, one canonical check with a closed reason vocabulary, and `:skipped` — never `:pass` — for the unjudgeable | O01 |
 | [0026](0026-decoder-options-passthrough-and-full-admission.md) | Replicant 1.4's decoder options pass through unchanged AND all three decoders are admitted: one decoder-scoped table-set home (SourceSet), a decoder-scoped census and contract manifest (pgoutput manifests byte-identical), per-decoder release floors and an honest plugin-presence check in the doctor, and live pglogical/wal2json lanes on PostgreSQL 9.6 and 12 | Replicant 1.4 sibling upgrade |
+| [0027](0027-postgresql-server-support.md) | PostgreSQL sources follow PGDG support (15–19), pglogical stays, AshPostgres destinations support 16–18, and wal2json and pre-15 sources are deprecated in 1.x | PostgreSQL support policy |
 
 ## On-touch gap list
 
