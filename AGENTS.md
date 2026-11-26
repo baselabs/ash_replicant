@@ -214,8 +214,9 @@ Supported sources are PostgreSQL 15–19 with pgoutput or pglogical, and support
 AshPostgres destinations are PostgreSQL 16–18 (ADR-0027). The existing full-suite cells cover
 PostgreSQL 15–17 on upstream images and 18 on the engine. Separate decoder sources cover 15–19
 and the deprecated 9.6/12 lanes, where wal2json still runs in 1.x. Source versions below 15 and
-wal2json are scheduled for removal in 2.0. Tests require the declared live major on each server.
-All fixture passwords are disposable test data.
+wal2json are scheduled for removal in 2.0. Tests require the declared live major on each
+server. The decoder suite connects to the source before selecting tests, so an unreachable or
+misidentified source fails qualification. All fixture passwords are disposable test data.
 
 `.tool-versions` is the single checkout runtime source. Only the shared, unedited
 `scripts/toolchain.sh` reads it; the local toolchain action tests the reader and exposes
