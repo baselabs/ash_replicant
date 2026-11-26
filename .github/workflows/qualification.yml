@@ -250,7 +250,8 @@ jobs:
     needs: postgres-lanes
     name: Plugin decoders / PostgreSQL ${{ matrix.pg_major }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 90 # no green run yet
+    # Green run 45895179176: slowest plugin decoder cell 3m26s.
+    timeout-minutes: 7
     strategy:
       fail-fast: false
       matrix:

@@ -1042,7 +1042,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       {@workflow, "no-database", 77},
       {@workflow, "compatibility", 37},
       {@workflow, "performance", 7},
-      {@workflow, "decoder-sources", 90},
+      {@workflow, "decoder-sources", 7},
       {@workflow, "release-artifact", 90},
       {@workflow, "fresh-consumer", 90},
       {@landing, "qualified", 5},

@@ -1247,7 +1247,6 @@ defmodule AshReplicant.ReleaseContract do
          {"publish.yml", "upload"},
          {"publish.yml", "read-back"},
          {"qualification.yml", "postgres-lanes"},
-         {"qualification.yml", "decoder-sources"},
          {"qualification.yml", "release-artifact"},
          {"qualification.yml", "fresh-consumer"}
        ] do
