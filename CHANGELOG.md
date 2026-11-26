@@ -7,16 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.5] - 2026-11-24
+
 ### Changed
 
 - Build the inspected Hex package and docs in qualification and use the shared
   publication action to upload and verify those exact archives. Run the live
   fresh-consumer smoke against the qualified package and use package-scoped
   release tags.
-
-## [1.6.5] - 2026-11-24
-
-### Changed
 
 - Refresh the shared toolchain reader's installed-version probes; CI keeps its
   existing runtime declarations and verifies the new reader checksum.
