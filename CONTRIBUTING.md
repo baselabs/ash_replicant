@@ -197,6 +197,12 @@ affected tests in the same change, and record the Ash version contract delta in 
   These live-suite and migration-drift commands are mandatory parts of the
   pre-PR release battery, in addition to the checks in step 3.
 
+  Each negative workflow fixture in `scripts/test_release_contract.exs` must
+  still parse as YAML: the self-test parses every mutated workflow before it
+  runs the checker, so a mutation that breaks YAML fails the self-test instead
+  of proving the checker rejects the change. Insert an extra step as a whole
+  step, never inside another step's `with:` mapping.
+
   CI fetches the exact-floor cell from `locks/exact-floors.lock`, the
   latest-compatible cell from `locks/latest-compatible.lock`, and current-lock
   cells from `mix.lock`. It copies the selected committed lock to `mix.lock`
