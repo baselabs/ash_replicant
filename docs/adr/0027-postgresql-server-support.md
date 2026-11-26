@@ -33,7 +33,8 @@ exercise pgoutput and pglogical on sources 15–19 against the platform
 destination. Each source image is pinned by digest and pglogical is pinned
 by commit and built against headers matching that image. Each lane verifies
 the live major and exercises preflight, CRUD, and stop/resume against the
-real source and destination.
+real source and destination. The supported-major sources allow
+`pglogical_output` in `output_plugin_libraries` for pglogical delivery.
 
 The legacy 9.6 and 12 decoder-source lanes continue to exercise pglogical
 and wal2json in 1.x. PostgreSQL 12 also exercises pgoutput delivery, and

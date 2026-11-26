@@ -14,7 +14,7 @@ defmodule AshReplicant.DecoderAdmissionTest do
   # the source exclusion if these cases also carried :integration.
   @moduletag :decoder_source
 
-  alias AshReplicant.Test.{PG, DecoderSource}
+  alias AshReplicant.Test.{DecoderSource, PG}
 
   # One resource, one source table: the plugin table set carries exactly this
   # table, and the adapter's strict-coverage rules require the sink's mapped

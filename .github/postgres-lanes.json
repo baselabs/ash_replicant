@@ -23,7 +23,7 @@
   },
   {
     "major": "16",
-    "image": "postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b",
+    "image": "postgres:16@sha256:07abc3f43c9395b0bdbbab36bc25ddb0e8d83cd4fcafb5fb7d6abe14ff156dd8",
     "roles": [
       "compatibility",
       "decoder-source"

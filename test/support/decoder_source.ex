@@ -147,7 +147,8 @@ defmodule AshReplicant.Test.DecoderSource do
           result
 
         {:error, error} ->
-          raise "decoder source query failed: " <> (error |> query_error_text() |> String.slice(0, 120))
+          raise "decoder source query failed: " <>
+                  (error |> query_error_text() |> String.slice(0, 120))
       end
     after
       GenServer.stop(conn)

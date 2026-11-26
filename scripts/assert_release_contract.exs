@@ -504,8 +504,7 @@ defmodule AshReplicant.ReleaseContract do
       {:run, "mix deps.compile"},
       {:run, "mix compile --warnings-as-errors"},
       {:run, String.trim(@create_database)},
-      {:run,
-       "scripts/run-structural-tests.sh test/integration/decoder_admission_test.exs"},
+      {:run, "scripts/run-structural-tests.sh test/integration/decoder_admission_test.exs"},
       {:uses, @postgres_action, %{"mode" => "stop"}, %{"if" => "always()"}},
       {:uses, @postgres_action, %{"mode" => "stop", "name" => "decoder-source", "port" => "5433"},
        %{"if" => "always()"}}
