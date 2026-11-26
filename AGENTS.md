@@ -162,7 +162,7 @@ SHA make landing ambiguous. After a green topic check, make a final docs-only co
 that new SHA for landing. It settles after promotion itself: it deletes local and origin branches that contain the landed
 commits, retires clean delegate worktrees and sweeps `kci/` refs. Exit 0 means landed and settled;
 exit 4 means landed with leftovers named, so fix the cause and run its sweep.
-Never push `main` directly. Workflow and release-script changes require the infrastructure maintainers' review before landing.
+Never push `main` directly. Workflow and release-script changes go to the infrastructure maintainers for advice; the repository's owner decides and lands them.
 
 ## Development workflow
 
@@ -321,8 +321,8 @@ they touch a workflow, a Dockerfile, a release script or a secret.
   maintainers one message: the repository, the full commit, what goes out, and anything they need.
 - An agent writes its own workflow changes. Before landing a change to `.github/`, a Dockerfile,
   a release script or anything that touches a secret, it sends the infrastructure maintainers
-  the branch and head and waits for their review. Any CI/CD, runner, box or key problem goes to
-  them, not around it.
+  the branch and head for their advice; the repository's owner decides and lands the change.
+  Any CI/CD, runner, box or key problem goes to them, not around it.
 - This public repository never builds on the build box. Never list process arguments:
   no `ps` with `args` or `-f`, no `/proc/*/cmdline`; use `ps -eo pid,etimes,pcpu,comm`.
 - A secret never appears on a command line, in a log or in a message. If you see one exposed,
