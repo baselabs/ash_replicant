@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Build the inspected Hex package and docs in qualification and use the shared
+  publication action to upload and verify those exact archives. Run the live
+  fresh-consumer smoke against the qualified package and use package-scoped
+  release tags.
+
 ## [1.6.5] - 2026-11-24
 
 ### Changed
@@ -298,8 +305,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checks Ash, Replicant, AshOnetime, AshPostgres, and Spark against the
   newest non-retired stable Hex release within each requirement.
 - Guard publish and verification with a clean tree and HEAD equal to the
-  version tag. Publish clears all dependency selectors and loads
-  `HEX_API_KEY` from the repo-root `.env`. Inspect package files against a
+  version tag. Publish clears all dependency selectors and uses the former
+  repository-local upload path. Inspect package files against a
   checked-in allowlist; run the fresh-consumer check in `prepush.sh` and
   support `--from-hex VERSION` after publication.
 - Exclude Cloak's AES-CTR advisory `EEF-CVE-2026-95105` from Hex audits while
@@ -1971,8 +1978,8 @@ sensitive-column verification.
   `usage-rules.md`, `CONTRIBUTING.md`, `LICENSE`, `NOTICE`; tracked charter at
   `docs/CHARTER.md`.
 
-[Unreleased]: https://github.com/baselabs/ash_replicant/compare/v1.6.5...HEAD
-[1.6.5]: https://github.com/baselabs/ash_replicant/tree/v1.6.5
+[Unreleased]: https://github.com/baselabs/ash_replicant/compare/baselabs_ash_replicant-v1.6.5...HEAD
+[1.6.5]: https://github.com/baselabs/ash_replicant/tree/baselabs_ash_replicant-v1.6.5
 [1.6.4]: https://github.com/baselabs/ash_replicant/tree/v1.6.4
 [1.6.3]: https://github.com/baselabs/ash_replicant/tree/v1.6.3
 [1.6.2]: https://github.com/baselabs/ash_replicant/tree/v1.6.2

@@ -180,13 +180,14 @@ DBConnection requires `>= 2.10.3 and < 3.0.0-0` (current lock 2.10.3).
 The CI gates install the exact runtime, fetch with `mix deps.get --check-locked`, and run
 format, compile with warnings as errors, Credo, both dependency audits, the covering tests,
 Dialyzer, and docs/package checks through the route above. The `fresh-consumer` job
-builds the candidate tarball and runs fresh resolution, both audits, compile with warnings
+consumes the qualified tarball and runs fresh resolution, both audits, compile with warnings
 as errors, docs, migrations, and a live CDC smoke against its own logical-WAL platform engine.
 The consumer's `deps.audit --path` runs from the dev repository root, where `mix_audit`
 is declared; Hex's audit runs inside the consumer. The retired local `prepush.sh` route
 authorizes no build or test on the owner's Mac or build box; CI runs its collector self-tests.
 
-CI fetches only committed locks: `mix.lock` for current-lock cells,
+The shared action compiles an unpacked consumer against the package lock. CI fetches
+committed locks: `mix.lock` for current-lock cells,
 `locks/exact-floors.lock` and `locks/latest-compatible.lock` for those cells.
 Qualification asserts compatible versions without querying newest upstream releases.
 The generated fresh tarball consumer starts without a lock and resolves its dependencies.
@@ -216,60 +217,39 @@ against the reader's expected major. All fixture passwords are disposable test d
 `.tool-versions` is the single checkout runtime source. Only the shared, unedited
 `scripts/toolchain.sh` reads it; the local toolchain action tests the reader and exposes
 its outputs. The local BEAM action installs those versions strictly, immediately refuses
-an Elixir, build-suffix or full OTP mismatch through `--installed`, and pins the Hex client.
+an Elixir, build-suffix or full OTP mismatch through `--installed`, and installs Hex from
+the shared publication action's pinned `hex-version` file.
 The wrapper and checkout config use the same reader; package requirements stay in `mix.exs`.
 Job timeouts follow infra's binding CI requirements linked below; each comment
 names its slowest measured green run and duration. Publish has no green run yet
 and uses `90 # no green run yet` until infra measures one. No workflow runs repository code from a pull
 request; a maintainer qualifies a fork's change through `kci/<commit>`.
 
-Live release-guard self-tests run once in the no-database job, separately from
-matrix checker tests. Every GitHub REST lookup uses `gh api` with `GH_TOKEN`
-from the calling step's environment; the guard and publish-refusal jobs grant
-only `contents: read`. Only an HTTP 404 proves absence; a missing token,
-transport failure or any other unexpected response refuses. The workflow
-contract mutation-tests token placement, transport and refusal controls.
-Publication first requires an anonymous HTTP 200 for the existing Hex package
-name. A missing name refuses: first publication is the owner's decision. Keyless
-steps build and inspect package and docs archives. Before upload planning, the
-built package must have a nonempty changelog section for its version and no
-entries above it. Only the upload step receives
-the publish key; it runs from the runner's temporary directory, loads no project,
-rechecks package existence and permits an untagged held version only when its checksum
-matches the freshly built package and it is not retired. Local or remote version tags and
-GitHub releases always refuse. Preflight and upload planning keep readable served docs;
-only HTTP 404 with `has_docs: false` permits a docs upload. A 404 with `has_docs: true`
-refuses because metadata and the repository disagree. Other responses and malformed archives
-refuse. Neither package nor served docs is replaced. A second owner dispatch finishes an
-approved hold or interrupted upload. This release path never replaces or compares served docs
-(infra's release rule). Hex allows republishing docs, but replacing them would bind this
-version's docs to a different commit than the one infra tags; comparing a rebuild could refuse
-a held release whose package bytes match.
+The `release-artifact` qualification job calls the shared Hex action with no publishing
+identity. It builds locked package and docs archives, checks the exact files and
+requirements in `.github/hex-packages.json`, and compiles the unpacked package in a
+locked consumer. It builds HTML and Markdown docs once with warnings as errors and stamps
+`release.json` with the package, version and qualification commit. The
+`hex-hexpm-ash_replicant` artifact holds both archives and their manifest for seven days.
 
-Qualification and publication render docs once from an extracted source tree with locked
-dependencies, warnings as errors, ExDoc 0.40.4 and Makeup Elixir 1.0.1. Only HTML and Markdown
-ship; EPUB embeds build time. After rendering, top-level `release.json` records exactly
-`package`, `version` and the run's full `GITHUB_SHA`. Hex 2.7.0 creates a sorted, fixed-metadata
-archive inspected against every visible rendered byte and that provenance. Docs builds are
-never compared with each other or with served docs. Equal package bytes cannot identify the
-docs source: docs also render files and dependency locks absent from the package.
+Infra dispatches `publish.yml` on the default branch with the full landed
+`release_commit`. Every job admits both the dispatch actor and the rerun actor.
+`upload` alone uses environment `publish` and OIDC. Its runtime setup executes only
+the checksum-pinned shared reader and installed tools outside the Mix project.
+The shared action verifies default-branch ancestry, exact-commit qualification,
+the artifact, changelog stamp, version tags, public package existence and private
+OTP-app version collisions. It requests a package-scoped token only when an
+upload is needed and verifies revocation.
 
-After upload, keyless read-back compares the served package with the inspected package and
-inspects the served docs archive, including `index.html` and `release.json`. The provenance
-must name this package and version, and the dispatched commit or an ancestor of it in fetched,
-complete default-branch history; unavailable history refuses. Legacy docs without provenance
-refuse read-back. The `published_commit` job output and `published-commit.txt` asset report that
-commit for infra's tag. One `release-assets` artifact retains the versioned package, the docs
-bytes downloaded from Hex, and their `SHA256SUMS`. `RELEASE-NOTES.md` takes the release
-section from the served package's changelog and records that commit and both digests;
-publication refuses a missing, duplicated or empty section before any build. Infra tags the published commit, compares
-the artifact package with Hex, and creates the GitHub release from those assets. Consumer verification names that
-permanent GitHub release, never the expiring workflow artifact. After infra reports read-back
-and the tag, this repository records the verified package digest in
-`scripts/release/published_packages.sha256` through normal landing. Held versions never change
-that ledger speculatively. A release is complete only with its tag, Hex package, docs and
-GitHub release. The published-package consumer runs only after upload in `publish.yml`, in
-no environment and with no key; only the upload job belongs to environment `publish`.
+`read-back` runs outside the publish environment. It retrieves the qualification
+identified by upload's run ID and manifest digest, compares both served archives
+byte for byte, and requires the docs provenance to name `release_commit`.
+`release-assets` retains the package, served docs and `SHA256SUMS` for seven days.
+Infra creates the scoped tag `baselabs_ash_replicant-v<version>` and the GitHub
+release, generating its notes from the packaged changelog. Retry an approved
+hold against the same qualified archives. First publication of a package name
+requires the owner's decision.
+
 The release checker fixtures are recorded data, never fetched or executed as
 an Elixir project: `recorded.lock` is replayed with `assert-dependency-version.sh
 --lock PATH`, whose default is the repository root's `mix.lock`. There is no

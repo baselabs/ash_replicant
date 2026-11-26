@@ -41,27 +41,6 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   fi
   """
 
-  @public_dependency_check """
-  env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix run --no-start -e '
-  deps = Mix.Project.config() |> Keyword.fetch!(:deps)
-
-  expected = AshReplicant.DependencyRequirements.read!("mix.exs")
-
-  public_deps = Enum.reject(deps, fn dependency ->
-    options = if tuple_size(dependency) == 3, do: elem(dependency, 2), else: []
-    Keyword.has_key?(options, :only)
-  end)
-
-  unless Enum.sort(Enum.map(public_deps, &elem(&1, 0))) == Enum.sort(Map.keys(expected)),
-    do: raise("unexpected public dependency set")
-
-  Enum.each(expected, fn {dependency, requirement} ->
-    actual = deps |> List.keyfind!(dependency, 0) |> elem(1)
-    unless actual == requirement, do: raise("unexpected public dependency requirement")
-  end)
-  '
-  """
-
   @command_status_guards [
     {"scripts/with-release-runtime.sh",
      ~S"""
@@ -79,16 +58,6 @@ defmodule AshReplicant.ReleaseContractSelfTest do
      ~S"""
      actual_elixir = System.version() <> "-otp-" <> System.build_info()[:otp_release]
      """},
-    {"scripts/assert-release-tree.sh",
-     ~S"""
-       tree_status="$(git status --porcelain --untracked-files=all)" || release_tree_fail 'git status failed'
-       [[ -z "$tree_status" ]] || release_tree_fail 'dirty tree'
-     """},
-    {"scripts/inspect-release-package.sh",
-     ~S"""
-     package_files="$(cd "$work/package" && find . \( -type f -o -type l \) | sed 's|^./||' | LC_ALL=C sort)"
-     if ! diff -u "$root/scripts/release-package-files.txt" - <<<"$package_files"; then
-     """},
     {"scripts/run-structural-tests.sh",
      ~S"""
      logger_error_count="$(grep -Ec '(^|[[:space:]])\[error\]' "$raw_output")" || [[ $? -eq 1 ]]
@@ -105,78 +74,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     {"scripts/bump-version.sh",
      ~S"""
        count="$(grep -cF "$old" "$file")" || [[ $? -eq 1 ]]
-     """},
-    {"scripts/test-release-package-inspection.sh",
-     ~S"""
-     grep -qF "$selector_free_build" <<<"$inspection" || {
-     """},
-    {"scripts/test-release-package-inspection.sh",
-     ~S"""
-       build_status=0
-       grep -q 'mix hex.build' <<<"$staged" || build_status=$?
-       if [[ "$build_status" -ne 1 ]]; then
-     """},
-    {"scripts/test-release-package-inspection.sh",
-     ~S"""
-       inspection_script="$(rebind_staging)" || return
-       ASH_REPLICANT_PACKAGE_FIXTURE="$1" bash -euo pipefail -c "$inspection_script"
-     """},
-    {"scripts/test-release-package-inspection.sh",
-     ~S"""
-       staged="$(printf '%s\n' "$inspection" \
-         | sed -e 's|^package_dir=\$(mktemp -d)$|package_dir="$ASH_REPLICANT_PACKAGE_FIXTURE"|' \
-               -e "s|^${selector_free_build}\$|: # self-test staged fixture|")" || return
      """}
   ]
-
-  @package_inspection ~S"""
-  package_dir=$(mktemp -d)
-  trap 'rm -rf "$package_dir"' EXIT
-  env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix hex.build --unpack --output "$package_dir"
-
-  for required in lib .formatter.exs mix.exs README.md LICENSE NOTICE CHANGELOG.md usage-rules.md \
-    lib/ash_replicant/upgrade.ex lib/ash_replicant/upgrade/checkpoint.ex \
-    lib/mix/tasks/ash_replicant.upgrade.ex; do
-    test -e "$package_dir/$required" || {
-      echo "::error::Missing package path: $required"
-      exit 1
-    }
-  done
-
-  residue="$(find "$package_dir" -type d \( -name test -o -name _build -o -name '.*' ! -name . \) -print -quit)"
-  if [[ -n "$residue" ]]; then
-    echo "::error::Package contains test, build, or dot-directory residue"
-    exit 1
-  fi
-
-  if test -e "$package_dir/priv"; then
-    echo "::error::Package contains private migrations"
-    exit 1
-  fi
-
-  credentials="$(find "$package_dir" -type f \( -name '.env*' -o -name '*.pem' -o -name '*.key' \) -print -quit)"
-  if [[ -n "$credentials" ]]; then
-    echo "::error::Package contains a credential-shaped file"
-    exit 1
-  fi
-
-  package_files="$(cd "$package_dir" && find . \( -type f -o -type l \) | sed 's|^./||' | LC_ALL=C sort)"
-  if ! diff -u scripts/release-package-files.txt - <<<"$package_files"; then
-    echo "::error::Package files differ from the release allowlist"
-    exit 1
-  fi
-  """
-
-  @upload_archive_checks ~S"""
-  trap 'rm -rf "$RUNNER_TEMP/package.tar" "$RUNNER_TEMP/hex-docs.tar.gz" "$RUNNER_TEMP/hex-docs.tar.gz.rendered"' EXIT
-  version="$(sed -n 's/^  @version "\(.*\)"$/\1/p' mix.exs)"
-  python3 -I scripts/check-docs-archive.py "$RUNNER_TEMP/hex-docs.tar.gz" "$RUNNER_TEMP/hex-docs.tar.gz.rendered" --version "$version" --commit "$GITHUB_SHA"
-  env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION scripts/with-release-runtime.sh mix hex.build --output "$RUNNER_TEMP/package.tar"
-  scripts/inspect-release-package.sh "$RUNNER_TEMP/package.tar"
-  python3 -B scripts/test_release_docs.py "$RUNNER_TEMP/hex-docs.tar.gz" "$RUNNER_TEMP/hex-docs.tar.gz.rendered" "$RUNNER_TEMP/package.tar"
-  cd "$RUNNER_TEMP"
-  mix run --no-mix-exs "$GITHUB_WORKSPACE/scripts/test_publish_hex_artifacts.exs"
-  """
 
   @job_commands %{
     "postgres-lanes" => [
@@ -191,7 +90,6 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       "elixir --version",
       "scripts/test-prepush.sh",
       "scripts/test-release-checkers.sh",
-      "scripts/test-release-guards.sh",
       "scripts/test-release-contract.sh",
       "python3 -B -m unittest discover -s scripts -p 'test_qualify.py'",
       "mix credo --strict",
@@ -222,18 +120,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     "fresh-consumer" => [
       "mix deps.get --check-locked",
       "mix deps.compile",
-      "scripts/test-fresh-consumer.sh"
-    ],
-    "release-artifact" => [
-      "env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix deps.get --check-locked",
-      "mix deps.compile",
-      "mix compile --warnings-as-errors",
-      "elixir --version",
-      "scripts/assert-release-contract.sh",
-      String.trim(@public_dependency_check),
-      ~s(scripts/build-release-docs.sh "$RUNNER_TEMP/hex-docs.tar.gz"),
-      String.trim(@upload_archive_checks),
-      String.trim(@package_inspection)
+      ~s(scripts/test-fresh-consumer.sh "$RUNNER_TEMP/qualified-hex/package.tar"),
+      ~s(rm -rf "$RUNNER_TEMP/qualified-hex")
     ]
   }
 
@@ -434,8 +322,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       decoder_job_probes()
       command_probes()
       compatibility_probes()
-      packaging_selector_probes()
-      public_dependency_probes()
+      hex_qualification_probes()
       workflow_structure_probes()
       checker_wiring_probes()
       mix_contract_probes()
@@ -457,16 +344,6 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     replace_once!(
       "scripts/test-release-checkers.sh",
       "scripts/test-ash-onetime-migration-checker.sh >/dev/null",
-      "true"
-    )
-
-    assert_invalid!()
-
-    prepare_fixture()
-
-    replace_once!(
-      "scripts/test-release-checkers.sh",
-      "scripts/test-release-package-inspection.sh >/dev/null",
       "true"
     )
 
@@ -630,8 +507,6 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       {@workflow, "decoder-old-majors"},
       {@workflow, "fresh-consumer"},
       {@workflow, "release-artifact"},
-      {@publish, "publish"},
-      {@publish, "published-package"},
       {@drift, "report"}
     ]
 
@@ -665,9 +540,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           {@beam, "        WANT_ELIXIR: ${{ inputs.elixir }}\n",
            "        WANT_ELIXIR: 1.20.3-otp-29\n"},
           {@beam, "        WANT_OTP: ${{ inputs.otp }}\n", "        WANT_OTP: 29.0.5\n"},
-          {@beam, "        WANT_HEX: \"2.7.0\"\n", "        WANT_HEX: \"2.6.0\"\n"},
-          {@beam, "        mix local.hex \"$WANT_HEX\" --force\n",
-           "        mix local.hex --force\n"},
+          {@beam, "mix local.hex \"$hex_version\" --force", "mix local.hex --force"},
           {@toolchain, "scripts/toolchain.sh --self-test", "true"},
           {@toolchain, "scripts/toolchain.sh >>", "sh scripts/toolchain.sh >>"},
           {@toolchain, "scripts/toolchain.sh >>", "awk '{print}' .tool-versions >>"},
@@ -815,19 +688,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       assert_invalid!()
     end
 
-    for command <- @job_commands["release-artifact"] do
-      for control <- ["if: #{@fail_late}", "id: compile"] do
-        prepare_fixture()
-
-        mutate_run_step!("release-artifact", command, fn step ->
-          String.trim_trailing(step) <> "\n        #{control}\n"
-        end)
-
-        assert_invalid!()
-      end
-    end
-
-    for job <- ["no-database", "compatibility", "release-artifact"],
+    for job <- ["no-database", "compatibility"],
         command <- @job_commands[job],
         value <- ["true", "false", "${{ true }}"] do
       prepare_fixture()
@@ -943,7 +804,10 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     assert_invalid!()
 
     for {old, replacement} <- [
-          {"scripts/test-fresh-consumer.sh", "scripts/test-fresh-consumer.sh --check"},
+          {"scripts/test-fresh-consumer.sh", "true"},
+          {"    needs: [postgres-lanes, release-artifact]", "    needs: postgres-lanes"},
+          {"          name: hex-hexpm-ash_replicant", "          name: other-artifact"},
+          {~s("$RUNNER_TEMP/qualified-hex/package.tar"), ~s("$RUNNER_TEMP/rebuilt.tar")},
           {"    permissions:\n      contents: read", "    permissions:\n      contents: write"},
           {"      MIX_ENV: dev", "      MIX_ENV: prod"},
           {"      ASH_REPLICANT_TEST_URL:", "      UNUSED_DATABASE_URL:"},
@@ -1098,14 +962,6 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       assert_invalid!()
     end
 
-    for command <- ["residue=", "credentials=", "package_files="] do
-      prepare_fixture()
-      source = File.read!(fixture_path(@workflow))
-      [line] = Regex.run(~r/^          #{Regex.escape(command)}[^\n]*\n/m, source)
-      replace_once!(@workflow, line, "")
-      assert_invalid!()
-    end
-
     for path <- Path.wildcard(Path.join(@source_root, "scripts/**/*.sh")) do
       relative = Path.relative_to(path, @source_root)
 
@@ -1121,236 +977,49 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   end
 
   defp publish_probes do
-    admission =
-      "      - name: Refuse a missing, duplicated or empty release changelog section\n" <>
-        "        run: python3 -I scripts/release-notes.py\n"
-
-    for replacement <- [
-          "",
-          String.replace(admission, "        run:", "        if: false\n        run:")
+    for job <- ["upload", "read-back"],
+        {old, replacement} <- [
+          {"    if: " <> @publish_owner_condition, "    if: true"},
+          {"refs/heads/$DEFAULT_BRANCH", "refs/heads/other"},
+          {"^[0-9a-f]{40}$", "^[0-9a-f]+$"},
+          {"          ref: ${{ inputs.release_commit }}", "          ref: ${{ github.sha }}"},
+          {"          fetch-depth: 0", "          fetch-depth: 1"},
+          {"sha256sum --check --status", "cat >/dev/null"},
+          {"version-type: strict", "version-type: loose"},
+          {"install-rebar: false", "install-rebar: true"},
+          {"test ! -e mix.exs", "true"},
+          {"hex-publish@3bfbb84692a65b4d2c03dc3b7932353026fe6943", "hex-publish@main"},
+          {"          release-commit: ${{ inputs.release_commit }}",
+           "          release-commit: ${{ github.sha }}"}
         ] do
       prepare_fixture()
-      replace_once!(@publish, admission, replacement)
+      mutate_job!(job, old, replacement, @publish)
       assert_invalid!()
     end
 
-    prepare_fixture()
-    replace_once!(@publish, admission, "")
-
-    replace_once!(
-      @publish,
-      "      - run: mix local.rebar --force\n",
-      "      - run: mix local.rebar --force\n" <> admission
-    )
-
-    assert_invalid!()
-
-    for {path, old} <- [
-          {"scripts/release-notes.py", "if len(versions) != 1:"},
-          {"scripts/release-notes.py", "if len(matches) != 1 or not matches[0].isfile():"},
-          {"scripts/release-notes.py", "if not re.sub("},
-          {"scripts/release-notes.py", "if len(sections) == 1 else"},
-          {"scripts/check-docs-archive.py",
-           "notes = release_notes.package_section(package_archive, version)"},
-          {"scripts/check-docs-archive.py", "Commit: {published}"},
-          {"scripts/check-docs-archive.py", "Package SHA-256: {digests[0]}"},
-          {"scripts/check-docs-archive.py", "Docs SHA-256: {digests[1]}"},
-          {"scripts/test_release_docs.py", "release notes accepted an invalid changelog section"},
-          {"scripts/test_release_docs.py",
-           "release assets accepted invalid packaged release notes"}
+    for {job, old, replacement} <- [
+          {"upload", "    environment: publish\n", ""},
+          {"upload", "      id-token: write\n", ""},
+          {"upload", "      actions: read\n", ""},
+          {"upload", "organization-read-key:", "unexpected-key:"},
+          {"upload", "          operation: upload",
+           "          operation: upload\n      - run: mix compile"},
+          {"read-back", "    needs: upload\n", ""},
+          {"read-back", "    needs: upload", "    needs: upload\n    environment: publish"},
+          {"read-back", "      actions: read", "      actions: read\n      id-token: write"},
+          {"read-back", "needs.upload.outputs.qualification-run", "github.run_id"},
+          {"read-back", "needs.upload.outputs.qualification-sha256", "github.sha"},
+          {"read-back", "          name: release-assets", "          name: another-artifact"}
         ] do
       prepare_fixture()
-      replace_once!(path, old, "removed_release_notes_guard")
-      assert_invalid!()
-    end
-
-    for trigger <- ["push", "pull_request"] do
-      prepare_fixture()
-
-      replace_once!(
-        @publish,
-        "  workflow_dispatch:\n",
-        "  workflow_dispatch:\n  #{trigger}:\n"
-      )
-
+      mutate_job!(job, old, replacement, @publish)
       assert_invalid!()
     end
 
     for {old, replacement} <- [
-          {"    environment: publish\n", ""},
-          {"    environment: publish\n", "    environment: other\n"},
-          {"mix deps.get --check-locked", "mix deps.get"},
-          {"          persist-credentials: false\n", "          persist-credentials: true\n"},
-          {"    timeout-minutes: 90 # no green run yet\n", "    timeout-minutes: 30\n"},
-          {"90 # no green run yet", "90 # unmeasured"},
-          {"90 # no green run yet", "90"},
-          {"          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}\n",
-           "          HEX_API_KEY: ${{ secrets.OTHER_KEY }}\n"},
-          {~s(scripts/build-release-docs.sh "$RUNNER_TEMP/hex-docs.tar.gz"), "true"},
-          {"scripts/build-release-docs.sh", "true"},
-          {"scripts/inspect-release-package.sh", "true"},
-          {"        working-directory: ${{ runner.temp }}\n", ""},
-          {"working-directory: ${{ runner.temp }}", "working-directory: ${{ github.workspace }}"},
-          {~s(mix run --no-mix-exs "$GITHUB_WORKSPACE/scripts/publish_hex_artifacts.exs"),
-           "mix hex.publish --yes"},
-          {~s(mix run --no-mix-exs "$GITHUB_WORKSPACE/scripts/publish_hex_artifacts.exs"),
-           "mix run scripts/publish_hex_artifacts.exs"},
-          {~s(mix run --no-mix-exs "$GITHUB_WORKSPACE/scripts/publish_hex_artifacts.exs"),
-           "mix compile && mix run --no-mix-exs scripts/publish_hex_artifacts.exs"},
-          {~s(mix run --no-mix-exs "$GITHUB_WORKSPACE/scripts/publish_hex_artifacts.exs"),
-           "mix run --no-mix-exs scripts/other.exs"},
-          {"ash_replicant \"$VERSION\" \"$RUNNER_TEMP/package.tar\"",
-           "ash_replicant \"$VERSION\" \"$RUNNER_TEMP/other.tar\""},
-          {"name: release-assets", "name: other-assets"},
-          {"cf430e030ddbb5b0abf93d22962f4752f3646cd9", "v7.0.2"}
-        ] do
-      prepare_fixture()
-      replace_once!(@publish, old, replacement)
-      assert_invalid!()
-    end
-
-    for condition <- [
-          "",
-          "    if: true\n",
-          "    if: contains(fromJSON('[\"corepay\",\"palermo-git\"]'), github.actor)\n",
-          "    if: #{String.replace(@publish_owner_condition, "palermo-git", "other-actor")}\n"
-        ] do
-      prepare_fixture()
-      replace_once!(@publish, "    if: #{@publish_owner_condition}\n", condition)
-      assert_invalid!()
-    end
-
-    for scope <- [:job, :workflow] do
-      prepare_fixture()
-      replace_once!(@publish, "          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}\n", "")
-
-      case scope do
-        :job ->
-          replace_once!(
-            @publish,
-            "      MIX_ENV: dev\n",
-            "      MIX_ENV: dev\n      HEX_API_KEY: ${{ secrets.HEX_API_KEY }}\n"
-          )
-
-        :workflow ->
-          replace_once!(
-            @publish,
-            "jobs:\n",
-            "env:\n  HEX_API_KEY: ${{ secrets.HEX_API_KEY }}\n\njobs:\n"
-          )
-      end
-
-      assert_invalid!()
-    end
-
-    # Every other step, including actions and cleanup, must reject the publish key.
-    source = File.read!(Path.join(@source_root, @publish))
-
-    steps =
-      Regex.scan(~r/^      - .*?(?=^      - |^  [a-z][a-z0-9-]+:\n|\z)/ms, source)
-      |> List.flatten()
-
-    stamp_name = "      - name: Refuse a package whose changelog is not stamped for its version"
-    build_name = "      - name: Build and inspect package and docs archives"
-    [stamp] = Enum.filter(steps, &String.starts_with?(&1, stamp_name))
-
-    prepare_fixture()
-    replace_once!(@publish, stamp, "")
-    assert_invalid!()
-
-    prepare_fixture()
-    replace_once!(@publish, stamp, "")
-    replace_once!(@publish, build_name, stamp <> build_name)
-    assert_invalid!()
-
-    for step <- steps, not String.contains?(step, "name: Upload inspected archives") do
-      prepare_fixture()
-
-      replacement =
-        if String.contains?(step, "        env:\n") do
-          String.replace(
-            step,
-            "        env:\n",
-            "        env:\n          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}\n"
-          )
-        else
-          String.trim_trailing(step) <>
-            "\n        env:\n          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}\n"
-        end
-
-      replace_once!(@publish, step, replacement)
-      assert_invalid!()
-    end
-
-    prepare_fixture()
-    replace_once!(@publish, "name: Publish to Hex", "name: Publish to Hex\n# mix hex.publish")
-    assert_invalid!()
-
-    for selector <- [
-          "ASH_REPLICANT_ASH_VERSION",
-          "ASH_REPLICANT_REPLICANT_VERSION",
-          "ASH_REPLICANT_ONETIME_VERSION"
-        ] do
-      prepare_fixture()
-      replace_once!(@publish, "-u #{selector} ", "")
-      assert_invalid!()
-    end
-
-    for {path, old} <- [
-          {"scripts/publish_hex_artifacts.exs", "    package_bytes = File.read!(archive)"},
-          {"scripts/publish_hex_artifacts.exs", "    docs_bytes = File.read!(docs)"},
-          {"scripts/publish_hex_artifacts.exs", "    if Mix.Project.get()"},
-          {"scripts/publish_hex_artifacts.exs",
-           "existing_package!(Hex.API.Package.get_anonymous(nil, name), name)"},
-          {"scripts/publish_hex_artifacts.exs", "{:held, _docs?} ->"},
-          {"scripts/publish_hex_artifacts.exs",
-           "Hex.API.Release.publish(nil, package_bytes, auth)"},
-          {"scripts/publish_hex_artifacts.exs",
-           "Hex.API.ReleaseDocs.publish(nil, name, version, docs_bytes, auth)"},
-          {"scripts/publish_hex_artifacts.exs", "package_read_back!(Hex.Repo.get_tarball"},
-          {"scripts/publish_hex_artifacts.exs", "docs_read_back!(Hex.Repo.get_docs"},
-          {"scripts/publish_hex_artifacts.exs", "|> approved!()"},
-          {"scripts/release_identity.exs", "checksum != digest"},
-          {"scripts/release_identity.exs", "retirement != :null"},
-          {"scripts/build-release-docs.sh", "mix docs --warnings-as-errors"},
-          {"scripts/build-release-docs.sh", "release.json"},
-          {"scripts/build-release-docs.sh", "mix deps.get --check-locked"},
-          {"scripts/build-docs-archive.exs", ":mix_hex_tarball.create_docs(files)"},
-          {"scripts/check-docs-archive.py", "if source is not None and names != source.keys():"},
-          {"scripts/test_release_docs.py", "check(candidate, Path(directory))"},
-          {"scripts/test_publish_hex_artifacts.exs", "PublishHexArtifacts.package_read_back!"},
-          {"scripts/test_publish_hex_artifacts.exs", "PublishHexArtifacts.docs_read_back!"},
-          {"scripts/read-release-assets.sh", "fetch_archive"},
-          {"scripts/read-release-assets.sh", "--assets"},
-          {"scripts/check-docs-archive.py", "if release is None:"},
-          {"scripts/check-docs-archive.py",
-           ~s|git("merge-base", "--is-ancestor", published, commit)|},
-          {"scripts/check-docs-archive.py", "shutil.copyfile(archive, paths[1])"}
-        ] do
-      prepare_fixture()
-      replace_once!(path, old, "removed_guard")
-      assert_invalid!()
-    end
-
-    for job <- ["publish", "published-package"] do
-      for {old, replacement} <- [
-            {"    if: " <> @publish_owner_condition, "    if: true"},
-            {"mix deps.get --check-locked", "mix deps.get"},
-            {"refs/heads/main", "refs/heads/other"}
-          ] do
-        prepare_fixture()
-        mutate_job!(job, old, replacement, @publish)
-        assert_invalid!()
-      end
-    end
-
-    for {old, replacement} <- [
-          {"    needs: publish", "    needs: []"},
-          {"    name: Verify published package",
-           "    environment: publish\n    name: Verify published package"},
-          {"scripts/test-fresh-consumer.sh --from-hex", "true --from-hex"},
-          {"scripts/read-release-assets.sh", "true"},
-          {"          fetch-depth: 0", "          fetch-depth: 1"}
+          {"  workflow_dispatch:", "  push:\n  workflow_dispatch:"},
+          {"        required: true", "        required: false"},
+          {"      release_commit:", "      extra_input:\n        type: string\n      release_commit:"}
         ] do
       prepare_fixture()
       replace_once!(@publish, old, replacement)
@@ -1365,17 +1034,17 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       {@workflow, "compatibility", 37},
       {@workflow, "performance", 7},
       {@workflow, "decoder-old-majors", 7},
-      {@workflow, "release-artifact", 12},
-      {@workflow, "fresh-consumer", 9},
+      {@workflow, "release-artifact", 90},
+      {@workflow, "fresh-consumer", 90},
       {@landing, "qualified", 5},
-      {@publish, "publish", 5},
-      {@drift, "report", 24},
-      {@publish, "published-package", 90}
+      {@publish, "upload", 90},
+      {@publish, "read-back", 90},
+      {@drift, "report", 24}
     ]
 
     for {workflow, job, timeout} <- jobs do
       suffix =
-        if job in ["published-package", "postgres-lanes"], do: " # no green run yet", else: ""
+        if timeout == 90, do: " # no green run yet", else: ""
 
       for replacement <- ["", "    timeout-minutes: 1\n"] do
         prepare_fixture()
@@ -1385,7 +1054,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
       prepare_fixture()
 
-      if job in ["published-package", "postgres-lanes"] do
+      if timeout == 90 do
         mutate_job!(job, "# no green run yet", "# No measurement", workflow)
       else
         path = fixture_path(workflow)
@@ -1398,7 +1067,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
       assert_invalid!()
 
-      unless job in ["published-package", "postgres-lanes"] do
+      unless timeout == 90 do
         # A measured timeout must cite a recorded green run, not any number.
         prepare_fixture()
         path = fixture_path(workflow)
@@ -1413,7 +1082,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       mutate_job!(job, "persist-credentials: false", "persist-credentials: true", workflow)
       assert_invalid!()
 
-      unless workflow in [@landing, @drift] or job == "postgres-lanes" do
+      if workflow == @workflow and job not in ["postgres-lanes", "release-artifact"] do
         prepare_fixture()
         mutate_job!(job, "mix deps.get --check-locked", "mix deps.get", workflow)
         assert_invalid!()
@@ -1506,102 +1175,12 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     )
 
     assert_invalid!()
-
-    ref_step =
-      "      - name: Refuse publishing outside the default branch\n" <>
-        "        run: test \"$GITHUB_REF\" = \"refs/heads/main\"\n"
-
-    for replacement <- ["", String.replace(ref_step, "refs/heads/main", "refs/heads/other")] do
-      prepare_fixture()
-      replace_once!(@publish, ref_step, replacement)
-      assert_invalid!()
-    end
-
-    prepare_fixture()
-    replace_once!(@publish, ref_step, "")
-
-    replace_once!(
-      @publish,
-      "      - uses: ./.github/actions/toolchain",
-      ref_step <> "      - uses: ./.github/actions/toolchain"
-    )
-
-    assert_invalid!()
-    prepare_fixture()
-    replace_once!(@publish, " --unreleased\n", "\n")
-    assert_invalid!()
-
-    for {old, replacement} <- [
-          {"    assert_hex_package_exists ash_replicant https://hex.pm/api/packages/ash_replicant",
-           "    :"},
-          {"200) ;;", "201) ;;"},
-          {"404) release_tree_fail \"$name is not on Hex; first publication is the owner's decision\" ;;",
-           "404) ;;"},
-          {"*) release_tree_fail \"$name package lookup failed\" ;;", "*) ;;"},
-          {"|| release_tree_fail \"$name package lookup failed\"", "|| return 0"},
-          {"0) release_tree_fail 'local tag already exists' ;;", "0) ;;"},
-          {"*) release_tree_fail 'local tag lookup failed' ;;", "*) ;;"},
-          {"0) release_tree_fail 'remote tag already exists' ;;", "0) ;;"},
-          {"*) release_tree_fail 'remote tag lookup failed' ;;", "*) ;;"},
-          {"404) ;;", "204) ;;"},
-          {"200) release_tree_fail \"$label already exists\" ;;", "200) ;;"},
-          {"*) release_tree_fail \"$label lookup failed\" ;;", "*) ;;"},
-          {"|| release_tree_fail \"$label lookup failed\"", "|| return 0"},
-          {"    assert_github_release_absent", "    :"},
-          {~s|    elixir "$(dirname "${BASH_SOURCE[0]}")/release_identity.exs"|, "    :"},
-          {"git ls-remote --exit-code --tags origin", ": --exit-code --tags origin"},
-          {"gh api --hostname github.com -i", "curl -i"},
-          {"[[ -n \"${GH_TOKEN:-}\" ]]", "true"},
-          {"read -r protocol code _", "read -r protocol _ code"},
-          {"404:1) ;;", "404:0) ;;"},
-          {"200:0) release_tree_fail 'GitHub release already exists' ;;", "200:0) ;;"},
-          {"*) release_tree_fail 'GitHub release lookup failed' ;;", "*) ;;"}
-        ] do
-      prepare_fixture()
-      replace_once!("scripts/assert-release-tree.sh", old, replacement)
-      assert_invalid!()
-    end
   end
 
   defp github_lookup_probes do
-    for {workflow, job, command} <- [
-          {@workflow, "no-database", "scripts/test-release-guards.sh"},
-          {@publish, "publish", "scripts/assert-release-tree.sh"}
-        ] do
-      for replacement <- ["", "          GH_TOKEN: ${{ secrets.HEX_API_KEY }}\n"] do
-        prepare_fixture()
-        mutate_job!(job, "          GH_TOKEN: ${{ github.token }}\n", replacement, workflow)
-        assert_invalid!()
-      end
-
-      prepare_fixture()
-
-      mutate_job!(
-        job,
-        "      MIX_ENV:",
-        "      GH_TOKEN: ${{ github.token }}\n      MIX_ENV:",
-        workflow
-      )
-
-      assert_invalid!()
-      prepare_fixture()
-      mutate_job!(job, "      contents: read\n", "      contents: write\n", workflow)
-      assert_invalid!()
-      prepare_fixture()
-      mutate_job!(job, command, "true", workflow)
-      assert_invalid!()
-    end
-
     for {path, old, replacement} <- [
-          {"scripts/test-release-checkers.sh", "scripts/test-newest-dependency.sh",
-           "scripts/test-release-guards.sh\nscripts/test-newest-dependency.sh"},
           {"scripts/qualify.py", ~s|"gh", "api", "--hostname", "github.com"|, ~s|"curl"|},
           {"scripts/qualify.py", ~s|if not os.environ.get("GH_TOKEN"):|, "if False:"},
-          {"scripts/verify-release.sh", "gh api --hostname github.com", "curl"},
-          {"scripts/verify-release.sh", ~s|[[ -n "${GH_TOKEN:-}" ]]|, "true"},
-          {"scripts/test-release-guards.sh", "without_github_token", "without_token_bypass"},
-          {"scripts/test-release-guards.sh", "assert_hex_package_exists ash_replicant.invalid",
-           "true"},
           {"test/fixtures/upgrade_0_4_app/mix.exs", "EEF-CVE-2026-95105", "unreviewed-advisory"}
         ] do
       prepare_fixture()
@@ -1867,115 +1446,33 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     assert_invalid!()
   end
 
-  defp public_dependency_probes do
-    for {configured, expected_status, message} <- [
-          {"deps: deps() |> select_requirements(),", 0, nil},
-          {~s|deps: select_requirements(deps()) ++ [{:extra_literal, "~> 7.8"}],|, 1,
-           "unexpected public dependency set"},
-          {"deps: Enum.reject(select_requirements(deps()), &(elem(&1, 0) == :ash_cloak)),", 1,
-           "unexpected public dependency set"},
-          {"deps: Enum.reject(select_requirements(deps()), &(elem(&1, 0) == :db_connection)),", 1,
-           "unexpected public dependency set"}
+  defp hex_qualification_probes do
+    for {old, replacement} <- [
+          {"hex-publish@3bfbb84692a65b4d2c03dc3b7932353026fe6943", "hex-publish@main"},
+          {"operation: qualify", "operation: upload"},
+          {"package: ash_replicant", "package: another_package"},
+          {"package-directory: .", "package-directory: another_directory"},
+          {"        with:\n          operation: qualify",
+           "        if: false\n        with:\n          operation: qualify"}
         ] do
       prepare_fixture()
-      directory = fixture_path("metadata-consumer")
-      File.mkdir_p!(directory)
-
-      source =
-        @source_root
-        |> Path.join("mix.exs")
-        |> File.read!()
-        |> String.replace("deps: deps() |> select_requirements(),", configured)
-
-      File.write!(Path.join(directory, "mix.exs"), source)
-      reader = Path.join(@source_root, "lib/ash_replicant/dependency_requirements.ex")
-
-      command =
-        String.replace(
-          @public_dependency_check,
-          "mix run --no-start -e",
-          "elixir -r \"#{reader}\" -S mix run --no-start --no-compile --no-deps-check -e"
-        )
-
-      {output, status} =
-        System.cmd("bash", ["-euo", "pipefail", "-c", command],
-          cd: directory,
-          stderr_to_stdout: true
-        )
-
-      unless status == expected_status and (is_nil(message) or String.contains?(output, message)) do
-        raise "public dependency metadata guard did not observe the expected set"
-      end
-
-      Process.put({__MODULE__, :checks}, Process.get({__MODULE__, :checks}, 0) + 1)
-    end
-  end
-
-  # The selector-free packaging commands must clear ALL THREE dependency
-  # selectors (release-artifact deps.get, the metadata assertion, and
-  # hex.build). RED/GREEN regression for the ASH_REPLICANT_ONETIME_VERSION
-  # omission: against the pre-fix checker these mutations were ACCEPTED,
-  # so an exported onetime selector could pin the built package's metadata
-  # to one version instead of publishing the requirement range. Each probe
-  # removes exactly the onetime clearing (or weakens the asserted
-  # onetime requirement) and must be rejected byte-for-byte.
-  defp packaging_selector_probes do
-    prepare_fixture()
-
-    mutate_job!(
-      "release-artifact",
-      "      - run: env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix deps.get --check-locked\n",
-      "      - run: env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION mix deps.get --check-locked\n"
-    )
-
-    assert_invalid!()
-
-    prepare_fixture()
-
-    mutate_job!(
-      "release-artifact",
-      "          env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix run --no-start -e '\n",
-      "          env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION mix run --no-start -e '\n"
-    )
-
-    assert_invalid!()
-
-    for dependency <- [:ash_onetime, :ash_cloak, :postgrex, :db_connection] do
-      prepare_fixture()
-
-      mutate_job!(
-        "release-artifact",
-        ~s[          expected = AshReplicant.DependencyRequirements.read!("mix.exs")],
-        ~s[          expected = AshReplicant.DependencyRequirements.read!("mix.exs") |> Map.delete(:#{dependency})]
-      )
-
+      mutate_job!("release-artifact", old, replacement)
       assert_invalid!()
     end
 
-    prepare_fixture()
-
-    mutate_job!(
-      "release-artifact",
-      "          env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix hex.build --unpack --output \"$package_dir\"\n",
-      "          env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION mix hex.build --unpack --output \"$package_dir\"\n"
-    )
-
-    assert_invalid!()
-
-    prepare_fixture()
-
-    mutate_job!(
-      "release-artifact",
-      """
-                if ! diff -u scripts/release-package-files.txt - <<<"$package_files"; then
-                  echo "::error::Package files differ from the release allowlist"
-                  exit 1
-                fi
-      """,
-      "          :\n"
-    )
-
-    assert_invalid!()
+    for {dependency, mutation} <- [
+          {"db_connection", fn _spec -> nil end},
+          {"igniter", &Map.put(&1, "optional", false)},
+          {"replicant", &Map.put(&1, "requirement", "== 1.6.0")},
+          {"ash", &Map.put(&1, "repository", "baselabs")}
+        ] do
+      prepare_fixture()
+      path = fixture_path(".github/hex-packages.json")
+      declaration = path |> File.read!() |> Jason.decode!()
+      keys = ["ash_replicant", "requirements", dependency]
+      File.write!(path, declaration |> update_in(keys, mutation) |> Jason.encode!())
+      assert_invalid!()
+    end
   end
 
   defp workflow_structure_probes do
@@ -2675,24 +2172,13 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           "mix.lock",
           "scripts/test-release-checkers.sh",
           "scripts/audit-fixtures.sh",
-          "scripts/assert-release-tree.sh",
-          "scripts/publish_hex_artifacts.exs",
-          "scripts/check-docs-archive.py",
-          "scripts/release-notes.py",
-          "scripts/build-docs-archive.exs",
-          "scripts/build-release-docs.sh",
-          "scripts/release_identity.exs",
-          "scripts/release/published_packages.sha256",
-          "scripts/test_publish_hex_artifacts.exs",
-          "scripts/test_release_docs.py",
-          "scripts/test-release-guards.sh",
-          "scripts/verify-release.sh",
-          "test/fixtures/release_checker/recorded.lock",
+              "test/fixtures/release_checker/recorded.lock",
           "test/fixtures/upgrade_0_4_app/mix.exs",
           "test/integration/upgrade_checkpoint_test.exs",
           "locks/exact-floors.lock",
           "locks/latest-compatible.lock",
           @inventory,
+          ".github/hex-packages.json",
           ".github/postgres.ref",
           ".github/postgres-lanes.json",
           "scripts/dependency-requirements.exs",

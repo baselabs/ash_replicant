@@ -128,7 +128,7 @@ defmodule AshReplicant.MixProject do
     [
       maintainers: ["rjpalermo"],
       licenses: ["MIT"],
-      files: ~w(lib .formatter.exs mix.exs README* LICENSE* NOTICE* CHANGELOG* usage-rules.md),
+      files: ~w(lib .formatter.exs mix.exs README.md LICENSE NOTICE CHANGELOG.md usage-rules.md),
       links: %{"GitHub" => @source_url, "Changelog" => "#{@source_url}/blob/main/CHANGELOG.md"}
     ]
   end
@@ -138,7 +138,7 @@ defmodule AshReplicant.MixProject do
       main: "readme",
       # EPUB embeds build time; HTML and Markdown are reproducible.
       formatters: ["html", "markdown"],
-      source_ref: "v#{@version}",
+      source_ref: "baselabs_ash_replicant-v#{@version}",
       extras: ["README.md", "usage-rules.md", "CHANGELOG.md", "CONTRIBUTING.md", "LICENSE"]
     ]
   end

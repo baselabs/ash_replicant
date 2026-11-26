@@ -1,44 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Prove a fresh consumer from the unpacked release candidate or Hex.
-# Builds the hex package, unpacks it as the ONLY dependency source of a
-# scratch mix project (nothing from this repo's checkout is on the
-# consumer's path), then runs the adopter's first hour: deps resolve,
-# compile with warnings-as-errors, docs, ash.codegen + ecto.migrate, and
-# a default live CDC smoke (a source insert mirrored through the real
-# pipeline) against $ASH_REPLICANT_TEST_URL's server. Hex consumers require
-# that URL; a local tarball consumer names its skip when the URL is unset.
-
+# Exercise the qualified Hex archive in a scratch Mix project against real logical WAL.
 root="$(cd "$(dirname "$0")/.." && pwd)"
 export MIX_ENV=dev
 unset ASH_REPLICANT_ASH_VERSION ASH_REPLICANT_REPLICANT_VERSION ASH_REPLICANT_ONETIME_VERSION
-hex_version=""
-check=false
-if [[ "${1:-}" == --from-hex ]]; then
-  hex_version="${2:?usage: test-fresh-consumer.sh [--from-hex VERSION] [--check]}"
-  [[ "$hex_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 2
-  shift 2
+
+if [[ "$#" -ne 1 || ! -s "$1" ]]; then
+  echo 'usage: test-fresh-consumer.sh PACKAGE_ARCHIVE' >&2
+  exit 2
 fi
-if [[ "${1:-}" == --check ]]; then
-  check=true
-  shift
-fi
-[[ "$#" -eq 0 ]] || { echo 'fresh-consumer: invalid arguments' >&2; exit 2; }
-if [[ -n "$hex_version" && -z "${ASH_REPLICANT_TEST_URL:-}" ]]; then
-  echo 'fresh-consumer: ASH_REPLICANT_TEST_URL is required in --from-hex mode' >&2
+tarball="$1"
+if [[ -z "${ASH_REPLICANT_TEST_URL:-}" ]]; then
+  echo 'fresh-consumer: ASH_REPLICANT_TEST_URL is required' >&2
   exit 1
 fi
-if [[ -n "$hex_version" ]]; then
-  curl -fsSL --max-time 30 "https://hex.pm/api/packages/ash_replicant/releases/$hex_version" >/dev/null
-  echo "fresh-consumer: dependency source is Hex ash_replicant $hex_version"
-else
-  echo 'fresh-consumer: dependency source is the local release tarball'
-fi
-if [[ "$check" == true ]]; then
-  echo 'fresh-consumer: source check PASS (no consumer run requested)'
-  exit 0
-fi
+
 work="$(mktemp -d "${TMPDIR:-/tmp}/ash-replicant-fresh-consumer.XXXXXX")"
 database_created=false
 lease_pid=""
@@ -69,11 +46,7 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-url="${ASH_REPLICANT_TEST_URL:-}"
-if [ -z "$url" ]; then
-  echo "fresh-consumer: SKIP — no ASH_REPLICANT_TEST_URL (the consumer smoke is live-only)"
-  exit 0
-fi
+url="$ASH_REPLICANT_TEST_URL"
 
 export ASH_REPLICANT_CONSUMER_DATABASE="ash_replicant_consumer_$$_$RANDOM"
 export ASH_REPLICANT_CONSUMER_SLOT="$ASH_REPLICANT_CONSUMER_DATABASE"
@@ -135,18 +108,6 @@ consumer_mix() {
 
 require_lease
 
-if [[ -z "$hex_version" ]]; then
-echo "== building the release package =="
-tarball="$work/ash_replicant-release.tar"
-# Selector-free build: an exported dependency selector would pin the
-# tarball's package metadata to one version instead of the published
-# requirement ranges, so all three selectors are cleared here exactly as
-# the release-artifact job's hex.build clears them.
-(cd "$root" &&
-  env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION \
-    MIX_ENV=test mix hex.build --output "$tarball" >/dev/null)
-[ -s "$tarball" ] || { echo "fresh-consumer: FAIL — no package built"; exit 1; }
-
 echo "== unpacking the tarball as the consumer's only dependency source =="
 # A hex package is a wrapper tar (VERSION, metadata, contents.tar.gz);
 # the consumer consumes the INNER tree.
@@ -156,7 +117,6 @@ tar -xzf "$work/outer/contents.tar.gz" -C "$vendor"
 [ -f "$vendor/mix.exs" ] && [ -d "$vendor/lib" ] || {
   echo "fresh-consumer: FAIL — tarball shape unexpected"; exit 1
 }
-fi
 require_lease
 
 echo "== scaffolding the scratch consumer =="
@@ -183,25 +143,12 @@ defmodule FreshConsumer.MixProject do
 
   defp deps do
     [
-      replicant_dependency(),
+      {:ash_replicant, path: Path.expand("#{__DIR__}/vendor/ash_replicant")},
       {:ex_doc, "~> 0.37", only: :dev, runtime: false}
     ]
   end
-
-  defp replicant_dependency do
-    case System.get_env("ASH_REPLICANT_CONSUMER_VERSION") do
-      nil -> {:ash_replicant, path: Path.expand("#{__DIR__}/vendor/ash_replicant")}
-      version -> {:ash_replicant, "== #{version}"}
-    end
-  end
 end
 MIX
-
-if [[ -n "$hex_version" ]]; then
-  export ASH_REPLICANT_CONSUMER_VERSION="$hex_version"
-else
-  unset ASH_REPLICANT_CONSUMER_VERSION
-fi
 
 cat > "$consumer/config/config.exs" <<'CONF'
 import Config

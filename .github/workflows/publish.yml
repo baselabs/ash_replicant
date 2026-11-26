@@ -1,8 +1,12 @@
 name: Publish to Hex
 
-# Owner dispatch on main; infra tags and creates the GitHub release after read-back.
 on:
   workflow_dispatch:
+    inputs:
+      release_commit:
+        description: Full SHA of the landed release commit
+        required: true
+        type: string
 
 defaults:
   run:
@@ -16,161 +20,146 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish:
-    name: Publish
+  upload:
     if: contains(fromJSON('["corepay","palermo-git"]'), github.actor) && contains(fromJSON('["corepay","palermo-git"]'), github.triggering_actor)
     environment: publish
     runs-on: ubuntu-24.04
-    # Green run 44736595182: Publish 2m28s.
-    timeout-minutes: 5
+    timeout-minutes: 90 # no green run yet
     permissions:
       contents: read
-    env:
-      MIX_ENV: dev
+      actions: read
+      id-token: write
     outputs:
-      version: ${{ steps.release.outputs.version }}
-      published_commit: ${{ steps.readback.outputs.published_commit }}
+      qualification-run: ${{ steps.hex.outputs.qualification-run }}
+      qualification-sha256: ${{ steps.hex.outputs.qualification-sha256 }}
     steps:
-      - name: Refuse publishing outside the default branch
-        run: test "$GITHUB_REF" = "refs/heads/main"
+      - name: Admit the default ref and full release commit
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+        run: |
+          [[ "$GITHUB_REF" == "refs/heads/$DEFAULT_BRANCH" ]]
+          [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          persist-credentials: false
+          ref: ${{ inputs.release_commit }}
           fetch-depth: 0
-      - name: Refuse a missing, duplicated or empty release changelog section
-        run: python3 -I scripts/release-notes.py
-      - uses: ./.github/actions/toolchain
+          persist-credentials: false
+      - name: Read the release runtime with the pinned shared reader
         id: toolchain
-      - uses: ./.github/actions/beam
+        run: |
+          reader="$RUNNER_TEMP/hex-release-toolchain.sh"
+          git show HEAD:scripts/toolchain.sh > "$reader"
+          printf '%s  %s\n' 25bbfa023b7f031256428b498fe300fcc460988fea81277072355e4c0d933764 "$reader" | sha256sum --check --status
+          git show HEAD:.tool-versions > "$RUNNER_TEMP/hex-release-tool-versions"
+          pins="$(bash "$reader" "$RUNNER_TEMP/hex-release-tool-versions")"
+          elixir="$(awk -F= '$1 == "elixir" { print $2 }' <<< "$pins")"
+          otp="$(awk -F= '$1 == "otp" { print $2 }' <<< "$pins")"
+          [[ "$elixir" =~ ^[0-9]+\.[0-9]+\.[0-9]+-otp-[0-9]+$ ]]
+          [[ "$otp" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          printf 'elixir=%s\notp=%s\n' "$elixir" "$otp" >> "$GITHUB_OUTPUT"
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
         with:
-          elixir: ${{ steps.toolchain.outputs.elixir }}
-          otp: ${{ steps.toolchain.outputs.otp }}
-      - run: mix local.rebar --force
-      - name: Refuse a tagged release or inadmissible Hex identity
-        id: release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test "$(git ls-remote --exit-code origin refs/heads/main | cut -f1)" = "$GITHUB_SHA"
-          version="$(sed -n 's/^  @version "\(.*\)"$/\1/p' mix.exs)"
-          scripts/assert-release-tree.sh "$version" "v$version" --unreleased
-          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
-      - name: Fetch dependencies
-        run: mix deps.get --check-locked
-      - name: Build and inspect package and docs archives
-        run: |
-          scripts/build-release-docs.sh "$RUNNER_TEMP/hex-docs.tar.gz"
-          env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION scripts/with-release-runtime.sh mix hex.build --output "$RUNNER_TEMP/package.tar"
-          scripts/inspect-release-package.sh "$RUNNER_TEMP/package.tar"
-      - name: Refuse a package whose changelog is not stamped for its version
-        shell: bash
-        env:
-          VERSION: ${{ steps.release.outputs.version }}
-        run: |
-          python3 -I - "$RUNNER_TEMP/package.tar" "$VERSION" <<'PY'
-          import io, re, sys, tarfile
-          archive, version = sys.argv[1], sys.argv[2]
-          def refuse(message):
-              raise SystemExit(f'{archive}: {message}; publication refused')
-          with tarfile.open(archive, 'r:*') as outer:
-              if 'contents.tar.gz' in outer.getnames():
-                  package = tarfile.open(fileobj=io.BytesIO(outer.extractfile('contents.tar.gz').read()), mode='r:gz')
-                  root = ''
-              else:
-                  package, root = outer, 'package/'
-              found = [member for member in package.getmembers() if member.isfile()
-                       and re.fullmatch(re.escape(root) + r'(?i:changelog(?:\.md|\.markdown|\.txt)?)', member.name)]
-              if len(found) != 1:
-                  refuse('the package must ship exactly one root CHANGELOG')
-              try:
-                  lines = package.extractfile(found[0]).read().decode('utf-8').splitlines()
-              except UnicodeDecodeError:
-                  refuse('the packaged CHANGELOG is not UTF-8')
-          headings, fence = {}, False
-          for index, line in enumerate(lines):
-              if re.match(r' {0,3}(```|~~~)', line):
-                  fence = not fence
-              elif not fence and (match := re.match(r' {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$', line)):
-                  headings[index] = (len(match.group(1)), match.group(2) or '')
-          token = re.compile(r'(?<![0-9A-Za-z.+-])v?' + re.escape(version) + r'(?![0-9A-Za-z.+-])')
-          stamped = [index for index, (_, title) in headings.items() if token.search(title)]
-          if not stamped:
-              refuse(f'the packaged CHANGELOG has no section for {version}')
-          at, level = stamped[0], headings[stamped[0]][0]
-          def written(start):
-              end = next((index for index, (depth, _) in headings.items() if index > start and depth <= level), len(lines))
-              return any(line.strip() for index, line in enumerate(lines[start + 1:end], start + 1) if index not in headings)
-          if not written(at):
-              refuse(f'the packaged CHANGELOG section for {version} is empty')
-          for start, (depth, title) in headings.items():
-              if start < at and depth == level and written(start):
-                  refuse(f'the packaged CHANGELOG has entries above {version}, under "{title}"')
-          print(f'{archive}: the packaged CHANGELOG is stamped for {version}')
-          PY
-      - name: Admit stamped release archives
-        env:
-          VERSION: ${{ steps.release.outputs.version }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          test "$(git ls-remote --exit-code origin refs/heads/main | cut -f1)" = "$GITHUB_SHA"
-          scripts/assert-release-tree.sh "$VERSION" "v$VERSION" --unreleased "$RUNNER_TEMP/package.tar" "$RUNNER_TEMP/hex-docs.tar.gz"
-          chmod a-w "$RUNNER_TEMP/package.tar" "$RUNNER_TEMP/hex-docs.tar.gz"
-      - name: Upload inspected archives to hex.pm
+          elixir-version: ${{ steps.toolchain.outputs.elixir }}
+          otp-version: ${{ steps.toolchain.outputs.otp }}
+          version-type: strict
+          install-hex: false
+          install-rebar: false
+      - name: Verify the runtime and install the shared Hex pin outside Mix source
         working-directory: ${{ runner.temp }}
         env:
-          VERSION: ${{ steps.release.outputs.version }}
-          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
-        run: mix run --no-mix-exs "$GITHUB_WORKSPACE/scripts/publish_hex_artifacts.exs" ash_replicant "$VERSION" "$RUNNER_TEMP/package.tar" "$RUNNER_TEMP/hex-docs.tar.gz"
-      - name: Read back served docs and prepare release assets without a key
-        id: readback
-        env:
-          VERSION: ${{ steps.release.outputs.version }}
-        run: scripts/read-release-assets.sh "$VERSION" "$RUNNER_TEMP/package.tar" "$RUNNER_TEMP/release-assets"
-      - name: Retain verified release assets for infra
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+          WANT_ELIXIR: ${{ steps.toolchain.outputs.elixir }}
+          WANT_OTP: ${{ steps.toolchain.outputs.otp }}
+        run: |
+          bash "$RUNNER_TEMP/hex-release-toolchain.sh" --installed "elixir=$WANT_ELIXIR" "erlang=$WANT_OTP"
+          test ! -e mix.exs
+          hex_version="$(curl --fail --silent --show-error --max-time 30 'https://raw.githubusercontent.com/baselabs/.github/3bfbb84692a65b4d2c03dc3b7932353026fe6943/.github/actions/hex-publish/hex-version')"
+          [[ "$hex_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          mix local.hex "$hex_version" --force
+      - uses: baselabs/.github/.github/actions/hex-publish@3bfbb84692a65b4d2c03dc3b7932353026fe6943
+        id: hex
         with:
-          name: release-assets
-          path: ${{ runner.temp }}/release-assets/
-          if-no-files-found: error
-          retention-days: 7
-      - name: Remove release archives
+          operation: upload
+          package: ash_replicant
+          package-directory: .
+          release-commit: ${{ inputs.release_commit }}
+          organization-read-key: ${{ secrets.HEX_ORG_KEY_PUBLISH_API_READ }}
+      - name: Remove the copied shared reader
         if: always()
-        run: rm -rf "$RUNNER_TEMP/package.tar" "$RUNNER_TEMP/hex-docs.tar.gz" "$RUNNER_TEMP/hex-docs.tar.gz.rendered" "$RUNNER_TEMP/release-assets"
+        run: rm -f "$RUNNER_TEMP/hex-release-toolchain.sh" "$RUNNER_TEMP/hex-release-tool-versions"
 
-  published-package:
-    name: Verify published package
-    needs: publish
+  read-back:
+    needs: upload
     if: contains(fromJSON('["corepay","palermo-git"]'), github.actor) && contains(fromJSON('["corepay","palermo-git"]'), github.triggering_actor)
     runs-on: ubuntu-24.04
     timeout-minutes: 90 # no green run yet
     permissions:
       contents: read
-    env:
-      MIX_ENV: dev
-      VERSION: ${{ needs.publish.outputs.version }}
-      # Throwaway fixture password, never an external service credential.
-      ASH_REPLICANT_TEST_URL: postgres://postgres:postgres@127.0.0.1:5432/ash_replicant_test
+      actions: read
+    outputs:
+      commit: ${{ steps.hex.outputs.commit }}
     steps:
-      - name: Refuse publishing outside the default branch
-        run: test "$GITHUB_REF" = "refs/heads/main"
+      - name: Admit the default ref and full release commit
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+        run: |
+          [[ "$GITHUB_REF" == "refs/heads/$DEFAULT_BRANCH" ]]
+          [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.release_commit }}
+          fetch-depth: 0
           persist-credentials: false
-      - uses: ./.github/actions/toolchain
+      - name: Read the release runtime with the pinned shared reader
         id: toolchain
-      - uses: ./.github/actions/beam
+        run: |
+          reader="$RUNNER_TEMP/hex-release-toolchain.sh"
+          git show HEAD:scripts/toolchain.sh > "$reader"
+          printf '%s  %s\n' 25bbfa023b7f031256428b498fe300fcc460988fea81277072355e4c0d933764 "$reader" | sha256sum --check --status
+          git show HEAD:.tool-versions > "$RUNNER_TEMP/hex-release-tool-versions"
+          pins="$(bash "$reader" "$RUNNER_TEMP/hex-release-tool-versions")"
+          elixir="$(awk -F= '$1 == "elixir" { print $2 }' <<< "$pins")"
+          otp="$(awk -F= '$1 == "otp" { print $2 }' <<< "$pins")"
+          [[ "$elixir" =~ ^[0-9]+\.[0-9]+\.[0-9]+-otp-[0-9]+$ ]]
+          [[ "$otp" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          printf 'elixir=%s\notp=%s\n' "$elixir" "$otp" >> "$GITHUB_OUTPUT"
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
         with:
-          elixir: ${{ steps.toolchain.outputs.elixir }}
-          otp: ${{ steps.toolchain.outputs.otp }}
-      - run: mix deps.get --check-locked
-      - run: mix deps.compile
-      - name: Start the published consumer's real PostgreSQL
-        uses: ./.github/actions/postgres
-      - name: Audit and exercise the published package as a fresh consumer
-        run: scripts/test-fresh-consumer.sh --from-hex "$VERSION"
-      - name: Remove the published consumer's PostgreSQL
+          elixir-version: ${{ steps.toolchain.outputs.elixir }}
+          otp-version: ${{ steps.toolchain.outputs.otp }}
+          version-type: strict
+          install-hex: false
+          install-rebar: false
+      - name: Verify the runtime and install the shared Hex pin outside Mix source
+        working-directory: ${{ runner.temp }}
+        env:
+          WANT_ELIXIR: ${{ steps.toolchain.outputs.elixir }}
+          WANT_OTP: ${{ steps.toolchain.outputs.otp }}
+        run: |
+          bash "$RUNNER_TEMP/hex-release-toolchain.sh" --installed "elixir=$WANT_ELIXIR" "erlang=$WANT_OTP"
+          test ! -e mix.exs
+          hex_version="$(curl --fail --silent --show-error --max-time 30 'https://raw.githubusercontent.com/baselabs/.github/3bfbb84692a65b4d2c03dc3b7932353026fe6943/.github/actions/hex-publish/hex-version')"
+          [[ "$hex_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          mix local.hex "$hex_version" --force
+      - uses: baselabs/.github/.github/actions/hex-publish@3bfbb84692a65b4d2c03dc3b7932353026fe6943
+        id: hex
+        with:
+          operation: read-back
+          package: ash_replicant
+          package-directory: .
+          release-commit: ${{ inputs.release_commit }}
+          qualification-run: ${{ needs.upload.outputs.qualification-run }}
+          qualification-sha256: ${{ needs.upload.outputs.qualification-sha256 }}
+          release-assets-directory: ${{ runner.temp }}/release-assets
+      - name: Retain the verified release assets
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-assets
+          path: ${{ runner.temp }}/release-assets/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+      - name: Remove release scratch files
         if: always()
-        uses: ./.github/actions/postgres
-        with:
-          mode: stop
+        run: rm -rf "$RUNNER_TEMP/hex-release-toolchain.sh" "$RUNNER_TEMP/hex-release-tool-versions" "$RUNNER_TEMP/release-assets"

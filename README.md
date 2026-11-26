@@ -1140,16 +1140,11 @@ scripts/with-release-runtime.sh mix hex.build
 
 Qualify the commit through CI before landing. Update `CHANGELOG.md` for the version being prepared.
 
-Publication first refuses a missing, duplicated or empty changelog section for the release.
-Release assets include `RELEASE-NOTES.md` from the served package's changelog, with the
-published commit and both served archive digests.
-The release path renders docs once, writes `release.json` with this package, version and full
-source commit, and inspects the archive. Held releases require identical package bytes and no
-retirement; served docs are kept. A docs 404 permits upload only with `has_docs: false`;
-advertised docs plus a 404 refuse. Keyless read-back requires readable served docs and valid
-provenance from the dispatched commit or an ancestor in fetched
-default-branch history. Infra tags that published commit. The permanent release assets retain
-the docs Hex serves and their checksum, never a subsequent rendering. See
+Qualification builds the Hex package and docs once. Infra publishes the
+qualified archives and verifies both served archives against those bytes.
+The docs' `release.json` identifies the exact source commit for the
+`baselabs_ash_replicant-v<version>` tag. The GitHub release includes the package,
+served docs, checksums and changelog-derived notes. See
 [the release procedure](CONTRIBUTING.md#shipping-a-release).
 
 ## License

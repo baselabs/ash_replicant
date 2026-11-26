@@ -8,7 +8,7 @@
 # Live lane: when ASH_REPLICANT_TEST_URL points at a logical-replication
 # Postgres (see README "Supported foundation"), also runs ecto
 # create/migrate, the migration drift gate, and the FULL live suite —
-# exactly the compatibility job's checks — followed by a fresh consumer.
+# the compatibility job covers those checks.
 # Export ASH_REPLICANT_TEST_URL yourself; the repository keeps no database
 # credential. Its own qualification runs only in CI, against each job's
 # service container.
@@ -76,8 +76,6 @@ main() {
   step "prepush collector self-tests" scripts/test-prepush.sh
   step "release checkers" \
     env -u ASH_REPLICANT_TEST_URL scripts/with-release-runtime.sh scripts/test-release-checkers.sh
-  step "release guards (live APIs)" \
-    env -u ASH_REPLICANT_TEST_URL scripts/with-release-runtime.sh scripts/test-release-guards.sh
   step "release contract" \
     env -u ASH_REPLICANT_TEST_URL scripts/with-release-runtime.sh scripts/test-release-contract.sh
   step "credo --strict" \
@@ -110,9 +108,6 @@ main() {
       skip "migration drift gate"
       skip "full live suite"
     fi
-    step "fresh consumer" \
-      env ASH_REPLICANT_TEST_URL="${ASH_REPLICANT_CONSUMER_TEST_URL:-$ASH_REPLICANT_TEST_URL}" \
-      scripts/with-release-runtime.sh scripts/test-fresh-consumer.sh
   else
     echo "prepush: ASH_REPLICANT_TEST_URL unset — skipping the live lane" >&2
   fi

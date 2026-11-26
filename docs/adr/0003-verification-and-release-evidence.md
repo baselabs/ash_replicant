@@ -60,10 +60,10 @@ Release evidence is separated by what it proves:
    sections; comments, code fences, and additive contradictions do not count.
    Independent mutation cases cover every required command and each matrix,
    documentation, and Action-pinning decision.
-7. The selector-free release job asserts the public Ash range, builds docs with
-   warnings as errors, unpacks the Hex package, requires its code/docs/license
-   paths, and rejects test, build, dot-directory, environment, and credential-shaped
-   residue.
+7. The shared Hex action builds and inspects selector-free package and docs
+   archives. It checks every packaged file and public dependency requirement
+   against the committed declaration and compiles the unpacked package with a
+   locked consumer. The product's fresh consumer runs against that same tarball.
 
 8. `scripts/run-mutation-gates.py` proves the fail-closed data-boundary
    guards are observed by the no-database focused tests. Each matrix cell
@@ -112,30 +112,20 @@ Every new gate needs a red-capable probe against the exact checked-in command or
 script used by CI. A separately implemented “test of the idea” is not evidence
 for the production gate.
 
-## Docs presence and provenance (1.6.4)
+## Docs presence and provenance
 
-Docs render once per job with locked dependencies and warnings as errors. The fixed-metadata
-Hex archive builder and every-file inspection remain; no check compares two builds or requires
-served docs to equal a rebuild. The package remains the byte identity: a mismatch or retirement
-refuses publication. Infra's release rule never replaces or compares served docs. Hex itself
-allows republishing, but replacing docs would bind the version to a different docs commit than
-the one infra tags; comparing a rebuild could refuse a held release whose package bytes match.
-Preflight and upload planning keep readable served docs whatever `has_docs` says. HTTP 404
-permits upload only with `has_docs: false`; advertised docs plus a 404 refuse as metadata/repository
-disagreement. Other responses or malformed archives refuse.
+Qualification renders the docs once with locked dependencies and warnings as
+errors. The shared Hex action stamps the archive's root `release.json` with
+`package`, `version` and the qualification commit. Publication uses the
+qualified bytes for that commit. Matching package bytes alone cannot identify
+the docs source because ExDoc renders unpackaged inputs such as
+`CONTRIBUTING.md` and uses dependencies selected by the checkout lock.
 
-Equal package bytes cannot identify the docs source: `CONTRIBUTING.md` is an ExDoc extra but
-is absent from the package, as is the docs toolchain lock. After rendering, every built archive
-therefore carries top-level `release.json` with exactly `package`, `version` and the run's full
-`GITHUB_SHA`. Keyless read-back inspects the served archive and requires `index.html`, matching
-package/version provenance and a commit equal to or ancestral to the dispatched commit in fetched,
-complete default-branch history. Missing provenance or history and unrelated commits refuse.
-The published commit is the served provenance commit, reported as `published_commit` for infra's
-tag. `release-assets` retains the served docs bytes, their checksum and `published-commit.txt`.
-
-The real-Hex keyless self-test proves readable published docs are kept for planning and legacy
-docs without provenance refuse read-back. Actual archives and real Git histories exercise field,
-ancestry and retained-asset checks. Publication and keys remain infra's work.
+Read-back requires the registry's package and docs archives to equal the
+qualified archives byte for byte. It validates `index.html` and the exact
+release commit in `release.json` and retains both archives with their checksums
+in `release-assets`. Infra creates the package-scoped tag at the commit named
+in the served docs and generates release notes from the packaged changelog.
 
 ## Consequences
 

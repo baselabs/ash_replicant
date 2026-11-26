@@ -131,11 +131,46 @@ defmodule AshReplicant.ReleaseContract do
   }
   @toolchain_sha256 "25bbfa023b7f031256428b498fe300fcc460988fea81277072355e4c0d933764"
 
+  @hex_action "baselabs/.github/.github/actions/hex-publish@3bfbb84692a65b4d2c03dc3b7932353026fe6943"
+  @download_artifact "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333"
+  @upload_artifact "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9"
+  @hex_identity %{"package" => "ash_replicant", "package-directory" => "."}
+  @release_commit "${{ inputs.release_commit }}"
+
+  @publish_ref_guard ~S"""
+  [[ "$GITHUB_REF" == "refs/heads/$DEFAULT_BRANCH" ]]
+  [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+  """
+
+  @publish_runtime_reader ~S"""
+  reader="$RUNNER_TEMP/hex-release-toolchain.sh"
+  git show HEAD:scripts/toolchain.sh > "$reader"
+  printf '%s  %s\n' 25bbfa023b7f031256428b498fe300fcc460988fea81277072355e4c0d933764 "$reader" | sha256sum --check --status
+  git show HEAD:.tool-versions > "$RUNNER_TEMP/hex-release-tool-versions"
+  pins="$(bash "$reader" "$RUNNER_TEMP/hex-release-tool-versions")"
+  elixir="$(awk -F= '$1 == "elixir" { print $2 }' <<< "$pins")"
+  otp="$(awk -F= '$1 == "otp" { print $2 }' <<< "$pins")"
+  [[ "$elixir" =~ ^[0-9]+\.[0-9]+\.[0-9]+-otp-[0-9]+$ ]]
+  [[ "$otp" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+  printf 'elixir=%s\notp=%s\n' "$elixir" "$otp" >> "$GITHUB_OUTPUT"
+  """
+
+  @publish_runtime_install ~S"""
+  bash "$RUNNER_TEMP/hex-release-toolchain.sh" --installed "elixir=$WANT_ELIXIR" "erlang=$WANT_OTP"
+  test ! -e mix.exs
+  hex_version="$(curl --fail --silent --show-error --max-time 30 'https://raw.githubusercontent.com/baselabs/.github/3bfbb84692a65b4d2c03dc3b7932353026fe6943/.github/actions/hex-publish/hex-version')"
+  [[ "$hex_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+  mix local.hex "$hex_version" --force
+  """
+
   @install_hex ~S"""
-  mix local.hex "$WANT_HEX" --force
+  test ! -e mix.exs
+  hex_version="$(curl --fail --silent --show-error --max-time 30 'https://raw.githubusercontent.com/baselabs/.github/3bfbb84692a65b4d2c03dc3b7932353026fe6943/.github/actions/hex-publish/hex-version')"
+  [[ "$hex_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+  mix local.hex "$hex_version" --force
   installed=$(mix hex.info | awk '$1 == "Hex:" {print $2}')
-  if [ "$installed" != "$WANT_HEX" ]; then
-    echo "::error::Installed Hex $installed; expected $WANT_HEX."
+  if [ "$installed" != "$hex_version" ]; then
+    echo "::error::Installed Hex $installed; expected $hex_version."
     exit 1
   fi
   echo "Hex $installed, as pinned"
@@ -143,1225 +178,11 @@ defmodule AshReplicant.ReleaseContract do
 
   @publish_owner_condition "contains(fromJSON('[\"corepay\",\"palermo-git\"]'), github.actor) && contains(fromJSON('[\"corepay\",\"palermo-git\"]'), github.triggering_actor)"
 
-  @publish_unreleased_check ~S"""
-  test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-  test "$(git ls-remote --exit-code origin refs/heads/main | cut -f1)" = "$GITHUB_SHA"
-  version="$(sed -n 's/^  @version "\(.*\)"$/\1/p' mix.exs)"
-  scripts/assert-release-tree.sh "$version" "v$version" --unreleased
-  printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
-  """
-
-  @publish_package_inspection ~S"""
-  scripts/build-release-docs.sh "$RUNNER_TEMP/hex-docs.tar.gz"
-  env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION scripts/with-release-runtime.sh mix hex.build --output "$RUNNER_TEMP/package.tar"
-  scripts/inspect-release-package.sh "$RUNNER_TEMP/package.tar"
-  """
-
-  @publish_changelog_stamp ~S"""
-  python3 -I - "$RUNNER_TEMP/package.tar" "$VERSION" <<'PY'
-  import io, re, sys, tarfile
-  archive, version = sys.argv[1], sys.argv[2]
-  def refuse(message):
-      raise SystemExit(f'{archive}: {message}; publication refused')
-  with tarfile.open(archive, 'r:*') as outer:
-      if 'contents.tar.gz' in outer.getnames():
-          package = tarfile.open(fileobj=io.BytesIO(outer.extractfile('contents.tar.gz').read()), mode='r:gz')
-          root = ''
-      else:
-          package, root = outer, 'package/'
-      found = [member for member in package.getmembers() if member.isfile()
-               and re.fullmatch(re.escape(root) + r'(?i:changelog(?:\.md|\.markdown|\.txt)?)', member.name)]
-      if len(found) != 1:
-          refuse('the package must ship exactly one root CHANGELOG')
-      try:
-          lines = package.extractfile(found[0]).read().decode('utf-8').splitlines()
-      except UnicodeDecodeError:
-          refuse('the packaged CHANGELOG is not UTF-8')
-  headings, fence = {}, False
-  for index, line in enumerate(lines):
-      if re.match(r' {0,3}(```|~~~)', line):
-          fence = not fence
-      elif not fence and (match := re.match(r' {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$', line)):
-          headings[index] = (len(match.group(1)), match.group(2) or '')
-  token = re.compile(r'(?<![0-9A-Za-z.+-])v?' + re.escape(version) + r'(?![0-9A-Za-z.+-])')
-  stamped = [index for index, (_, title) in headings.items() if token.search(title)]
-  if not stamped:
-      refuse(f'the packaged CHANGELOG has no section for {version}')
-  at, level = stamped[0], headings[stamped[0]][0]
-  def written(start):
-      end = next((index for index, (depth, _) in headings.items() if index > start and depth <= level), len(lines))
-      return any(line.strip() for index, line in enumerate(lines[start + 1:end], start + 1) if index not in headings)
-  if not written(at):
-      refuse(f'the packaged CHANGELOG section for {version} is empty')
-  for start, (depth, title) in headings.items():
-      if start < at and depth == level and written(start):
-          refuse(f'the packaged CHANGELOG has entries above {version}, under "{title}"')
-  print(f'{archive}: the packaged CHANGELOG is stamped for {version}')
-  PY
-  """
-
-  @publish_archive_admission ~S"""
-  test "$(git ls-remote --exit-code origin refs/heads/main | cut -f1)" = "$GITHUB_SHA"
-  scripts/assert-release-tree.sh "$VERSION" "v$VERSION" --unreleased "$RUNNER_TEMP/package.tar" "$RUNNER_TEMP/hex-docs.tar.gz"
-  chmod a-w "$RUNNER_TEMP/package.tar" "$RUNNER_TEMP/hex-docs.tar.gz"
-  """
-
-  @read_release_assets_script ~S"""
-  #!/usr/bin/env bash
-  # Keyless registry read-back: retain served docs and report their published commit.
-  set -euo pipefail
-  root="$(cd "$(dirname "$0")/.." && pwd)"
-  version="${1:?usage: read-release-assets.sh VERSION PACKAGE_ARCHIVE ASSET_DIRECTORY}"
-  package="${2:?}"
-  assets="${3:?}"
-  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && ! -e "$assets" ]] || exit 2
-  work="$(mktemp -d "${RUNNER_TEMP:?}/ash-replicant-readback.XXXXXX")"
-  trap 'rm -rf "$work"' EXIT
-  # Refresh the actual default branch; missing or shallow history fails inspection.
-  git -C "$root" fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
-  fetch_archive() {
-    local url="$1" output="$2" status
-    status="$(curl --silent --show-error --connect-timeout 10 --max-time 60 \
-      --output "$output" --write-out '%{http_code}' "$url")"
-    [[ "$status" == 200 ]] || { echo 'Hex archive read-back is unavailable' >&2; exit 1; }
-  }
-  fetch_archive "https://repo.hex.pm/tarballs/ash_replicant-$version.tar" "$work/package.tar"
-  cmp "$package" "$work/package.tar"
-  fetch_archive "https://repo.hex.pm/docs/ash_replicant-$version.tar.gz" "$work/docs.tar.gz"
-  python3 -I "$root/scripts/check-docs-archive.py" "$work/docs.tar.gz" \
-    --version "$version" --commit "${GITHUB_SHA:?}" --repository "$root" \
-    --commit-output "$work/published-commit" --assets "$assets" --package-archive "$work/package.tar"
-  published_commit="$(cat "$work/published-commit")"
-  printf 'published_commit=%s\n' "$published_commit" >> "${GITHUB_OUTPUT:?}"
-  echo "Release read-back: published commit $published_commit"
-  """
-
   @fresh_consumer_audits ~S"""
   consumer_mix deps.get >/dev/null
   consumer_mix hex.audit
   (cd "$root" && mix deps.audit --path "$consumer")
   consumer_mix deps.compile >/dev/null
-  """
-
-  @publish_hex_artifacts_script ~S"""
-  # Runs with --no-mix-exs: only Hex and the already inspected archives are loaded.
-  # No dependency fetch, build, project code, credential persistence, or response logging.
-  defmodule PublishHexArtifacts do
-    @moduledoc false
-
-    def main([name, version, archive, docs]) do
-      if Mix.Project.get(), do: raise("publication must run without a Mix project")
-
-      # Read both files before uploading anything. The keyless build inspected these paths.
-      package_bytes = File.read!(archive)
-      docs_bytes = File.read!(docs)
-      key = System.fetch_env!("HEX_API_KEY")
-      if key == "", do: raise("HEX_API_KEY is empty; publication stopped")
-      Hex.start()
-      auth = [key: key]
-
-      # A missing release alone cannot prove the package name already exists.
-      existing_package!(Hex.API.Package.get_anonymous(nil, name), name)
-      digest = :crypto.hash(:sha256, package_bytes) |> Base.encode16(case: :lower)
-
-      case release_state!(Hex.API.Release.get(nil, name, version), version, digest) do
-        :fresh ->
-          Hex.API.Release.publish(nil, package_bytes, auth)
-          |> accepted!("Hex package")
-          |> approved!()
-
-        {:held, _docs?} ->
-          :ok
-      end
-
-      # Re-read after the package decision: docs may have appeared in the meantime.
-      case release_state!(Hex.API.Release.get(nil, name, version), version, digest) do
-        {:held, docs?} ->
-          case docs_action!(Hex.Repo.get_docs("hexpm", name, version), docs?) do
-            :upload ->
-              Hex.API.ReleaseDocs.publish(nil, name, version, docs_bytes, auth)
-              |> accepted!("Hex docs")
-              |> approved!()
-
-            :skip ->
-              :ok
-          end
-
-        :fresh ->
-          raise "Hex package is not served yet; inspect public state before retrying"
-      end
-
-      read_back!(Hex.API.Release.get(nil, name, version), version, digest)
-      package_read_back!(Hex.Repo.get_tarball("hexpm", name, version), digest)
-      docs_read_back!(Hex.Repo.get_docs("hexpm", name, version))
-    end
-
-    def main(_argv),
-      do: raise("usage: publish_hex_artifacts.exs NAME VERSION PACKAGE_ARCHIVE DOCS_ARCHIVE")
-
-    def existing_package!({:ok, {200, _headers, _body}}, _name), do: :ok
-
-    def existing_package!({:ok, {404, _headers, _body}}, name),
-      do: raise("the name #{name} is not on Hex; a first publication is the owner's decision")
-
-    def existing_package!(_result, _name),
-      do: raise("Hex package lookup failed; publication refused")
-
-    def release_state!({:ok, {404, _headers, _body}}, _version, _digest), do: :fresh
-
-    def release_state!({:ok, {200, _headers, metadata}}, version, digest) do
-      case metadata do
-        %{
-          "version" => ^version,
-          "checksum" => ^digest,
-          "retirement" => nil,
-          "has_docs" => docs?
-        }
-        when is_boolean(docs?) ->
-          if is_binary(digest) and Regex.match?(~r/\A[0-9a-f]{64}\z/, digest) do
-            {:held, docs?}
-          else
-            raise "Hex release checksum is invalid; publication refused"
-          end
-
-        %{"retirement" => retirement} when not is_nil(retirement) ->
-          raise "Hex release is retired; publication refused"
-
-        _other ->
-          raise "Hex release identity does not match the built package; publication refused"
-      end
-    end
-
-    def release_state!(_result, _version, _digest),
-      do: raise("Hex release lookup failed; publication refused")
-
-    def accepted!({:ok, {code, _headers, body}}, label) when code in 200..299 do
-      IO.puts("#{label}: archive accepted")
-      if is_map(body) and body["status"] == "staged", do: :staged, else: :published
-    end
-
-    def accepted!(_result, label),
-      do: raise("#{label} upload failed or ambiguous; inspect public state before retrying")
-
-    def approved!(:published), do: :ok
-
-    def approved!(:staged),
-      do: raise("Hex approval pending; inspect public state before retrying the same commit")
-
-    def read_back!(response, version, digest) do
-      case release_state!(response, version, digest) do
-        {:held, _docs?} -> :ok
-        _other -> raise "Hex package is not served; inspect public state before retrying"
-      end
-    end
-
-    def package_read_back!({:ok, {200, _headers, bytes}}, digest) when is_binary(bytes) do
-      if Base.encode16(:crypto.hash(:sha256, bytes), case: :lower) != digest do
-        raise "Hex package archive checksum differs from the built package; publication refused"
-      end
-
-      :ok
-    end
-
-    def package_read_back!(_response, _digest),
-      do: raise("Hex package archive is unavailable; inspect public state before retrying")
-
-    # Read raw bytes from the repository API. ReleaseDocs.get decodes API responses
-    # and can return nil for a successful binary response. Never replace served docs.
-    def docs_action!({:ok, {200, _headers, bytes}}, _required?) do
-      if docs_archive?(bytes),
-        do: :skip,
-        else: raise("Hex docs archive is malformed; publication refused")
-    end
-
-    def docs_action!({:ok, {404, _headers, _body}}, false), do: :upload
-
-    def docs_action!({:ok, {404, _headers, _body}}, true),
-      do: raise("Hex docs metadata and repository disagree; inspect public state before retrying")
-
-    def docs_action!(_response, _required?),
-      do: raise("Hex docs archive is unavailable; inspect public state before retrying")
-
-    def docs_read_back!(response) do
-      :skip = docs_action!(response, true)
-      :ok
-    end
-
-    def docs_archive?(<<0x1F, 0x8B, _rest::binary>> = bytes) do
-      case :erl_tar.extract({:binary, bytes}, [:compressed, :memory]) do
-        {:ok, entries} -> Enum.any?(entries, &match?({~c"index.html", _bytes}, &1))
-        _other -> false
-      end
-    rescue
-      _error -> false
-    catch
-      _kind, _reason -> false
-    end
-
-    def docs_archive?(_bytes), do: false
-  end
-
-  PublishHexArtifacts.main(System.argv())
-  """
-
-  @release_notes_script ~S'''
-  #!/usr/bin/env python3
-  """Validate the release changelog before publication and read it from a served package."""
-
-  import argparse
-  import io
-  from pathlib import Path
-  import re
-  import sys
-  import tarfile
-
-
-  def section(version, changelog):
-      sections = re.findall(
-          rf"^## \[{re.escape(version)}\][^\n]*(?:\n|\Z).*?(?=^## |\Z)", changelog,
-          re.M | re.S,
-      )
-      body = sections[0].partition("\n")[2] if len(sections) == 1 else ""
-      if not re.sub(r"^\s*#+[^\n]*$", "", body, flags=re.M).strip():
-          raise ValueError("The release changelog section is missing, duplicated or empty.")
-      return sections[0].strip()
-
-
-  def verify_changelog(mixfile, changelog):
-      versions = re.findall(r'^  @version "([^"]+)"$', mixfile.read_text(encoding="utf-8"), re.M)
-      if len(versions) != 1:
-          raise ValueError("Expected exactly one Mix project version.")
-      section(versions[0], changelog.read_text(encoding="utf-8"))
-
-
-  def member(packed, name):
-      matches = [entry for entry in packed if entry.name == name]
-      if len(matches) != 1 or not matches[0].isfile():
-          raise ValueError("Hex package changelog is missing, duplicated or malformed.")
-      return packed.extractfile(matches[0]).read()
-
-
-  def package_section(archive, version):
-      with tarfile.open(archive, "r:") as package:
-          contents = member(package, "contents.tar.gz")
-      with tarfile.open(fileobj=io.BytesIO(contents), mode="r:gz") as contents:
-          changelog = member(contents, "CHANGELOG.md").decode("utf-8")
-      return section(version, changelog)
-
-
-  def main():
-      parser = argparse.ArgumentParser(description=__doc__)
-      parser.add_argument("--mixfile", type=Path, default=Path("mix.exs"))
-      parser.add_argument("--changelog", type=Path, default=Path("CHANGELOG.md"))
-      args = parser.parse_args()
-      try:
-          verify_changelog(args.mixfile, args.changelog)
-      except (OSError, UnicodeError, ValueError) as error:
-          print(f"Release notes refused: {error}", file=sys.stderr)
-          return 1
-      print("CHANGELOG OK: exactly one nonempty release section")
-      return 0
-
-
-  if __name__ == "__main__":
-      raise SystemExit(main())
-  '''
-
-  @docs_inspection_script ~S'''
-  #!/usr/bin/env python3
-  """Inspect rendered or served Hex docs and their release provenance."""
-
-  import argparse
-  import hashlib
-  import importlib.util
-  import json
-  from pathlib import Path, PurePosixPath
-  import re
-  import shutil
-  import subprocess
-  import sys
-  import tarfile
-  import zlib
-
-
-  spec = importlib.util.spec_from_file_location(
-      "release_notes", Path(__file__).with_name("release-notes.py")
-  )
-  release_notes = importlib.util.module_from_spec(spec)
-  spec.loader.exec_module(release_notes)
-
-
-  SEMVER = re.compile(
-      r"[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
-      r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
-  )
-
-
-  def provenance(payload, package, version, commit, repository):
-      def unique_fields(pairs):
-          result = {}
-          for key, value in pairs:
-              if key in result:
-                  raise ValueError("Duplicate release.json field.")
-              result[key] = value
-          return result
-
-      try:
-          release = json.loads(payload, object_pairs_hook=unique_fields)
-      except (UnicodeError, json.JSONDecodeError) as error:
-          raise ValueError("Invalid release.json JSON.") from error
-      if (not isinstance(release, dict) or set(release) != {"package", "version", "commit"}
-              or release["package"] != package or release["version"] != version
-              or not isinstance(release["commit"], str)
-              or not re.fullmatch(r"[0-9a-f]{40}", release["commit"])):
-          raise ValueError("Invalid release.json identity.")
-      published = release["commit"]
-      if repository is None:
-          if published != commit:
-              raise ValueError("Built docs commit differs from the dispatched commit.")
-      else:
-          def git(*args):
-              result = subprocess.run(["git", "-C", str(repository), *args],
-                                      capture_output=True, check=False)
-              if result.returncode:
-                  raise ValueError("Docs provenance is outside available default-branch history.")
-              return result.stdout.strip()
-
-          if git("rev-parse", "--is-shallow-repository") != b"false":
-              raise ValueError("Complete default-branch history is required.")
-          git("show-ref", "--verify", "refs/remotes/origin/main")
-          git("merge-base", "--is-ancestor", commit, "refs/remotes/origin/main")
-          git("merge-base", "--is-ancestor", published, commit)
-      return published
-
-
-  def check(archive, directory=None, *, package="ash_replicant", version, commit, repository=None):
-      if not SEMVER.fullmatch(version) or not re.fullmatch(r"[0-9a-f]{40}", commit):
-          raise ValueError("Expected release identity is invalid.")
-      source = None
-      if directory is not None:
-          if not directory.is_dir():
-              raise ValueError("Documentation source directory is missing.")
-          # Hex excludes dot-prefixed files and directories, including ExDoc's manifests.
-          source = {}
-          for path in directory.rglob("*"):
-              if path.is_symlink() or not (path.is_file() or path.is_dir()):
-                  raise ValueError("Documentation contains a link or special entry.")
-              relative = path.relative_to(directory)
-              if path.is_file() and not any(part.startswith(".") for part in relative.parts):
-                  source[relative.as_posix()] = path
-      names = set()
-      ordered = []
-      release = None
-      with tarfile.open(archive, "r:gz") as packed:
-          # Legacy served archives must refuse for their missing release identity.
-          try:
-              packed.getmember("release.json")
-          except KeyError as error:
-              raise ValueError("Docs archive requires top-level release.json.") from error
-          # Hex emits a fixed gzip header: no original filename, timestamp, or OS.
-          with archive.open("rb") as stream:
-              if stream.read(10) != bytes((31, 139, 8, 0, 0, 0, 0, 0, 0, 0)):
-                  raise ValueError("Docs gzip header must have no name or mtime.")
-          for member in packed:
-              path = PurePosixPath(member.name)
-              if (not member.isfile() or path.is_absolute() or "\\" in member.name
-                      or any(part in ("", ".", "..") for part in member.name.split("/"))):
-                  raise ValueError(f"Unsafe docs archive member: {member.name!r}")
-              if SEMVER.fullmatch(path.parts[0]):
-                  raise ValueError("Top-level documentation filenames cannot be semantic versions.")
-              if path.suffix == ".epub":
-                  raise ValueError("EPUB embeds build time by default; only HTML and Markdown ship.")
-              if (member.uid != 0 or member.gid != 0 or member.uname or member.gname
-                      or member.mtime != 946684800):
-                  raise ValueError("Docs tar metadata must use fixed times and empty ownership.")
-              if member.name in names:
-                  raise ValueError(f"Duplicate docs archive member: {member.name!r}")
-              names.add(member.name)
-              ordered.append(member.name)
-              payload = packed.extractfile(member).read()
-              if len(payload) != member.size:
-                  raise ValueError("Truncated docs archive member.")
-              if member.name == "release.json":
-                  release = payload
-              if source is not None:
-                  if member.name not in source:
-                      raise ValueError(f"Docs archive member has no source: {member.name!r}")
-                  if payload != source[member.name].read_bytes():
-                      raise ValueError(f"Docs archive bytes differ from source: {member.name!r}")
-      if not {"index.html", "readme.html"} <= names:
-          raise ValueError("Docs archive requires top-level index.html and readme.html.")
-      if release is None:
-          raise ValueError("Docs archive requires top-level release.json.")
-      published = provenance(release, package, version, commit, repository)
-      if source is not None and names != source.keys():
-          raise ValueError(f"Docs archive omits source files: {sorted(source.keys() - names)!r}")
-      if ordered != sorted(ordered):
-          raise ValueError("Docs archive entries must be sorted.")
-      with archive.open("rb") as stream:
-          digest = hashlib.file_digest(stream, "sha256").hexdigest()
-      print(f"DOCS OK: {len(names)} regular files; contents and release provenance inspected")
-      print(f"SHA256: {digest}")
-      print(f"Published commit: {published}")
-      return published
-
-
-  def retain_assets(archive, package_archive, assets, version, published):
-      # Both archives are the verified served bytes. Notes come from the package they identify.
-      notes = release_notes.package_section(package_archive, version)
-      if not re.fullmatch(r"[0-9a-f]{40}", published):
-          raise ValueError("Release notes require the full published commit.")
-      assets.mkdir()
-      try:
-          paths = [assets / f"ash_replicant-{version}.tar", assets / f"ash_replicant-{version}-docs.tar.gz"]
-          shutil.copyfile(package_archive, paths[0])
-          shutil.copyfile(archive, paths[1])
-          sums = ""
-          digests = []
-          for path in paths:
-              with path.open("rb") as stream:
-                  digest = hashlib.file_digest(stream, "sha256").hexdigest()
-              digests.append(digest)
-              sums += f"{digest}  {path.name}\n"
-          (assets / "SHA256SUMS").write_text(sums)
-          (assets / "RELEASE-NOTES.md").write_text(
-              f"{notes}\n\nCommit: {published}\n\n"
-              f"Package SHA-256: {digests[0]}\n\nDocs SHA-256: {digests[1]}\n",
-              encoding="utf-8",
-          )
-          (assets / "published-commit.txt").write_text(published + "\n")
-      except BaseException:
-          shutil.rmtree(assets)
-          raise
-
-
-  def main():
-      parser = argparse.ArgumentParser(description=__doc__)
-      parser.add_argument("archive", type=Path)
-      parser.add_argument("directory", type=Path, nargs="?")
-      parser.add_argument("--package", default="ash_replicant")
-      parser.add_argument("--version", required=True)
-      parser.add_argument("--commit", required=True)
-      parser.add_argument("--repository", type=Path)
-      parser.add_argument("--commit-output", type=Path)
-      parser.add_argument("--assets", type=Path)
-      parser.add_argument("--package-archive", type=Path)
-      args = parser.parse_args()
-      try:
-          published = check(args.archive, args.directory, package=args.package, version=args.version,
-                            commit=args.commit, repository=args.repository)
-          if args.assets:
-              if args.repository is None or args.package_archive is None:
-                  raise ValueError("Release assets require served docs and default-branch history.")
-              retain_assets(args.archive, args.package_archive, args.assets, args.version, published)
-          if args.commit_output:
-              args.commit_output.write_text(published + "\n")
-      except (OSError, UnicodeError, ValueError, tarfile.TarError, EOFError, zlib.error) as error:
-          print(f"Docs archive refused: {error}", file=sys.stderr)
-          return 1
-      return 0
-
-
-  if __name__ == "__main__":
-      raise SystemExit(main())
-  '''
-
-  @publish_hex_artifacts_tests ~S"""
-  # Load the real uploader module, without executing its publication entrypoint.
-  if Mix.Project.get(), do: raise("upload preconditions must run without a Mix project")
-
-  path = Path.join(__DIR__, "publish_hex_artifacts.exs")
-  {:ok, {:__block__, _, [module, _entrypoint]}} = Code.string_to_quoted(File.read!(path))
-  Code.compile_quoted(module, path)
-  Hex.start()
-
-  defmodule PublishHexArtifactsSelfTest do
-    def reject(expected, function) do
-      function.()
-      raise "upload preconditions accepted a forbidden release"
-    rescue
-      error in RuntimeError ->
-        unless error.message == expected, do: reraise(error, __STACKTRACE__)
-    end
-  end
-
-  PublishHexArtifacts.existing_package!(
-    Hex.API.Package.get_anonymous(nil, "ash_replicant"),
-    "ash_replicant"
-  )
-
-  :fresh =
-    PublishHexArtifacts.release_state!(
-      Hex.API.Release.get(nil, "ash_replicant", "999999.0.0"),
-      "999999.0.0",
-      String.duplicate("0", 64)
-    )
-
-  # A dot cannot occur in a Hex package name, so this real lookup cannot name a package.
-  PublishHexArtifactsSelfTest.reject(
-    "the name ash_replicant.invalid is not on Hex; a first publication is the owner's decision",
-    fn ->
-      PublishHexArtifacts.existing_package!(
-        Hex.API.Package.get_anonymous(nil, "ash_replicant.invalid"),
-        "ash_replicant.invalid"
-      )
-    end
-  )
-
-  {:ok, {200, _, metadata}} = Hex.API.Release.get(nil, "ash_replicant", "1.6.3")
-
-  {:held, true} =
-    PublishHexArtifacts.release_state!({:ok, {200, [], metadata}}, "1.6.3", metadata["checksum"])
-
-  package_response = Hex.Repo.get_tarball("hexpm", "ash_replicant", "1.6.3")
-  :ok = PublishHexArtifacts.package_read_back!(package_response, metadata["checksum"])
-
-  docs_response = Hex.Repo.get_docs("hexpm", "ash_replicant", "1.6.3")
-
-  :skip = PublishHexArtifacts.docs_action!(docs_response, false)
-  :skip = PublishHexArtifacts.docs_action!(docs_response, true)
-  :ok = PublishHexArtifacts.docs_read_back!(docs_response)
-
-  :upload =
-    PublishHexArtifacts.docs_action!(
-      Hex.Repo.get_docs("hexpm", "ash_replicant", "999999.0.0"),
-      false
-    )
-
-  # These real published docs predate release.json: presence is sufficient for
-  # upload planning, but provenance read-back must refuse them without an upload.
-  {:ok, {200, _, package_bytes}} = package_response
-  work = Path.join(System.tmp_dir!(), "ash-docs-live-#{System.unique_integer([:positive])}")
-  File.mkdir!(work)
-
-  try do
-    archive = Path.join(work, "package.tar")
-    assets = Path.join(work, "assets")
-    File.write!(archive, package_bytes)
-
-    {output, 1} =
-      System.cmd(
-        Path.join(__DIR__, "read-release-assets.sh"),
-        ["1.6.3", archive, assets],
-        stderr_to_stdout: true
-      )
-
-    unless output =~ "requires top-level release.json",
-      do: raise("legacy docs refused for wrong reason")
-
-    if File.exists?(assets), do: raise("legacy docs retained release assets")
-  after
-    File.rm_rf!(work)
-  end
-
-  PublishHexArtifactsSelfTest.reject(
-    "Hex release identity does not match the built package; publication refused",
-    fn ->
-      PublishHexArtifacts.release_state!(
-        {:ok, {200, [], metadata}},
-        "1.6.3",
-        String.duplicate("0", 64)
-      )
-    end
-  )
-
-  IO.puts("upload preconditions: live Hex self-tests PASS (no upload or key)")
-  """
-
-  @docs_inspection_tests ~S"""
-  #!/usr/bin/env python3
-  # Exercise the inspector against actual ExDoc output and mutated archive bytes.
-
-  import gzip
-  import importlib.util
-  import io
-  import hashlib
-  import json
-  import re
-  import subprocess
-  import sys
-  import tarfile
-  import tempfile
-  from pathlib import Path
-  from textwrap import dedent
-
-  spec = importlib.util.spec_from_file_location(
-      "release_docs", Path(__file__).with_name("check-docs-archive.py")
-  )
-  inspector = importlib.util.module_from_spec(spec)
-  spec.loader.exec_module(inspector)
-  archive, directory, package_archive = sys.argv[1:]
-  identity = json.loads((Path(directory) / "release.json").read_text())
-  version, commit = identity["version"], identity["commit"]
-
-  publish = Path(__file__).resolve().parents[1] / ".github/workflows/publish.yml"
-  stamp_step = re.search(
-      r"^      - name: Refuse a package whose changelog is not stamped for its version\n"
-      r".*?^        run: \|\n(.*?)(?=^      - )",
-      publish.read_text(encoding="utf-8"),
-      flags=re.M | re.S,
-  )
-  assert stamp_step is not None, "publish workflow is missing the package changelog stamp check"
-
-
-  def check_changelog_stamp(package):
-      package = Path(package)
-      assert package.name == "package.tar"
-      return subprocess.run(
-          ["bash", "-euo", "pipefail", "-c",
-           'export RUNNER_TEMP="$1" VERSION="$2"\n' + dedent(stamp_step[1]),
-           "changelog-stamp", str(package.resolve().parent), version],
-          capture_output=True,
-          text=True,
-          check=False,
-      )
-
-
-  stamped = check_changelog_stamp(package_archive)
-  assert stamped.returncode == 0, stamped.stderr
-  print(stamped.stdout, end="")
-
-
-  def check(candidate, tree=None, **kwargs):
-      return inspector.check(Path(candidate), tree, version=version, commit=commit, **kwargs)
-
-
-  # The same parser admits the checkout preflight and the changelog inside served packages.
-  notes = inspector.release_notes
-  valid_section = f"## [{version}] - 2026-11-22\n\n### Fixed\n\n- Packaged release note."
-  assert notes.section(version, valid_section + "\n\n## [0.0.0]\n\n- Older.\n") == valid_section
-
-  for changelog in [
-      "## [Unreleased]\n\n- A different release.\n",
-      valid_section + "\n\n" + valid_section,
-      f"## [{version}]",
-      f"## [{version}]\n\n### Fixed\n\n",
-  ]:
-      try:
-          notes.section(version, changelog)
-      except ValueError as error:
-          assert "missing, duplicated or empty" in str(error)
-      else:
-          raise AssertionError("release notes accepted an invalid changelog section")
-
-  with tempfile.TemporaryDirectory(prefix="ash-replicant-changelog-") as scratch:
-      work = Path(scratch)
-      mixfile, changelog = work / "mix.exs", work / "CHANGELOG.md"
-      mixfile.write_text(f'  @version "{version}"\n')
-      changelog.write_text(valid_section)
-      notes.verify_changelog(mixfile, changelog)
-      command = [sys.executable, "-I", str(Path(notes.__file__)),
-                 "--mixfile", str(mixfile), "--changelog", str(changelog)]
-      subprocess.run(command, check=True, capture_output=True)
-      for invalid in ["", valid_section + "\n\n" + valid_section,
-                      f"## [{version}]\n\n### Fixed\n"]:
-          changelog.write_text(invalid)
-          result = subprocess.run(command, check=False, capture_output=True)
-          assert result.returncode == 1 and b"missing, duplicated or empty" in result.stderr
-      changelog.write_text(valid_section)
-      for invalid in ["", f'  @version "{version}"\n  @version "{version}"\n']:
-          mixfile.write_text(invalid)
-          result = subprocess.run(command, check=False, capture_output=True)
-          assert result.returncode == 1 and b"exactly one Mix project version" in result.stderr
-
-
-  check(archive, Path(directory))
-
-  with tempfile.TemporaryDirectory(prefix="ash-replicant-docs-check-") as work:
-      reasons = {
-          "missing": "requires top-level",
-          "changed": "bytes differ from source",
-          "extra": "has no source",
-          "duplicate": "Duplicate docs archive member",
-          "traversal": "Unsafe docs archive member",
-          "symlink": "Unsafe docs archive member",
-      }
-      for mutation in ["clean", *reasons]:
-          candidate = Path(work) / "docs.tar.gz"
-          packed = io.BytesIO()
-          with tarfile.open(archive, "r:gz") as original, tarfile.open(fileobj=packed, mode="w") as output:
-              for entry in original:
-                  if entry.isfile():
-                      payload = original.extractfile(entry).read()
-                      if entry.name.removeprefix("./") == "index.html":
-                          if mutation == "missing":
-                              continue
-                          if mutation == "changed":
-                              payload += b"changed"
-                              entry.size = len(payload)
-                      output.addfile(entry, io.BytesIO(payload))
-                  else:
-                      output.addfile(entry)
-              if mutation in ["extra", "duplicate", "traversal", "symlink"]:
-                  name = {
-                      "extra": "unexpected.html",
-                      "duplicate": "index.html",
-                      "traversal": "../outside.html",
-                      "symlink": "linked.html",
-                  }[mutation]
-                  entry = tarfile.TarInfo(name)
-                  entry.mtime = 946684800
-                  if mutation == "symlink":
-                      entry.type = tarfile.SYMTYPE
-                      entry.linkname = "index.html"
-                  output.addfile(entry, io.BytesIO(b""))
-          # Preserve the fixed gzip header so each negative reaches its intended guard.
-          compressed = gzip.compress(packed.getvalue(), mtime=0)
-          candidate.write_bytes(bytes((31, 139, 8, 0, 0, 0, 0, 0, 0, 0)) + compressed[10:])
-          if mutation == "clean":
-              check(candidate, Path(directory))
-              continue
-          try:
-              check(candidate, Path(directory))
-          except ValueError as error:
-              if reasons[mutation] not in str(error):
-                  raise AssertionError(f"wrong rejection for {mutation}: {error}") from error
-          else:
-              raise AssertionError(f"docs inspector accepted {mutation}")
-
-  # Build real archive variants from rendered output, and exercise actual Git ancestry.
-  with tempfile.TemporaryDirectory(prefix="ash-replicant-docs-provenance-") as scratch:
-      work = Path(scratch)
-      repo = work / "repo"
-      repo.mkdir()
-
-      def git(*args):
-          return subprocess.run(["git", "-C", str(repo), *args], check=True,
-                                capture_output=True).stdout.decode().strip()
-
-      git("init", "--initial-branch=main")
-      git("config", "user.name", "Docs provenance test")
-      git("config", "user.email", "docs@example.invalid")
-      git("commit", "--allow-empty", "-m", "Ancestor")
-      ancestor = git("rev-parse", "HEAD")
-      git("commit", "--allow-empty", "-m", "Dispatch")
-      dispatched = git("rev-parse", "HEAD")
-      git("commit", "--allow-empty", "-m", "Descendant")
-      descendant = git("rev-parse", "HEAD")
-      git("update-ref", "refs/remotes/origin/main", dispatched)
-      git("checkout", "--orphan", "unrelated")
-      git("commit", "--allow-empty", "-m", "Outside default history")
-      unrelated = git("rev-parse", "HEAD")
-
-      def variant(release, *, omit=False):
-          candidate = work / "served.tar.gz"
-          packed = io.BytesIO()
-          with tarfile.open(archive, "r:gz") as original, tarfile.open(fileobj=packed, mode="w") as output:
-              for entry in original:
-                  payload = original.extractfile(entry).read()
-                  if entry.name == "release.json":
-                      if omit:
-                          continue
-                      payload = release if isinstance(release, bytes) else json.dumps(release).encode()
-                      entry.size = len(payload)
-                  output.addfile(entry, io.BytesIO(payload))
-          compressed = gzip.compress(packed.getvalue(), mtime=0)
-          candidate.write_bytes(bytes((31, 139, 8, 0, 0, 0, 0, 0, 0, 0)) + compressed[10:])
-          return candidate
-
-      def served(candidate, **kwargs):
-          return inspector.check(candidate, version=version, commit=dispatched, repository=repo, **kwargs)
-
-      for accepted in [ancestor, dispatched]:
-          assert served(variant({**identity, "commit": accepted})) == accepted
-
-      negatives = [
-          ({**identity, "package": "other"}, "identity"),
-          ({**identity, "version": "0.0.0"}, "identity"),
-          ({**identity, "commit": 1}, "identity"),
-          ({**identity, "commit": "bad"}, "identity"),
-          ({**identity, "extra": True}, "identity"),
-          ({"package": "ash_replicant", "version": version}, "identity"),
-          ({**identity, "commit": descendant}, "outside available"),
-          ({**identity, "commit": unrelated}, "outside available"),
-          ({**identity, "commit": "0" * 40}, "outside available"),
-          (b"not JSON", "JSON"),
-          (b'{"package": "ash_replicant", "package": "other"}', "Duplicate"),
-          ([], "identity"),
-      ]
-      for release, reason in negatives:
-          try:
-              served(variant(release))
-          except ValueError as error:
-              assert reason in str(error), (reason, error)
-          else:
-              raise AssertionError("served docs accepted invalid release provenance")
-
-      for mode, reason in [("missing", "requires top-level release.json"),
-                           ("history", "outside available"), ("shallow", "Complete default-branch")]:
-          candidate = variant({**identity, "commit": ancestor}, omit=mode == "missing")
-          if mode == "history":
-              git("update-ref", "-d", "refs/remotes/origin/main")
-          if mode == "shallow":
-              git("update-ref", "refs/remotes/origin/main", dispatched)
-              (repo / ".git/shallow").write_text(ancestor + "\n")
-          try:
-              served(candidate)
-          except ValueError as error:
-              assert reason in str(error), (reason, error)
-          else:
-              raise AssertionError("served docs accepted missing provenance or history")
-      (repo / ".git/shallow").unlink()
-
-      # The ancestor archive differs from this job's rendering. Retention uses its bytes.
-      candidate = variant({**identity, "commit": ancestor})
-      published = served(candidate)
-      package = work / "package.tar"
-      package.write_bytes(Path(package_archive).read_bytes())
-      assets = work / "release-assets"
-      inspector.retain_assets(candidate, package, assets, version, published)
-      retained = assets / f"ash_replicant-{version}-docs.tar.gz"
-      assert retained.read_bytes() == candidate.read_bytes()
-      assert retained.read_bytes() != Path(archive).read_bytes()
-      sums = (assets / "SHA256SUMS").read_text()
-      assert hashlib.sha256(candidate.read_bytes()).hexdigest() + "  " + retained.name in sums
-      assert (assets / "published-commit.txt").read_text().strip() == ancestor
-      package_digest = hashlib.sha256(package.read_bytes()).hexdigest()
-      docs_digest = hashlib.sha256(candidate.read_bytes()).hexdigest()
-      release_text = (assets / "RELEASE-NOTES.md").read_text()
-      assert release_text == (
-          notes.package_section(package, version) + f"\n\nCommit: {ancestor}\n\n"
-          f"Package SHA-256: {package_digest}\n\nDocs SHA-256: {docs_digest}\n"
-      )
-      assert f"Commit: {dispatched}" not in release_text
-      assert package_digest + "  " + f"ash_replicant-{version}.tar" in sums
-
-      for invalid_commit in ["", ancestor[:7], "g" * 40]:
-          destination = work / "assets-invalid-commit"
-          try:
-              inspector.retain_assets(candidate, package, destination, version, invalid_commit)
-          except ValueError as error:
-              assert "full published commit" in str(error) and not destination.exists()
-          else:
-              raise AssertionError("release notes accepted an incomplete published commit")
-
-      # Mutate the actual built package in memory; never extract archive paths to disk.
-      with tarfile.open(package_archive, "r:") as original:
-          original_entries = [(entry, original.extractfile(entry).read()) for entry in original]
-      contents = next(payload for entry, payload in original_entries if entry.name == "contents.tar.gz")
-      for mutation in ["changed", "missing", "duplicate", "empty", "linked", "duplicate_member", "unstamped"]:
-          packed = io.BytesIO()
-          with tarfile.open(fileobj=io.BytesIO(contents), mode="r:gz") as original, \
-                  tarfile.open(fileobj=packed, mode="w:gz") as output:
-              for entry in original:
-                  payload = original.extractfile(entry).read()
-                  if entry.name == "CHANGELOG.md":
-                      if mutation == "missing":
-                          continue
-                      payload = valid_section.encode()
-                      if mutation == "duplicate":
-                          payload += b"\n\n" + payload
-                      if mutation == "empty":
-                          payload = f"## [{version}]\n\n### Fixed\n".encode()
-                      if mutation == "unstamped":
-                          payload = b"## [Unreleased]\n\n- An unstamped entry.\n\n" + payload
-                      entry.size = len(payload)
-                      if mutation == "linked":
-                          entry.type, entry.linkname, entry.size = tarfile.SYMTYPE, "README.md", 0
-                  output.addfile(entry, io.BytesIO(payload))
-                  if mutation == "duplicate_member" and entry.name == "CHANGELOG.md":
-                      output.addfile(entry, io.BytesIO(payload))
-          altered = work / "package.tar"
-          with tarfile.open(altered, "w:") as output:
-              for entry, payload in original_entries:
-                  if entry.name == "contents.tar.gz":
-                      payload = packed.getvalue()
-                      entry.size = len(payload)
-                  output.addfile(entry, io.BytesIO(payload))
-          if mutation == "unstamped":
-              result = check_changelog_stamp(altered)
-              assert result.returncode == 1, result.stdout
-              assert f"entries above {version}" in result.stderr, result.stderr
-              continue
-          destination = work / f"assets-{mutation}"
-          if mutation == "changed":
-              inspector.retain_assets(candidate, altered, destination, version, ancestor)
-              retained_notes = (destination / "RELEASE-NOTES.md").read_text()
-              assert retained_notes.startswith(valid_section + "\n\nCommit: " + ancestor)
-              assert hashlib.sha256(altered.read_bytes()).hexdigest() in retained_notes
-          else:
-              try:
-                  inspector.retain_assets(candidate, altered, destination, version, ancestor)
-              except ValueError:
-                  assert not destination.exists()
-              else:
-                  raise AssertionError("release assets accepted invalid packaged release notes")
-
-  print("docs inspection: real renders, negative archives, provenance, ancestry and served assets PASS")
-  """
-
-  @upload_archive_checks ~S"""
-  trap 'rm -rf "$RUNNER_TEMP/package.tar" "$RUNNER_TEMP/hex-docs.tar.gz" "$RUNNER_TEMP/hex-docs.tar.gz.rendered"' EXIT
-  version="$(sed -n 's/^  @version "\(.*\)"$/\1/p' mix.exs)"
-  python3 -I scripts/check-docs-archive.py "$RUNNER_TEMP/hex-docs.tar.gz" "$RUNNER_TEMP/hex-docs.tar.gz.rendered" --version "$version" --commit "$GITHUB_SHA"
-  env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION scripts/with-release-runtime.sh mix hex.build --output "$RUNNER_TEMP/package.tar"
-  scripts/inspect-release-package.sh "$RUNNER_TEMP/package.tar"
-  python3 -B scripts/test_release_docs.py "$RUNNER_TEMP/hex-docs.tar.gz" "$RUNNER_TEMP/hex-docs.tar.gz.rendered" "$RUNNER_TEMP/package.tar"
-  cd "$RUNNER_TEMP"
-  mix run --no-mix-exs "$GITHUB_WORKSPACE/scripts/test_publish_hex_artifacts.exs"
-  """
-
-  @docs_build_script ~S"""
-  #!/usr/bin/env bash
-  # Render once with locked dependencies; inspect the archive and its release provenance.
-  set -euo pipefail
-  root="$(cd "$(dirname "$0")/.." && pwd)"
-  output="${1:?usage: build-release-docs.sh ABSOLUTE_ARCHIVE_PATH}"
-  [[ "$output" == /* && ! -e "$output" && ! -e "$output.rendered" ]] || exit 2
-  work="$(mktemp -d "${RUNNER_TEMP:?}/ash-replicant-docs.XXXXXX")"
-  complete=false
-  cleanup() {
-    rm -rf "$work"
-    if [[ "$complete" != true ]]; then
-      rm -rf "$output" "$output.rendered"
-    fi
-  }
-  trap cleanup EXIT
-  unset ASH_REPLICANT_ASH_VERSION ASH_REPLICANT_REPLICANT_VERSION ASH_REPLICANT_ONETIME_VERSION
-  export MIX_ENV=dev
-  tree="$work/source"
-  mkdir "$tree"
-  git -C "$root" archive HEAD | tar -x -C "$tree"
-  (
-    cd "$tree"
-    mix deps.get --check-locked
-    mix docs --warnings-as-errors
-  )
-  version="$(sed -n 's/^  @version "\(.*\)"$/\1/p' "$tree/mix.exs")"
-  commit="$(git -C "$root" rev-parse HEAD)"
-  [[ "$commit" == "${GITHUB_SHA:?}" ]] || exit 1
-  python3 - "$tree/doc/release.json" "$version" "$commit" <<'PROVENANCE'
-  import json
-  from pathlib import Path
-  import sys
-  path, version, commit = sys.argv[1:]
-  Path(path).write_text(json.dumps({"package": "ash_replicant", "version": version, "commit": commit}) + "\n")
-  PROVENANCE
-  (cd "$work" && mix run --no-mix-exs "$root/scripts/build-docs-archive.exs" \
-    "$tree/doc" "$work/docs.tar.gz")
-  python3 -I "$root/scripts/check-docs-archive.py" "$work/docs.tar.gz" "$tree/doc" \
-    --version "$version" --commit "$commit"
-  cp "$work/docs.tar.gz" "$output"
-  cp -R "$tree/doc" "$output.rendered"
-  complete=true
-  echo 'release docs: rendered once; archive contents and release provenance inspected'
-  """
-
-  @docs_archive_builder ~S"""
-  unless is_nil(Mix.Project.get()) do
-    Mix.raise("Docs archives must be built outside a Mix project")
-  end
-
-  [directory, output] = System.argv()
-  directory = Path.expand(directory)
-
-  unless File.regular?(Path.join(directory, "index.html")) do
-    Mix.raise("Documentation must contain a top-level index.html")
-  end
-
-  Hex.start()
-  Code.ensure_loaded!(:mix_hex_tarball)
-
-  # The same listing mix hex.publish makes: Path.wildcard/1 matches no file or
-  # directory whose name starts with a dot, so ExDoc's .build manifests stay out.
-  files =
-    directory
-    |> Path.join("**")
-    |> Path.wildcard()
-    |> Enum.sort()
-    |> Enum.filter(fn path ->
-      case File.lstat!(path).type do
-        :regular -> true
-        :directory -> false
-        _other -> Mix.raise("Documentation must contain only regular files and directories")
-      end
-    end)
-    |> Enum.map(fn path ->
-      name = Path.relative_to(path, directory)
-      top_level = name |> Path.split() |> List.first()
-
-      if match?({:ok, _}, Version.parse(top_level)) do
-        Mix.raise("Top-level documentation filenames cannot be semantic versions")
-      end
-
-      {String.to_charlist(name), File.read!(path)}
-    end)
-
-  # Hex 2.7.0 sorts entries, fixes times to 2000-01-01 and uid/gid to 0,
-  # leaves owner/group names empty, and emits gzip without a filename or mtime.
-  {:ok, data} = :mix_hex_tarball.create_docs(files)
-  File.write!(output, data)
-  IO.puts("Docs archive: #{output}")
-  """
-
-  @release_identity_script ~S"""
-  # Anonymous pre-build and inspected-archive checks. No project or key is loaded.
-  defmodule AshReplicant.ReleaseIdentity do
-    @moduledoc false
-
-    def main(args, runner \\ &run/2) do
-      {version, package_digest, inspect_docs?} =
-        case args do
-          [version] ->
-            {version, nil, false}
-
-          [version, package, docs] ->
-            unless docs_archive?(File.read!(docs)), do: raise("Built docs archive is invalid")
-            {version, digest(package), true}
-
-          _ ->
-            raise "usage: release_identity.exs VERSION [PACKAGE DOCS]"
-        end
-
-      case check_archive(version, package_digest, inspect_docs?, runner) do
-        {:ok, _state} -> IO.puts("Hex release identity: accepted")
-        {:error, message} -> raise message
-      end
-    end
-
-    defp digest(path), do: :crypto.hash(:sha256, File.read!(path)) |> Base.encode16(case: :lower)
-
-    # A nil digest is only the pre-build identity check. Publication always repeats
-    # this decision with the inspected package checksum and docs presence, before exposing a key.
-    def check_archive(version, digest, inspect_docs?, runner \\ &run/2) do
-      args = [
-        "--silent",
-        "--show-error",
-        "--connect-timeout",
-        "10",
-        "--max-time",
-        "30",
-        "--write-out",
-        "\n%{http_code}",
-        "https://hex.pm/api/packages/ash_replicant/releases/" <> version
-      ]
-
-      case runner.("curl", args) do
-        {response, 0} ->
-          case String.split(response, "\n") |> Enum.reverse() do
-            ["404" | _body] ->
-              present_docs(version, :fresh, inspect_docs?, runner)
-
-            ["200" | body] ->
-              with {:ok, state} <- held_release(Enum.reverse(body), version, digest) do
-                present_docs(version, state, inspect_docs?, runner)
-              end
-
-            _other ->
-              {:error, "Hex release lookup failed; publication refused"}
-          end
-
-        _other ->
-          {:error, "Hex release lookup failed; publication refused"}
-      end
-    end
-
-    defp present_docs(_version, state, false, _runner), do: {:ok, state}
-
-    defp present_docs(version, state, true, runner) do
-      args = [
-        "--silent",
-        "--show-error",
-        "--connect-timeout",
-        "10",
-        "--max-time",
-        "30",
-        "--write-out",
-        "\n%{http_code}",
-        "https://repo.hex.pm/docs/ash_replicant-" <> version <> ".tar.gz"
-      ]
-
-      with :ok <- docs_present(runner.("curl", args), state == {:held, true}) do
-        {:ok, state}
-      end
-    end
-
-    # Split the HTTP status by byte offset: the archive is binary, not UTF-8 text.
-    def docs_present({response, 0}, required?)
-        when is_binary(response) and byte_size(response) >= 4 do
-      size = byte_size(response) - 4
-      <<bytes::binary-size(size), status::binary>> = response
-
-      case status do
-        "\n200" ->
-          if docs_archive?(bytes),
-            do: :ok,
-            else: {:error, "Hex docs archive is malformed; publication refused"}
-
-        "\n404" when not required? ->
-          :ok
-
-        "\n404" ->
-          {:error,
-           "Hex docs metadata and repository disagree; inspect public state before retrying"}
-
-        _other ->
-          {:error, "Hex docs archive is unavailable; publication refused"}
-      end
-    end
-
-    def docs_present(_response, _required?),
-      do: {:error, "Hex docs archive lookup failed; publication refused"}
-
-    def docs_archive?(<<0x1F, 0x8B, _rest::binary>> = bytes) do
-      case :erl_tar.extract({:binary, bytes}, [:compressed, :memory]) do
-        {:ok, entries} -> Enum.any?(entries, &match?({~c"index.html", _bytes}, &1))
-        _other -> false
-      end
-    rescue
-      _error -> false
-    catch
-      _kind, _reason -> false
-    end
-
-    def docs_archive?(_bytes), do: false
-
-    defp held_release(body, version, digest) do
-      # OTP's JSON decoder uses :null; Hex's Erlang API uses nil in the uploader.
-      with {:ok, metadata} <- decode_json(Enum.join(body, "\n"), "Hex release") do
-        case metadata do
-          %{
-            "version" => ^version,
-            "checksum" => checksum,
-            "retirement" => :null,
-            "has_docs" => docs?
-          }
-          when is_binary(checksum) and is_boolean(docs?) ->
-            cond do
-              not Regex.match?(~r/\A[0-9a-f]{64}\z/, checksum) ->
-                {:error, "Hex release checksum is invalid"}
-
-              digest != nil and checksum != digest ->
-                {:error, "Hex release checksum differs from the built package; publication refused"}
-
-              true ->
-                {:ok, {:held, docs?}}
-            end
-
-          %{"retirement" => retirement} when retirement != :null ->
-            {:error, "Hex release is retired; publication refused"}
-
-          _other ->
-            {:error, "Hex release metadata is invalid; publication refused"}
-        end
-      end
-    end
-
-    defp decode_json(body, label) do
-      case :json.decode(body) do
-        metadata when is_map(metadata) -> {:ok, metadata}
-        _other -> {:error, "#{label} returned an invalid metadata shape"}
-      end
-    rescue
-      _error -> {:error, "#{label} returned invalid JSON"}
-    catch
-      _kind, _reason -> {:error, "#{label} returned invalid JSON"}
-    end
-
-    defp run(command, args), do: System.cmd(command, args, stderr_to_stdout: true)
-  end
-
-  AshReplicant.ReleaseIdentity.main(System.argv())
   """
 
   @fixture_audit_script ~S"""
@@ -1379,98 +200,6 @@ defmodule AshReplicant.ReleaseContract do
   export ASH_REPLICANT_PATH="$root"
   (cd "$fixture" && mix deps.get --check-locked && mix hex.audit)
   mix deps.audit --path "$fixture"
-  """
-
-  @release_tree_script ~S"""
-  #!/usr/bin/env bash
-  set -euo pipefail
-
-  release_tree_fail() { echo "release tree: $1" >&2; exit 1; }
-
-  # Publication may add a version, never a package name. Read anonymously first.
-  assert_hex_package_exists() {
-    local name="$1" url="$2" code
-    code="$(curl --silent --show-error --max-time 30 --output /dev/null \
-      --write-out '%{http_code}' "$url")" || release_tree_fail "$name package lookup failed"
-    case "$code" in
-      200) ;;
-      404) release_tree_fail "$name is not on Hex; first publication is the owner's decision" ;;
-      *) release_tree_fail "$name package lookup failed" ;;
-    esac
-  }
-
-  # Only an HTTP 404 proves absence. A transport error, redirect, or any other
-  # response refuses publication. GitHub uses the caller's read-only job token.
-  assert_release_absent() {
-    local label="$1" url="$2" code
-    code="$(curl --silent --show-error --max-time 30 --output /dev/null \
-      --write-out '%{http_code}' "$url")" || release_tree_fail "$label lookup failed"
-    case "$code" in
-      404) ;;
-      200) release_tree_fail "$label already exists" ;;
-      *) release_tree_fail "$label lookup failed" ;;
-    esac
-  }
-
-  # gh exits 1 for HTTP errors, including the 404 that proves absence. Inspect
-  # the first status line and the exit code; never print the response or stderr.
-  assert_github_release_absent() {
-    local path="$1" response protocol code result=0
-    [[ -n "${GH_TOKEN:-}" ]] || release_tree_fail 'GitHub token is required'
-    response="$(gh api --hostname github.com -i "$path" 2>/dev/null)" || result=$?
-    read -r protocol code _ <<< "$response"
-    [[ "$protocol" == HTTP/* ]] || release_tree_fail 'GitHub release lookup failed'
-    case "$code:$result" in
-      404:1) ;;
-      200:0) release_tree_fail 'GitHub release already exists' ;;
-      *) release_tree_fail 'GitHub release lookup failed' ;;
-    esac
-  }
-
-  release_tree_main() {
-    local version="${1:?usage: assert-release-tree.sh VERSION TAG [--unreleased [PACKAGE DOCS]]}"
-    local tag="${2:?usage: assert-release-tree.sh VERSION TAG [--unreleased [PACKAGE DOCS]]}"
-    local mode="${3:-}" tag_sha result tree_status
-    [[ "$#" -eq 2 || ( ( "$#" -eq 3 || "$#" -eq 5 ) && "$mode" == --unreleased ) ]] || exit 2
-    [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || release_tree_fail 'invalid release version'
-    [[ "$tag" == "v$version" ]] || release_tree_fail 'tag must match version'
-    tree_status="$(git status --porcelain --untracked-files=all)" || release_tree_fail 'git status failed'
-    [[ -z "$tree_status" ]] || release_tree_fail 'dirty tree'
-
-    if [[ "$mode" == --unreleased ]]; then
-      assert_hex_package_exists ash_replicant https://hex.pm/api/packages/ash_replicant
-      [[ "$(sed -n 's/^  @version "\(.*\)"$/\1/p' mix.exs)" == "$version" ]] \
-        || release_tree_fail 'project version differs from release version'
-      result=0
-      git show-ref --verify --quiet "refs/tags/$tag" || result=$?
-      case "$result" in
-        0) release_tree_fail 'local tag already exists' ;;
-        1) ;;
-        *) release_tree_fail 'local tag lookup failed' ;;
-      esac
-      result=0
-      GIT_TERMINAL_PROMPT=0 git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null || result=$?
-      case "$result" in
-        0) release_tree_fail 'remote tag already exists' ;;
-        2) ;;
-        *) release_tree_fail 'remote tag lookup failed' ;;
-      esac
-      assert_github_release_absent "repos/baselabs/ash_replicant/releases/tags/$tag"
-      elixir "$(dirname "${BASH_SOURCE[0]}")/release_identity.exs" "$version" "${@:4}"
-      echo 'release tree: version is untagged and its Hex identity is admissible'
-      return
-    fi
-
-    tag_sha="$(git rev-parse --verify "refs/tags/$tag^{commit}")" || release_tree_fail 'tag cannot be resolved'
-    [[ "$(git rev-parse HEAD)" == "$tag_sha" ]] || release_tree_fail 'HEAD differs from tag'
-    [[ "$(sed -n 's/^  @version "\(.*\)"$/\1/p' mix.exs)" == "$version" ]] \
-      || release_tree_fail 'project version differs from release version'
-    echo "$tag_sha"
-  }
-
-  if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
-    release_tree_main "$@"
-  fi
   """
 
   @upgrade_fixture_project """
@@ -1502,11 +231,6 @@ defmodule AshReplicant.ReleaseContract do
   end
   """
 
-  @github_target_lookup ~S"""
-  target="$(gh api --hostname github.com "repos/baselabs/ash_replicant/releases/tags/$tag" --jq .target_commitish 2>/dev/null)" \
-    || fail "GitHub release lookup failed"
-  """
-
   @qualification_lookup ~S"""
           response = subprocess.run(
               [
@@ -1517,32 +241,6 @@ defmodule AshReplicant.ReleaseContract do
               check=True, capture_output=True, text=True, timeout=30,
           )
           body = json.loads(response.stdout)
-  """
-
-  @hex_package_guard_tests ~S"""
-  assert_hex_package_exists ash_replicant https://hex.pm/api/packages/ash_replicant
-  # A dot cannot occur in a Hex package name; this real name can never exist.
-  reject "ash_replicant.invalid is not on Hex; first publication is the owner's decision" \
-    assert_hex_package_exists ash_replicant.invalid https://hex.pm/api/packages/ash_replicant.invalid
-  reject 'ash_replicant package lookup failed' assert_hex_package_exists ash_replicant https://127.0.0.1:1
-  """
-
-  @github_guard_tests ~S"""
-  reject 'GitHub release already exists' assert_github_release_absent \
-    repos/baselabs/ash_replicant/releases/tags/v1.6.3
-  reject 'Hex release already exists' assert_release_absent 'Hex release' \
-    https://hex.pm/api/packages/ash_replicant/releases/1.6.3
-  assert_github_release_absent \
-    repos/baselabs/ash_replicant/releases/tags/v999999.0.0
-  without_github_token() (
-    unset GH_TOKEN
-    assert_github_release_absent "$@"
-  )
-  reject 'GitHub token is required' without_github_token \
-    repos/baselabs/ash_replicant/releases/tags/v999999.0.0
-  # A real invalid date query yields an HTTP error other than absence.
-  reject 'GitHub release lookup failed' assert_github_release_absent \
-    'repos/baselabs/ash_replicant/commits?since=not-a-date'
   """
 
   @resolve_dependencies """
@@ -1618,27 +316,6 @@ defmodule AshReplicant.ReleaseContract do
   fi
   """
 
-  @public_dependency_check """
-  env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix run --no-start -e '
-  deps = Mix.Project.config() |> Keyword.fetch!(:deps)
-
-  expected = AshReplicant.DependencyRequirements.read!("mix.exs")
-
-  public_deps = Enum.reject(deps, fn dependency ->
-    options = if tuple_size(dependency) == 3, do: elem(dependency, 2), else: []
-    Keyword.has_key?(options, :only)
-  end)
-
-  unless Enum.sort(Enum.map(public_deps, &elem(&1, 0))) == Enum.sort(Map.keys(expected)),
-    do: raise("unexpected public dependency set")
-
-  Enum.each(expected, fn {dependency, requirement} ->
-    actual = deps |> List.keyfind!(dependency, 0) |> elem(1)
-    unless actual == requirement, do: raise("unexpected public dependency requirement")
-  end)
-  '
-  """
-
   @command_status_guards [
     {"scripts/with-release-runtime.sh",
      ~S"""
@@ -1656,16 +333,6 @@ defmodule AshReplicant.ReleaseContract do
      ~S"""
      actual_elixir = System.version() <> "-otp-" <> System.build_info()[:otp_release]
      """},
-    {"scripts/assert-release-tree.sh",
-     ~S"""
-       tree_status="$(git status --porcelain --untracked-files=all)" || release_tree_fail 'git status failed'
-       [[ -z "$tree_status" ]] || release_tree_fail 'dirty tree'
-     """},
-    {"scripts/inspect-release-package.sh",
-     ~S"""
-     package_files="$(cd "$work/package" && find . \( -type f -o -type l \) | sed 's|^./||' | LC_ALL=C sort)"
-     if ! diff -u "$root/scripts/release-package-files.txt" - <<<"$package_files"; then
-     """},
     {"scripts/run-structural-tests.sh",
      ~S"""
      logger_error_count="$(grep -Ec '(^|[[:space:]])\[error\]' "$raw_output")" || [[ $? -eq 1 ]]
@@ -1682,67 +349,8 @@ defmodule AshReplicant.ReleaseContract do
     {"scripts/bump-version.sh",
      ~S"""
        count="$(grep -cF "$old" "$file")" || [[ $? -eq 1 ]]
-     """},
-    {"scripts/test-release-package-inspection.sh",
-     ~S"""
-     grep -qF "$selector_free_build" <<<"$inspection" || {
-     """},
-    {"scripts/test-release-package-inspection.sh",
-     ~S"""
-       build_status=0
-       grep -q 'mix hex.build' <<<"$staged" || build_status=$?
-       if [[ "$build_status" -ne 1 ]]; then
-     """},
-    {"scripts/test-release-package-inspection.sh",
-     ~S"""
-       inspection_script="$(rebind_staging)" || return
-       ASH_REPLICANT_PACKAGE_FIXTURE="$1" bash -euo pipefail -c "$inspection_script"
-     """},
-    {"scripts/test-release-package-inspection.sh",
-     ~S"""
-       staged="$(printf '%s\n' "$inspection" \
-         | sed -e 's|^package_dir=\$(mktemp -d)$|package_dir="$ASH_REPLICANT_PACKAGE_FIXTURE"|' \
-               -e "s|^${selector_free_build}\$|: # self-test staged fixture|")" || return
      """}
   ]
-
-  @package_inspection ~S"""
-  package_dir=$(mktemp -d)
-  trap 'rm -rf "$package_dir"' EXIT
-  env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix hex.build --unpack --output "$package_dir"
-
-  for required in lib .formatter.exs mix.exs README.md LICENSE NOTICE CHANGELOG.md usage-rules.md \
-    lib/ash_replicant/upgrade.ex lib/ash_replicant/upgrade/checkpoint.ex \
-    lib/mix/tasks/ash_replicant.upgrade.ex; do
-    test -e "$package_dir/$required" || {
-      echo "::error::Missing package path: $required"
-      exit 1
-    }
-  done
-
-  residue="$(find "$package_dir" -type d \( -name test -o -name _build -o -name '.*' ! -name . \) -print -quit)"
-  if [[ -n "$residue" ]]; then
-    echo "::error::Package contains test, build, or dot-directory residue"
-    exit 1
-  fi
-
-  if test -e "$package_dir/priv"; then
-    echo "::error::Package contains private migrations"
-    exit 1
-  fi
-
-  credentials="$(find "$package_dir" -type f \( -name '.env*' -o -name '*.pem' -o -name '*.key' \) -print -quit)"
-  if [[ -n "$credentials" ]]; then
-    echo "::error::Package contains a credential-shaped file"
-    exit 1
-  fi
-
-  package_files="$(cd "$package_dir" && find . \( -type f -o -type l \) | sed 's|^./||' | LC_ALL=C sort)"
-  if ! diff -u scripts/release-package-files.txt - <<<"$package_files"; then
-    echo "::error::Package files differ from the release allowlist"
-    exit 1
-  fi
-  """
 
   @job_env %{
     "postgres-lanes" => nil,
@@ -1811,8 +419,6 @@ defmodule AshReplicant.ReleaseContract do
       {:run, "elixir --version", %{"if" => @fail_late}},
       {:run, "scripts/test-prepush.sh", %{"if" => @fail_late}},
       {:run, "scripts/test-release-checkers.sh", %{"if" => @fail_late}},
-      {:run, "scripts/test-release-guards.sh",
-       %{"if" => @fail_late, "env" => %{"GH_TOKEN" => "${{ github.token }}"}}},
       {:run, "scripts/test-release-contract.sh", %{"if" => @fail_late}},
       {:run, "python3 -B -m unittest discover -s scripts -p 'test_qualify.py'",
        %{"if" => @fail_late}},
@@ -1901,23 +507,17 @@ defmodule AshReplicant.ReleaseContract do
       {:run, "mix deps.get --check-locked"},
       {:run, "mix deps.compile"},
       {:uses, @postgres_action, :absent},
-      {:run, "scripts/test-fresh-consumer.sh"},
+      {:uses, @download_artifact,
+       %{"name" => "hex-hexpm-ash_replicant", "path" => "${{ runner.temp }}/qualified-hex"}},
+      {:run, ~s(scripts/test-fresh-consumer.sh "$RUNNER_TEMP/qualified-hex/package.tar")},
+      {:run, ~s(rm -rf "$RUNNER_TEMP/qualified-hex"), %{"if" => "always()"}},
       {:uses, @postgres_action, %{"mode" => "stop"}, %{"if" => "always()"}}
     ],
     "release-artifact" => [
       {:uses, @checkout, %{"persist-credentials" => false}},
       {:uses, @toolchain_action, :absent, %{"id" => "toolchain"}},
       {:uses, @beam_action, @runtime_inputs},
-      {:run,
-       "env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix deps.get --check-locked"},
-      {:run, "mix deps.compile"},
-      {:run, "mix compile --warnings-as-errors"},
-      {:run, "elixir --version"},
-      {:run, "scripts/assert-release-contract.sh"},
-      {:run, String.trim(@public_dependency_check)},
-      {:run, ~s(scripts/build-release-docs.sh "$RUNNER_TEMP/hex-docs.tar.gz")},
-      {:run, String.trim(@upload_archive_checks)},
-      {:run, String.trim(@package_inspection)}
+      {:uses, @hex_action, Map.put(@hex_identity, "operation", "qualify")}
     ]
   }
 
@@ -2101,9 +701,6 @@ defmodule AshReplicant.ReleaseContract do
   # The package-inspection self-test executes these bytes against staged
   # fixtures (leak + clean), so the shipped predicate is proven to REJECT, not
   # merely to exist as text.
-  @doc false
-  def package_inspection, do: @package_inspection
-
   def run(root) do
     workflow = YamlElixir.read_from_file!(Path.join(root, ".github/workflows/qualification.yml"))
     landing = YamlElixir.read_from_file!(Path.join(root, ".github/workflows/ci.yml"))
@@ -2112,7 +709,8 @@ defmodule AshReplicant.ReleaseContract do
     publish = YamlElixir.read_from_file!(Path.join(root, ".github/workflows/publish.yml"))
 
     assert_landing(landing)
-    assert_publish(publish, root)
+    assert_publish(publish)
+    assert_hex_declaration(root)
     assert_qualification(workflow, root)
     assert_drift_report(drift, root)
     assert_workflow_runners(root)
@@ -2229,13 +827,6 @@ defmodule AshReplicant.ReleaseContract do
 
     assert(count == 1, "AshOnetime migration checker wiring is incomplete")
 
-    inspection_count =
-      source
-      |> String.split("\n")
-      |> Enum.count(&(String.trim(&1) == "scripts/test-release-package-inspection.sh >/dev/null"))
-
-    assert(inspection_count == 1, "package inspection checker wiring is incomplete")
-
     lanes_count =
       source
       |> String.split("\n")
@@ -2246,10 +837,6 @@ defmodule AshReplicant.ReleaseContract do
 
     assert(lanes_count == 1, "PostgreSQL lane checker wiring is incomplete")
 
-    assert(
-      not String.contains?(source, "scripts/test-release-guards.sh"),
-      "live release guards must run only in their dedicated step"
-    )
   rescue
     _error in [File.Error] -> fail("release checker wiring input is invalid")
   end
@@ -2440,154 +1027,159 @@ defmodule AshReplicant.ReleaseContract do
     assert_runtime(workflow, root, %{"id" => "runtime"})
   end
 
-  defp assert_publish(workflow, root) do
-    assert_runtime(workflow, root)
+  defp assert_publish(workflow) do
+    common_steps = [
+      {:run, String.trim(@publish_ref_guard),
+       %{
+         "env" => %{
+           "DEFAULT_BRANCH" => "${{ github.event.repository.default_branch }}",
+           "RELEASE_COMMIT" => @release_commit
+         }
+       }},
+      {:uses, @checkout,
+       %{"ref" => @release_commit, "fetch-depth" => 0, "persist-credentials" => false}},
+      {:run, String.trim(@publish_runtime_reader), %{"id" => "toolchain"}},
+      {:uses, @setup_beam,
+       %{
+         "elixir-version" => @runtime_inputs["elixir"],
+         "otp-version" => @runtime_inputs["otp"],
+         "version-type" => "strict",
+         "install-hex" => false,
+         "install-rebar" => false
+       }},
+      {:run, String.trim(@publish_runtime_install),
+       %{
+         "working-directory" => "${{ runner.temp }}",
+         "env" => %{
+           "WANT_ELIXIR" => @runtime_inputs["elixir"],
+           "WANT_OTP" => @runtime_inputs["otp"]
+         }
+       }}
+    ]
 
-    # Exact maps admit the registry key only in the isolated upload step,
-    # and keep the published consumer outside every environment.
-    expected = %{
-      "name" => "Publish to Hex",
-      "defaults" => %{"run" => %{"shell" => "bash"}},
-      "permissions" => %{"contents" => "read"},
-      "concurrency" => %{"group" => "publish", "cancel-in-progress" => false},
-      "jobs" => %{
-        "publish" => %{
-          "name" => "Publish",
-          "if" => @publish_owner_condition,
-          "environment" => "publish",
-          "runs-on" => "ubuntu-24.04",
-          "timeout-minutes" => 5,
-          "permissions" => %{"contents" => "read"},
-          "env" => %{"MIX_ENV" => "dev"},
-          "outputs" => %{
-            "version" => "${{ steps.release.outputs.version }}",
-            "published_commit" => "${{ steps.readback.outputs.published_commit }}"
-          },
-          "steps" => [
-            %{
-              "name" => "Refuse publishing outside the default branch",
-              "run" => "test \"$GITHUB_REF\" = \"refs/heads/main\""
-            },
-            %{
-              "uses" => "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-              "with" => %{"persist-credentials" => false, "fetch-depth" => 0}
-            },
-            %{
-              "name" => "Refuse a missing, duplicated or empty release changelog section",
-              "run" => "python3 -I scripts/release-notes.py"
-            },
-            %{"uses" => @toolchain_action, "id" => "toolchain"},
-            %{"uses" => @beam_action, "with" => @runtime_inputs},
-            %{"run" => "mix local.rebar --force"},
-            %{
-              "name" => "Refuse a tagged release or inadmissible Hex identity",
-              "id" => "release",
-              "env" => %{"GH_TOKEN" => "${{ github.token }}"},
-              "run" => @publish_unreleased_check
-            },
-            %{"name" => "Fetch dependencies", "run" => "mix deps.get --check-locked"},
-            %{
-              "name" => "Build and inspect package and docs archives",
-              "run" => @publish_package_inspection
-            },
-            %{
-              "name" => "Refuse a package whose changelog is not stamped for its version",
-              "shell" => "bash",
-              "env" => %{"VERSION" => "${{ steps.release.outputs.version }}"},
-              "run" => @publish_changelog_stamp
-            },
-            %{
-              "name" => "Admit stamped release archives",
-              "env" => %{
-                "VERSION" => "${{ steps.release.outputs.version }}",
-                "GH_TOKEN" => "${{ github.token }}"
-              },
-              "run" => @publish_archive_admission
-            },
-            %{
-              "name" => "Upload inspected archives to hex.pm",
-              "working-directory" => "${{ runner.temp }}",
-              "env" => %{
-                "VERSION" => "${{ steps.release.outputs.version }}",
-                "HEX_API_KEY" => "${{ secrets.HEX_API_KEY }}"
-              },
-              "run" =>
-                "mix run --no-mix-exs \"$GITHUB_WORKSPACE/scripts/publish_hex_artifacts.exs\" ash_replicant \"$VERSION\" \"$RUNNER_TEMP/package.tar\" \"$RUNNER_TEMP/hex-docs.tar.gz\""
-            },
-            %{
-              "name" => "Read back served docs and prepare release assets without a key",
-              "id" => "readback",
-              "env" => %{"VERSION" => "${{ steps.release.outputs.version }}"},
-              "run" =>
-                "scripts/read-release-assets.sh \"$VERSION\" \"$RUNNER_TEMP/package.tar\" \"$RUNNER_TEMP/release-assets\""
-            },
-            %{
-              "name" => "Retain verified release assets for infra",
-              "uses" => "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
-              "with" => %{
-                "name" => "release-assets",
-                "path" => "${{ runner.temp }}/release-assets/",
-                "if-no-files-found" => "error",
-                "retention-days" => 7
-              }
-            },
-            %{
-              "name" => "Remove release archives",
-              "if" => "always()",
-              "run" =>
-                "rm -rf \"$RUNNER_TEMP/package.tar\" \"$RUNNER_TEMP/hex-docs.tar.gz\" \"$RUNNER_TEMP/hex-docs.tar.gz.rendered\" \"$RUNNER_TEMP/release-assets\""
-            }
-          ]
-        },
-        "published-package" => %{
-          "name" => "Verify published package",
-          "needs" => "publish",
-          "if" => @publish_owner_condition,
-          "runs-on" => "ubuntu-24.04",
-          "timeout-minutes" => 90,
-          "permissions" => %{"contents" => "read"},
-          "env" => %{
-            "MIX_ENV" => "dev",
-            "VERSION" => "${{ needs.publish.outputs.version }}",
-            "ASH_REPLICANT_TEST_URL" =>
-              "postgres://postgres:postgres@127.0.0.1:5432/ash_replicant_test"
-          },
-          "steps" => [
-            %{
-              "name" => "Refuse publishing outside the default branch",
-              "run" => "test \"$GITHUB_REF\" = \"refs/heads/main\""
-            },
-            %{
-              "uses" => "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-              "with" => %{"persist-credentials" => false}
-            },
-            %{"uses" => @toolchain_action, "id" => "toolchain"},
-            %{"uses" => @beam_action, "with" => @runtime_inputs},
-            %{"run" => "mix deps.get --check-locked"},
-            %{"run" => "mix deps.compile"},
-            %{
-              "name" => "Start the published consumer's real PostgreSQL",
-              "uses" => @postgres_action
-            },
-            %{
-              "name" => "Audit and exercise the published package as a fresh consumer",
-              "run" => "scripts/test-fresh-consumer.sh --from-hex \"$VERSION\""
-            },
-            %{
-              "name" => "Remove the published consumer's PostgreSQL",
-              "if" => "always()",
-              "uses" => @postgres_action,
-              "with" => %{"mode" => "stop"}
-            }
-          ]
-        }
-      },
-      "on" => %{"workflow_dispatch" => nil}
+    hex_inputs = Map.put(@hex_identity, "release-commit", @release_commit)
+    upload_inputs =
+      Map.merge(hex_inputs, %{
+        "operation" => "upload",
+        "organization-read-key" => "${{ secrets.HEX_ORG_KEY_PUBLISH_API_READ }}"
+      })
+
+    read_back_inputs =
+      Map.merge(hex_inputs, %{
+        "operation" => "read-back",
+        "qualification-run" => "${{ needs.upload.outputs.qualification-run }}",
+        "qualification-sha256" => "${{ needs.upload.outputs.qualification-sha256 }}",
+        "release-assets-directory" => "${{ runner.temp }}/release-assets"
+      })
+
+    read_permissions = %{"contents" => "read", "actions" => "read"}
+
+    common_job = %{
+      "if" => @publish_owner_condition,
+      "runs-on" => "ubuntu-24.04",
+      "timeout-minutes" => 90
     }
 
-    assert(workflow == expected, "publish job contract is invalid")
-    source = File.read!(Path.join(root, ".github/workflows/publish.yml"))
-    assert(not String.contains?(source, "mix hex.publish"), "publish must upload inspected files")
+    upload =
+      Map.merge(common_job, %{
+        "environment" => "publish",
+        "permissions" => Map.put(read_permissions, "id-token", "write"),
+        "outputs" => %{
+          "qualification-run" => "${{ steps.hex.outputs.qualification-run }}",
+          "qualification-sha256" => "${{ steps.hex.outputs.qualification-sha256 }}"
+        },
+        "steps" =>
+          common_steps ++
+            [
+              {:uses, @hex_action, upload_inputs, %{"id" => "hex"}},
+              {:run,
+               ~s(rm -f "$RUNNER_TEMP/hex-release-toolchain.sh" "$RUNNER_TEMP/hex-release-tool-versions"),
+               %{"if" => "always()"}}
+            ]
+      })
+
+    read_back =
+      Map.merge(common_job, %{
+        "needs" => "upload",
+        "permissions" => read_permissions,
+        "outputs" => %{"commit" => "${{ steps.hex.outputs.commit }}"},
+        "steps" =>
+          common_steps ++
+            [
+              {:uses, @hex_action, read_back_inputs, %{"id" => "hex"}},
+              {:uses, @upload_artifact,
+               %{
+                 "name" => "release-assets",
+                 "path" => "${{ runner.temp }}/release-assets/",
+                 "if-no-files-found" => "error",
+                 "compression-level" => 0,
+                 "retention-days" => 7
+               }},
+              {:run,
+               ~s(rm -rf "$RUNNER_TEMP/hex-release-toolchain.sh" "$RUNNER_TEMP/hex-release-tool-versions" "$RUNNER_TEMP/release-assets"),
+               %{"if" => "always()"}}
+            ]
+      })
+
+    jobs =
+      Map.new(workflow["jobs"], fn {id, job} ->
+        steps = Enum.map(Map.get(job, "steps", []), &step_signature/1)
+        {id, Map.put(job, "steps", steps)}
+      end)
+
+    assert(jobs == %{"upload" => upload, "read-back" => read_back}, "publish job contract is invalid")
+
+    assert(
+      Map.delete(workflow, "jobs") == %{
+        "name" => "Publish to Hex",
+        "defaults" => %{"run" => %{"shell" => "bash"}},
+        "permissions" => %{"contents" => "read"},
+        "concurrency" => %{"group" => "publish", "cancel-in-progress" => false},
+        "on" => %{
+          "workflow_dispatch" => %{
+            "inputs" => %{
+              "release_commit" => %{
+                "description" => "Full SHA of the landed release commit",
+                "required" => true,
+                "type" => "string"
+              }
+            }
+          }
+        }
+      },
+      "publish must dispatch on one full release commit"
+    )
+  end
+
+  defp assert_hex_declaration(root) do
+    declaration = root |> Path.join(".github/hex-packages.json") |> File.read!() |> Jason.decode!()
+
+    requirements =
+      Map.new(public_requirements(root), fn {app, requirement} ->
+        name = Atom.to_string(app)
+
+        {name,
+         %{
+           "app" => name,
+           "optional" => app == :igniter,
+           "requirement" => requirement,
+           "repository" => "hexpm"
+         }}
+      end)
+
+    assert(
+      match?(
+        %{
+          "ash_replicant" => %{
+            "app" => "ash_replicant",
+            "directory" => ".",
+            "requirements" => ^requirements
+          }
+        },
+        declaration
+      ),
+      "Hex package declaration must match the public Mix dependencies"
+    )
   end
 
   defp assert_workflow_runners(root) do
@@ -2598,16 +1190,13 @@ defmodule AshReplicant.ReleaseContract do
       workflow = YamlElixir.read_from_file!(path)
       assert_actions(workflow)
       controls = if Path.basename(path) == "drift-report.yml", do: %{"id" => "runtime"}, else: %{}
-      assert_runtime(workflow, root, controls)
+      if Path.basename(path) != "publish.yml", do: assert_runtime(workflow, root, controls)
       source = File.read!(path)
 
       assert(
-        not String.contains?(source, [
-          "version-file:",
-          "elixir-version:",
-          "otp-version:",
-          ".tool-versions"
-        ]) and
+        (Path.basename(path) == "publish.yml" or
+           not String.contains?(source, ["elixir-version:", "otp-version:", ".tool-versions"])) and
+          not String.contains?(source, "version-file:") and
           not Regex.match?(~r/\b(?:elixir|erlang|otp)[_-]?(?:version)?\s*:\s*["']?[0-9]/i, source),
         "workflow runtime versions must come only from the shared reader outputs"
       )
@@ -2639,8 +1228,11 @@ defmodule AshReplicant.ReleaseContract do
     [block] = Regex.run(pattern, File.read!(path)) || fail("CI job source is missing")
 
     if {Path.basename(path), name} in [
-         {"publish.yml", "published-package"},
-         {"qualification.yml", "postgres-lanes"}
+         {"publish.yml", "upload"},
+         {"publish.yml", "read-back"},
+         {"qualification.yml", "postgres-lanes"},
+         {"qualification.yml", "release-artifact"},
+         {"qualification.yml", "fresh-consumer"}
        ] do
       assert(
         timeout == 90 and
@@ -2693,16 +1285,6 @@ defmodule AshReplicant.ReleaseContract do
 
     for {path, expected} <- [
           {"scripts/audit-fixtures.sh", @fixture_audit_script},
-          {"scripts/assert-release-tree.sh", @release_tree_script},
-          {"scripts/publish_hex_artifacts.exs", @publish_hex_artifacts_script},
-          {"scripts/check-docs-archive.py", @docs_inspection_script},
-          {"scripts/release-notes.py", @release_notes_script},
-          {"scripts/build-release-docs.sh", @docs_build_script},
-          {"scripts/read-release-assets.sh", @read_release_assets_script},
-          {"scripts/build-docs-archive.exs", @docs_archive_builder},
-          {"scripts/release_identity.exs", @release_identity_script},
-          {"scripts/test_publish_hex_artifacts.exs", @publish_hex_artifacts_tests},
-          {"scripts/test_release_docs.py", @docs_inspection_tests},
           {"test/fixtures/upgrade_0_4_app/mix.exs", @upgrade_fixture_project}
         ] do
       assert(
@@ -2711,29 +1293,13 @@ defmodule AshReplicant.ReleaseContract do
       )
     end
 
-    for {path, expected} <- [
-          {"scripts/verify-release.sh", @github_target_lookup},
-          {"scripts/qualify.py", @qualification_lookup},
-          {"scripts/test-release-guards.sh", @github_guard_tests},
-          {"scripts/test-release-guards.sh", @hex_package_guard_tests}
-        ] do
-      source = File.read!(Path.join(root, path))
-      assert(String.contains?(source, expected), "GitHub API lookup contract is invalid")
-    end
+    verdict = File.read!(Path.join(root, "scripts/qualify.py"))
 
-    for path <- ["scripts/verify-release.sh", "scripts/qualify.py"] do
-      source = File.read!(Path.join(root, path))
-
-      required =
-        if String.ends_with?(path, ".py"),
-          do: ~s|if not os.environ.get("GH_TOKEN"):|,
-          else: ~s([[ -n "${GH_TOKEN:-}" ]] || fail "GitHub token is required")
-
-      assert(
-        String.contains?(source, required),
-        "GitHub lookup must require its environment token"
-      )
-    end
+    assert(
+      String.contains?(verdict, @qualification_lookup) and
+        String.contains?(verdict, ~s|if not os.environ.get("GH_TOKEN"):|),
+      "qualification must use the job token for its GitHub lookup"
+    )
 
     upgrade = File.read!(Path.join(root, "test/integration/upgrade_checkpoint_test.exs"))
 
@@ -3019,7 +1585,6 @@ defmodule AshReplicant.ReleaseContract do
           "name" => "Install and verify the pinned Hex client",
           "shell" => "bash",
           "working-directory" => "${{ runner.temp }}",
-          "env" => %{"WANT_HEX" => "2.7.0"},
           "run" => @install_hex
         }
       ]
@@ -3160,10 +1725,16 @@ defmodule AshReplicant.ReleaseContract do
            "no-database",
            "compatibility",
            "performance",
-           "decoder-old-majors",
-           "fresh-consumer"
+           "decoder-old-majors"
          ] do
         assert(job["needs"] == "postgres-lanes", "database lanes must use the declaration job")
+      end
+
+      if name == "fresh-consumer" do
+        assert(
+          job["needs"] == ["postgres-lanes", "release-artifact"],
+          "fresh consumer needs the qualified Hex archive"
+        )
       end
 
       if name == "postgres-lanes" do
@@ -3181,7 +1752,7 @@ defmodule AshReplicant.ReleaseContract do
       if name in ["no-database", "fresh-consumer"] do
         assert(
           job["permissions"] == %{"contents" => "read"},
-          "release guards need read-only contents"
+          "qualification job must keep read-only contents"
         )
       end
 
@@ -3198,8 +1769,8 @@ defmodule AshReplicant.ReleaseContract do
       "CI release run step control is invalid"
     )
 
-    # Controls participate in the exact per-job signature, including the token
-    # environment admitted only for the dedicated live release-guard step.
+    # Include step controls in the signature so a command cannot be bypassed
+    # or given a broader environment.
     case Map.take(step, ["id", "if", "env", "working-directory", "shell"]) do
       controls when map_size(controls) == 0 -> {:run, String.trim(run)}
       controls -> {:run, String.trim(run), controls}
@@ -3235,16 +1806,18 @@ defmodule AshReplicant.ReleaseContract do
   end
 
   defp assert_mix_contract(root) do
-    ast = root |> Path.join("mix.exs") |> File.read!() |> Code.string_to_quoted!()
-    body = mix_project_body(ast)
+    source = root |> Path.join("mix.exs") |> File.read!()
+    body = source |> Code.string_to_quoted!() |> mix_project_body()
     projects = find_definitions(body, :def, :project)
     dependency_lists = find_definitions(body, :defp, :deps)
     public_requirements(root)
     docs = find_definitions(body, :defp, :docs)
     [dependencies] = dependency_lists
+    scoped_source_ref = ~S|source_ref: "baselabs_ash_replicant-v#{@version}"|
 
     assert(
       match?([[main: _, formatters: ["html", "markdown"], source_ref: _, extras: _]], docs) and
+        String.contains?(source, scoped_source_ref) and
         Enum.any?(dependencies, fn dependency ->
           match?(
             {:{}, _, [:ex_doc, "== 0.40.4", [only: :dev, runtime: false]]},

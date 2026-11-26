@@ -77,10 +77,6 @@ jobs:
         if: ${{ !cancelled() && steps.compile.outcome == 'success' }}
       - run: scripts/test-release-checkers.sh
         if: ${{ !cancelled() && steps.compile.outcome == 'success' }}
-      - run: scripts/test-release-guards.sh
-        if: ${{ !cancelled() && steps.compile.outcome == 'success' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
       - run: scripts/test-release-contract.sh
         if: ${{ !cancelled() && steps.compile.outcome == 'success' }}
       - run: python3 -B -m unittest discover -s scripts -p 'test_qualify.py'
@@ -325,11 +321,10 @@ jobs:
           port: '5433'
 
   fresh-consumer:
-    needs: postgres-lanes
+    needs: [postgres-lanes, release-artifact]
     name: Fresh tarball consumer
     runs-on: ubuntu-24.04
-    # Green run 44738538737: Fresh tarball consumer 4m18s, no cache restored.
-    timeout-minutes: 9
+    timeout-minutes: 90 # no green run yet
     permissions:
       contents: read
     env:
@@ -351,8 +346,16 @@ jobs:
       - run: mix deps.compile
       - name: Start the candidate consumer's real PostgreSQL
         uses: ./.github/actions/postgres
-      - name: Audit and exercise the candidate package as a fresh consumer
-        run: scripts/test-fresh-consumer.sh
+      - name: Download the qualified Hex archives
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: hex-hexpm-ash_replicant
+          path: ${{ runner.temp }}/qualified-hex
+      - name: Audit and exercise the qualified package as a fresh consumer
+        run: scripts/test-fresh-consumer.sh "$RUNNER_TEMP/qualified-hex/package.tar"
+      - name: Remove downloaded Hex archives
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/qualified-hex"
       - name: Remove the candidate consumer's PostgreSQL
         if: always()
         uses: ./.github/actions/postgres
@@ -362,8 +365,7 @@ jobs:
   release-artifact:
     name: Selector-free docs and package
     runs-on: ubuntu-24.04
-    # Green run 44572306314: Selector-free docs and package 5m33s, no cache restored.
-    timeout-minutes: 12
+    timeout-minutes: 90 # no green run yet
     env:
       MIX_ENV: dev
 
@@ -378,79 +380,8 @@ jobs:
           elixir: ${{ steps.toolchain.outputs.elixir }}
           otp: ${{ steps.toolchain.outputs.otp }}
 
-      - run: env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix deps.get --check-locked
-      - run: mix deps.compile
-      - run: mix compile --warnings-as-errors
-      - run: elixir --version
-      - run: scripts/assert-release-contract.sh
-      - name: Assert selector-free public dependency requirements
-        run: |
-          env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix run --no-start -e '
-          deps = Mix.Project.config() |> Keyword.fetch!(:deps)
-
-          expected = AshReplicant.DependencyRequirements.read!("mix.exs")
-
-          public_deps = Enum.reject(deps, fn dependency ->
-            options = if tuple_size(dependency) == 3, do: elem(dependency, 2), else: []
-            Keyword.has_key?(options, :only)
-          end)
-
-          unless Enum.sort(Enum.map(public_deps, &elem(&1, 0))) == Enum.sort(Map.keys(expected)),
-            do: raise("unexpected public dependency set")
-
-          Enum.each(expected, fn {dependency, requirement} ->
-            actual = deps |> List.keyfind!(dependency, 0) |> elem(1)
-            unless actual == requirement, do: raise("unexpected public dependency requirement")
-          end)
-          '
-
-      - run: scripts/build-release-docs.sh "$RUNNER_TEMP/hex-docs.tar.gz"
-
-      - name: Inspect the upload archives and exercise their guards without a key
-        run: |
-          trap 'rm -rf "$RUNNER_TEMP/package.tar" "$RUNNER_TEMP/hex-docs.tar.gz" "$RUNNER_TEMP/hex-docs.tar.gz.rendered"' EXIT
-          version="$(sed -n 's/^  @version "\(.*\)"$/\1/p' mix.exs)"
-          python3 -I scripts/check-docs-archive.py "$RUNNER_TEMP/hex-docs.tar.gz" "$RUNNER_TEMP/hex-docs.tar.gz.rendered" --version "$version" --commit "$GITHUB_SHA"
-          env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION scripts/with-release-runtime.sh mix hex.build --output "$RUNNER_TEMP/package.tar"
-          scripts/inspect-release-package.sh "$RUNNER_TEMP/package.tar"
-          python3 -B scripts/test_release_docs.py "$RUNNER_TEMP/hex-docs.tar.gz" "$RUNNER_TEMP/hex-docs.tar.gz.rendered" "$RUNNER_TEMP/package.tar"
-          cd "$RUNNER_TEMP"
-          mix run --no-mix-exs "$GITHUB_WORKSPACE/scripts/test_publish_hex_artifacts.exs"
-
-      - name: Build and inspect unpacked Hex package
-        run: |
-          package_dir=$(mktemp -d)
-          trap 'rm -rf "$package_dir"' EXIT
-          env -u ASH_REPLICANT_ASH_VERSION -u ASH_REPLICANT_REPLICANT_VERSION -u ASH_REPLICANT_ONETIME_VERSION mix hex.build --unpack --output "$package_dir"
-
-          for required in lib .formatter.exs mix.exs README.md LICENSE NOTICE CHANGELOG.md usage-rules.md \
-            lib/ash_replicant/upgrade.ex lib/ash_replicant/upgrade/checkpoint.ex \
-            lib/mix/tasks/ash_replicant.upgrade.ex; do
-            test -e "$package_dir/$required" || {
-              echo "::error::Missing package path: $required"
-              exit 1
-            }
-          done
-
-          residue="$(find "$package_dir" -type d \( -name test -o -name _build -o -name '.*' ! -name . \) -print -quit)"
-          if [[ -n "$residue" ]]; then
-            echo "::error::Package contains test, build, or dot-directory residue"
-            exit 1
-          fi
-
-          if test -e "$package_dir/priv"; then
-            echo "::error::Package contains private migrations"
-            exit 1
-          fi
-
-          credentials="$(find "$package_dir" -type f \( -name '.env*' -o -name '*.pem' -o -name '*.key' \) -print -quit)"
-          if [[ -n "$credentials" ]]; then
-            echo "::error::Package contains a credential-shaped file"
-            exit 1
-          fi
-
-          package_files="$(cd "$package_dir" && find . \( -type f -o -type l \) | sed 's|^./||' | LC_ALL=C sort)"
-          if ! diff -u scripts/release-package-files.txt - <<<"$package_files"; then
-            echo "::error::Package files differ from the release allowlist"
-            exit 1
-          fi
+      - uses: baselabs/.github/.github/actions/hex-publish@3bfbb84692a65b4d2c03dc3b7932353026fe6943
+        with:
+          operation: qualify
+          package: ash_replicant
+          package-directory: .

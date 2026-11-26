@@ -15,12 +15,9 @@
 # are NEVER touched: the anchors below are exact strings, not a version sed.
 # Next steps use AGENTS.md's CI-only Build and test route: qualify a topic
 # commit, then give the landing tool a fresh SHA never pushed to kci beforehand.
-# Infra asks an owner to dispatch Publish to Hex on main. A second dispatch
-# finishes a held release only with identical package bytes, keeping served docs.
-# Read-back validates served release.json against default-branch ancestry.
-# Infra tags its published commit and creates the GitHub release from
-# release-assets. The published consumer runs in CI after upload, without a
-# key or environment. This repository then records the verified package digest.
+# Infra dispatches Publish to Hex with the landed release_commit. The workflow
+# uses the retained qualification archives. After read-back, infra tags the
+# release commit and creates the GitHub release from the served archives.
 set -euo pipefail
 
 new_version="${1:?usage: bump-version.sh NEW_VERSION [--check] (e.g. 1.2.0)}"
@@ -85,10 +82,10 @@ replace_once docs/CHARTER.md "**Updated:** $charter_updated" \
   "**Updated:** $today"
 # Bind the CHANGELOG link references: the [Unreleased] compare base moves to the
 # new tag and the new version gains its tree link ahead of its predecessor's.
-replace_once CHANGELOG.md "compare/v$current...HEAD" "compare/v$new_version...HEAD"
-replace_once CHANGELOG.md "[$current]: https://github.com/baselabs/ash_replicant/tree/v$current" \
-  "[$new_version]: https://github.com/baselabs/ash_replicant/tree/v$new_version
-[$current]: https://github.com/baselabs/ash_replicant/tree/v$current"
+replace_once CHANGELOG.md "compare/baselabs_ash_replicant-v$current...HEAD" "compare/baselabs_ash_replicant-v$new_version...HEAD"
+replace_once CHANGELOG.md "[$current]: https://github.com/baselabs/ash_replicant/tree/baselabs_ash_replicant-v$current" \
+  "[$new_version]: https://github.com/baselabs/ash_replicant/tree/baselabs_ash_replicant-v$new_version
+[$current]: https://github.com/baselabs/ash_replicant/tree/baselabs_ash_replicant-v$current"
 
 echo "bump-version: $current -> $new_version"
 if [[ "$check" == true ]]; then
@@ -97,10 +94,6 @@ if [[ "$check" == true ]]; then
 fi
 echo 'bump-version: next: commit with named paths; use AGENTS.md, Build and test (CI only).'
 echo 'bump-version: the landing tool alone moves main; its head must never have been pushed to kci.'
-echo 'bump-version: infra asks an owner to dispatch Publish to Hex on the landed main commit.'
-echo 'bump-version: retry that same commit only after infra inspects an approved hold or interruption.'
-echo "bump-version: after read-back, infra tags v$new_version at the served published_commit"
-echo 'bump-version:   and creates the GitHub release from the downloaded served docs and package.'
-echo 'bump-version:   from release-assets (served archives, SHA256SUMS and published-commit.txt).'
-echo 'bump-version:   publish.yml exercises the published consumer without a key or environment.'
-echo 'bump-version:   this repository records the verified digest through normal landing.'
+echo 'bump-version: send infra the landed release_commit, version, and qualification run.'
+echo 'bump-version: retry after approval with the same qualified package and docs.'
+echo "bump-version: infra tags baselabs_ash_replicant-v$new_version and creates the GitHub release."

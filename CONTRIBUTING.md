@@ -72,12 +72,12 @@ Database migration and its dependent live checks run only after successful
 database creation and migration. The other checks continue after a failure.
 Each CI job owns its PostgreSQL container. A fresh consumer creates and removes its own
 throwaway database on that server; it never borrows another project's machine or service.
-The `fresh-consumer` qualification job builds the candidate tarball and runs the full
+The `fresh-consumer` qualification job downloads the qualified tarball and runs the full
 consumer against its own logical-WAL platform engine: fresh dependency resolution, both
 audits, compilation with warnings as errors, docs, migrations, and the live CDC smoke.
 The `deps.audit --path` call runs from the repository's dev environment, where
-`mix_audit` is declared; Hex's audit runs inside the consumer. The post-publish job
-uses the same script with `--from-hex VERSION` for the exact published release.
+`mix_audit` is declared; Hex's audit runs inside the consumer. Publication verifies the
+served package and docs against those qualified bytes.
 
 The last command is the data-boundary guard-mutation gate (ADR-0003): it
 removes one production guard or reorders one notifier guard after its first
@@ -191,7 +191,6 @@ affected tests in the same change, and record the Ash version contract delta in 
   ```bash
   scripts/with-release-runtime.sh scripts/test-migration-drift-gate.sh
   scripts/with-release-runtime.sh scripts/test-release-checkers.sh
-  scripts/with-release-runtime.sh scripts/test-release-guards.sh
   scripts/with-release-runtime.sh scripts/test-release-contract.sh
   ```
 
@@ -205,16 +204,6 @@ affected tests in the same change, and record the Ash version contract delta in 
   a lock and resolves its own dependencies; other qualification projects fetch locked.
   Version assertions check the committed versions against their requirements; newest-release comparisons run only in the drift report.
   Upstream code enters qualification through a reviewed lock refresh.
-
-  Live release guards run once in the no-database job, separately from the
-  dependency-sensitive checker tests that also run in every compatibility cell.
-  Every GitHub REST lookup uses `gh api`; the live-guard and publish-refusal
-  steps receive `GH_TOKEN: ${{ github.token }}` only in their step environment,
-  with job `permissions: contents: read`. The qualification verdict uses its
-  own job token through the same client. Missing tokens, transport failures,
-  and HTTP errors refuse; only HTTP 404 proves an absent release. Contributors
-  running live guards or post-release verification supply `GH_TOKEN` in their
-  environment, never as a command argument or in a file.
 
   `test/fixtures/release_checker` is recorded checker data, never fetched or
   executed as an Elixir project. Its `recorded.lock` has no project metadata or
@@ -262,93 +251,49 @@ push cannot exercise the report itself because its ref refusal is deliberate.
 
 ## Shipping a release
 
-All workflows declare `defaults: run: shell: bash`, and shell scripts use bash with
-`set -euo pipefail`. A failing test, build, audit, scan, publication or compared listing fails
-its check. Capture output with a standalone assignment before a comparison; never hide its
-status in process substitution or another command's argument. Optional grep counts permit
-status 1 (no match), while read errors fail. Only diagnostics after a known failure and
-cleanup use best-effort commands.
+Contributors prepare the version commit and qualify it via the CI route in
+`AGENTS.md` under "Build and test". Infra owns dispatch, registry access, tags
+and GitHub releases.
 
-Contributors prepare the version commit; infra owns every publication action and credential.
-Agents finish at `main` through the route in `AGENTS.md` under "Build and test". All builds and
-tests run on GitHub-hosted CI, never on the owner's Mac or the build box.
+1. Run `scripts/bump-version.sh NEW_VERSION` to update the version and stamp
+   the changelog. Keep the version's section nonempty and the sections above it
+   empty. Update `.github/hex-packages.json` when shipped files or dependency
+   requirements change. Land the release commit through the landing tool.
+2. Qualification builds and inspects the package and docs through the pinned
+   shared Hex action. It retains `package.tar`, `docs.tar.gz` and `qualified.json`
+   in `hex-hexpm-ash_replicant` for seven days. The live consumer checks the
+   package tarball from that same artifact with fresh resolution, audits,
+   migrations and CDC delivery against PostgreSQL.
+3. Give infra the version, full landed commit and successful qualification run.
+   Infra dispatches `publish.yml` on the default branch with that SHA as
+   `release_commit`. Both the actor and the rerun actor must be authorized.
+   The `upload` job checks exact-commit qualification, archive and changelog
+   identity, tags, the existing public package and private OTP-app version
+   collisions. It uses a short-lived package-scoped Hex token for any needed
+   uploads. The owner decides first publication of a new package name.
+4. The `read-back` job reopens the same artifact, checks both served archives
+   byte for byte and verifies that docs provenance names the release commit.
+   Its `release-assets` artifact retains the package, served docs and their
+   SHA-256 checksums for seven days. Retry after approval with the same qualified
+   archives. Infra tags that commit as `baselabs_ash_replicant-v<version>` and
+   creates the GitHub release with notes from the packaged changelog.
 
-1. Run `scripts/bump-version.sh NEW_VERSION` to update the version-bearing anchors and
-   changelog. Commit with named paths and qualify through a topic `kci/` ref. After green,
-   make a final docs-only commit with a fresh SHA for the landing tool; never push that landing
-   SHA to any `kci/` ref beforehand. Infra reviews workflow and release-script changes before
-   landing. The landing tool alone moves `main` after its `qualified` check.
-2. Infra asks an owner (`corepay` or `palermo-git`, including the triggering actor on reruns)
-   to dispatch `publish.yml` on `main`, with no inputs. Its first step refuses every other
-   ref; the default-branch ruleset is the qualification guarantee. No job rechecks
-   qualification or downloads qualification artifacts.
-3. An anonymous Hex read requires an existing `ash_replicant` package name. A missing name
-   refuses: first publication is the owner's decision. A local tag, remote tag or GitHub
-   release for the version refuses. GitHub REST reads use `gh api -i` with `GH_TOKEN` scoped
-   to the reading step; only HTTP 404 proves absence. Lookup failures refuse.
-4. Keyless steps fetch locked dependencies and build and inspect the package with all three
-   dependency selectors cleared. Docs render once from an extracted source tree with locked
-   ExDoc 0.40.4, Makeup Elixir 1.0.1 and warnings as errors. HTML and Markdown ship; EPUB
-   embeds build time. After rendering, `release.json` records exactly `package: ash_replicant`,
-   the version and the run's full `GITHUB_SHA`. Hex 2.7.0 creates a sorted, fixed-metadata archive;
-   the checker inspects every visible rendered file and validates the provenance.
-5. An untagged version already on Hex is a held or partial release. Its package checksum must
-   equal the inspected archive and it must not be retired. Docs planning uses presence:
-   readable served docs are kept whatever `has_docs` says. HTTP 404 permits upload only with
-   `has_docs: false`; a 404 with `has_docs: true` refuses as metadata/repository disagreement.
-   Other responses or malformed archives refuse. Infra's release rule never replaces or compares
-   served docs. Hex itself permits republishing, but replacing them would bind the version's docs to a
-   different commit than the one infra tags. Comparing a rebuild could refuse a held release
-   whose package bytes match. A second owner dispatch finishes an approved hold or interrupted
-   upload; ambiguous results require infra to inspect public state first.
-6. Only the upload job belongs to environment `publish`. Only the upload step receives
-   `HEX_API_KEY`, in its environment, and runs `mix run --no-mix-exs` from the runner's
-   temporary directory with no `mix.exs`. It reads inspected archives, loads no project, builds
-   nothing, checks package existence again and compares the served package checksum. Its docs
-   check requires a readable gzip tarball; no served-docs digest is compared with a rebuild.
-7. A separate keyless read-back downloads and inspects the served docs. It requires `index.html`
-   and exactly the `release.json` fields above, naming this package/version and the dispatched
-   commit or an ancestor in fetched, complete default-branch history. Missing provenance,
-   invalid identity, unrelated commits and unavailable history refuse. Equal package bytes
-   alone cannot identify docs rendered from unpackaged guides or the docs dependency lock.
-   The published commit is reported as the `published_commit` job output and retained in
-   `published-commit.txt`. The `release-assets` artifact carries the downloaded package and
-   SERVED docs, with `SHA256SUMS` for those bytes. `RELEASE-NOTES.md` takes the release section
-   from the changelog inside the served package, followed by the published commit and both
-   archive digests. Publication refuses a missing, duplicated or empty release section before
-   any build or upload. Before upload planning, the built package must also have
-   no changelog entries above its version. Temporary archives are removed even on
-   failure.
-   A published-package check needs the upload job, holds no key or environment, and exercises
-   a fresh registry consumer against real PostgreSQL. Qualification consumes the candidate tarball.
-8. Infra tags `v<version>` at the published commit from the served provenance, compares the
-   artifact package with Hex, and creates the GitHub release from those assets. No workflow
-   creates a GitHub release or runs on a tag. After infra reports read-back and the tag, this
-   repository records the verified package digest in `scripts/release/published_packages.sha256`
-   through normal landing. Held versions never change the ledger speculatively. A release is
-   complete only when its tag, Hex package, docs and GitHub release all exist.
-
-Consumers verify the permanent [GitHub release](https://github.com/baselabs/ash_replicant/releases)
-for `v<version>`, rather than the expiring workflow artifact:
+Consumers verify the permanent [GitHub release](https://github.com/baselabs/ash_replicant/releases).
 
 ```bash
-gh release download vX.Y.Z --repo baselabs/ash_replicant --pattern 'ash_replicant-*' --pattern SHA256SUMS
+gh release download baselabs_ash_replicant-vX.Y.Z --repo baselabs/ash_replicant \
+  --pattern 'ash_replicant-*' --pattern SHA256SUMS
 sha256sum --check SHA256SUMS
 curl --fail --silent --show-error https://repo.hex.pm/tarballs/ash_replicant-X.Y.Z.tar -o hex.tar
 cmp ash_replicant-X.Y.Z.tar hex.tar
 curl --fail --silent --show-error https://repo.hex.pm/docs/ash_replicant-X.Y.Z.tar.gz -o hex-docs.tar.gz
+cmp ash_replicant-X.Y.Z-docs.tar.gz hex-docs.tar.gz
 tar -xOf hex-docs.tar.gz release.json
 rm hex.tar hex-docs.tar.gz
 ```
 
-Check that the served provenance names `ash_replicant`, `X.Y.Z`, and the release tag's full commit.
-The asset checksum verifies the retained served docs; it does not compare a new docs build.
-
-`scripts/verify-release.sh VERSION TAG --check` checks local tree/tag preconditions only.
-Its full mode verifies public state from the exact tagged tree. The publish workflow's package
-inspection compares unpacked files with `scripts/release-package-files.txt`; review the allowlist
-whenever package contents change. `bump-version.sh VERSION --check` checks bump anchors without
-writing files. These builds and tests follow the CI-only route above.
+Check that `release.json` names `ash_replicant`, `X.Y.Z`, and the tag's full commit.
+For historical releases, use the asset names and tag listed on their release page.
 
 ## Critical rules (binding)
 

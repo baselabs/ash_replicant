@@ -25,13 +25,14 @@ runs:
     - name: Install and verify the pinned Hex client
       shell: bash
       working-directory: ${{ runner.temp }}
-      env:
-        WANT_HEX: "2.7.0"
       run: |
-        mix local.hex "$WANT_HEX" --force
+        test ! -e mix.exs
+        hex_version="$(curl --fail --silent --show-error --max-time 30 'https://raw.githubusercontent.com/baselabs/.github/3bfbb84692a65b4d2c03dc3b7932353026fe6943/.github/actions/hex-publish/hex-version')"
+        [[ "$hex_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+        mix local.hex "$hex_version" --force
         installed=$(mix hex.info | awk '$1 == "Hex:" {print $2}')
-        if [ "$installed" != "$WANT_HEX" ]; then
-          echo "::error::Installed Hex $installed; expected $WANT_HEX."
+        if [ "$installed" != "$hex_version" ]; then
+          echo "::error::Installed Hex $installed; expected $hex_version."
           exit 1
         fi
         echo "Hex $installed, as pinned"

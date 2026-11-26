@@ -271,7 +271,6 @@ if [[ "$onetime_floor_requirement" != "== $onetime_floor" ]]; then
 fi
 
 scripts/test-ash-onetime-migration-checker.sh >/dev/null
-scripts/test-release-package-inspection.sh >/dev/null
 scripts/test-newest-dependency.sh
 
 for dependency_name in ASH_REPLICANT_DEPENDENCY_SENTINEL ash_replicant_missing_dependency; do
@@ -282,8 +281,6 @@ for dependency_name in ASH_REPLICANT_DEPENDENCY_SENTINEL ash_replicant_missing_d
     exit 1
   fi
 done
-scripts/test-fresh-consumer-requirements.sh
-scripts/test-fresh-consumer.sh --check
 python3 -B -m unittest discover -s scripts -p 'test_postgres_lanes.py' >/dev/null
 
 printf '%s\n' \
