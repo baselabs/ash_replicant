@@ -836,7 +836,6 @@ defmodule AshReplicant.ReleaseContract do
       )
 
     assert(lanes_count == 1, "PostgreSQL lane checker wiring is incomplete")
-
   rescue
     _error in [File.Error] -> fail("release checker wiring input is invalid")
   end
@@ -1058,6 +1057,7 @@ defmodule AshReplicant.ReleaseContract do
     ]
 
     hex_inputs = Map.put(@hex_identity, "release-commit", @release_commit)
+
     upload_inputs =
       Map.merge(hex_inputs, %{
         "operation" => "upload",
@@ -1127,7 +1127,10 @@ defmodule AshReplicant.ReleaseContract do
         {id, Map.put(job, "steps", steps)}
       end)
 
-    assert(jobs == %{"upload" => upload, "read-back" => read_back}, "publish job contract is invalid")
+    assert(
+      jobs == %{"upload" => upload, "read-back" => read_back},
+      "publish job contract is invalid"
+    )
 
     assert(
       Map.delete(workflow, "jobs") == %{
@@ -1152,7 +1155,8 @@ defmodule AshReplicant.ReleaseContract do
   end
 
   defp assert_hex_declaration(root) do
-    declaration = root |> Path.join(".github/hex-packages.json") |> File.read!() |> Jason.decode!()
+    declaration =
+      root |> Path.join(".github/hex-packages.json") |> File.read!() |> Jason.decode!()
 
     requirements =
       Map.new(public_requirements(root), fn {app, requirement} ->

@@ -17,6 +17,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
                 )
   @requirements DependencyRequirements.read!(Path.join(@source_root, "mix.exs"))
   @workflow ".github/workflows/qualification.yml"
+  @hex_action "baselabs/.github/.github/actions/hex-publish@3bfbb84692a65b4d2c03dc3b7932353026fe6943"
   @landing ".github/workflows/ci.yml"
   @drift ".github/workflows/drift-report.yml"
   @pull_request ".github/workflows/pull-request.yml"
@@ -590,12 +591,17 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       assert_invalid!()
       prepare_fixture()
 
-      command =
-        if job == "postgres-lanes", do: "scripts/ci/postgres-lanes.sh", else: "mix deps.compile"
+      if job == "release-artifact" do
+        step = "      - uses: #{@hex_action}\n"
+        mutate_job!(job, step, step <> "        continue-on-error: #{value}\n")
+      else
+        command =
+          if job == "postgres-lanes", do: "scripts/ci/postgres-lanes.sh", else: "mix deps.compile"
 
-      mutate_run_step!(job, command, fn step ->
-        String.trim_trailing(step) <> "\n        continue-on-error: #{value}\n"
-      end)
+        mutate_run_step!(job, command, fn step ->
+          String.trim_trailing(step) <> "\n        continue-on-error: #{value}\n"
+        end)
+      end
 
       assert_invalid!()
     end
@@ -1019,7 +1025,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     for {old, replacement} <- [
           {"  workflow_dispatch:", "  push:\n  workflow_dispatch:"},
           {"        required: true", "        required: false"},
-          {"      release_commit:", "      extra_input:\n        type: string\n      release_commit:"}
+          {"      release_commit:",
+           "      extra_input:\n        type: string\n      release_commit:"}
         ] do
       prepare_fixture()
       replace_once!(@publish, old, replacement)
@@ -2172,7 +2179,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           "mix.lock",
           "scripts/test-release-checkers.sh",
           "scripts/audit-fixtures.sh",
-              "test/fixtures/release_checker/recorded.lock",
+          "test/fixtures/release_checker/recorded.lock",
           "test/fixtures/upgrade_0_4_app/mix.exs",
           "test/integration/upgrade_checkpoint_test.exs",
           "locks/exact-floors.lock",
