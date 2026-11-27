@@ -21,7 +21,7 @@ not re-gated. It executes through the
 > first. A fuller project charter (architecture, scope, and the resolved effect-once
 > model) is **tracked** at
 > [`docs/CHARTER.md`](https://github.com/baselabs/ash_replicant/blob/main/docs/CHARTER.md).
-> Repo-local tool state (`graphify-out/` and contributors' own tool directories) is untracked.
+> Contributors' own tool directories are untracked.
 
 ## Install and run preflight
 

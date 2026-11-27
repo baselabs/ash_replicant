@@ -282,15 +282,7 @@ bump (`scripts/bump-version.sh`) is an ordinary commit and lands the same way.
 - Update the CHANGELOG when behavior, a dependency or a contract changes; other docs only when
   a contract changes.
 - Tracked docs: root docs, `docs/` (charter, roadmap, ADRs, instruction history) and the tour
-  notebook. Local-only: `graphify-out/` and each contributor's own untracked tool state.
-
-## graphify (code knowledge graph)
-
-`graphify-out/graph.json` maps this repo (tree-sitter AST; rebuilt by the git post-commit hook when
-installed; gitignored). Prefer `graphify query`, `graphify explain` and `graphify path` for orientation.
-Graph output is navigation, never evidence: Elixir edges are file-local only, so verify
-load-bearing claims against live code. `graphify update .` refreshes it after large uncommitted
-changes.
+  notebook. Local-only: each contributor's own untracked tool state.
 
 ## CI/CD and releases
 
