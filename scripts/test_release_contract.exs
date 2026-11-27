@@ -570,7 +570,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
            "unsupported plugin source major\" >&2; exit 0"}
         ] do
       prepare_fixture()
-      replace_once!("test/support/pg_old.dockerfile", old, replacement)
+      replace_once!("test/support/pglogical.dockerfile", old, replacement)
       assert_invalid!()
     end
   end
@@ -1206,7 +1206,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           {"docker logs \"$CONTAINER\" || cleanup_status=1", "true"},
           {"--env TEST_PG_PASSWORD", "--env OMITTED_PASSWORD"},
           {"--tmpfs /var/lib/pg:uid=26,gid=26,mode=0750", "--tmpfs /var/lib/pg"},
-          {"host replication all all %s", "host replication all all trust"},
+          {"host replication all all scram-sha-256", "host replication all all trust"},
           {"output_plugin_libraries=pgoutput,pglogical_output",
            "output_plugin_libraries=pgoutput"},
           {"for attempt in range(3):", "for attempt in range(1):"},
@@ -2201,7 +2201,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           @toolchain,
           "scripts/ci/postgres-lanes.sh",
           "scripts/test_postgres_lanes.py",
-          "test/support/pg_old.dockerfile",
+          "test/support/pglogical.dockerfile",
           "scripts/qualify.py",
           "lib/ash_replicant.ex",
           "lib/ash_replicant/sink.ex",

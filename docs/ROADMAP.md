@@ -14,7 +14,7 @@ not silently narrowed out of the adapter.
 The current CI substrate supersedes the original D6 cell list: the checked BaseLabs
 platform engine runs dependency-range, consumer, performance, drift-report, and decoder
 destination work. `.github/postgres-lanes.json` declares upstream compatibility images
-for every other supported major (9.6/12 decoder sources and 15/16/17 compatibility).
+for PostgreSQL 15–19 decoder sources and PostgreSQL 15–17 compatibility.
 One reader produces matrices and the qualification inventory; one composite action
 owns password-authenticated startup, TCP readiness, logs, and unconditional cleanup.
 The engine's major is not duplicated in that declaration.

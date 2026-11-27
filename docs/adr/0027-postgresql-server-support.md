@@ -19,11 +19,11 @@ preserves pglogical's filter intersection in both its stream and snapshots.
 [PostgreSQL row filters](https://www.postgresql.org/docs/19/logical-replication-row-filter.html)
 · [pglogical filter evaluation](https://github.com/2ndQuadrant/pglogical/blob/REL2_4_8/pglogical_output_plugin.c#L619-L672)
 
-PostgreSQL sources below 15 and `decoder: :wal2json` are deprecated in 1.x.
-They will be removed in 2.0 along with the wal2json-only options `tables:`,
-`allow_keyless_tables:`, and `schema_check_interval:`. The 1.x admission floors
-remain PostgreSQL 12 for pgoutput and 9.6 for pglogical and wal2json. Doctor
-warns on PostgreSQL 20 and newer, and activation enforces the decoder floor.
+**2.0 amendment (2026-11-27).** AshReplicant removes PostgreSQL sources
+below 15 and `decoder: :wal2json` along with its options `tables:`,
+`allow_keyless_tables:`, and `schema_check_interval:`. Activation and
+doctor enforce the same floor before querying the source catalogs. Doctor
+warns on PostgreSQL 20 and newer.
 
 ## Qualification
 
@@ -36,10 +36,6 @@ the live major and exercises preflight, CRUD, and stop/resume against the
 real source and destination. The supported-major sources allow
 `pglogical_output` in `output_plugin_libraries` for pglogical delivery.
 
-The legacy 9.6 and 12 decoder-source lanes continue to exercise pglogical
-and wal2json in 1.x. PostgreSQL 12 also exercises pgoutput delivery, and
-9.6 exercises pgoutput's release-floor refusal.
-
 All 19 qualification jobs passed for the AshReplicant 1.7.0 candidate
 `9e4776b83ebc44c2a6a2696cf5bba1a72c07fb09`, the first release carrying
 this policy, including every decoder-source lane from 9.6 through 19 and
@@ -48,10 +44,12 @@ this policy, including every decoder-source lane from 9.6 through 19 and
 
 ## Migrating from wal2json
 
-An existing slot is bound to its output plugin and the stored checkpoint
-contract is bound to its decoder and source table set. Prepare a new slot
-and the equivalent publication or replication set. Establish a verified
-cutover with writes quiesced while the existing pipeline drains through
-its durable checkpoint. Confirm the new slot and checkpoint origin agree
-before resuming writes. A fresh snapshot can rebuild a state mirror, while
-an append-log migration needs the retained change history through cutover.
+A logical slot is bound to its output plugin. AshReplicant also refuses
+to resume a stored wal2json checkpoint contract. Complete the cutover before
+upgrading. Create an equivalent publication or replication set and a new slot
+on a supported source. With writes quiesced, drain the old pipeline and
+verify the new slot's consistent point against the durable delivery boundary
+before resuming writes. Use a new checkpoint binding for the new slot. Carry
+forward a watermark only after verifying continuity on the same source.
+A fresh snapshot can rebuild a state mirror. An append-log migration needs
+retained change history through cutover.

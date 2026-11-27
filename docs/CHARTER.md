@@ -38,7 +38,7 @@ This is "the `ash_postgres` of `replicant`" — just as `ash_postgres` is not
 |-------|-----------------|
 | **Ash core** | multitenancy DSL, policies, the tenant concept |
 | **AshReplicant** ← HERE | resource resolution, tenant routing, sensitive-column verification, mirror actions |
-| **replicant** | PostgreSQL logical replication (pgoutput, pglogical, wal2json), transaction assembly, WAL ordering and acknowledgment |
+| **replicant** | PostgreSQL logical replication (pgoutput and pglogical), transaction assembly, WAL ordering and acknowledgment |
 | **Postgres** | logical decoding output |
 
 ## Scope
@@ -64,7 +64,9 @@ This is "the `ash_postgres` of `replicant`" — just as `ash_postgres` is not
 - WAL message decoding
 - The output-plugin (decoder) GRAMMAR, capabilities, and decoder halts —
   the options pass through unchanged; the decoder-scoped table set feeds
-  this adapter's own census, contract, and doctor (ADR-0026)
+  this adapter's own census, contract, and doctor. Sources run PostgreSQL
+  15–19 with pgoutput or pglogical; AshPostgres destinations support 16–18
+  (ADR-0026 and ADR-0027)
 - Transaction assembly and commit-LSN ordering
 - Schema-change detection
 - Snapshot extraction, chunking, and transport

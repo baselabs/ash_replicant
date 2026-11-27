@@ -14,7 +14,7 @@ inputs:
     description: Empty for the platform engine; otherwise the declared digest or built plugin image ID
     default: ''
   decoder-source:
-    description: Built plugin source profile (legacy or modern), or false for a plain server
+    description: Whether the image is a built pglogical source
     default: 'false'
 runs:
   using: composite
@@ -101,15 +101,11 @@ runs:
         else
           mounts=()
           case "$DECODER_SOURCE" in
-            legacy|modern)
+            true)
               [[ "$IMAGE" =~ ^sha256:[0-9a-f]{64}$ ]]
               # Peer for entrypoint initialization; all host logins require a password.
-              auth=md5
-              if [[ "$DECODER_SOURCE" == modern ]]; then
-                auth=scram-sha-256
-                settings+=(-c output_plugin_libraries=pgoutput,pglogical_output)
-              fi
-              printf 'local all all peer\nhost all all all %s\nhost replication all all %s\n' "$auth" "$auth" > "$hba"
+              settings+=(-c output_plugin_libraries=pgoutput,pglogical_output)
+              printf 'local all all peer\nhost all all all scram-sha-256\nhost replication all all scram-sha-256\n' > "$hba"
               mounts=(--volume "$hba:/hba.conf:ro")
               settings+=(-c shared_preload_libraries=pglogical -c hba_file=/hba.conf)
               ;;
@@ -117,7 +113,7 @@ runs:
               [[ "$IMAGE" =~ ^postgres:[0-9][a-z0-9.-]*@sha256:[0-9a-f]{64}$ ]]
               docker pull "$IMAGE"
               ;;
-            *) echo 'decoder-source must be legacy, modern or false' >&2; exit 1 ;;
+            *) echo 'decoder-source must be true or false' >&2; exit 1 ;;
           esac
           docker run --detach --pull=never --name "$CONTAINER" \
             --publish "127.0.0.1:$PORT:5432" \

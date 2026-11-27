@@ -281,10 +281,9 @@ jobs:
         id: plugins
         env:
           PG_BASE: ${{ matrix.base }}
-          WITH_WAL2JSON: ${{ matrix.legacy }}
         run: |
-          docker build -f test/support/pg_old.dockerfile --build-arg "BASE=$PG_BASE" \
-            --build-arg "WITH_WAL2JSON=$WITH_WAL2JSON" -t decoder-source-plugins:ci .
+          docker build -f test/support/pglogical.dockerfile --build-arg "BASE=$PG_BASE" \
+            -t decoder-source-plugins:ci .
           image="$(docker image inspect --format '{{.Id}}' decoder-source-plugins:ci)"
           printf 'image=%s\n' "$image" >> "$GITHUB_OUTPUT"
 
@@ -296,7 +295,7 @@ jobs:
           name: decoder-source
           port: '5433'
           image: ${{ steps.plugins.outputs.image }}
-          decoder-source: ${{ matrix.legacy == 'true' && 'legacy' || 'modern' }}
+          decoder-source: 'true'
 
       - run: mix deps.get --check-locked
       - run: mix deps.compile

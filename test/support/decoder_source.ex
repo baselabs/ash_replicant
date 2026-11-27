@@ -4,8 +4,8 @@ defmodule AshReplicant.Test.DecoderSource do
   source. TestRepo connects to the separate AshPostgres destination.
 
   The source comes from `ASH_REPLICANT_DECODER_SOURCE_URL`. CI builds
-  `test/support/pg_old.dockerfile` for each declared source major with
-  commit-pinned pglogical and legacy-only wal2json (ADR-0027).
+  `test/support/pglogical.dockerfile` for each declared source major with
+  commit-pinned pglogical (ADR-0027).
   """
 
   alias AshReplicant.Test.PG
@@ -25,7 +25,7 @@ defmodule AshReplicant.Test.DecoderSource do
 
   @doc """
   The decoder source's ACTUAL session identity — the `source_identity:` the
-  activation must be configured with (`pg_control_system()` exists from 9.6).
+  activation must be configured with.
   """
   @spec identity!() :: [system_identifier: String.t(), database: String.t()]
   def identity! do
@@ -39,52 +39,32 @@ defmodule AshReplicant.Test.DecoderSource do
     [system_identifier: system_identifier, database: database]
   end
 
-  @doc "The decoder source's `server_version_num` (the release-floor fixture fact)."
+  @doc "Verify the source version before running decoder tests."
   @spec release!() :: integer()
   def release! do
     [[release]] = query!("SELECT current_setting('server_version_num')::int").rows
     PG.assert_major!(release, "EXPECTED_PG_SOURCE_MAJOR")
+    :ok = AshReplicant.SourceSet.check_release_floor(release)
     release
   end
 
   @doc """
-  Source-side DDL for one decoder lane: the source table, REPLICA IDENTITY
-  FULL, and the decoder's own wiring — a pglogical node + replication set
-  carrying the table for `:pglogical`, nothing beyond the table for
-  `:wal2json` (its table set is config). Idempotent.
+  Create the source table and its pgoutput publication or pglogical
+  replication set. Idempotent.
   """
-  @spec setup_source!(String.t(), :pgoutput | :pglogical | :wal2json) :: :ok
+  @spec setup_source!(String.t(), :pgoutput | :pglogical) :: :ok
   def setup_source!(table, decoder) do
-    release = release!()
-    setup_source!(table, decoder, release)
-  end
-
-  defp setup_source!(table, decoder, release) do
     query!("DROP TABLE IF EXISTS #{table}")
     query!("CREATE TABLE #{table} (id text primary key, note text, body text)")
 
-    # wal2json delivers the full old record under REPLICA IDENTITY FULL;
-    # pglogical 2.x REFUSES set membership for FULL tables (its native
-    # protocol keys off the primary key — observed live: "table does not
-    # have PRIMARY KEY and given replication set is configured to replicate
-    # UPDATEs and/or DELETEs"), so the pglogical lane runs DEFAULT identity.
-    unless decoder == :pglogical do
-      query!("ALTER TABLE #{table} REPLICA IDENTITY FULL")
-    end
-
     case decoder do
-      :pgoutput when release >= 100_000 ->
-        # The pgoutput lane proves the PUBLICATION path on the old major
-        # (pgoutput 12 is the floor the doctor admits). Pre-10 has no
-        # publications at all — the lane asserts the probe-failure class
-        # there instead (the floor itself is unit-proven in doctor_test).
+      :pgoutput ->
+        query!("ALTER TABLE #{table} REPLICA IDENTITY FULL")
         query!("DROP PUBLICATION IF EXISTS decoder_lane_pub")
         query!("CREATE PUBLICATION decoder_lane_pub FOR TABLE #{table}")
         :ok
 
-      :pgoutput ->
-        :ok
-
+      # pglogical's update/delete sets require a primary key and DEFAULT replica identity.
       :pglogical ->
         query!("CREATE EXTENSION IF NOT EXISTS pglogical")
         drop_node!()
@@ -96,14 +76,11 @@ defmodule AshReplicant.Test.DecoderSource do
         query!("SELECT pglogical.create_replication_set('lane_set')")
         query!("SELECT pglogical.replication_set_add_table('lane_set', '#{table}')")
         :ok
-
-      :wal2json ->
-        :ok
     end
   end
 
   @doc "Tear the source back down (slot + pglogical node + table)."
-  @spec teardown_source!(String.t(), String.t(), :pgoutput | :pglogical | :wal2json) :: :ok
+  @spec teardown_source!(String.t(), String.t(), :pgoutput | :pglogical) :: :ok
   def teardown_source!(table, slot, decoder) do
     drop_slot!(slot)
 
@@ -111,7 +88,7 @@ defmodule AshReplicant.Test.DecoderSource do
       drop_node!()
     end
 
-    if decoder == :pgoutput and release!() >= 100_000 do
+    if decoder == :pgoutput do
       query!("DROP PUBLICATION IF EXISTS decoder_lane_pub")
     end
 

@@ -15,7 +15,6 @@ defmodule AshReplicant.SourceSetTest do
     assert set.decoder == :pgoutput
     assert set.publication == ["orders_pub"]
     assert set.replication_sets == nil
-    assert set.tables == nil
   end
 
   test "a publication list normalizes unchanged" do
@@ -43,87 +42,31 @@ defmodule AshReplicant.SourceSetTest do
              {:error, :config_invalid}
   end
 
-  test "wal2json requires a non-empty {schema, table} list" do
-    assert {:ok, set} =
-             SourceSet.normalize(decoder: :wal2json, tables: [{"public", "orders"}])
-
-    assert set.decoder == :wal2json
-    assert set.tables == [{"public", "orders"}]
-    assert set.publication == nil
-
-    assert SourceSet.normalize(decoder: :wal2json) == {:error, :config_invalid}
-    assert SourceSet.normalize(decoder: :wal2json, tables: []) == {:error, :config_invalid}
-
-    assert SourceSet.normalize(decoder: :wal2json, tables: ["public.orders"]) ==
-             {:error, :config_invalid}
-
-    assert SourceSet.normalize(decoder: :wal2json, tables: [{"public"}]) ==
-             {:error, :config_invalid}
-  end
-
   test "an unknown decoder atom fails with the config atom upstream itself uses" do
     assert SourceSet.normalize(decoder: :pg_logical, publication: "p") ==
              {:error, :config_invalid}
 
-    assert SourceSet.normalize(decoder: "wal2json", tables: [{"public", "orders"}]) ==
+    assert SourceSet.normalize(decoder: "pglogical", replication_sets: ["default"]) ==
              {:error, :config_invalid}
   end
 
   test "the census table-set decision names which member feeds the census" do
     {:ok, pgoutput} = SourceSet.normalize(publication: "p")
     {:ok, pglogical} = SourceSet.normalize(decoder: :pglogical, replication_sets: ["default"])
-    {:ok, wal2json} = SourceSet.normalize(decoder: :wal2json, tables: [{"public", "orders"}])
 
     assert SourceSet.census_member(pgoutput) == {:publication, ["p"]}
     assert SourceSet.census_member(pglogical) == {:replication_sets, ["default"]}
-    assert SourceSet.census_member(wal2json) == {:tables, [{"public", "orders"}]}
   end
 
-  describe "the decoder facts are one derived structure" do
-    test "the decoder list is exactly the table-set map's keys" do
-      # @decoders is DERIVED (Map.keys of @table_set_keys): adding a decoder
-      # to the map admits it everywhere at once; the reverse (a decoder in
-      # the list without a key) is unconstructible.
-      assert MapSet.new(SourceSet.decoders()) ==
-               MapSet.new(SourceSet.table_set_keys() |> Map.keys())
-    end
+  test "the table-set keys match the supported decoder rules" do
+    assert SourceSet.table_set_keys() == %{pgoutput: :publication, pglogical: :replication_sets}
+  end
 
-    test "the table-set keys match the transport's own per-decoder rule" do
-      assert SourceSet.table_set_keys() == %{
-               pgoutput: :publication,
-               pglogical: :replication_sets,
-               wal2json: :tables
-             }
-    end
-
-    test "the release floors cover exactly the admitted decoders" do
-      floors = SourceSet.release_floors()
-
-      assert MapSet.new(floors |> Map.keys()) == MapSet.new(SourceSet.decoders())
-      assert floors.pgoutput == 120_000
-      assert floors.pglogical == 90_600
-      assert floors.wal2json == 90_600
-    end
-
-    test "a version below the decoder's floor is the named refusal" do
-      assert {:error, :source_release_unsupported} =
-               SourceSet.check_release_floor(90_500, :wal2json)
-
-      assert {:error, :source_release_unsupported} =
-               SourceSet.check_release_floor(110_000, :pgoutput)
-
-      assert {:error, :source_release_unsupported} =
-               SourceSet.check_release_floor(90_503, :pglogical)
-    end
-
-    test "a version at or above the floor passes" do
-      assert :ok = SourceSet.check_release_floor(90_600, :wal2json)
-      assert :ok = SourceSet.check_release_floor(90_624, :pglogical)
-      assert :ok = SourceSet.check_release_floor(120_000, :pgoutput)
-      assert :ok = SourceSet.check_release_floor(190_000, :pgoutput)
-      assert :ok = SourceSet.check_release_floor(190_000, :pglogical)
-      assert :ok = SourceSet.check_release_floor(200_000, :pgoutput)
-    end
+  test "the source floor is enforced at PostgreSQL 15" do
+    assert {:error, :source_release_unsupported} = SourceSet.check_release_floor(149_999)
+    assert :ok = SourceSet.check_release_floor(150_000)
+    assert :ok = SourceSet.check_release_floor(190_000)
+    assert :ok = SourceSet.check_release_floor(200_000)
   end
 
   describe "the pipeline's required-key table derives from the home" do
@@ -159,6 +102,26 @@ defmodule AshReplicant.SourceSetTest do
             start_with(substituted)
           end
         end
+      end
+    end
+
+    test "a removed decoder fails configuration validation without showing its value" do
+      error =
+        assert_raise ArgumentError, fn ->
+          start_with(@base ++ [decoder: :wal2json, tables: [{"public", "orders"}]])
+        end
+
+      assert Exception.message(error) =~ ":decoder"
+      refute Exception.message(error) =~ "wal2json"
+    end
+
+    test "removed table options fail configuration validation without showing their values" do
+      for key <- [:tables, :allow_keyless_tables, :schema_check_interval] do
+        config = Keyword.put(@base ++ [publication: "pub"], key, "private-value")
+        error = assert_raise ArgumentError, fn -> start_with(config) end
+
+        assert Exception.message(error) =~ inspect(key)
+        refute Exception.message(error) =~ "private-value"
       end
     end
 

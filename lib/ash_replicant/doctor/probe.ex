@@ -87,8 +87,7 @@ defmodule AshReplicant.Doctor.Probe do
   Every statement the probes issue for an admitted source set — the
   non-vacuity anchor for `admit!/1`: a guard that admits nothing would be
   green and useless, so the test asserts this whole list is admitted, for
-  EVERY decoder's statement set plus BOTH release forms of the slot
-  statement (ADR-0026).
+  both decoders' statement sets (ADR-0026).
   """
   @spec statements(SourceSet.t()) :: [String.t()]
   def statements(%SourceSet{} = source_set) do
@@ -97,8 +96,7 @@ defmodule AshReplicant.Doctor.Probe do
       Coverage.sql_identity_probe(),
       sql_role_privileges(),
       sql_output_plugin_extension(),
-      sql_replication_slot(130_000),
-      sql_replication_slot(90_600)
+      sql_replication_slot()
     ] ++ table_set_statements(SourceSet.census_member(source_set))
   end
 
@@ -122,33 +120,10 @@ defmodule AshReplicant.Doctor.Probe do
     |> Enum.reject(&is_nil/1)
   end
 
-  defp table_set_statements({:tables, tables}) do
-    case tables do
-      [] ->
-        []
-
-      _ ->
-        [
-          ok_sql(fn -> Coverage.sql_relreplident_for(tables) end),
-          ok_sql(fn -> sql_table_privileges_for(tables) end),
-          ok_sql(fn -> Replicant.QueryBuilder.table_columns_for(tables) end),
-          ok_sql(fn -> Replicant.QueryBuilder.pk_columns_for(tables) end)
-        ]
-        |> Enum.reject(&is_nil/1)
-    end
-  end
-
   defp framework_sql(builder) do
     case builder.() do
       {:ok, sql} when is_binary(sql) -> sql
       sql when is_binary(sql) -> sql
-      _invalid -> nil
-    end
-  end
-
-  defp ok_sql(builder) do
-    case builder.() do
-      {:ok, sql} when is_binary(sql) -> sql
       _invalid -> nil
     end
   end
@@ -196,11 +171,8 @@ defmodule AshReplicant.Doctor.Probe do
   def sql_table_privileges_for(_other), do: {:error, :invalid_identifier}
 
   @doc """
-  Whether an output plugin's EXTENSION is available on the server — the one
-  plugin-presence fact a catalog read can prove (pglogical ships as an
-  extension; wal2json is a decoding library with no extension row, so its
-  presence stays the transport's connect-time probe). The fixed name binds
-  `$1`; value-free.
+  Whether pglogical is available and installed. The extension name binds
+  `$1`.
   """
   @spec sql_output_plugin_extension() :: String.t()
   def sql_output_plugin_extension do
@@ -220,24 +192,15 @@ defmodule AshReplicant.Doctor.Probe do
   end
 
   @doc """
-  The slot's type, plugin, liveness, and retention horizon, for the server
-  release the probe already read. `wal_status` and `safe_wal_size` exist from
-  PostgreSQL 13 — a pre-13 release gets the same row shape with NULL for both,
-  and the risk classifier reads an absent status as `:unknown`, never a
-  guess. O03 (ADR-0022) reads `safe_wal_size` from the SAME statement — one
-  SQL home (rule 11). The slot name binds `$1`.
+  The slot's type, plugin, liveness, and retention horizon. The doctor and
+  runtime recovery-horizon check use this same statement. The slot name
+  binds `$1`.
   """
-  @spec sql_replication_slot(pos_integer()) :: String.t()
-  def sql_replication_slot(release) when is_integer(release) and release >= 130_000 do
+  @spec sql_replication_slot() :: String.t()
+  def sql_replication_slot do
     "SELECT slot_type, plugin, active, wal_status, " <>
       "(safe_wal_size IS NOT NULL AND safe_wal_size <= 0) AS exhausted, " <>
       "safe_wal_size " <>
-      "FROM pg_replication_slots WHERE slot_name = $1"
-  end
-
-  def sql_replication_slot(_pre_13_release) do
-    "SELECT slot_type, plugin, active, NULL::text AS wal_status, " <>
-      "NULL::bool AS exhausted, NULL::int8 AS safe_wal_size " <>
       "FROM pg_replication_slots WHERE slot_name = $1"
   end
 
@@ -327,7 +290,7 @@ defmodule AshReplicant.Doctor.Probe do
 
   defp collect(conn, source_set, slot_name) do
     with {:ok, %{rows: [[release]]}} <- query(conn, Coverage.sql_release_probe()),
-         :ok <- release_floor_guard(release, source_set),
+         :ok <- release_floor_guard(release),
          {:ok, %{rows: [[^release, system_identifier, database]]}} <-
            query(conn, Coverage.sql_identity_probe()),
          # The extension read runs BEFORE the table-set probes: with the
@@ -338,7 +301,7 @@ defmodule AshReplicant.Doctor.Probe do
          {:ok, table_rows} <- probe_table_rows(conn, SourceSet.census_member(source_set)),
          {:ok, privilege_rows} <- probe_privileges(conn, SourceSet.census_member(source_set)),
          {:ok, role_rows} <- query(conn, sql_role_privileges()),
-         {:ok, slot_rows} <- query(conn, sql_replication_slot(release), [slot_name]) do
+         {:ok, slot_rows} <- query(conn, sql_replication_slot(), [slot_name]) do
       {pub_rows, column_rows, pk_rows, ident_rows} = table_rows
 
       {:ok,
@@ -363,13 +326,8 @@ defmodule AshReplicant.Doctor.Probe do
     end
   end
 
-  # Mirrors the activation-enforced floor (ADR-0026): the release probe is
-  # the one statement every connectable release answers, so the BELOW-FLOOR
-  # verdict is reportable even where the 9.6-dependent identity probe would
-  # fault — the doctor names the floor instead of degrading to
-  # :query_failed skips (rule 11: an adapter over the rules activation runs).
-  defp release_floor_guard(release, %SourceSet{decoder: decoder}) do
-    case SourceSet.check_release_floor(release, decoder) do
+  defp release_floor_guard(release) do
+    case SourceSet.check_release_floor(release) do
       :ok -> :ok
       {:error, :source_release_unsupported} -> {:error, {:below_floor, release}}
     end
@@ -390,10 +348,6 @@ defmodule AshReplicant.Doctor.Probe do
          {:ok, ident_rows} <- query(conn, Coverage.sql_relreplident(), [publication]) do
       {:ok, {pub_rows, column_rows, pk_rows, ident_rows}}
     end
-  end
-
-  defp probe_table_rows(conn, {:tables, tables}) do
-    probe_tables_explicit(conn, tables)
   end
 
   defp probe_table_rows(conn, {:replication_sets, sets}) do
@@ -419,7 +373,7 @@ defmodule AshReplicant.Doctor.Probe do
          {:ok, ident_sql} <- Coverage.sql_relreplident_for(tables),
          {:ok, ident_rows} <- query(conn, ident_sql, []) do
       # Only server-PRESENT tables enter the synthesized table set: a
-      # configured-but-absent table must hit the missing-expected-table rule
+      # table dropped during collection must hit the missing-expected-table rule
       # (:source_table_missing), never a column-shape verdict.
       {:ok, {present_table_set(tables, column_rows), column_rows, pk_rows, ident_rows}}
     else
@@ -441,8 +395,6 @@ defmodule AshReplicant.Doctor.Probe do
   defp probe_privileges(conn, {:publication, publication}) do
     query(conn, sql_table_privileges(), [publication])
   end
-
-  defp probe_privileges(conn, {:tables, tables}), do: explicit_privileges(conn, tables)
 
   defp probe_privileges(conn, {:replication_sets, sets}) do
     with {:ok, sql} <- Replicant.QueryBuilder.replication_set_tables(sets),
@@ -476,10 +428,6 @@ defmodule AshReplicant.Doctor.Probe do
   end
 
   defp probe_extension(_conn, %SourceSet{decoder: :pgoutput}), do: {:ok, :not_applicable}
-
-  # wal2json is a decoding library, not an extension: no catalog row can
-  # prove it, and the transport's connect-time probe stays the authority.
-  defp probe_extension(_conn, %SourceSet{decoder: :wal2json}), do: {:ok, :not_provable}
 
   defp extension(%{rows: rows}) do
     case rows do
@@ -576,21 +524,15 @@ defmodule AshReplicant.Doctor.Probe do
   def classify_query_error(_error), do: :query_failed
 
   defp read_slot(conn, slot_name) do
-    with {:ok, release} <- release_of(conn),
-         {:ok, result} <- query(conn, sql_replication_slot(release), [slot_name]) do
+    with {:ok, %{rows: [[release]]}} <- query(conn, Coverage.sql_release_probe()),
+         :ok <- release_floor_guard(release),
+         {:ok, result} <- query(conn, sql_replication_slot(), [slot_name]) do
       case result do
         %{rows: []} -> nil
         _read -> slot(result)
       end
     else
       _fault -> :unreachable
-    end
-  end
-
-  defp release_of(conn) do
-    case query(conn, "SELECT current_setting('server_version_num')::int", []) do
-      {:ok, %{rows: [[release]]}} when is_integer(release) -> {:ok, release}
-      _other -> {:error, :query_failed}
     end
   end
 

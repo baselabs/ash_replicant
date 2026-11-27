@@ -49,18 +49,11 @@ defmodule AshReplicant do
       from the actual replication session, as
       `[system_identifier: "...", database: "..."]`.
     * `:go_forward_only` — passed through to `Replicant.start_link/1`.
-    * `:decoder`, `:replication_sets`, `:tables`, `:allow_keyless_tables:`,
-      and `:schema_check_interval` — Replicant 1.4's decoder selection,
-      passed through to `Replicant.start_link/1` unchanged and ADMITTED for
-      all three decoders (ADR-0026): the table-set key names the source for
-      the adapter's own census (`publication:` for `:pgoutput`, the default;
-      `replication_sets:` for `:pglogical`; `tables:` for `:wal2json`) — a
-      missing or mis-shaped one fails closed with
-      `{:error, :config_invalid}`. Everything else about the decoder grammar
-      (a key belonging to another decoder, a wal2json-only knob under
-      pgoutput, a capability the chosen decoder cannot express — `messages:`
-      on pglogical, `streaming:`/`failover:` off pgoutput) is Replicant's own
-      validation surfaced raw.
+    * `:decoder` and `:replication_sets` — the default `:pgoutput` decoder
+      uses `:publication`; `:pglogical` uses `:replication_sets`. A missing
+      or malformed table set or unsupported option returns
+      `{:error, :config_invalid}`. Replicant validates decoder capabilities
+      such as `messages:`, `streaming:`, and `failover:` (ADR-0026).
     * `:snapshot` — `false`, Replicant's v1 snapshot (`true`), or sink-owned
       incremental snapshot options (`[mode: :incremental, ...]`). Incremental
       mode requires every mapped resource to declare `snapshot_provenance true`.
@@ -620,14 +613,8 @@ defmodule AshReplicant do
   @replicant_option_keys [
     :connection,
     :publication,
-    # The Replicant 1.4 decoder grammar (ADR-0026) — forwarded so the transport
-    # owns every rule of its own option set; the adapter owns only the
-    # table-set admission SourceSet.normalize/1 decides (and the census reads).
     :decoder,
     :replication_sets,
-    :tables,
-    :allow_keyless_tables,
-    :schema_check_interval,
     :go_forward_only,
     :snapshot,
     :messages,

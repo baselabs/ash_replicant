@@ -85,15 +85,11 @@ defmodule AshReplicant.ReleaseContract do
   else
     mounts=()
     case "$DECODER_SOURCE" in
-      legacy|modern)
+      true)
         [[ "$IMAGE" =~ ^sha256:[0-9a-f]{64}$ ]]
         # Peer for entrypoint initialization; all host logins require a password.
-        auth=md5
-        if [[ "$DECODER_SOURCE" == modern ]]; then
-          auth=scram-sha-256
-          settings+=(-c output_plugin_libraries=pgoutput,pglogical_output)
-        fi
-        printf 'local all all peer\nhost all all all %s\nhost replication all all %s\n' "$auth" "$auth" > "$hba"
+        settings+=(-c output_plugin_libraries=pgoutput,pglogical_output)
+        printf 'local all all peer\nhost all all all scram-sha-256\nhost replication all all scram-sha-256\n' > "$hba"
         mounts=(--volume "$hba:/hba.conf:ro")
         settings+=(-c shared_preload_libraries=pglogical -c hba_file=/hba.conf)
         ;;
@@ -101,7 +97,7 @@ defmodule AshReplicant.ReleaseContract do
         [[ "$IMAGE" =~ ^postgres:[0-9][a-z0-9.-]*@sha256:[0-9a-f]{64}$ ]]
         docker pull "$IMAGE"
         ;;
-      *) echo 'decoder-source must be legacy, modern or false' >&2; exit 1 ;;
+      *) echo 'decoder-source must be true or false' >&2; exit 1 ;;
     esac
     docker run --detach --pull=never --name "$CONTAINER" \
       --publish "127.0.0.1:$PORT:5432" \
@@ -482,15 +478,15 @@ defmodule AshReplicant.ReleaseContract do
       {:uses, @beam_action, @runtime_inputs},
       {:run,
        ~S"""
-       docker build -f test/support/pg_old.dockerfile --build-arg "BASE=$PG_BASE" \
-         --build-arg "WITH_WAL2JSON=$WITH_WAL2JSON" -t decoder-source-plugins:ci .
+       docker build -f test/support/pglogical.dockerfile --build-arg "BASE=$PG_BASE" \
+         -t decoder-source-plugins:ci .
        image="$(docker image inspect --format '{{.Id}}' decoder-source-plugins:ci)"
        printf 'image=%s\n' "$image" >> "$GITHUB_OUTPUT"
        """
        |> String.trim(),
        %{
          "id" => "plugins",
-         "env" => %{"PG_BASE" => "${{ matrix.base }}", "WITH_WAL2JSON" => "${{ matrix.legacy }}"}
+         "env" => %{"PG_BASE" => "${{ matrix.base }}"}
        }},
       {:uses, @postgres_action, :absent},
       {:uses, @postgres_action,
@@ -498,7 +494,7 @@ defmodule AshReplicant.ReleaseContract do
          "name" => "decoder-source",
          "port" => "5433",
          "image" => "${{ steps.plugins.outputs.image }}",
-         "decoder-source" => "${{ matrix.legacy == 'true' && 'legacy' || 'modern' }}"
+         "decoder-source" => "true"
        }},
       {:run, "mix deps.get --check-locked"},
       {:run, "mix deps.compile"},
@@ -1406,7 +1402,7 @@ defmodule AshReplicant.ReleaseContract do
       "PostgreSQL fixture environment is invalid"
     )
 
-    dockerfile = File.read!(Path.join(root, "test/support/pg_old.dockerfile"))
+    dockerfile = File.read!(Path.join(root, "test/support/pglogical.dockerfile"))
 
     assert(
       Regex.match?(~r/^ARG BASE$/m, dockerfile) and

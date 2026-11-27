@@ -21,9 +21,8 @@ defmodule AshReplicant.Checkpoint.Identity do
   @type manifest :: %{
           required(:contract_version) => pos_integer(),
           required(:publication) => [String.t()],
-          optional(:decoder) => :pglogical | :wal2json,
+          optional(:decoder) => :pglogical,
           optional(:replication_sets) => [String.t()],
-          optional(:tables) => [{String.t(), String.t()}],
           required(:relations) => [relation()],
           required(:ignores) => [term()]
         }
@@ -72,8 +71,8 @@ defmodule AshReplicant.Checkpoint.Identity do
 
   A `:pgoutput` set builds the EXACT pre-decoder manifest shape — no
   `:decoder` key — so a stored v1 manifest keeps classifying `:equal`
-  (upgrade-in-place). A plugin set records `decoder:`, its own table-set
-  names, and `publication: []`.
+  (upgrade-in-place). A pglogical set records `decoder:`, the replication
+  set names, and `publication: []`.
   """
   @spec canonical_contract(map(), AshReplicant.SourceSet.t()) ::
           {:ok, manifest()} | {:error, term()}
@@ -92,13 +91,6 @@ defmodule AshReplicant.Checkpoint.Identity do
             decoder: :pglogical,
             publication: [],
             replication_sets: Enum.sort(source_set.replication_sets)
-          }
-
-        :wal2json ->
-          %{
-            decoder: :wal2json,
-            publication: [],
-            tables: Enum.sort(source_set.tables)
           }
       end
 
@@ -141,12 +133,13 @@ defmodule AshReplicant.Checkpoint.Identity do
   @spec encode(manifest()) :: binary()
   def encode(manifest), do: :erlang.term_to_binary(manifest, [:deterministic])
 
-  @doc "Decode a stored contract term (unknown/garbage decodes as `:error`)."
+  @doc "Decode a stored contract term. Unknown formats and removed decoders return `:error`."
   @spec decode(binary()) :: {:ok, manifest()} | :error
   def decode(binary) when is_binary(binary) do
     case :erlang.binary_to_term(binary, [:safe]) do
       %{contract_version: v, publication: _, relations: _, ignores: _} = manifest
-      when is_integer(v) ->
+      when is_integer(v) and
+             (not is_map_key(manifest, :decoder) or manifest.decoder == :pglogical) ->
         {:ok, manifest}
 
       _other ->
@@ -230,8 +223,7 @@ defmodule AshReplicant.Checkpoint.Identity do
       # (pgoutput's absent key reads as :pgoutput) or a change of the chosen
       # decoder's set names re-targets the source contract wholesale.
       decoder_name(stored) != decoder_name(current) or
-        Map.get(stored, :replication_sets) != Map.get(current, :replication_sets) or
-          Map.get(stored, :tables) != Map.get(current, :tables) ->
+          Map.get(stored, :replication_sets) != Map.get(current, :replication_sets) ->
         {:incompatible, :decoder}
 
       stored.publication != current.publication ->

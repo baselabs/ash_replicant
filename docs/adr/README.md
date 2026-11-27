@@ -38,8 +38,8 @@ the narrative "why"; an ADR is the tracked, per-decision record with code eviden
 | [0023](0023-public-api-and-compatibility.md) | The public API is a frozen module inventory (test-pinned); everything else is internal-by-convention; SemVer with no silent removals — a deprecation keeps working for at least one minor cycle | D8 / PKG01 |
 | [0024](0024-install-generator-host-owned-contract.md) | The install generator writes host-owned code and never guesses: four modules, no connection/publication/key material, a bootable no-op, write-nothing refusals as unit-tested planner decisions, and the README manual block test-tied to the installer's output | I01 |
 | [0025](0025-doctor-read-only-diagnosis-surface.md) | The diagnosis surface is read-only, an adapter, and never guesses: three independent no-writes legs, adapters (never copies) over the activation rules, one canonical check with a closed reason vocabulary, and `:skipped` — never `:pass` — for the unjudgeable | O01 |
-| [0026](0026-decoder-options-passthrough-and-full-admission.md) | Replicant 1.4's decoder options pass through unchanged AND all three decoders are admitted: one decoder-scoped table-set home (SourceSet), a decoder-scoped census and contract manifest (pgoutput manifests byte-identical), per-decoder release floors and an honest plugin-presence check in the doctor, and live pglogical/wal2json lanes on PostgreSQL 9.6 and 12 | Replicant 1.4 sibling upgrade |
-| [0027](0027-postgresql-server-support.md) | PostgreSQL sources follow PGDG support (15–19), pglogical stays, AshPostgres destinations support 16–18, and wal2json and pre-15 sources are deprecated in 1.x | PostgreSQL support policy |
+| [0026](0026-decoder-options-passthrough-and-full-admission.md) | Decoder-scoped admission, census, checkpoint contracts, and doctor checks for pgoutput and pglogical | Replicant decoder coordination |
+| [0027](0027-postgresql-server-support.md) | PostgreSQL 15–19 sources with pgoutput or pglogical, PostgreSQL 16–18 AshPostgres destinations, and the 2.0 removal and migration policy | PostgreSQL support policy |
 
 ## On-touch gap list
 

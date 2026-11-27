@@ -121,17 +121,18 @@ defmodule AshReplicant.DoctorProbeTest do
 
   describe "admit!/1 non-vacuity" do
     test "every statement the probes actually issue is admitted" do
-      source_set = %AshReplicant.SourceSet{
-        decoder: :pgoutput,
-        publication: ["pub_one", "pub_two"]
-      }
+      source_sets = [
+        %AshReplicant.SourceSet{decoder: :pgoutput, publication: ["pub_one", "pub_two"]},
+        %AshReplicant.SourceSet{decoder: :pglogical, replication_sets: ["default"]}
+      ]
 
-      statements = Probe.statements(source_set)
+      for source_set <- source_sets do
+        statements = Probe.statements(source_set)
+        assert length(statements) >= 5
 
-      assert length(statements) >= 5
-
-      for sql <- statements do
-        assert Probe.admit!(sql) == sql
+        for sql <- statements do
+          assert Probe.admit!(sql) == sql
+        end
       end
     end
 

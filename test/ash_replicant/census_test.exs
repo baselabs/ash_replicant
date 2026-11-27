@@ -256,7 +256,7 @@ defmodule AshReplicant.CensusTest do
       # An operator who swapped :pgoutput for a plugin decoder must see a
       # reason that names the decoder — :publication_contract_incompatible
       # would send them hunting publications (ADR-0026's one table-set fact).
-      stored_set = %AshReplicant.SourceSet{decoder: :wal2json, tables: [{"public", "orders"}]}
+      stored_set = %AshReplicant.SourceSet{decoder: :pglogical, replication_sets: ["default"]}
       {:ok, stored_contract} = Identity.build_contract(sink_config(), stored_set)
 
       assert {:drift, :decoder_contract_incompatible} =

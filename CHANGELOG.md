@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **Breaking:** Removed the `wal2json` decoder and its `tables:`,
+  `allow_keyless_tables:`, and `schema_check_interval:` options. A stored
+  checkpoint contract for that decoder refuses to resume. See the
+  [cutover guide](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0027-postgresql-server-support.md#migrating-from-wal2json).
+- **Breaking:** PostgreSQL sources below 15 are refused at activation and
+  by doctor. Sources 15–19 support pgoutput and pglogical. AshPostgres
+  destinations support PostgreSQL 16–18.
+
 ## [1.7.0] - 2026-11-26
 
 ### Added

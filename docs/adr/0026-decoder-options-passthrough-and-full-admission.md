@@ -7,8 +7,15 @@ before any release was cut — see the amendment note)
 
 Status: Accepted. Supersedes: none (extends the ADR-0005 coordination contract
 with Replicant's ADR-0009 decoder surface). Partly superseded by
-[ADR-0027](0027-postgresql-server-support.md) for source support, qualification,
-and the planned wal2json retirement.
+[ADR-0027](0027-postgresql-server-support.md) for source support and qualification.
+
+> **2.0 amendment (2026-11-27).** The active decoder choices are pgoutput
+> and pglogical. Both require PostgreSQL 15 or newer and are qualified on
+> 15–19. The adapter rejects the removed decoder and its three options at
+> configuration admission. The slot probe reads the retention columns
+> directly on supported sources. Supported checkpoint manifest encodings
+> stay byte-identical. A stored contract naming the removed decoder fails
+> closed. The original 1.x decision follows as historical context.
 
 > **Superseding CI substrate amendment (2026-11-21).** Old-major sources are now
 > selected from `.github/postgres-lanes.json` by the single lane reader and built

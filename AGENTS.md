@@ -171,8 +171,8 @@ The supported release foundation is Elixir 1.20.3 on Erlang/OTP 29 with Ash
 `>= 1.6.0 and < 2.0.0-0` (current lock 1.6.0), plus
 AshOnetime `>= 1.3.2 and < 2.0.0-0` (current lock 1.5.0) and AshCloak
 `>= 0.4.0 and < 1.0.0-0` (current lock 0.4.0; releases below 0.4.0 carry
-CVE-2026-81319 and CVE-2026-81322 and are not admitted). Replicant 1.4's
-decoder options pass through with FULL decoder admission (ADR-0026).
+CVE-2026-81319 and CVE-2026-81322 and are not admitted). The admitted pgoutput and pglogical decoder options pass through to Replicant
+(ADR-0026 and ADR-0027).
 
 Postgrex requires `~> 0.23` (current lock 0.23.0), matching Replicant 1.6.0.
 DBConnection requires `>= 2.10.3 and < 3.0.0-0` (current lock 2.10.3).
@@ -212,11 +212,10 @@ the verdict never runs the lane reader. Dependency-range cells derived from `mix
 performance, consumers, drift reporting, and decoder destinations run the engine.
 Supported sources are PostgreSQL 15–19 with pgoutput or pglogical, and supported
 AshPostgres destinations are PostgreSQL 16–18 (ADR-0027). The existing full-suite cells cover
-PostgreSQL 15–17 on upstream images and 18 on the engine. Separate decoder sources cover 15–19
-and the deprecated 9.6/12 lanes, where wal2json still runs in 1.x. Source versions below 15 and
-wal2json are scheduled for removal in 2.0. Tests require the declared live major on each
-server. The decoder suite connects to the source before selecting tests, so an unreachable or
-misidentified source fails qualification. All fixture passwords are disposable test data.
+PostgreSQL 15–17 on upstream images and 18 on the engine. Separate decoder sources cover
+both decoders on 15–19. The decoder suite connects to the source before running tests, so an
+unreachable, unsupported or misidentified source fails qualification. All fixture passwords
+are disposable test data.
 
 `.tool-versions` is the single checkout runtime source. Only the shared, unedited
 `scripts/toolchain.sh` reads it; the local toolchain action tests the reader and exposes

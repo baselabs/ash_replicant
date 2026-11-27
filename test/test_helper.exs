@@ -5,7 +5,8 @@ decoder_excludes =
     DecoderSource.enabled?() ->
       unless PG.enabled?(), do: raise("decoder source requires a destination")
 
-      if DecoderSource.release!() < 150_000, do: [], else: [:legacy_decoder_source]
+      DecoderSource.release!()
+      []
 
     System.get_env("EXPECTED_PG_SOURCE_MAJOR") != nil ->
       raise "decoder source lane requires a source URL"

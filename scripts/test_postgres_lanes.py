@@ -69,8 +69,7 @@ class PostgresLanesTest(unittest.TestCase):
         )
         self.assertEqual(
             data["decoder"],
-            [dict(pg_major=lane["major"], base=lane["image"],
-                  legacy="true" if lane["major"] in ("9.6", "12") else "false")
+            [dict(pg_major=lane["major"], base=lane["image"])
              for lane in self.lanes if "decoder-source" in lane["roles"]],
         )
         self.assertEqual(data["checks"], sorted(set(data["checks"])))
@@ -80,7 +79,7 @@ class PostgresLanesTest(unittest.TestCase):
                 data["checks"],
             )
 
-    def test_current_support_and_documented_legacy_sources_are_qualified(self):
+    def test_currently_supported_sources_are_qualified(self):
         result = self.read()
         self.assertEqual(result.returncode, 0, result.stderr)
         data = json.loads(result.stdout)
@@ -90,9 +89,8 @@ class PostgresLanesTest(unittest.TestCase):
             {"15", "16", "17", "18"},
         )
         self.assertEqual(
-            {row["pg_major"]: row["legacy"] for row in data["decoder"]},
-            {"9.6": "true", "12": "true",
-             "15": "false", "16": "false", "17": "false", "18": "false", "19": "false"},
+            {row["pg_major"] for row in data["decoder"]},
+            {"15", "16", "17", "18", "19"},
         )
         for row in data["decoder"]:
             self.assertIn(
@@ -136,6 +134,14 @@ class PostgresLanesTest(unittest.TestCase):
         lanes = copy.deepcopy(self.lanes)
         lane = next(lane for lane in lanes if lane["major"] == engine)
         lane["roles"].append("compatibility")
+        self.write_lanes(lanes)
+        self.refused()
+
+    def test_source_major_below_the_floor_is_refused(self):
+        lanes = copy.deepcopy(self.lanes)
+        lanes[0]["major"] = "14"
+        lanes[0]["image"] = lanes[0]["image"].replace("postgres:15", "postgres:14")
+        lanes[0]["roles"] = ["decoder-source"]
         self.write_lanes(lanes)
         self.refused()
 

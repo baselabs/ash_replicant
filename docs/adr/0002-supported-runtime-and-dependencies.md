@@ -122,6 +122,12 @@ moves the Replicant release lock to 1.2.4 within the unchanged
 proving the declared floor), and refreshes the development-only dialyxir and
 ex_doc locks, which are not shipped in the package.
 
+## Source support
+
+[ADR-0027](0027-postgresql-server-support.md) defines the current source matrix
+and activation floor. Earlier amendments below record past dependency and
+server decisions.
+
 ## Amendment (2026-09-29): the Ash and Replicant floors move; the AshOnetime and Mint locks move
 
 Four facts, all observed on 2026-09-28/29, move the floors:

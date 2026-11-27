@@ -691,12 +691,8 @@ defmodule AshReplicant.Coverage do
   # --- verbatim where they already expose the required census) ---
 
   @doc """
-  ONE round-trip release probe: `server_version_num` on a statement EVERY
-  connectable PostgreSQL release can answer. It runs BEFORE the
-  `pg_control_system()` identity probe (a 9.6+ view), so a below-floor source
-  — 9.4/9.5 against a plugin decoder, pre-12 against pgoutput — is refused
-  by its NAME (`:source_release_unsupported`, ADR-0026) instead of faulting
-  the identity probe into the unreachable class.
+  Read `server_version_num` before querying the identity or decoder
+  catalogs so a below-floor source returns `:source_release_unsupported`.
   """
   @spec sql_release_probe() :: String.t()
   def sql_release_probe do
@@ -704,10 +700,8 @@ defmodule AshReplicant.Coverage do
   end
 
   @doc """
-  ONE round-trip identity + version probe. `pg_control_system()` exposes the
-  system identifier across the source qualification matrix (9.6, 12, and 15–19),
-  so every supported release verifies the same system-and-database pair; the
-  release probe above admits or refuses the release BEFORE this runs.
+  Read the source version and verify the system-and-database pair after
+  the release has passed the floor check.
   """
   @spec sql_identity_probe() :: String.t()
   def sql_identity_probe do
@@ -872,21 +866,12 @@ defmodule AshReplicant.Coverage do
     end
   end
 
-  # The census: release probe + floor gate + identity probe + the table-set
-  # statements. The release probe is the one statement every connectable
-  # release answers; the floor gate runs on its answer BEFORE the
-  # `pg_control_system()` identity probe (a 9.6+ view) so a below-floor
-  # source is a NAMED rule verdict — `{:error, :source_release_unsupported}`
-  # — never an unreachable-class fault. pgoutput keeps the publication-bound
-  # single pass (byte-identical to the pre-decoder census); the plugin
-  # decoders census an EXPLICIT table list — pglogical's members discovered
-  # from `pglogical.tables`, wal2json's the configured set — read through the
-  # framework's own `*_for/1` builders plus the adapter's
-  # `sql_relreplident_for/1`. All read-only; names validated before any
-  # interpolation.
+  # Check the source version before querying identity and decoder catalogs.
+  # pgoutput binds publication names; pglogical discovers its tables from
+  # the configured replication sets and reads their explicit table census.
   defp collect_census(conn, %SourceSet{} = source_set) do
     with {:ok, %{rows: [[version]]}} <- query(conn, sql_release_probe()),
-         :ok <- release_floor_gate(version, source_set.decoder),
+         :ok <- release_floor_gate(version),
          {:ok, %{rows: [[^version, system_identifier, database]]}} <-
            query(conn, sql_identity_probe()),
          {:ok, table_rows} <- census_table_rows(conn, SourceSet.census_member(source_set)) do
@@ -920,8 +905,8 @@ defmodule AshReplicant.Coverage do
   # The floor verdict arrives as an %Error{} so the preflight/reconnect
   # `with` chains treat it as the RULE verdict it is — a bare tuple would
   # fall into the unreachable/deferred class the gate exists to replace.
-  defp release_floor_gate(version, decoder) do
-    case SourceSet.check_release_floor(version, decoder) do
+  defp release_floor_gate(version) do
+    case SourceSet.check_release_floor(version) do
       :ok ->
         :ok
 
@@ -945,11 +930,6 @@ defmodule AshReplicant.Coverage do
          {:ok, %Postgrex.Result{} = ident_rows} <- query(conn, sql_relreplident(), [publication]) do
       {:ok, {pub_rows, column_rows, pk_rows, ident_rows}}
     end
-  end
-
-  # wal2json: the configured tables ARE the table set.
-  defp census_table_rows(conn, {:tables, tables}) do
-    plugin_census(conn, tables)
   end
 
   # pglogical: the members of the configured replication sets, from
@@ -976,7 +956,7 @@ defmodule AshReplicant.Coverage do
          {:ok, ident_sql} <- sql_relreplident_for(tables),
          {:ok, %Postgrex.Result{} = ident_rows} <- query(conn, ident_sql, []) do
       # Only server-PRESENT tables enter the synthesized table set: a
-      # configured-but-absent table must hit the missing-expected-table rule
+      # table dropped during collection must hit the missing-expected-table rule
       # (:source_table_missing), never a column-shape verdict.
       present = MapSet.new(column_rows.rows, fn [schema, table | _rest] -> {schema, table} end)
       tables = Enum.filter(tables, &MapSet.member?(present, &1))

@@ -305,26 +305,11 @@ defmodule AshReplicant.CheckpointIdentityTest do
       assert Identity.classify(fresh, stored) == :equal
     end
 
-    test "a wal2json set carries the decoder, its tables, and an empty publication" do
-      set = %AshReplicant.SourceSet{
-        decoder: :wal2json,
-        publication: nil,
-        replication_sets: nil,
-        tables: [{"public", "orders"}]
-      }
-
-      assert {:ok, contract} = Identity.canonical_contract(sink_config(), set)
-      assert contract.decoder == :wal2json
-      assert contract.tables == [{"public", "orders"}]
-      assert contract.publication == []
-    end
-
     test "a pglogical set carries the decoder and its replication sets, sorted" do
       set = %AshReplicant.SourceSet{
         decoder: :pglogical,
         publication: nil,
-        replication_sets: ["beta_set", "alpha_set"],
-        tables: nil
+        replication_sets: ["beta_set", "alpha_set"]
       }
 
       assert {:ok, contract} = Identity.canonical_contract(sink_config(), set)
@@ -336,27 +321,11 @@ defmodule AshReplicant.CheckpointIdentityTest do
     test "a decoder switch is incompatible with its own reason" do
       {:ok, pgoutput} = Identity.canonical_contract(sink_config(), pgoutput_set())
 
-      wal2json_set = %AshReplicant.SourceSet{
-        decoder: :wal2json,
-        publication: nil,
-        replication_sets: nil,
-        tables: [{"public", "orders"}]
-      }
+      pglogical_set = %AshReplicant.SourceSet{decoder: :pglogical, replication_sets: ["default"]}
+      {:ok, pglogical} = Identity.canonical_contract(sink_config(), pglogical_set)
 
-      {:ok, wal2json} = Identity.canonical_contract(sink_config(), wal2json_set)
-
-      assert Identity.classify(pgoutput, wal2json) == {:incompatible, :decoder}
-      assert Identity.classify(wal2json, pgoutput) == {:incompatible, :decoder}
-    end
-
-    test "a table-set change under the same decoder is incompatible" do
-      set_a = %AshReplicant.SourceSet{decoder: :wal2json, tables: [{"public", "orders"}]}
-      set_b = %AshReplicant.SourceSet{decoder: :wal2json, tables: [{"public", "events"}]}
-
-      {:ok, a} = Identity.canonical_contract(sink_config(), set_a)
-      {:ok, b} = Identity.canonical_contract(sink_config(), set_b)
-
-      assert Identity.classify(a, b) == {:incompatible, :decoder}
+      assert Identity.classify(pgoutput, pglogical) == {:incompatible, :decoder}
+      assert Identity.classify(pglogical, pgoutput) == {:incompatible, :decoder}
     end
 
     test "a replication-set change under pglogical is incompatible" do
@@ -376,10 +345,20 @@ defmodule AshReplicant.CheckpointIdentityTest do
       encoded = Identity.encode(contract)
       assert {:ok, decoded} = Identity.decode(encoded)
       assert decoded == contract
+    end
 
-      wal2json = %AshReplicant.SourceSet{decoder: :wal2json, tables: [{"public", "orders"}]}
-      {:ok, contract_2} = Identity.canonical_contract(sink_config(), wal2json)
-      assert {:ok, contract_2} = Identity.decode(Identity.encode(contract_2))
+    test "a stored wal2json manifest cannot be resumed under a supported decoder" do
+      {:ok, current} = Identity.canonical_contract(sink_config(), pgoutput_set())
+
+      stored =
+        Map.merge(current, %{decoder: :wal2json, tables: [{"public", "orders"}], publication: []})
+
+      encoded = :erlang.term_to_binary(stored, [:deterministic])
+
+      assert :error = Identity.decode(encoded)
+
+      assert {:incompatible, :stored_contract_invalid} =
+               Identity.classify_stored_contract(encoded, Identity.fingerprint(encoded), current)
     end
   end
 

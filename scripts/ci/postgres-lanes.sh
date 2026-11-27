@@ -44,7 +44,7 @@ try:
         if not isinstance(lane, dict) or set(lane) != {'major', 'image', 'roles'}:
             refuse()
         major, image, roles = lane['major'], lane['image'], lane['roles']
-        if not isinstance(major, str) or not re.fullmatch(r'(?:9\.[0-9]+|[1-9][0-9]+)', major):
+        if not isinstance(major, str) or not re.fullmatch(r'[1-9][0-9]+', major) or int(major) < 15:
             refuse()
         if major in seen:
             refuse()
@@ -57,7 +57,7 @@ try:
             role not in ('compatibility', 'decoder-source') for role in roles
         ) or len(set(roles)) != len(roles):
             refuse()
-        if 'compatibility' in roles and (major == engine_major or int(major.split('.')[0]) < 15):
+        if 'compatibility' in roles and major == engine_major:
             refuse()
     generated = subprocess.run(
         ['elixir', sys.argv[2], '--lanes', str(root / 'mix.exs')],
@@ -79,11 +79,7 @@ try:
         for lane in lanes if 'compatibility' in lane['roles']
     ]
     decoder = [
-        dict(
-            pg_major=lane['major'],
-            base=lane['image'],
-            legacy=str(int(lane['major'].split('.')[0]) < 15).lower(),
-        )
+        dict(pg_major=lane['major'], base=lane['image'])
         for lane in lanes if 'decoder-source' in lane['roles']
     ]
     if len(compatibility) == 3 or not decoder:

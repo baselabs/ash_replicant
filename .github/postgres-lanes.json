@@ -1,19 +1,5 @@
 [
   {
-    "major": "9.6",
-    "image": "postgres:9.6@sha256:caddd35b05cdd56c614ab1f674e63be778e0abdf54e71a7507ff3e28d4902698",
-    "roles": [
-      "decoder-source"
-    ]
-  },
-  {
-    "major": "12",
-    "image": "postgres:12@sha256:2f2a8c2a7d10862e7fba2602e304523554f9df8244c632dafe2628ccb398fb5c",
-    "roles": [
-      "decoder-source"
-    ]
-  },
-  {
     "major": "15",
     "image": "postgres:15@sha256:10f9e886f772e9d6484350b043bcf990ead67ae5d9988ddce265d72a299055d5",
     "roles": [

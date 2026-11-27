@@ -20,7 +20,7 @@ defmodule AshReplicant.Pipeline do
 
   ## A fresh install starts nothing
 
-  The connection, publication, and source identity are facts only the operator
+  The connection, table set, and source identity are facts only the operator
   has, so a freshly installed pipeline supervises NOTHING until they are
   configured:
 
@@ -34,15 +34,14 @@ defmodule AshReplicant.Pipeline do
   boots with zero children, so a blank install compiles and runs. Every other key
   is passed to `AshReplicant.PipelineOwner` untouched (`snapshot:`, `census:`,
   `max_inflight_lag:`, …); this module owns no start-option vocabulary of its
-  own beyond the three it requires.
+  own beyond the source options it validates.
 
   ## A half-configured pipeline fails closed
 
-  A configuration that is present but missing `:connection`, `:publication`, or
-  `:source_identity` RAISES rather than supervising nothing. Supervising nothing
-  would be a silent outage: the app boots, the tree is healthy, and no data ever
-  arrives. The same holds for a `sink:` in config that contradicts the sink the
-  module declares.
+  A configuration missing `:connection`, `:source_identity`, or the decoder
+  table-set key (`:publication` or `:replication_sets`) raises an error.
+  Unsupported decoder values, removed options, and a conflicting `sink:`
+  also raise before the supervisor starts a pipeline.
 
   Those messages name the missing KEYS and never their values — pipeline
   configuration carries connection credentials, and the value-free rule covers
@@ -58,13 +57,6 @@ defmodule AshReplicant.Pipeline do
 
   @required_options [:connection, :source_identity]
 
-  # The table-set key the configured decoder names its source by (ADR-0026):
-  # `publication:` for pgoutput (the default), `replication_sets:` for
-  # pglogical, `tables:` for wal2json. DERIVED from the ONE admission home —
-  # `AshReplicant.SourceSet` owns the decoder-fact structure, so a decoder
-  # added there is admitted here at once and a diverging local copy is
-  # unconstructible. Presence only — the values are never read, exactly like
-  # every other required key here.
   @table_set_keys AshReplicant.SourceSet.table_set_keys()
 
   @macro_options [:otp_app, :sink]
@@ -203,8 +195,9 @@ defmodule AshReplicant.Pipeline do
   end
 
   defp require_options!(options, otp_app, module) do
-    case table_set_decoder(options) do
-      {:ok, decoder} ->
+    case AshReplicant.SourceSet.invalid_option(options) do
+      nil ->
+        decoder = Keyword.get(options, :decoder, :pgoutput)
         required = @required_options ++ [@table_set_keys[decoder]]
 
         case Enum.reject(required, &supplied?(options, &1)) do
@@ -212,18 +205,12 @@ defmodule AshReplicant.Pipeline do
           missing -> raise ArgumentError, missing_message(missing, otp_app, module)
         end
 
-      :error ->
+      :decoder ->
         raise ArgumentError, unknown_decoder_message(otp_app, module)
-    end
-  end
 
-  # A `decoder:` the transport itself would not accept fails closed HERE —
-  # naming the three accepted atoms, never a silent fall back to the
-  # pgoutput key (the transport rejects the same value at start).
-  defp table_set_decoder(options) do
-    case Keyword.get(options, :decoder, :pgoutput) do
-      decoder when is_map_key(@table_set_keys, decoder) -> {:ok, decoder}
-      _other -> :error
+      key ->
+        raise ArgumentError,
+              "#{inspect(module)} is configured with unsupported option #{inspect(key)}."
     end
   end
 
@@ -234,7 +221,7 @@ defmodule AshReplicant.Pipeline do
       |> Enum.unzip()
 
     """
-    #{inspect(module)} is configured with a decoder AshReplicant does not admit.
+    #{inspect(module)} is configured with a :decoder value AshReplicant does not admit.
 
     The admitted decoders are #{Enum.join(decoders, ", ")}; the \
     table-set key follows the decoder (#{Enum.join(keys, ", ")}):
@@ -249,9 +236,6 @@ defmodule AshReplicant.Pipeline do
     """
   end
 
-  # An unknown decoder leaves the pipeline without a nameable table-set key:
-  # fail closed naming the decoder key, before activation's own grammar
-  # refusal runs (the transport rejects the same atom at start).
   # A key present but empty is not supplied: `publication: ""` would reach
   # activation as a config error far from the operator who wrote it.
   defp supplied?(options, key) do

@@ -32,9 +32,8 @@ defmodule AshReplicant.ReplicantDependencyTest do
 
     version = Application.spec(:replicant, :vsn) |> List.to_string()
     assert Version.match?(version, AshReplicant.Doctor.replicant_requirement())
-    # The 1.4 decoder grammar the adapter forwards (ADR-0026): the three
-    # behavior atoms are exactly what the admission rule enumerates against.
-    assert Plugin.decoder_atoms() == [:pgoutput, :pglogical, :wal2json]
+    supported = Map.keys(AshReplicant.SourceSet.table_set_keys())
+    assert Enum.all?(supported, &(&1 in Plugin.decoder_atoms()))
     assert Code.ensure_loaded?(Incremental)
     assert function_exported?(Incremental, :keyed_retry_decision, 3)
     assert Replicant.SnapshotProgress.pending?(:backfill_pending)

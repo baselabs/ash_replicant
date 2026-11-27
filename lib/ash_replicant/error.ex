@@ -137,10 +137,7 @@ defmodule AshReplicant.Error do
     # (or table-set) switch re-targets the source wholesale, and the operator
     # halting on it sees a reason that names the decoder, not the publication.
     :decoder_contract_incompatible,
-    # ADR-0026: the release floor is ENFORCED at activation — a source below
-    # the configured decoder's floor (the map's home is
-    # `AshReplicant.SourceSet`) refuses by name before any 9.6-dependent
-    # probe can fault. Misconfiguration class.
+    # ADR-0027: refuse a below-floor source before probing its catalogs.
     :source_release_unsupported,
     :source_column_missing,
     :source_column_unmapped,

@@ -60,7 +60,7 @@ AshReplicant ← HERE   Ash resource extension: tenant routing, sensitive verifi
    │
 replicant       Postgres logical replication, WAL ordering and delivery
    │
-Postgres        logical decoding output (pgoutput, pglogical, or wal2json)
+Postgres        logical decoding output (pgoutput or pglogical)
 ```
 
 Multitenancy lives **here**, not in `replicant` — exactly as `ash_postgres` (not
@@ -90,12 +90,10 @@ The current 1.7.0 release baseline is built and tested with:
 - Replicant `>= 1.6.0 and < 2.0.0-0` (current lock 1.6.0);
 - Postgrex `~> 0.23` (current lock 0.23.0);
 - DBConnection `>= 2.10.3 and < 3.0.0-0` (current lock 2.10.3).
-- Replicant 1.4's decoder options (`decoder:`, `replication_sets:`, `tables:`,
-  `allow_keyless_tables:`, `schema_check_interval:`) are forwarded to the
-  transport unchanged and ADMITTED for all three decoders — the table-set
-  key (`publication:` / `replication_sets:` / `tables:`) feeds the adapter's
-  own coverage census, contract manifest, and doctor checks
-  ([ADR-0026](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0026-decoder-options-passthrough-and-full-admission.md));
+- Use `publication:` for the default pgoutput decoder or
+  `replication_sets:` with `decoder: :pglogical`. The adapter uses that
+  table set for coverage, checkpoint contracts, and doctor.
+  [ADR-0026](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0026-decoder-options-passthrough-and-full-admission.md).
 - AshOnetime `>= 1.3.2 and < 2.0.0-0` (current lock 1.5.0);
 - AshCloak `>= 0.4.0 and < 1.0.0-0` (current lock 0.4.0; every release below
   0.4.0 carries CVE-2026-81319 and CVE-2026-81322 and is not admitted); and
@@ -103,10 +101,9 @@ The current 1.7.0 release baseline is built and tested with:
   pglogical 2.4.8. Sources follow PGDG's supported majors.
 - **AshPostgres destination PostgreSQL 16–18.** The decoder-source lanes use
   the PostgreSQL 18 platform engine as their destination.
-- **Deprecated in 1.x, scheduled for removal in 2.0** — PostgreSQL sources
-  below 15 and `decoder: :wal2json`. The 9.6 and 12 source lanes still cover
-  pglogical and wal2json ≥ 2.6, and PostgreSQL 12 still covers pgoutput.
-  Doctor warns on sources running PostgreSQL 20 or newer. [ADR-0027](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0027-postgresql-server-support.md).
+- Activation refuses sources below PostgreSQL 15. Doctor reports the
+  refusal and warns on PostgreSQL 20 or newer.
+  [PostgreSQL support and migration](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0027-postgresql-server-support.md).
 
 The Ash floor excludes `EEF-CVE-2026-94201` (atom-table exhaustion, fixed
 in 3.34.3), `EEF-CVE-2026-101028` (related-resource read-policy bypass

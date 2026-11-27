@@ -68,13 +68,6 @@ defmodule AshReplicant.Doctor do
     db_connection: @db_connection_requirement
   ]
 
-  # The source release floors live in `AshReplicant.SourceSet` — the ONE
-  # decoder-fact home — and are ENFORCED at activation (the census's release
-  # probe answers on every connectable release, so a below-floor source halts
-  # `{:error, :source_release_unsupported}` before any 9.6-dependent probe
-  # can fault; ADR-0026). This check MIRRORS that map for the operator's
-  # pull channel and warns starting at the first untested major (ADR-0027).
-  @source_release_floors SourceSet.release_floors()
   @source_release_ceiling 200_000
 
   @expected_plugin "pgoutput"
@@ -140,12 +133,12 @@ defmodule AshReplicant.Doctor do
   @doc """
   Run one diagnosis. `opts` is the same keyword list
   `AshReplicant.PipelineOwner` takes — `:sink`, `:connection`, `:publication`
-  (or the plugin decoders' `:replication_sets:`/`:tables:` with `:decoder:`),
+  (or `:replication_sets` with `decoder: :pglogical`),
   `:source_identity`, and the forwarded Replicant decoder options — so an
   operator diagnoses with the configuration the pipeline actually runs,
   never a hand-copied second one. The decoder-scoped census, release floor,
-  plugin-presence, and privilege checks all follow the admitted decoder
-  (ADR-0026).
+  plugin-presence, and privilege checks use the same source contract as
+  activation (ADR-0026 and ADR-0027).
 
   An invocation this cannot build a plan from returns
   `AshReplicant.Doctor.Report.invalid/1` (exit `3`), never a health verdict.
@@ -310,11 +303,8 @@ defmodule AshReplicant.Doctor do
         [check_source_reachable(:ok) | judged_source_checks(plan, contract, probed, durable)]
 
       {:error, {:below_floor, release}} ->
-        # Mirrors the activation-enforced floor (ADR-0026): the release
-        # itself answers on every connectable release, so the doctor names
-        # the below-floor failure and skips the rest WITH that reason —
-        # never the pre-fix shape where the 9.6-dependent identity probe
-        # faulted the whole gather into :query_failed skips.
+        # The version query succeeded. Report the release refusal before
+        # the remaining source checks can query any catalogs.
         [
           check_source_reachable(:ok),
           check_source_release(release, plan.source_set.decoder)
@@ -599,23 +589,26 @@ defmodule AshReplicant.Doctor do
     do: fail(:source_reachable, :source, :source_unreachable)
 
   @doc """
-  The source PostgreSQL version against the supported matrix — the MIRROR of
-  the floor activation enforces (`AshReplicant.SourceSet` owns the map).
-  A source below the decoder's floor fails. PostgreSQL 20 and newer produce
-  an advisory warning.
+  The source PostgreSQL version. Releases below 15 fail; PostgreSQL 20
+  and newer produce an advisory warning. Activation uses the same floor.
   """
-  @spec check_source_release(integer() | nil, :pgoutput | :pglogical | :wal2json) :: Check.t()
-  def check_source_release(version, decoder) when is_integer(version) do
-    floor = Map.fetch!(@source_release_floors, decoder)
+  @spec check_source_release(integer() | String.t() | nil, :pgoutput | :pglogical) :: Check.t()
+  def check_source_release(version, decoder) when is_binary(version) do
+    case Integer.parse(version) do
+      {release, ""} -> check_source_release(release, decoder)
+      _other -> check_source_release(nil, decoder)
+    end
+  end
 
-    cond do
-      version < floor ->
+  def check_source_release(version, _decoder) when is_integer(version) do
+    case SourceSet.check_release_floor(version) do
+      {:error, :source_release_unsupported} ->
         fail(:source_release, :source, :source_release_unsupported)
 
-      version >= @source_release_ceiling ->
+      :ok when version >= @source_release_ceiling ->
         warn(:source_release, :source, :source_release_untested)
 
-      true ->
+      :ok ->
         pass(:source_release, :source, :ok)
     end
   end
@@ -624,19 +617,12 @@ defmodule AshReplicant.Doctor do
     do: warn(:source_release, :source, :source_release_unknown)
 
   @doc """
-  The chosen decoder's output-plugin presence on the source server. pglogical
-  ships as an extension, so its catalog row is proof (ADR-0026); wal2json is a
-  decoding library with no extension row — its presence is only provable at
-  `START_REPLICATION`, which stays the transport's connect-time probe, so the
-  check reports the fact it cannot judge rather than passing vacuously.
+  The chosen output plugin's presence. pgoutput is built in on supported
+  sources; pglogical requires an installed extension.
   """
-  @spec check_source_plugin(:not_applicable | :not_provable | map() | nil, SourceSet.t()) ::
-          Check.t()
+  @spec check_source_plugin(:not_applicable | map() | nil, SourceSet.t()) :: Check.t()
   def check_source_plugin(:not_applicable, _source_set),
     do: pass(:source_plugin, :source, :ok)
-
-  def check_source_plugin(:not_provable, _source_set),
-    do: skipped_check(:source_plugin, :source, :plugin_presence_not_provable)
 
   def check_source_plugin(nil, %SourceSet{decoder: :pglogical}),
     do: fail(:source_plugin, :source, :source_plugin_missing)

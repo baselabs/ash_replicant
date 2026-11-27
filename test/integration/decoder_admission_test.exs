@@ -4,8 +4,7 @@ defmodule AshReplicant.DecoderAdmissionTest do
   major and a separate AshPostgres destination. Exercises preflight, CRUD
   through host actions, and the effect-once watermark across stop/resume.
 
-  Every source runs pglogical and the pgoutput delivery or floor check.
-  The legacy sources also run wal2json.
+  Every source runs delivery with pgoutput and pglogical.
   """
 
   use ExUnit.Case, async: false
@@ -79,8 +78,8 @@ defmodule AshReplicant.DecoderAdmissionTest do
   defp lane_enabled_setup(context) do
     decoder = context[:decoder]
 
-    unless decoder in [:pgoutput, :pglogical, :wal2json] do
-      raise "decoder lane requires a @tag decoder: :pgoutput | :pglogical | :wal2json"
+    unless decoder in [:pgoutput, :pglogical] do
+      raise "decoder lane requires a @tag decoder: :pgoutput | :pglogical"
     end
 
     # The pipeline's processes write to the destination for real: auto mode
@@ -145,7 +144,6 @@ defmodule AshReplicant.DecoderAdmissionTest do
     case decoder do
       :pgoutput -> Keyword.merge(base, publication: "decoder_lane_pub")
       :pglogical -> Keyword.merge(base, decoder: :pglogical, replication_sets: ["lane_set"])
-      :wal2json -> Keyword.merge(base, decoder: :wal2json, tables: [{"public", @source_table}])
     end
   end
 
@@ -208,50 +206,16 @@ defmodule AshReplicant.DecoderAdmissionTest do
   @tag decoder: :pglogical
   test "pglogical: the decoder-scoped census admits and mirrors CRUD across resume",
        %{decoder: decoder} do
-    assert_plugin_lane(decoder)
-  end
-
-  @tag :legacy_decoder_source
-  @tag decoder: :wal2json
-  test "wal2json: the decoder-scoped census admits, mirrors CRUD, and tolerates the pre-15 empty-transaction suppression",
-       %{decoder: decoder} do
-    assert_plugin_lane(decoder)
+    assert_decoder_lane(decoder)
   end
 
   @tag decoder: :pgoutput
-  test "pgoutput: publication mirroring above the release floor and refusal below it",
+  test "pgoutput: the publication census admits and mirrors CRUD across resume",
        %{decoder: decoder} do
-    if DecoderSource.release!() >= 100_000 do
-      assert_plugin_lane(decoder)
-    else
-      # Pre-10 has no publications at all — and the release floor is
-      # ENFORCED, not advisory (ADR-0026): the release probe answers on this
-      # server, the floor gate refuses pgoutput below 12 BY NAME, and the
-      # doctor mirrors the same verdict (the check fails
-      # :source_release_unsupported; every other source check skips with
-      # that reason, never a guessed pass). The runtime enforces the same
-      # floor at ACTIVATION — synchronously, before the transport ever
-      # connects, instead of the transport's later connect halt.
-      report = AshReplicant.preflight(lane_opts(decoder))
-
-      release = Enum.find(report.checks, &(&1.name == :source_release))
-
-      assert release.status == :fail
-      assert release.reason == :source_release_unsupported
-
-      for name <- [:source_plugin, :source_privileges, :source_identity, :source_coverage] do
-        check = Enum.find(report.checks, &(&1.name == name))
-
-        assert check.status == :skipped
-        assert check.reason == :source_release_unsupported
-      end
-
-      assert {:error, %AshReplicant.Error{reason: :source_release_unsupported}} =
-               AshReplicant.start_link(lane_opts(decoder))
-    end
+    assert_decoder_lane(decoder)
   end
 
-  defp assert_plugin_lane(decoder) do
+  defp assert_decoder_lane(decoder) do
     # 1. The doctor's plugin-source diagnosis: the decoder-scoped census runs
     #    against the source (coverage, privileges, RIF, release floor,
     #    the plugin check's honest answer per decoder).
@@ -262,29 +226,16 @@ defmodule AshReplicant.DecoderAdmissionTest do
     # :retention_unknown) — those clear once the pipeline creates it.
     assert report.status in [:pass, :warn], inspect(report.checks, pretty: true)
 
-    for name <- [:source_coverage, :source_release, :source_privileges, :source_replica_identity] do
+    for name <- [
+          :source_coverage,
+          :source_release,
+          :source_privileges,
+          :source_replica_identity,
+          :source_plugin
+        ] do
       check = Enum.find(report.checks, &(&1.name == name))
       assert check.status == :pass, "#{name}: #{inspect(check)}"
     end
-
-    plugin_check = Enum.find(report.checks, &(&1.name == :source_plugin))
-
-    case decoder do
-      :pglogical ->
-        assert plugin_check.status == :pass
-        assert plugin_check.reason == :ok
-
-      :wal2json ->
-        assert plugin_check.status == :skipped
-        assert plugin_check.reason == :plugin_presence_not_provable
-
-      :pgoutput ->
-        assert plugin_check.status == :pass
-        assert plugin_check.reason == :ok
-    end
-
-    release_check = Enum.find(report.checks, &(&1.name == :source_release))
-    assert release_check.status == :pass
 
     # 2. Live mirroring through the host's own actions.
     start_pipeline!(decoder)
@@ -296,7 +247,6 @@ defmodule AshReplicant.DecoderAdmissionTest do
     assert_mirrored!("lane-1", "updated")
 
     # 3. A catalog-only transaction leaves the next row deliverable.
-    # This also exercises Replicant's pre-15 empty-transaction suppression.
     DecoderSource.empty_catalog_txn!(@source_table)
     DecoderSource.insert_row!(@source_table, "lane-2", "after-empty")
     assert_mirrored!("lane-2", "after-empty")

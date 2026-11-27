@@ -23,8 +23,7 @@ Thank you for your interest in contributing to AshReplicant!
   upstream compatibility lanes. The `decoder-sources` jobs use
   `ASH_REPLICANT_DECODER_SOURCE_URL` for the separate source and
   `ASH_REPLICANT_TEST_URL` for the destination. Sources 15–19 run
-  pgoutput and commit-pinned pglogical. The deprecated 9.6 and 12 sources
-  retain pglogical and wal2json in 1.x, and 12 also runs pgoutput.
+  pgoutput and commit-pinned pglogical.
   Supported AshPostgres destinations are PostgreSQL 16–18. [ADR-0027](https://github.com/baselabs/ash_replicant/blob/main/docs/adr/0027-postgresql-server-support.md).
 
 ## Getting Started

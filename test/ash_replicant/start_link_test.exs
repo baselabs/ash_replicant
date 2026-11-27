@@ -122,9 +122,9 @@ defmodule AshReplicant.StartLinkTest do
 
     pgoutput_set = %AshReplicant.SourceSet{decoder: :pgoutput, publication: ["valid_pub"]}
 
-    wal2json_set = %AshReplicant.SourceSet{
-      decoder: :wal2json,
-      tables: [{"public", "orders"}]
+    pglogical_set = %AshReplicant.SourceSet{
+      decoder: :pglogical,
+      replication_sets: ["default"]
     }
 
     config = fn set ->
@@ -140,7 +140,7 @@ defmodule AshReplicant.StartLinkTest do
     # Cross-shape both directions: fail closed BEFORE any bind work.
     assert {:error, :source_identity_mismatch} =
              Impl.handle_session_identity(
-               config.(wal2json_set),
+               config.(pglogical_set),
                identity,
                %{slot_name: "valid_slot", publication: ["valid_pub"]}
              )
@@ -156,7 +156,7 @@ defmodule AshReplicant.StartLinkTest do
     # the contract-less config, scrubbed — the scrub_boundary pattern).
     assert {:error, %AshReplicant.Error{reason: :sink_failed}} =
              Impl.handle_session_identity(
-               config.(wal2json_set),
+               config.(pglogical_set),
                identity,
                %{slot_name: "valid_slot", publication: nil}
              )

@@ -90,8 +90,8 @@ defmodule AshReplicant.HorizonRiskTest do
   end
 
   describe "the probe statement stays one home" do
-    test "sql_replication_slot/1 carries safe_wal_size alongside the risk columns" do
-      sql = Probe.sql_replication_slot(130_000)
+    test "sql_replication_slot/0 carries safe_wal_size alongside the risk columns" do
+      sql = Probe.sql_replication_slot()
 
       assert sql =~ "wal_status"
       assert sql =~ "safe_wal_size"

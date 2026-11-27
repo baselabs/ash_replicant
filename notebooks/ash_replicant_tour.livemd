@@ -44,7 +44,7 @@ re-implement Ash core's multitenancy concept.
 flowchart TD
   A["Ash core<br/>multitenancy DSL · policies · the tenant concept"]
   B["AshReplicant  ← HERE<br/>resource resolution · tenant routing<br/>sensitive-column verification · mirror actions"]
-  C["replicant<br/>Postgres logical replication (pgoutput · pglogical · wal2json)<br/>transaction assembly · WAL ordering"]
+  C["replicant<br/>Postgres logical replication (pgoutput · pglogical)<br/>transaction assembly · WAL ordering"]
   D["Postgres<br/>logical decoding output"]
   A --> B --> C --> D
 ```
@@ -605,22 +605,12 @@ snapshot. Replicant's incremental options are accepted when every mapped resourc
 declares `snapshot_provenance true`; activation otherwise fails closed with
 `:snapshot_unsupported` before transport starts.
 
-Replicant 1.4's decoder options (`decoder:`, `replication_sets:`, `tables:`,
-`allow_keyless_tables:`, `schema_check_interval:`) are forwarded to the transport
-unchanged and admitted for all three decoders. The table-set key names the
-source for this adapter's own census — `publication:` for pgoutput (the
-default), `replication_sets:` for pglogical, `tables:` for wal2json — so the
-coverage, contract, and doctor checks judge a plugin decoder's table set
-exactly as they judge a publication (ADR-0026). The source release floor is
-ENFORCED at activation, not just diagnosed: pgoutput requires PostgreSQL 12+,
-the plugin decoders 9.6+, and a below-floor source refuses to start with the
-named `{:error, :source_release_unsupported}` before the transport ever
-connects (`{:misconfigured, :source_release_unsupported}` on the status
-surface). A source ABOVE the tested matrix is a doctor warning, never a
-refusal. The rest of the decoder
-grammar is Replicant's own validation: a table-set key belonging to another
-decoder, or a wal2json-only knob under pgoutput, comes back as Replicant's
-`{:error, :config_invalid}`.
+Use `publication:` for the default pgoutput decoder or `replication_sets:`
+with `decoder: :pglogical`. The adapter uses that table set for coverage,
+checkpoint binding, and doctor checks. Both decoders support PostgreSQL
+15–19. Activation refuses an earlier release with
+`:source_release_unsupported` before transport starts. Doctor warns on
+PostgreSQL 20 and newer (ADR-0026 and ADR-0027).
 
 Stop it (idempotent; clears the cached index) with
 `AshReplicant.stop_supervised("shop_orders")`.

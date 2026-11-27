@@ -364,7 +364,7 @@ defmodule AshReplicant.DoctorTest do
     end
 
     test "a foreign output plugin fails" do
-      check = Doctor.check_slot(slot(plugin: "wal2json"))
+      check = Doctor.check_slot(slot(plugin: "pglogical_output"))
 
       assert check.status == :fail
       assert check.reason == :slot_plugin_invalid
@@ -528,41 +528,28 @@ defmodule AshReplicant.DoctorTest do
       assert check.status == :pass
     end
 
-    test "a source below the decoder's floor fails" do
-      # pgoutput's floor is 12; a pre-12 server has no tested pgoutput path.
-      check = Doctor.check_source_release(110_000, :pgoutput)
+    test "text source versions below PostgreSQL 15 fail for both supported decoders" do
+      for decoder <- [:pgoutput, :pglogical], version <- ["90624", "120004", "149999"] do
+        check = Doctor.check_source_release(version, decoder)
 
-      assert check.status == :fail
-      assert check.reason == :source_release_unsupported
-
-      # The plugin decoders reach 9.6 — a 9.4 server is below their floor.
-      assert Doctor.check_source_release(90_004, :wal2json).status == :fail
-      assert Doctor.check_source_release(90_004, :pglogical).status == :fail
+        assert check.status == :fail
+        assert check.reason == :source_release_unsupported
+      end
     end
 
-    test "the plugin decoders admit the 9.6 floor pgoutput does not" do
-      # The 1.x legacy sources keep their admission floors: plugins pass, pgoutput
-      # fails 9.6 (no publications on a pre-10 server).
-      for decoder <- [:pglogical, :wal2json] do
-        assert Doctor.check_source_release(90_624, decoder).status == :pass
-        assert Doctor.check_source_release(120_004, decoder).status == :pass
+    test "PostgreSQL 15 through 19 pass for both supported decoders" do
+      for decoder <- [:pgoutput, :pglogical], major <- 15..19 do
+        version = Integer.to_string(major * 10_000)
+        assert Doctor.check_source_release(version, decoder).status == :pass
       end
-
-      assert Doctor.check_source_release(90_624, :pgoutput).status == :fail
-      assert Doctor.check_source_release(120_004, :pgoutput).status == :pass
     end
 
     test "the first untested source major warns" do
-      check = Doctor.check_source_release(200_000, :pgoutput)
-
-      assert check.status == :warn
-      assert check.reason == :source_release_untested
-    end
-
-    test "PostgreSQL 19 passes for both supported decoders" do
       for decoder <- [:pgoutput, :pglogical] do
-        assert Doctor.check_source_release(190_000, decoder).status == :pass
-        assert Doctor.check_source_release(190_004, decoder).status == :pass
+        check = Doctor.check_source_release("200000", decoder)
+
+        assert check.status == :warn
+        assert check.reason == :source_release_untested
       end
     end
 
@@ -570,7 +557,7 @@ defmodule AshReplicant.DoctorTest do
       dependency =
         Doctor.check_dependency_requirements(%{@compatible_versions | replicant: "1.5.1"})
 
-      source = Doctor.check_source_release(140_000, :pgoutput)
+      source = Doctor.check_source_release("149999", :pgoutput)
 
       assert dependency.reason != source.reason
       assert dependency.name != source.name

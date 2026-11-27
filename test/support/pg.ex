@@ -5,10 +5,7 @@ defmodule AshReplicant.Test.PG do
 
   @doc "Verify that the real server is the declared lane, without exposing connection data."
   def assert_major!(release, variable) do
-    actual =
-      if release >= 100_000,
-        do: Integer.to_string(div(release, 10_000)),
-        else: "#{div(release, 10_000)}.#{div(rem(release, 10_000), 100)}"
+    actual = Integer.to_string(div(release, 10_000))
 
     unless actual == System.fetch_env!(variable), do: raise("unexpected PostgreSQL major")
     :ok
