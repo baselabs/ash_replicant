@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-11-26
+
 ### Added
 
 - Qualify PostgreSQL 15–19 sources with pgoutput and pglogical, including a
@@ -1993,7 +1995,8 @@ sensitive-column verification.
   `usage-rules.md`, `CONTRIBUTING.md`, `LICENSE`, `NOTICE`; tracked charter at
   `docs/CHARTER.md`.
 
-[Unreleased]: https://github.com/baselabs/ash_replicant/compare/baselabs_ash_replicant-v1.6.5...HEAD
+[Unreleased]: https://github.com/baselabs/ash_replicant/compare/baselabs_ash_replicant-v1.7.0...HEAD
+[1.7.0]: https://github.com/baselabs/ash_replicant/tree/baselabs_ash_replicant-v1.7.0
 [1.6.5]: https://github.com/baselabs/ash_replicant/tree/baselabs_ash_replicant-v1.6.5
 [1.6.4]: https://github.com/baselabs/ash_replicant/tree/v1.6.4
 [1.6.3]: https://github.com/baselabs/ash_replicant/tree/v1.6.3
