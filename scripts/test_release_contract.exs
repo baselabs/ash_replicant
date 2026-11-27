@@ -17,7 +17,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
                 )
   @requirements DependencyRequirements.read!(Path.join(@source_root, "mix.exs"))
   @workflow ".github/workflows/qualification.yml"
-  @hex_action "baselabs/.github/.github/actions/hex-publish@3bfbb84692a65b4d2c03dc3b7932353026fe6943"
+  @hex_action "baselabs/.github/.github/actions/hex-publish@654fcd0ef63daf8e3f79dfeb4ca900adffd0d4e2"
   @landing ".github/workflows/ci.yml"
   @drift ".github/workflows/drift-report.yml"
   @pull_request ".github/workflows/pull-request.yml"
@@ -996,7 +996,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
           {"version-type: strict", "version-type: loose"},
           {"install-rebar: false", "install-rebar: true"},
           {"test ! -e mix.exs", "true"},
-          {"hex-publish@3bfbb84692a65b4d2c03dc3b7932353026fe6943", "hex-publish@main"},
+          {"hex-publish@654fcd0ef63daf8e3f79dfeb4ca900adffd0d4e2", "hex-publish@main"},
           {"          release-commit: ${{ inputs.release_commit }}",
            "          release-commit: ${{ github.sha }}"}
         ] do
@@ -1459,7 +1459,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
   defp hex_qualification_probes do
     for {old, replacement} <- [
-          {"hex-publish@3bfbb84692a65b4d2c03dc3b7932353026fe6943", "hex-publish@main"},
+          {"hex-publish@654fcd0ef63daf8e3f79dfeb4ca900adffd0d4e2", "hex-publish@main"},
           {"operation: qualify", "operation: upload"},
           {"package: ash_replicant", "package: another_package"},
           {"package-directory: .", "package-directory: another_directory"},

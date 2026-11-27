@@ -136,7 +136,7 @@ defmodule AshReplicant.ReleaseContract do
   }
   @toolchain_sha256 "25bbfa023b7f031256428b498fe300fcc460988fea81277072355e4c0d933764"
 
-  @hex_action "baselabs/.github/.github/actions/hex-publish@3bfbb84692a65b4d2c03dc3b7932353026fe6943"
+  @hex_action "baselabs/.github/.github/actions/hex-publish@654fcd0ef63daf8e3f79dfeb4ca900adffd0d4e2"
   @download_artifact "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333"
   @upload_artifact "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9"
   @hex_identity %{"package" => "ash_replicant", "package-directory" => "."}
@@ -163,14 +163,14 @@ defmodule AshReplicant.ReleaseContract do
   @publish_runtime_install ~S"""
   bash "$RUNNER_TEMP/hex-release-toolchain.sh" --installed "elixir=$WANT_ELIXIR" "erlang=$WANT_OTP"
   test ! -e mix.exs
-  hex_version="$(curl --fail --silent --show-error --max-time 30 'https://raw.githubusercontent.com/baselabs/.github/3bfbb84692a65b4d2c03dc3b7932353026fe6943/.github/actions/hex-publish/hex-version')"
+  hex_version="$(curl --fail --silent --show-error --max-time 30 'https://raw.githubusercontent.com/baselabs/.github/654fcd0ef63daf8e3f79dfeb4ca900adffd0d4e2/.github/actions/hex-publish/hex-version')"
   [[ "$hex_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
   mix local.hex "$hex_version" --force
   """
 
   @install_hex ~S"""
   test ! -e mix.exs
-  hex_version="$(curl --fail --silent --show-error --max-time 30 'https://raw.githubusercontent.com/baselabs/.github/3bfbb84692a65b4d2c03dc3b7932353026fe6943/.github/actions/hex-publish/hex-version')"
+  hex_version="$(curl --fail --silent --show-error --max-time 30 'https://raw.githubusercontent.com/baselabs/.github/654fcd0ef63daf8e3f79dfeb4ca900adffd0d4e2/.github/actions/hex-publish/hex-version')"
   [[ "$hex_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
   mix local.hex "$hex_version" --force
   installed=$(mix hex.info | awk '$1 == "Hex:" {print $2}')
