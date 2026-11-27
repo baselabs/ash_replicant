@@ -40,6 +40,12 @@ The legacy 9.6 and 12 decoder-source lanes continue to exercise pglogical
 and wal2json in 1.x. PostgreSQL 12 also exercises pgoutput delivery, and
 9.6 exercises pgoutput's release-floor refusal.
 
+All 19 qualification jobs passed for the AshReplicant 1.7.0 candidate
+`9e4776b83ebc44c2a6a2696cf5bba1a72c07fb09`, the first release carrying
+this policy, including every decoder-source lane from 9.6 through 19 and
+`qualified`.
+[Qualification run 45914577614](https://github.com/baselabs/ash_replicant/actions/runs/45914577614).
+
 ## Migrating from wal2json
 
 An existing slot is bound to its output plugin and the stored checkpoint
