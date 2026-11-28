@@ -59,6 +59,7 @@ defmodule QuickTests do
       "test/**/*_test.exs"
       |> Path.wildcard()
       |> Enum.reject(&String.starts_with?(&1, "test/fixtures/"))
+
     changed_tests = Enum.filter(changed, &(&1 in tests))
     lib = Enum.filter(changed, &lib?/1)
     lib = Enum.uniq(lib ++ direct_dependents(lib))
