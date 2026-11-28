@@ -14,7 +14,7 @@ not re-gated. It executes through the
 [`replicant`](https://github.com/baselabs/replicant) client (the transport — the
 "`postgrex` of CDC").
 
-> **Status: v1.7.0 — stable public API (ADR-0023).** Effect-once mirroring with fail-closed
+> **Status: v2.0.0 — stable public API (ADR-0023).** Effect-once mirroring with fail-closed
 > multitenancy (compile-time verified), SCD2 history mirroring, and AshCloak integration.
 > Working rules are in
 > [`AGENTS.md`](https://github.com/baselabs/ash_replicant/blob/main/AGENTS.md) — read it
@@ -73,7 +73,7 @@ Add `ash_replicant` to your dependencies in `mix.exs`:
 
 ```elixir
 # mix.exs
-{:ash_replicant, "~> 1.7.0"}
+{:ash_replicant, "~> 2.0.0"}
 ```
 
 It pulls in [`replicant`](https://github.com/baselabs/replicant) (the CDC transport)
@@ -81,13 +81,13 @@ as a transitive dependency.
 
 ### Supported foundation
 
-The current 1.7.0 release baseline is built and tested with:
+The 2.0.0 release uses this foundation:
 
 - Elixir 1.20.3 on Erlang/OTP 29;
 - Ash `>= 3.38.1 and < 4.0.0-0` (current lock 3.38.1);
 - AshPostgres `~> 2.13` (current lock 2.15.2 with AshSql 0.8.8; qualification tests the reviewed compatibility lock);
 - Spark `~> 2.7.0` (effective floor 2.7.6 through Ash; current lock 2.7.9);
-- Replicant `>= 1.6.0 and < 2.0.0-0` (current lock 1.6.0);
+- Replicant `>= 2.0.0 and < 3.0.0-0` (current lock 2.0.0);
 - Postgrex `~> 0.23` (current lock 0.23.0);
 - DBConnection `>= 2.10.3 and < 3.0.0-0` (current lock 2.10.3).
 - Use `publication:` for the default pgoutput decoder or

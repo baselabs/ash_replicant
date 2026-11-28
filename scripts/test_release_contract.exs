@@ -133,7 +133,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
        "- Ash `#{@requirements.ash}` (current lock 3.38.1);",
        "- AshPostgres `#{@requirements.ash_postgres}` (current lock 2.15.2 with AshSql 0.8.8; qualification tests the reviewed compatibility lock);",
        "- Spark `#{@requirements.spark}` (effective floor 2.7.6 through Ash; current lock 2.7.9);",
-       "- Replicant `#{@requirements.replicant}` (current lock 1.6.0)",
+       "- Replicant `#{@requirements.replicant}` (current lock 2.0.0)",
        "- Postgrex `#{@requirements.postgrex}` (current lock 0.23.0);",
        "- DBConnection `#{@requirements.db_connection}` (current lock 2.10.3).",
        "- AshOnetime `#{@requirements.ash_onetime}` (current lock 1.5.0)",
@@ -143,7 +143,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
      [
        "- **Elixir 1.20.3** and **Erlang/OTP 29**",
        "- Ash `#{@requirements.ash}`; selector-free development uses this public range",
-       "- Replicant `#{@requirements.replicant}` from Hex; the lock is 1.6.0.",
+       "- Replicant `#{@requirements.replicant}` from Hex; the lock is 2.0.0.",
        "- Postgrex `#{@requirements.postgrex}` from Hex; the lock is 0.23.0.",
        "- DBConnection `#{@requirements.db_connection}` from Hex. The lock is 2.10.3.",
        "- AshCloak `#{@requirements.ash_cloak}` from Hex; the current lock is 0.4.0 (the"
@@ -152,7 +152,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
      [
        "The supported release foundation is Elixir 1.20.3 on Erlang/OTP 29 with Ash\n" <>
          "`#{@requirements.ash}` (current lock 3.38.1) and Replicant\n" <>
-         "`#{@requirements.replicant}` (current lock 1.6.0), plus\n" <>
+         "`#{@requirements.replicant}` (current lock 2.0.0), plus\n" <>
          "AshOnetime `#{@requirements.ash_onetime}` (current lock 1.5.0) and AshCloak\n" <>
          "`#{@requirements.ash_cloak}` (current lock 0.4.0; releases below 0.4.0 carry\n" <>
          "CVE-2026-81319 and CVE-2026-81322 and are not admitted).",
@@ -371,14 +371,14 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       "mix.lock",
-      ~s("replicant": {:hex, :replicant, "1.6.0"),
-      ~s("replicant": {:hex, :replicant, "1.5.1")
+      ~s("replicant": {:hex, :replicant, "2.0.0"),
+      ~s("replicant": {:hex, :replicant, "1.6.0")
     )
 
     with_env("ASH_REPLICANT_REPLICANT_VERSION", floor, &assert_invalid!/0)
 
     prepare_fixture()
-    with_env("ASH_REPLICANT_REPLICANT_VERSION", "1.5.1", &assert_invalid!/0)
+    with_env("ASH_REPLICANT_REPLICANT_VERSION", "1.6.0", &assert_invalid!/0)
 
     prepare_fixture()
     with_env("ASH_REPLICANT_REPLICANT_VERSION", "latest", &assert_valid!/0)
@@ -1474,7 +1474,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     for {dependency, mutation} <- [
           {"db_connection", fn _spec -> nil end},
           {"igniter", &Map.put(&1, "optional", false)},
-          {"replicant", &Map.put(&1, "requirement", "== 1.6.0")},
+          {"replicant", &Map.put(&1, "requirement", "== 2.0.0")},
           {"ash", &Map.put(&1, "repository", "baselabs")}
         ] do
       prepare_fixture()
@@ -1883,7 +1883,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     replace_once!(
       "mix.exs",
       ~s(@replicant_requirement "#{@requirements.replicant}"),
-      ~s(@replicant_requirement ">= 0.3.0 and < 2.0.0-0")
+      ~s(@replicant_requirement ">= 1.6.0 and < 3.0.0-0")
     )
 
     assert_invalid!()
@@ -1932,7 +1932,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       "mix.lock",
-      ~s("replicant": {:hex, :replicant, "1.6.0"),
+      ~s("replicant": {:hex, :replicant, "2.0.0"),
       ~s("replicant": {:hex, :replicant, "0.3.1")
     )
 
@@ -1942,7 +1942,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
 
     replace_once!(
       "mix.lock",
-      ~s("replicant": {:hex, :replicant, "1.6.0"),
+      ~s("replicant": {:hex, :replicant, "2.0.0"),
       ~s("replicant": {:hex, :replicant, "1.1.0")
     )
 
@@ -2153,7 +2153,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     File.write!(
       fixture_path("README.md"),
       File.read!(fixture_path("README.md")) <>
-        "\nThis project does not support Replicant 1.2.3.\n"
+        "\nThis project does not support Replicant 2.0.0.\n"
     )
 
     assert_invalid!()

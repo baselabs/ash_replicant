@@ -543,7 +543,7 @@ defmodule AshReplicant.ReleaseContract do
          "- Ash `#{requirements.ash}` (current lock 3.38.1);",
          "- AshPostgres `#{requirements.ash_postgres}` (current lock 2.15.2 with AshSql 0.8.8; qualification tests the reviewed compatibility lock);",
          "- Spark `#{requirements.spark}` (effective floor 2.7.6 through Ash; current lock 2.7.9);",
-         "- Replicant `#{requirements.replicant}` (current lock 1.6.0)",
+         "- Replicant `#{requirements.replicant}` (current lock 2.0.0)",
          "- Postgrex `#{requirements.postgrex}` (current lock 0.23.0);",
          "- DBConnection `#{requirements.db_connection}` (current lock 2.10.3).",
          "- AshOnetime `#{requirements.ash_onetime}` (current lock 1.5.0)",
@@ -553,7 +553,7 @@ defmodule AshReplicant.ReleaseContract do
        [
          "- **Elixir 1.20.3** and **Erlang/OTP 29**",
          "- Ash `#{requirements.ash}`; selector-free development uses this public range",
-         "- Replicant `#{requirements.replicant}` from Hex; the lock is 1.6.0.",
+         "- Replicant `#{requirements.replicant}` from Hex; the lock is 2.0.0.",
          "- Postgrex `#{requirements.postgrex}` from Hex; the lock is 0.23.0.",
          "- DBConnection `#{requirements.db_connection}` from Hex. The lock is 2.10.3.",
          "- AshCloak `#{requirements.ash_cloak}` from Hex; the current lock is 0.4.0 (the"
@@ -562,7 +562,7 @@ defmodule AshReplicant.ReleaseContract do
        [
          "The supported release foundation is Elixir 1.20.3 on Erlang/OTP 29 with Ash\n" <>
            "`#{requirements.ash}` (current lock 3.38.1) and Replicant\n" <>
-           "`#{requirements.replicant}` (current lock 1.6.0), plus\n" <>
+           "`#{requirements.replicant}` (current lock 2.0.0), plus\n" <>
            "AshOnetime `#{requirements.ash_onetime}` (current lock 1.5.0) and AshCloak\n" <>
            "`#{requirements.ash_cloak}` (current lock 0.4.0; releases below 0.4.0 carry\n" <>
            "CVE-2026-81319 and CVE-2026-81322 and are not admitted).",
@@ -2110,7 +2110,7 @@ defmodule AshReplicant.ReleaseContract do
 
       assert(
         not Regex.match?(
-          ~r/(?:unsupported release foundation|does(?:[\s\p{Cf}]+not|n't)[\s\p{Cf}]+support[\s\p{Cf}]*(?:Elixir 1\.20\.3|Erlang\/OTP 29|Ash 3\.33\.4|Replicant 1(?:\.x|\.\d+(?:\.\d+)?))|(?:Elixir 1\.20\.3|Erlang\/OTP 29|Ash 3\.33\.4|Replicant 1(?:\.x|\.\d+(?:\.\d+)?))[\s\p{Cf}]*(?:is[\s\p{Cf}]+)?not[\s\p{Cf}]+supported)/iu,
+          ~r/(?:unsupported release foundation|does(?:[\s\p{Cf}]+not|n't)[\s\p{Cf}]+support[\s\p{Cf}]*(?:Elixir 1\.20\.3|Erlang\/OTP 29|Ash 3\.33\.4|Replicant 2(?:\.x|\.\d+(?:\.\d+)?))|(?:Elixir 1\.20\.3|Erlang\/OTP 29|Ash 3\.33\.4|Replicant 2(?:\.x|\.\d+(?:\.\d+)?))[\s\p{Cf}]*(?:is[\s\p{Cf}]+)?not[\s\p{Cf}]+supported)/iu,
           visible
         ),
         "published runtime or dependency contract is contradictory"

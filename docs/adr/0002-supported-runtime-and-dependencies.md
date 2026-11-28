@@ -9,9 +9,9 @@ October 28, November 5 and November 24, 2026 (the Ash security floor is now
 `>= 3.38.1 and < 4.0.0-0`). Partly superseded by
 [ADR-0027](0027-postgresql-server-support.md) for source support and qualification.
 
-> **Dependency floor amendment (2026-11-23).** Postgrex is declared `~> 0.23` and
-> Replicant `>= 1.6.0 and < 2.0.0-0`: Replicant 1.6.0 requires Postgrex `~> 0.23`.
-> The exact-floor, latest-compatible and release locks record Replicant 1.6.0 and
+> **Dependency floor amendment (2026-11-28).** Postgrex is declared `~> 0.23` and
+> Replicant `>= 2.0.0 and < 3.0.0-0`: Replicant 2.0.0 requires Postgrex `~> 0.23`.
+> The exact-floor, latest-compatible and release locks record Replicant 2.0.0 and
 > Postgrex 0.23.0. The Postgrex 0.22.4 statements below are the earlier floor.
 
 > **Superseding CI substrate amendment (2026-11-21).** The historical database cell

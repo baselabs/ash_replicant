@@ -1,15 +1,13 @@
 #!/usr/bin/env bash
 # bump-version NEW_VERSION — the routine release-surface bump in one command.
 #
-# Touches exactly the six version-bearing spots (verified against the
-# release-contract pins: the contract pins dependency FOUNDATION text, never
-# the package version, so a routine bump cannot trip it):
+# Updates the release version in the package and docs:
 #
 #   mix.exs   @version
 #   CHANGELOG [Unreleased] -> [NEW] - today
 #   README    status badge, install snippet, baseline line
 #   notebook  the hex-package comment and the AshReplicant.version() output
-#   CHARTER   the "latest published package" status line
+#   CHARTER   the pending cut on the status line
 #
 # Dependency-foundation lines (Ash / Replicant / AshOnetime ranges and locks)
 # are NEVER touched: the anchors below are exact strings, not a version sed.
@@ -37,6 +35,9 @@ current="$(sed -n 's/^  @version "\(.*\)"$/\1/p' mix.exs)"
 [[ "$new_version" != "$current" ]] || { echo "bump-version: already at $current" >&2; exit 1; }
 
 today="$(date +%Y-%m-%d)"
+charter_status="$(sed -n 's/^\*\*Status:\*\* current — realized, \(latest published package [^·]*\) · .*/\1/p' docs/CHARTER.md)"
+[[ -n "$charter_status" ]] || { echo "bump-version: could not read the charter status" >&2; exit 1; }
+charter_published="${charter_status%%,*}"
 charter_updated="$(grep -o '\*\*Updated:\*\* [0-9-]*' docs/CHARTER.md | cut -d' ' -f2)"
 
 replace_once() {
@@ -69,15 +70,14 @@ replace_once README.md "> **Status: v$current — stable public API (ADR-0023).*
   "> **Status: v$new_version — stable public API (ADR-0023).**"
 replace_once README.md "{:ash_replicant, \"~> $current\"}" \
   "{:ash_replicant, \"~> $new_version\"}"
-replace_once README.md "The current $current release baseline is built and tested with:" \
-  "The current $new_version release baseline is built and tested with:"
+replace_once README.md "The $current release uses this foundation:" \
+  "The $new_version release uses this foundation:"
 replace_once notebooks/ash_replicant_tour.livemd "\`{:ash_replicant, \"~> $current\"}\`" \
   "\`{:ash_replicant, \"~> $new_version\"}\`"
 replace_once notebooks/ash_replicant_tour.livemd "# => \"$current\"" "# => \"$new_version\""
-# The charter carries the five-field status stamp; bump its version segment and
-# its Updated field (the stamp line is the anchor, dated today).
-replace_once docs/CHARTER.md "latest published package $current" \
-  "latest published package $new_version"
+# Record the pending cut while retaining the last published version.
+replace_once docs/CHARTER.md "$charter_status ·" \
+  "$charter_published, $new_version cut and awaiting publication ·"
 replace_once docs/CHARTER.md "**Updated:** $charter_updated" \
   "**Updated:** $today"
 # Bind the CHANGELOG link references: the [Unreleased] compare base moves to the

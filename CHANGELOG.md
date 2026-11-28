@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-11-28
+
+### Changed
+
+- **Breaking:** Require Replicant `>= 2.0.0 and < 3.0.0-0`.
+
 ### Removed
 
 - **Breaking:** Removed the `wal2json` decoder and its `tables:`,
@@ -2005,7 +2011,8 @@ sensitive-column verification.
   `usage-rules.md`, `CONTRIBUTING.md`, `LICENSE`, `NOTICE`; tracked charter at
   `docs/CHARTER.md`.
 
-[Unreleased]: https://github.com/baselabs/ash_replicant/compare/baselabs_ash_replicant-v1.7.0...HEAD
+[Unreleased]: https://github.com/baselabs/ash_replicant/compare/baselabs_ash_replicant-v2.0.0...HEAD
+[2.0.0]: https://github.com/baselabs/ash_replicant/tree/baselabs_ash_replicant-v2.0.0
 [1.7.0]: https://github.com/baselabs/ash_replicant/tree/baselabs_ash_replicant-v1.7.0
 [1.6.5]: https://github.com/baselabs/ash_replicant/tree/baselabs_ash_replicant-v1.6.5
 [1.6.4]: https://github.com/baselabs/ash_replicant/tree/v1.6.4

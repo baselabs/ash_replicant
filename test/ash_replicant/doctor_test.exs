@@ -14,7 +14,7 @@ defmodule AshReplicant.DoctorTest do
   alias AshReplicant.Doctor.{Check, Report}
   alias AshReplicant.Error
 
-  @compatible_versions %{replicant: "1.6.0", ash: "3.38.1", db_connection: "2.10.3"}
+  @compatible_versions %{replicant: "2.0.0", ash: "3.38.1", db_connection: "2.10.3"}
 
   defp pass(name), do: %Check{name: name, domain: :source, status: :pass, reason: :ok}
   defp warn(name), do: %Check{name: name, domain: :source, status: :warn, reason: :something}
@@ -490,7 +490,7 @@ defmodule AshReplicant.DoctorTest do
 
   describe "dependency and source version checks" do
     test "a Replicant release below the supported floor fails" do
-      check = Doctor.check_dependency_requirements(%{@compatible_versions | replicant: "1.5.1"})
+      check = Doctor.check_dependency_requirements(%{@compatible_versions | replicant: "1.6.0"})
 
       assert check.status == :fail
       assert check.reason == :dependency_version_mismatch
@@ -555,7 +555,7 @@ defmodule AshReplicant.DoctorTest do
 
     test "the two version axes never share a reason" do
       dependency =
-        Doctor.check_dependency_requirements(%{@compatible_versions | replicant: "1.5.1"})
+        Doctor.check_dependency_requirements(%{@compatible_versions | replicant: "1.6.0"})
 
       source = Doctor.check_source_release("149999", :pgoutput)
 

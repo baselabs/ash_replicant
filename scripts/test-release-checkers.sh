@@ -185,7 +185,7 @@ if [[ "$replicant_selector_exit" -eq 0 ]] || [[ "$replicant_selector_output" != 
 fi
 
 set +e
-replicant_major_output="$(ASH_REPLICANT_REPLICANT_VERSION='2.0.0-rc.0' mix run --no-start --no-compile --no-deps-check -e ':ok' 2>&1)"
+replicant_major_output="$(ASH_REPLICANT_REPLICANT_VERSION='3.0.0-rc.0' mix run --no-start --no-compile --no-deps-check -e ':ok' 2>&1)"
 replicant_major_exit=$?
 set -e
 
@@ -195,7 +195,7 @@ if [[ "$replicant_major_exit" -eq 0 ]] || [[ "$replicant_major_output" != *"must
 fi
 
 set +e
-replicant_old_output="$(ASH_REPLICANT_REPLICANT_VERSION='0.3.1' mix run --no-start --no-compile --no-deps-check -e ':ok' 2>&1)"
+replicant_old_output="$(ASH_REPLICANT_REPLICANT_VERSION='1.6.0' mix run --no-start --no-compile --no-deps-check -e ':ok' 2>&1)"
 replicant_old_exit=$?
 set -e
 

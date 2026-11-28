@@ -168,13 +168,13 @@ Never push `main` directly. Workflow and release-script changes go to the infras
 
 The supported release foundation is Elixir 1.20.3 on Erlang/OTP 29 with Ash
 `>= 3.38.1 and < 4.0.0-0` (current lock 3.38.1) and Replicant
-`>= 1.6.0 and < 2.0.0-0` (current lock 1.6.0), plus
+`>= 2.0.0 and < 3.0.0-0` (current lock 2.0.0), plus
 AshOnetime `>= 1.3.2 and < 2.0.0-0` (current lock 1.5.0) and AshCloak
 `>= 0.4.0 and < 1.0.0-0` (current lock 0.4.0; releases below 0.4.0 carry
 CVE-2026-81319 and CVE-2026-81322 and are not admitted). The admitted pgoutput and pglogical decoder options pass through to Replicant
 (ADR-0026 and ADR-0027).
 
-Postgrex requires `~> 0.23` (current lock 0.23.0), matching Replicant 1.6.0.
+Postgrex requires `~> 0.23` (current lock 0.23.0), matching Replicant 2.0.0.
 DBConnection requires `>= 2.10.3 and < 3.0.0-0` (current lock 2.10.3).
 
 The CI gates install the exact runtime, fetch with `mix deps.get --check-locked`, and run
