@@ -1050,7 +1050,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       {@publish, "upload", 90},
       {@publish, "read-back", 90},
       {@drift, "report", 24},
-      {@quick, "quick", 90}
+      {@quick, "quick", 17}
     ]
 
     for {workflow, job, timeout} <- jobs do
