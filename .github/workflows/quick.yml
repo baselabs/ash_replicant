@@ -1,0 +1,164 @@
+name: Quick
+
+# Work-branch feedback. The qualified check on kci/** decides landing.
+on:
+  push:
+    branches-ignore: [main, 'kci/**']
+
+concurrency:
+  group: quick-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  quick:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90 # no green run yet
+    env:
+      MIX_ENV: test
+      # Throwaway fixture password, matching qualification.
+      ASH_REPLICANT_TEST_URL: postgres://postgres:postgres@127.0.0.1:5432/ash_replicant_test
+
+    steps:
+      # The selector compares HEAD with its merge base on the default branch.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: ./.github/actions/toolchain
+        id: toolchain
+      - uses: ./.github/actions/beam
+        with:
+          elixir: ${{ steps.toolchain.outputs.elixir }}
+          otp: ${{ steps.toolchain.outputs.otp }}
+
+      - run: mix deps.get --check-locked
+      - run: mix format --check-formatted
+      - run: mix compile --warnings-as-errors
+      - run: mix credo --strict
+
+      - name: Select the tests that cover this branch
+        id: select
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          selected=$(elixir scripts/quick_tests.exs "origin/$DEFAULT_BRANCH")
+          echo "selected: $selected"
+          if [[ "$selected" == none ]]; then exit 0; fi
+
+          if [[ "$selected" == all ]]; then
+            shopt -s globstar nullglob
+            files=(test/**/*_test.exs)
+          else
+            read -ra files <<< "$selected"
+          fi
+
+          ordinary=()
+          decoder=()
+          performance=()
+          for file in "${files[@]}"; do
+            [[ "$file" != test/fixtures/* ]] || continue
+            tags=$(grep -oE '^[[:space:]]*@(module)?tag :(decoder_source|performance)([[:space:]]|$)' "$file") || [[ $? -eq 1 ]]
+            if [[ "$tags" == *':decoder_source'* ]]; then decoder+=("$file"); fi
+            if [[ "$tags" == *':performance'* ]]; then performance+=("$file"); fi
+            if [[ "$tags" != *'@moduletag :decoder_source'* && "$tags" != *'@moduletag :performance'* ]]; then
+              ordinary+=("$file")
+            fi
+          done
+          if [[ "$selected" == all ]]; then ordinary=(all); fi
+          {
+            echo "tests=$selected"
+            echo "ordinary=${ordinary[*]}"
+            echo "decoder=${decoder[*]}"
+            echo "performance=${performance[*]}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Read the declared PostgreSQL lanes
+        if: steps.select.outputs.tests != ''
+        id: lanes
+        run: scripts/ci/postgres-lanes.sh
+
+      - name: Start the pinned destination engine
+        if: steps.select.outputs.tests != ''
+        uses: ./.github/actions/postgres
+
+      - name: Create and migrate the integration database
+        if: steps.select.outputs.tests != ''
+        run: |
+          mix ecto.create
+          mix ecto.migrate
+
+      # The structural runner requires a positive Result receipt for each invocation.
+      - name: Run unit and integration tests
+        if: steps.select.outputs.ordinary != ''
+        env:
+          EXPECTED_PG_MAJOR: ${{ steps.lanes.outputs.engine_major }}
+          TESTS: ${{ steps.select.outputs.ordinary }}
+        run: |
+          files=()
+          [[ "$TESTS" == all ]] || read -ra files <<< "$TESTS"
+          scripts/run-structural-tests.sh --warnings-as-errors --include integration "${files[@]}"
+
+      - name: Build the same-major decoder source
+        if: steps.select.outputs.decoder != ''
+        id: plugins
+        env:
+          DECODER_MATRIX: ${{ steps.lanes.outputs.decoder }}
+          EXPECTED_PG_MAJOR: ${{ steps.lanes.outputs.engine_major }}
+        run: |
+          base=$(jq -er --arg major "$EXPECTED_PG_MAJOR" '.[] | select(.pg_major == $major) | .base' <<< "$DECODER_MATRIX")
+          docker build -f test/support/pglogical.dockerfile --build-arg "BASE=$base" \
+            -t decoder-source-plugins:quick .
+          image=$(docker image inspect --format '{{.Id}}' decoder-source-plugins:quick)
+          printf 'image=%s\n' "$image" >> "$GITHUB_OUTPUT"
+
+      - name: Start the decoder source
+        if: steps.plugins.outputs.image != ''
+        uses: ./.github/actions/postgres
+        with:
+          name: decoder-source
+          port: '5433'
+          image: ${{ steps.plugins.outputs.image }}
+          decoder-source: 'true'
+
+      - name: Run decoder delivery tests
+        if: steps.plugins.outputs.image != ''
+        env:
+          EXPECTED_PG_MAJOR: ${{ steps.lanes.outputs.engine_major }}
+          EXPECTED_PG_SOURCE_MAJOR: ${{ steps.lanes.outputs.engine_major }}
+          # Throwaway fixture password, matching qualification.
+          ASH_REPLICANT_DECODER_SOURCE_URL: postgres://postgres:postgres@127.0.0.1:5433/ash_replicant_test
+          TESTS: ${{ steps.select.outputs.decoder }}
+        run: |
+          read -ra files <<< "$TESTS"
+          scripts/run-structural-tests.sh --warnings-as-errors --only decoder_source "${files[@]}"
+
+      - name: Run performance sentinels separately
+        if: steps.select.outputs.performance != ''
+        env:
+          EXPECTED_PG_MAJOR: ${{ steps.lanes.outputs.engine_major }}
+          ASH_REPLICANT_PERFORMANCE: "1"
+          TESTS: ${{ steps.select.outputs.performance }}
+        run: |
+          read -ra files <<< "$TESTS"
+          scripts/run-structural-tests.sh --warnings-as-errors --only performance "${files[@]}"
+
+      - name: Remove the decoder source
+        if: always() && steps.plugins.outputs.image != ''
+        uses: ./.github/actions/postgres
+        with:
+          mode: stop
+          name: decoder-source
+          port: '5433'
+
+      - name: Remove PostgreSQL
+        if: always() && steps.select.outputs.tests != ''
+        uses: ./.github/actions/postgres
+        with:
+          mode: stop

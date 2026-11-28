@@ -1244,7 +1244,8 @@ defmodule AshReplicant.ReleaseContract do
          {"publish.yml", "read-back"},
          {"qualification.yml", "postgres-lanes"},
          {"qualification.yml", "release-artifact"},
-         {"qualification.yml", "fresh-consumer"}
+         {"qualification.yml", "fresh-consumer"},
+         {"quick.yml", "quick"}
        ] do
       assert(
         timeout == 90 and

@@ -22,6 +22,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
   @drift ".github/workflows/drift-report.yml"
   @pull_request ".github/workflows/pull-request.yml"
   @publish ".github/workflows/publish.yml"
+  @quick ".github/workflows/quick.yml"
   @inventory "scripts/qualification-jobs.json"
   @fail_late "${{ !cancelled() && steps.compile.outcome == 'success' }}"
   @report_if "${{ !cancelled() && steps.runtime.outcome == 'success' }}"
@@ -1048,7 +1049,8 @@ defmodule AshReplicant.ReleaseContractSelfTest do
       {@landing, "qualified", 5},
       {@publish, "upload", 90},
       {@publish, "read-back", 90},
-      {@drift, "report", 24}
+      {@drift, "report", 24},
+      {@quick, "quick", 90}
     ]
 
     for {workflow, job, timeout} <- jobs do
@@ -2163,7 +2165,7 @@ defmodule AshReplicant.ReleaseContractSelfTest do
     File.rm_rf!(@fixture_root)
     File.mkdir_p!(Path.join(@fixture_root, ".github/workflows"))
 
-    for path <- [@workflow, @landing, @publish, @drift] do
+    for path <- [@workflow, @landing, @publish, @drift, @quick] do
       File.cp!(Path.join(@source_root, path), fixture_path(path))
     end
 

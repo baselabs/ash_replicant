@@ -142,10 +142,8 @@ classification body.
 ## Build and test
 
 This public repository runs all checks on GitHub-hosted CI runners. Nothing that compiles
-or tests runs on the owner's Mac or on the build box. Covering tests for changed files and
-their direct dependents run by pushing a topic commit to `kci/<topic>`, reading that run once,
-and fixing failures forward. Use the commands declared in `.github/workflows/qualification.yml`;
-never fall back to a local build or test.
+or tests runs on the owner's Mac or on the build box. Work branches run covering tests
+through Quick. The full suite and release checks run through `.github/workflows/qualification.yml`.
 
 Every workflow declares `defaults: run: shell: bash`, so command pipelines preserve failures.
 Jobs inherit that default. Job-level `defaults` are refused because even a working-directory
@@ -157,11 +155,10 @@ Diagnostic output on an already-failing path and cleanup remain best effort.
 
 Land only with the landing tool, given the full SHA.
 It submits a fresh `kci/<commit>` candidate and moves `main` only after `qualified` succeeds.
-The landing SHA must never have been pushed to any `kci/` ref: two `qualified` checks on one
-SHA make landing ambiguous. After a green topic check, make a final docs-only commit, use
-that new SHA for landing. It settles after promotion itself: it deletes local and origin branches that contain the landed
-commits, retires clean delegate worktrees and sweeps `kci/` refs. Exit 0 means landed and settled;
-exit 4 means landed with leftovers named, so fix the cause and run its sweep.
+The landing SHA must never have been pushed to any `kci/` ref. Use the green work-branch
+commit for landing. The tool settles after promotion by deleting branches that contain the
+landed commits, retiring clean delegate worktrees and sweeping `kci/` refs. Exit 0 means
+landed and settled. Exit 4 names the leftovers, so fix the cause and run its sweep.
 Never push `main` directly. Workflow and release-script changes go to the infrastructure maintainers for advice; the repository's owner decides and lands them.
 
 ## Development workflow
@@ -223,9 +220,9 @@ its outputs. The local BEAM action installs those versions strictly, immediately
 an Elixir, build-suffix or full OTP mismatch through `--installed`, and installs Hex from
 the shared publication action's pinned `hex-version` file.
 The wrapper and checkout config use the same reader; package requirements stay in `mix.exs`.
-Job timeouts follow infra's binding CI requirements linked below; each comment
-names its slowest measured green run and duration. Publish has no green run yet
-and uses `90 # no green run yet` until infra measures one. No workflow runs repository code from a pull
+Job timeouts follow infra's binding CI requirements linked below. Each job's comment
+names its slowest measured green run and duration. An unmeasured job uses
+`90 # no green run yet` until its first green run. No workflow runs repository code from a pull
 request; a maintainer qualifies a fork's change through `kci/<commit>`.
 
 The `release-artifact` qualification job calls the shared Hex action with no publishing
@@ -275,6 +272,15 @@ artifact checksums name the exact tree they were built from.
 Make the change, commit with named paths, and use the route in [Build and test](#build-and-test).
 `main` moves only on that commit's `qualified` check. If it goes red, fix forward in the next commit. A version
 bump (`scripts/bump-version.sh`) is an ordinary commit and lands the same way.
+
+Push the work branch to run `.github/workflows/quick.yml` and read its result once it finishes.
+A newer push cancels the older run. Quick checks locked dependencies, formatting, compilation
+with warnings as errors, and Credo. It runs changed tests and tests that cover changed, deleted
+or renamed library modules and the direct dependents of changed library files. Changes to
+the build, test fixtures, migrations, PostgreSQL substrate or Quick itself select the whole
+suite. Quick uses the pinned PostgreSQL engine and the current lock, starts a separate
+same-major source for selected decoder tests, and runs selected performance tests in their
+own invocation. Ask for landing after the latest Quick run is green.
 
 - A test that fails on every run is a defect: fix it, or quarantine it with a reason, in the
   change that finds it.
