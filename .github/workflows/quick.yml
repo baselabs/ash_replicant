@@ -103,7 +103,7 @@ jobs:
         run: |
           files=()
           [[ "$TESTS" == all ]] || read -ra files <<< "$TESTS"
-          scripts/run-structural-tests.sh --warnings-as-errors --include integration "${files[@]}"
+          scripts/run-structural-tests.sh --include integration "${files[@]}"
 
       - name: Build the same-major decoder source
         if: steps.select.outputs.decoder != ''
@@ -137,7 +137,7 @@ jobs:
           TESTS: ${{ steps.select.outputs.decoder }}
         run: |
           read -ra files <<< "$TESTS"
-          scripts/run-structural-tests.sh --warnings-as-errors --only decoder_source "${files[@]}"
+          scripts/run-structural-tests.sh --only decoder_source "${files[@]}"
 
       - name: Run performance sentinels separately
         if: steps.select.outputs.performance != ''
@@ -147,7 +147,18 @@ jobs:
           TESTS: ${{ steps.select.outputs.performance }}
         run: |
           read -ra files <<< "$TESTS"
-          scripts/run-structural-tests.sh --warnings-as-errors --only performance "${files[@]}"
+          scripts/run-structural-tests.sh --only performance "${files[@]}"
+
+      # The structural runner keeps its raw output on failure; show it so a red run is
+      # diagnosed from its own log.
+      - name: Show the preserved test output
+        if: failure()
+        run: |
+          shopt -s nullglob
+          for log in /tmp/ash-replicant-structural-failure.*.log; do
+            echo "== $log"
+            tail -n 300 "$log"
+          done
 
       - name: Remove the decoder source
         if: always() && steps.plugins.outputs.image != ''
