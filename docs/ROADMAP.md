@@ -3,8 +3,9 @@
 This is the canonical definition of the work required for the stable major
 release. It contains authored scope, acceptance, dependencies, and governing
 decision ownership. Derive work-item status from the commit history and
-`CHANGELOG.md`. AshReplicant 2.0.0 is cut and awaiting publication. The
-[charter](CHARTER.md) records the latest published package.
+`CHANGELOG.md`. AshReplicant 2.0.0 is published (Hex, tag
+`baselabs_ash_replicant-v2.0.0`, 2026-11-28). The [charter](CHARTER.md) records the
+latest published package.
 
 No row is optional for the release gate. Enhancements are included where the live
 Replicant contract or Ash architecture already supports the capability; they are
