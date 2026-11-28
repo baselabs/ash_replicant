@@ -38,6 +38,14 @@ today="$(date +%Y-%m-%d)"
 charter_status="$(sed -n 's/^\*\*Status:\*\* current — realized, \(latest published package [^·]*\) · .*/\1/p' docs/CHARTER.md)"
 [[ -n "$charter_status" ]] || { echo "bump-version: could not read the charter status" >&2; exit 1; }
 charter_published="${charter_status%%,*}"
+# A pending cut of the current version means that version is the one being
+# superseded: a new cut starts only after the previous one is published.
+if [[ "$charter_status" == *", $current cut and awaiting publication" ]]; then
+  charter_published="latest published package $current"
+elif [[ "$charter_status" == *" cut and awaiting publication" ]]; then
+  echo "bump-version: the charter names a pending cut other than $current: $charter_status" >&2
+  exit 1
+fi
 charter_updated="$(grep -o '\*\*Updated:\*\* [0-9-]*' docs/CHARTER.md | cut -d' ' -f2)"
 
 replace_once() {
